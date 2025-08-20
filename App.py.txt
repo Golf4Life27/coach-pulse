@@ -1,0 +1,117 @@
+import os, json, sqlite3, datetime as dt, re
+from flask import Flask, request, abort
+from twilio.twiml.messaging_response import MessagingResponse
+from twilio.request_validator import RequestValidator
+from twilio.rest import Client as TwilioClient
+from zoneinfo import ZoneInfo
+from apscheduler.schedulers.background import BackgroundScheduler
+
+# ============== Configuration & Globals ==============
+
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+SYSTEM_PROMPT = os.getenv("SYSTEM_PROMPT", """You are “Coach Pulse,” a friendly, evidence-based personal training coach over SMS.
+Priorities: safety first, progressive overload, habit consistency, clear cues.
+Always personalize using the user profile.
+Keep replies short (1–3 SMS), affirmative, and actionable.
+If user reports injury or pain, reduce intensity and advise consulting a professional.
+Use RPE 6–8 for most work; warmups first; cool-downs optional.
+Output tool calls in JSON when needed using the provided schemas.
+Never provide medical diagnosis; avoid extreme diets/supplements; keep nutrition general and opt-in.
+""")
+
+DEFAULT_TZ = os.getenv("DEFAULT_TZ", "America/Chicago")
+
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
+TWILIO_FROM = os.getenv("TWILIO_FROM_NUMBER")  # e.g., +13125551234
+
+app = Flask(__name__)
+validator = RequestValidator(TWILIO_AUTH_TOKEN)
+
+DB_PATH = os.getenv("DB_PATH", "coach.db")
+
+# ============== Database Helpers ==============
+
+def db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    with db() as c:
+        c.execute("""CREATE TABLE IF NOT EXISTS users(
+            phone TEXT PRIMARY KEY,
+            name TEXT, goal TEXT, experience TEXT, equipment TEXT,
+            schedule TEXT, injuries TEXT, prefs TEXT, created_at TEXT
+        )""")
+        c.execute("""CREATE TABLE IF NOT EXISTS logs(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            phone TEXT, date TEXT, type TEXT, payload TEXT
+        )""")
+init_db()
+
+def get_user(phone):
+    with db() as c:
+        row = c.execute("SELECT * FROM users WHERE phone=?", (phone,)).fetchone()
+        return dict(row) if row else None
+
+def save_user_profile(phone, profile):
+    with db() as c:
+        row = c.execute("SELECT phone FROM users WHERE phone=?", (phone,)).fetchone()
+        if row:
+            c.execute("""UPDATE users SET name=?, goal=?, experience=?, equipment=?,
+                         schedule=?, injuries=?, prefs=? WHERE phone=?""",
+                      (profile.get("name"), profile.get("goal"), profile.get("experience"),
+                       profile.get("equipment"), profile.get("schedule"),
+                       profile.get("injuries"), json.dumps(profile.get("prefs", {})), phone))
+        else:
+            c.execute("""INSERT INTO users(phone, name, goal, experience, equipment, schedule, injuries, prefs, created_at)
+                         VALUES(?,?,?,?,?,?,?,?,?)""",
+                      (phone, profile.get("name"), profile.get("goal"), profile.get("experience"),
+                       profile.get("equipment"), profile.get("schedule"), profile.get("injuries"),
+                       json.dumps(profile.get("prefs", {})), dt.datetime.utcnow().isoformat()))
+
+def log(phone, typ, payload):
+    with db() as c:
+        c.execute("INSERT INTO logs(phone,date,type,payload) VALUES(?,?,?,?)",
+                  (phone, dt.date.today().isoformat(), typ, json.dumps(payload)))
+
+# ============== Outbound SMS ==============
+
+def send_sms(to, text):
+    if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN or not TWILIO_FROM:
+        print("[DEV MODE] SMS to", to, ":", text)
+        return
+    twilio_client = TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+    twilio_client.messages.create(to=to, from_=TWILIO_FROM, body=text[:1500])
+
+# ============== Flask Routes ==============
+
+@app.route("/sms", methods=["POST"])
+def sms():
+    phone = request.form.get("From")
+    body  = (request.form.get("Body") or "").strip()
+
+    # Very simple start flow
+    if body.upper() == "START":
+        send_sms(phone, "Welcome to Coach Pulse 💪! What’s your main goal (strength, fat loss, endurance)?")
+        return str(MessagingResponse())
+
+    if body.upper().startswith("HELP"):
+        resp = MessagingResponse()
+        resp.message("Commands: START (onboard), CHECKINS ON/OFF, WEEKLY ON/OFF, RECOVERY ON/OFF, MICRO, LOG")
+        return str(resp)
+
+    # Default echo/log for now
+    log(phone, "msg", {"body": body})
+    resp = MessagingResponse()
+    resp.message("Got it! (demo reply) You said: " + body)
+    return str(resp)
+
+@app.route("/health", methods=["GET"])
+def health():
+    return {"ok": True, "now": dt.datetime.now().isoformat()}
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port)
