@@ -167,3 +167,26 @@ export async function getBuyers(): Promise<Buyer[]> {
   setCache(cacheKey, buyers);
   return buyers;
 }
+
+export async function updateListingRecord(
+  recordId: string,
+  fields: Record<string, unknown>
+): Promise<void> {
+  const url = `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}/${recordId}`;
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${AIRTABLE_PAT}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ fields }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Airtable update error ${res.status}: ${errText}`);
+  }
+
+  // Invalidate listings cache after write
+  delete cache["listings"];
+}
