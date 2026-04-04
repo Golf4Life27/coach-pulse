@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Listing } from "@/lib/types";
 import { formatCurrency, buildSMSLink } from "@/lib/utils";
+import { showToast } from "@/components/Toast";
 
 interface OutreachQueueProps {
   listings: Listing[];
@@ -11,25 +12,30 @@ interface OutreachQueueProps {
 export default function OutreachQueue({ listings }: OutreachQueueProps) {
   const [sortField, setSortField] = useState<"dom" | "listPrice" | "city">("dom");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const [fadingOut, setFadingOut] = useState<Set<string>>(new Set());
+  const [removed, setRemoved] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState<Set<string>>(new Set());
 
-  const sorted = [...listings].sort((a, b) => {
-    let aVal: number | string = 0;
-    let bVal: number | string = 0;
-    if (sortField === "dom") {
-      aVal = a.dom ?? 0;
-      bVal = b.dom ?? 0;
-    } else if (sortField === "listPrice") {
-      aVal = a.listPrice ?? 0;
-      bVal = b.listPrice ?? 0;
-    } else {
-      aVal = a.city ?? "";
-      bVal = b.city ?? "";
-    }
-    if (typeof aVal === "string") {
-      return sortDir === "asc" ? aVal.localeCompare(bVal as string) : (bVal as string).localeCompare(aVal);
-    }
-    return sortDir === "asc" ? (aVal as number) - (bVal as number) : (bVal as number) - (aVal as number);
-  });
+  const sorted = [...listings]
+    .filter((l) => !removed.has(l.id))
+    .sort((a, b) => {
+      let aVal: number | string = 0;
+      let bVal: number | string = 0;
+      if (sortField === "dom") {
+        aVal = a.dom ?? 0;
+        bVal = b.dom ?? 0;
+      } else if (sortField === "listPrice") {
+        aVal = a.listPrice ?? 0;
+        bVal = b.listPrice ?? 0;
+      } else {
+        aVal = a.city ?? "";
+        bVal = b.city ?? "";
+      }
+      if (typeof aVal === "string") {
+        return sortDir === "asc" ? aVal.localeCompare(bVal as string) : (bVal as string).localeCompare(aVal);
+      }
+      return sortDir === "asc" ? (aVal as number) - (bVal as number) : (bVal as number) - (aVal as number);
+    });
 
   const toggleSort = (field: "dom" | "listPrice" | "city") => {
     if (sortField === field) {
@@ -37,6 +43,63 @@ export default function OutreachQueue({ listings }: OutreachQueueProps) {
     } else {
       setSortField(field);
       setSortDir("desc");
+    }
+  };
+
+  const fadeAndRemove = (id: string) => {
+    setFadingOut((prev) => new Set(prev).add(id));
+    setTimeout(() => {
+      setRemoved((prev) => new Set(prev).add(id));
+      setFadingOut((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }, 500);
+  };
+
+  const handleLog = async (id: string) => {
+    setLoading((prev) => new Set(prev).add(id));
+    try {
+      const res = await fetch("/api/mark-texted", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recordId: id }),
+      });
+      if (!res.ok) throw new Error();
+      showToast("Marked as Texted", "success");
+      fadeAndRemove(id);
+    } catch {
+      showToast("Failed to update record");
+    } finally {
+      setLoading((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  };
+
+  const handleKill = async (id: string) => {
+    if (!window.confirm("Are you sure you want to mark this lead as Dead?")) return;
+    setLoading((prev) => new Set(prev).add(id));
+    try {
+      const res = await fetch("/api/mark-dead", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recordId: id }),
+      });
+      if (!res.ok) throw new Error();
+      showToast("Marked as Dead", "success");
+      fadeAndRemove(id);
+    } catch {
+      showToast("Failed to update record");
+    } finally {
+      setLoading((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
     }
   };
 
@@ -74,7 +137,9 @@ export default function OutreachQueue({ listings }: OutreachQueueProps) {
           {sorted.map((listing) => (
             <tr
               key={listing.id}
-              className="border-b border-[#30363d]/50 hover:bg-[#1c2128] transition-colors"
+              className={`border-b border-[#30363d]/50 hover:bg-[#1c2128] transition-all duration-500 ${
+                fadingOut.has(listing.id) ? "opacity-0 scale-y-0" : "opacity-100"
+              }`}
             >
               <td className="py-3 px-2 text-white font-medium">{listing.address}</td>
               <td className="py-3 px-2 text-gray-300">{listing.city}</td>
@@ -109,6 +174,20 @@ export default function OutreachQueue({ listings }: OutreachQueueProps) {
                       SMS
                     </a>
                   )}
+                  <button
+                    onClick={() => handleLog(listing.id)}
+                    disabled={loading.has(listing.id)}
+                    className="inline-flex items-center justify-center bg-green-700 hover:bg-green-600 text-white text-xs font-semibold px-3 py-2 rounded transition-colors min-h-[44px] disabled:opacity-50"
+                  >
+                    {loading.has(listing.id) ? "..." : "Log"}
+                  </button>
+                  <button
+                    onClick={() => handleKill(listing.id)}
+                    disabled={loading.has(listing.id)}
+                    className="inline-flex items-center justify-center bg-red-700 hover:bg-red-600 text-white text-xs font-semibold px-3 py-2 rounded transition-colors min-h-[44px] disabled:opacity-50"
+                  >
+                    Kill
+                  </button>
                   {listing.verificationUrl && (
                     <a
                       href={listing.verificationUrl}
