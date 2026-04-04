@@ -90,12 +90,13 @@ async function fetchAllRecords(
   do {
     const params = new URLSearchParams();
     fieldIds.forEach((f) => params.append("fields[]", f));
+    params.set("returnFieldsByFieldId", "true");
     if (offset) params.set("offset", offset);
 
     const url = `https://api.airtable.com/v0/${BASE_ID}/${tableId}?${params.toString()}`;
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${AIRTABLE_PAT}` },
-      next: { revalidate: 0 },
+      cache: "no-store",
     });
 
     if (!res.ok) {
