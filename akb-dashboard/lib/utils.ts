@@ -13,6 +13,10 @@ export function extractFirstName(fullName: string | null | undefined): string {
   return fullName.split(" ")[0];
 }
 
+function cleanPhone(phone: string): string {
+  return phone.replace(/[^+\d]/g, "");
+}
+
 export function buildSMSLink(
   phone: string | null | undefined,
   agentName: string | null | undefined,
@@ -21,15 +25,17 @@ export function buildSMSLink(
   mao: number | null | undefined
 ): string {
   if (!phone) return "#";
+  const cleaned = cleanPhone(phone);
+  if (!cleaned) return "#";
   const firstName = extractFirstName(agentName);
   const maoStr = mao != null ? formatCurrency(mao) : "a competitive price";
   const body = `Hi ${firstName}, this is Alex with AKB Solutions. I'm interested in your listing at ${address || "the property"} in ${city || "your area"}. I'd like to make a cash offer at ${maoStr} with a quick close and no financing contingencies. Is the seller open to offers in that range?`;
-  return `sms:${phone}?body=${encodeURIComponent(body)}`;
+  return `sms:${cleaned}?body=${encodeURIComponent(body)}`;
 }
 
 export function buildQuickSMSLink(phone: string | null | undefined): string {
   if (!phone) return "#";
-  return `sms:${phone}`;
+  return `sms:${cleanPhone(phone)}`;
 }
 
 export function getLastNote(notes: string | null | undefined): string {
