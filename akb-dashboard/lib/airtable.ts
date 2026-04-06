@@ -1,4 +1,4 @@
-import { Listing, Deal, Buyer } from "./types";
+import { Listing, Deal, Buyer, ProspectiveBuyer } from "./types";
 
 const AIRTABLE_PAT = process.env.AIRTABLE_PAT!;
 const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
@@ -6,6 +6,7 @@ const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
 const LISTINGS_TABLE = "tbldMjKBgPiq45Jjs";
 const DEALS_TABLE = "tblKDYhaghKe6dToW";
 const BUYERS_TABLE = "tbl4Rr07vq0mTftZB";
+const PROSPECTIVE_BUYERS_TABLE = "tblyPAkwRyrlPIP59";
 
 // Field IDs
 const LISTING_FIELDS: Record<string, string> = {
@@ -62,6 +63,20 @@ const BUYER_FIELDS: Record<string, string> = {
   fldzL2ooNWPZbxJOa: "cashBuyer",
   fldgjfPuBQkfRoebT: "proofOfFundsOnFile",
   fldhZbgY7oTHbuFTO: "buyerActiveFlag",
+};
+
+const PROSPECTIVE_BUYER_FIELDS: Record<string, string> = {
+  fldOrnnfmI3huae9a: "fullName",
+  fld40Mhlket7Rvr8a: "company",
+  fld9b74PzwutvTKH2: "email",
+  fldSwN77Rwehkd5Ng: "phone",
+  fldfBtfELGGVm5eOW: "propertyPurchased",
+  fldbfuK1wvXgLkOFL: "city",
+  fldImgIVFblhQLLUy: "zip",
+  fldzEtrD7OrWZLdjz: "source",
+  fld3mac8sg2dWtX0z: "outreachStatus",
+  fldRCclcXWtMSg1i5: "lastContacted",
+  fldoTwSEJX4ulN3tz: "notes",
 };
 
 // Simple in-memory cache
@@ -166,6 +181,44 @@ export async function getBuyers(): Promise<Buyer[]> {
   const buyers = records.map((r) => mapRecord<Buyer>(r, BUYER_FIELDS));
   setCache(cacheKey, buyers);
   return buyers;
+}
+
+export async function getProspectiveBuyers(): Promise<ProspectiveBuyer[]> {
+  const cacheKey = "prospectiveBuyers";
+  const cached = getCached<ProspectiveBuyer[]>(cacheKey);
+  if (cached) return cached;
+
+  const records = await fetchAllRecords(
+    PROSPECTIVE_BUYERS_TABLE,
+    Object.keys(PROSPECTIVE_BUYER_FIELDS)
+  );
+  const buyers = records.map((r) =>
+    mapRecord<ProspectiveBuyer>(r, PROSPECTIVE_BUYER_FIELDS)
+  );
+  setCache(cacheKey, buyers);
+  return buyers;
+}
+
+export async function updateProspectiveBuyerRecord(
+  recordId: string,
+  fields: Record<string, unknown>
+): Promise<void> {
+  const url = `https://api.airtable.com/v0/${BASE_ID}/${PROSPECTIVE_BUYERS_TABLE}/${recordId}`;
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${AIRTABLE_PAT}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ fields }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Airtable update error ${res.status}: ${errText}`);
+  }
+
+  delete cache["prospectiveBuyers"];
 }
 
 export async function updateListingRecord(

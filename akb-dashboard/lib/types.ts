@@ -68,3 +68,18 @@ export interface DashboardStats {
   manualReview: number;
   rejected: number;
 }
+
+export interface ProspectiveBuyer {
+  id: string;
+  fullName: string;
+  company: string | null;
+  email: string | null;
+  phone: string | null;
+  propertyPurchased: string | null;
+  city: string | null;
+  zip: string | null;
+  source: string | null;
+  outreachStatus: string | null;
+  lastContacted: string | null;
+  notes: string | null;
+}

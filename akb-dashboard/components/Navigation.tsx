@@ -7,6 +7,7 @@ const tabs = [
   { name: "ACT NOW", href: "/" },
   { name: "PIPELINE", href: "/pipeline" },
   { name: "DEALS", href: "/deals" },
+  { name: "BUYERS", href: "/buyers" },
 ];
 
 export default function Navigation() {
