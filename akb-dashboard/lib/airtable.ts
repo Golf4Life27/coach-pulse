@@ -210,11 +210,12 @@ export async function updateProspectiveBuyerRecord(
       Authorization: `Bearer ${AIRTABLE_PAT}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ fields }),
+    body: JSON.stringify({ fields, typecast: true }),
   });
 
   if (!res.ok) {
     const errText = await res.text();
+    console.error(`[Airtable] PATCH ${url} failed: ${res.status} ${errText}`);
     throw new Error(`Airtable update error ${res.status}: ${errText}`);
   }
 
@@ -232,11 +233,12 @@ export async function updateListingRecord(
       Authorization: `Bearer ${AIRTABLE_PAT}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ fields }),
+    body: JSON.stringify({ fields, typecast: true }),
   });
 
   if (!res.ok) {
     const errText = await res.text();
+    console.error(`[Airtable] PATCH ${url} failed: ${res.status} ${errText}`);
     throw new Error(`Airtable update error ${res.status}: ${errText}`);
   }
 

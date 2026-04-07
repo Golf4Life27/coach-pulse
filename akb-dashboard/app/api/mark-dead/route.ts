@@ -10,13 +10,15 @@ export async function POST(request: Request) {
 
     await updateListingRecord(recordId, {
       fldGIgqwyCJg4uFyv: "Dead",
+      fldOrWvqKcc1g6Lka: "Reject",
     });
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error("Failed to mark dead:", error);
+    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error("[mark-dead] Failed:", message);
     return NextResponse.json(
-      { error: "Failed to update record" },
+      { error: message },
       { status: 500 }
     );
   }
