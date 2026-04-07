@@ -17,9 +17,10 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error("Failed to mark texted:", error);
+    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error("[mark-texted] Failed:", message);
     return NextResponse.json(
-      { error: "Failed to update record" },
+      { error: message },
       { status: 500 }
     );
   }

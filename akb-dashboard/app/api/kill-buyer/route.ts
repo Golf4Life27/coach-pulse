@@ -14,10 +14,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error("Failed to kill buyer:", error);
-    return NextResponse.json(
-      { error: "Failed to update record" },
-      { status: 500 }
-    );
+    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error("[kill-buyer] Failed:", message);
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
