@@ -17,6 +17,10 @@ function cleanPhone(phone: string): string {
   return phone.replace(/[^+\d]/g, "");
 }
 
+function roundOfferUp(amount: number): number {
+  return Math.ceil(amount / 250) * 250;
+}
+
 export function buildSMSLink(
   phone: string | null | undefined,
   agentName: string | null | undefined,
@@ -28,7 +32,8 @@ export function buildSMSLink(
   const cleaned = cleanPhone(phone);
   if (!cleaned) return "#";
   const firstName = extractFirstName(agentName);
-  const maoStr = mao != null ? formatCurrency(mao) : "a competitive price";
+  const maoStr =
+    mao != null ? formatCurrency(roundOfferUp(mao)) : "a competitive price";
   const body = `Hi ${firstName}, this is Alex with AKB Solutions. I'm interested in your listing at ${address || "the property"} in ${city || "your area"}. I'd like to make a cash offer at ${maoStr} with a quick close and no financing contingencies. Is the seller open to offers in that range?`;
   return `sms:${cleaned}?body=${encodeURIComponent(body)}`;
 }
