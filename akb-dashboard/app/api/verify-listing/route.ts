@@ -99,8 +99,8 @@ interface VerifyRequest {
   city: string;
   state: string;
   zip: string;
-  listPrice: number | null;
-  domCalc: number | null;
+  listPrice: number | string | null;
+  domCalc: number | string | null;
   existingRedfinUrl: string | null;
   existingNotes?: string | null;
 }
@@ -140,13 +140,22 @@ function buildUserMessage(req: VerifyRequest): string {
     parts.push("No Redfin URL on file — please search for it.");
   }
 
-  if (req.listPrice) {
+  const listPrice =
+    req.listPrice != null && req.listPrice !== ""
+      ? parseFloat(String(req.listPrice))
+      : NaN;
+  const domCalc =
+    req.domCalc != null && req.domCalc !== ""
+      ? parseFloat(String(req.domCalc))
+      : NaN;
+
+  if (!isNaN(listPrice)) {
     parts.push(
-      `PropStream list price: $${req.listPrice.toLocaleString("en-US")}`
+      `PropStream list price: $${listPrice.toLocaleString("en-US")}`
     );
   }
-  if (req.domCalc) {
-    parts.push(`PropStream DOM estimate: ${req.domCalc} days`);
+  if (!isNaN(domCalc)) {
+    parts.push(`PropStream DOM estimate: ${domCalc} days`);
   }
 
   parts.push(
