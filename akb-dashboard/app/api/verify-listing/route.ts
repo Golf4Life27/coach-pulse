@@ -258,14 +258,25 @@ export async function POST(request: Request) {
 
     const rawText = textBlocks[textBlocks.length - 1].text!;
 
-    // Strip markdown fences if present
-    const cleaned = rawText
-      .replace(/^```(?:json)?\s*/i, "")
-      .replace(/\s*```$/i, "")
-      .trim();
+    // Extract JSON object from response — Claude may prefix with prose
+    const jsonStart = rawText.indexOf("{");
+    const jsonEnd = rawText.lastIndexOf("}");
+
+    if (jsonStart === -1 || jsonEnd === -1 || jsonEnd <= jsonStart) {
+      console.error(
+        "[verify-listing] No JSON object found in response. Raw text:",
+        rawText
+      );
+      return NextResponse.json(
+        { error: "No JSON found in Anthropic response", rawText },
+        { status: 500 }
+      );
+    }
+
+    const jsonStr = rawText.slice(jsonStart, jsonEnd + 1);
 
     try {
-      verdict = JSON.parse(cleaned);
+      verdict = JSON.parse(jsonStr);
     } catch (parseErr) {
       console.error(
         "[verify-listing] JSON parse failed. Raw text:",
