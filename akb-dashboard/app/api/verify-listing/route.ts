@@ -1,3 +1,4 @@
+// POST /api/verify-listing — Called by Make.com to verify listings via Anthropic + web search
 import { NextResponse } from "next/server";
 
 // Web search + LLM inference can take 30-60s
