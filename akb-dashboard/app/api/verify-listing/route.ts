@@ -202,10 +202,14 @@ export async function POST(request: Request) {
   }
 
   let body: VerifyRequest;
+  const rawText = await request.text();
   try {
-    body = await request.json();
+    body = JSON.parse(rawText);
   } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    return NextResponse.json(
+      { error: "Invalid JSON body", rawBody: rawText },
+      { status: 400 }
+    );
   }
 
   const { recordId, address, city } = body;
