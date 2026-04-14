@@ -1,5 +1,5 @@
 // POST /api/verify-listing — Called by Make.com to verify listings via Anthropic + web search
-import { NextResponse } from "next/server";
+
 
 // Force Node.js runtime (not Edge) — we need full Node APIs
 export const runtime = "nodejs";
@@ -185,8 +185,28 @@ function buildNotesAppend(
   return existing ? `${existing}\n\n${newNote}` : newNote;
 }
 
-export async function POST(request: Request) {
-  console.log("[verify-listing] called", request.method, request.url);
+export async function POST(req: Request) {
+  console.log("[verify-listing] called", req.method, req.url);
+
+  // Read body ONCE as text, then parse — never mix req.text() and req.json()
+  let body: VerifyRequest;
+  try {
+    const text = await req.text();
+    console.log("[verify-listing] raw body length:", text.length);
+    if (!text || text.trim() === "") {
+      return Response.json(
+        { error: "Empty body received" },
+        { status: 400 }
+      );
+    }
+    body = JSON.parse(text);
+  } catch (e) {
+    console.error("[verify-listing] JSON parse failed:", e);
+    return Response.json(
+      { error: "JSON parse failed", detail: String(e) },
+      { status: 400 }
+    );
+  }
 
   try {
     const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -197,34 +217,21 @@ export async function POST(request: Request) {
       process.env.AIRTABLE_TABLE_ID || "tbldMjKBgPiq45Jjs";
 
     if (!ANTHROPIC_API_KEY) {
-      return NextResponse.json(
+      return Response.json(
         { error: "ANTHROPIC_API_KEY not configured" },
         { status: 500 }
       );
     }
     if (!AIRTABLE_PAT) {
-      return NextResponse.json(
+      return Response.json(
         { error: "AIRTABLE_PAT not configured" },
         { status: 500 }
       );
     }
 
-    let body: VerifyRequest;
-    const rawText = await request.text();
-    console.log("[verify-listing] raw body length:", rawText.length);
-    try {
-      body = JSON.parse(rawText);
-    } catch {
-      console.error("[verify-listing] JSON parse failed, rawBody:", rawText);
-      return NextResponse.json(
-        { error: "Invalid JSON body", rawBody: rawText },
-        { status: 400 }
-      );
-    }
-
   const { recordId, address, city } = body;
   if (!recordId || !address || !city) {
-    return NextResponse.json(
+    return Response.json(
       { error: "Missing required fields: recordId, address, city" },
       { status: 400 }
     );
@@ -255,7 +262,7 @@ export async function POST(request: Request) {
       console.error(
         `[verify-listing] Anthropic API error ${anthropicRes.status}: ${errText}`
       );
-      return NextResponse.json(
+      return Response.json(
         { error: `Anthropic API error: ${anthropicRes.status}`, detail: errText },
         { status: 500 }
       );
@@ -273,7 +280,7 @@ export async function POST(request: Request) {
         "[verify-listing] No text block in Anthropic response:",
         JSON.stringify(anthropicData.content)
       );
-      return NextResponse.json(
+      return Response.json(
         { error: "No text response from Anthropic", raw: anthropicData.content },
         { status: 500 }
       );
@@ -290,7 +297,7 @@ export async function POST(request: Request) {
         "[verify-listing] No JSON object found in response. Raw text:",
         rawText
       );
-      return NextResponse.json(
+      return Response.json(
         { error: "No JSON found in Anthropic response", rawText },
         { status: 500 }
       );
@@ -305,7 +312,7 @@ export async function POST(request: Request) {
         "[verify-listing] JSON parse failed. Raw text:",
         rawText
       );
-      return NextResponse.json(
+      return Response.json(
         {
           error: "Failed to parse verdict JSON",
           rawText,
@@ -316,7 +323,7 @@ export async function POST(request: Request) {
     }
   } catch (err) {
     console.error("[verify-listing] Anthropic fetch error:", err);
-    return NextResponse.json(
+    return Response.json(
       { error: "Failed to call Anthropic API", detail: String(err) },
       { status: 500 }
     );
@@ -404,7 +411,7 @@ export async function POST(request: Request) {
     airtableSuccess = true; // test mode
   }
 
-  return NextResponse.json({
+  return Response.json({
     success: true,
     recordId,
     airtableUpdated: airtableSuccess,
@@ -413,7 +420,7 @@ export async function POST(request: Request) {
 
   } catch (topLevelErr) {
     console.error("[verify-listing] Unhandled error:", topLevelErr);
-    return NextResponse.json(
+    return Response.json(
       {
         error: "Unhandled server error",
         detail: String(topLevelErr),
