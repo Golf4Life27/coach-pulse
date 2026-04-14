@@ -1,6 +1,9 @@
 // POST /api/verify-listing — Called by Make.com to verify listings via Anthropic + web search
 import { NextResponse } from "next/server";
 
+// Force Node.js runtime (not Edge) — we need full Node APIs
+export const runtime = "nodejs";
+
 // Web search + LLM inference can take 30-60s
 export const maxDuration = 60;
 
@@ -183,34 +186,41 @@ function buildNotesAppend(
 }
 
 export async function POST(request: Request) {
-  const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-  const AIRTABLE_PAT = process.env.AIRTABLE_PAT;
-  const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
-  const AIRTABLE_TABLE_ID = process.env.AIRTABLE_TABLE_ID || "tbldMjKBgPiq45Jjs";
+  console.log("[verify-listing] called", request.method, request.url);
 
-  if (!ANTHROPIC_API_KEY) {
-    return NextResponse.json(
-      { error: "ANTHROPIC_API_KEY not configured" },
-      { status: 500 }
-    );
-  }
-  if (!AIRTABLE_PAT) {
-    return NextResponse.json(
-      { error: "AIRTABLE_PAT not configured" },
-      { status: 500 }
-    );
-  }
-
-  let body: VerifyRequest;
-  const rawText = await request.text();
   try {
-    body = JSON.parse(rawText);
-  } catch {
-    return NextResponse.json(
-      { error: "Invalid JSON body", rawBody: rawText },
-      { status: 400 }
-    );
-  }
+    const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+    const AIRTABLE_PAT = process.env.AIRTABLE_PAT;
+    const AIRTABLE_BASE_ID =
+      process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
+    const AIRTABLE_TABLE_ID =
+      process.env.AIRTABLE_TABLE_ID || "tbldMjKBgPiq45Jjs";
+
+    if (!ANTHROPIC_API_KEY) {
+      return NextResponse.json(
+        { error: "ANTHROPIC_API_KEY not configured" },
+        { status: 500 }
+      );
+    }
+    if (!AIRTABLE_PAT) {
+      return NextResponse.json(
+        { error: "AIRTABLE_PAT not configured" },
+        { status: 500 }
+      );
+    }
+
+    let body: VerifyRequest;
+    const rawText = await request.text();
+    console.log("[verify-listing] raw body length:", rawText.length);
+    try {
+      body = JSON.parse(rawText);
+    } catch {
+      console.error("[verify-listing] JSON parse failed, rawBody:", rawText);
+      return NextResponse.json(
+        { error: "Invalid JSON body", rawBody: rawText },
+        { status: 400 }
+      );
+    }
 
   const { recordId, address, city } = body;
   if (!recordId || !address || !city) {
@@ -400,4 +410,15 @@ export async function POST(request: Request) {
     airtableUpdated: airtableSuccess,
     verdict,
   });
+
+  } catch (topLevelErr) {
+    console.error("[verify-listing] Unhandled error:", topLevelErr);
+    return NextResponse.json(
+      {
+        error: "Unhandled server error",
+        detail: String(topLevelErr),
+      },
+      { status: 500 }
+    );
+  }
 }
