@@ -32,8 +32,7 @@ const LISTING_FIELDS: Record<string, string> = {
   fldvZ8hU1aREVg3Gs: "bathrooms",
   fld5bKGJLlN7GmiE9: "buildingSqFt",
   fldA8B9zOCneF0rjp: "stageCalc",
-  fldbYzkL24aQ1Y1xz: "approvedForOutreach",
-  fldyiFT48fudbF34k: "flipScore",
+  fldyiFT48fudbF34k: "approvedForOutreach",
   fldytROucQFdlPGLm: "offMarketOverride",
   fldapf2ZXpIWTZfSX: "restrictionText",
 };

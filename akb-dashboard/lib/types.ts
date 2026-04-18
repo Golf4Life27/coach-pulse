@@ -22,8 +22,7 @@ export interface Listing {
   bathrooms: number | null;
   buildingSqFt: number | null;
   stageCalc: string | null;
-  approvedForOutreach: boolean;
-  flipScore: number | null;
+  approvedForOutreach: number | null;
   offMarketOverride: boolean;
   restrictionText: string | null;
 }

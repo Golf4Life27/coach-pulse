@@ -53,8 +53,21 @@ export default function ActNowPage() {
     (l) =>
       l.liveStatus === "Active" &&
       !l.outreachStatus &&
-      l.executionPath === "Auto Proceed"
+      l.executionPath === "Auto Proceed" &&
+      l.approvedForOutreach !== 1
   );
+
+  const onDeckH2Count = listings.filter(
+    (l) => l.approvedForOutreach === 1 && !l.outreachStatus
+  ).length;
+
+  const todayISO = new Date().toISOString().split("T")[0];
+  const textedTodayCount = listings.filter(
+    (l) =>
+      l.outreachStatus === "Texted" &&
+      typeof l.lastOutreachDate === "string" &&
+      l.lastOutreachDate.startsWith(todayISO)
+  ).length;
 
   if (loading) {
     return (
@@ -86,11 +99,13 @@ export default function ActNowPage() {
 
       {/* Metric Cards */}
       {stats && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           <MetricCard label="Negotiating" value={stats.negotiating} color="orange" />
           <MetricCard label="Responses" value={stats.responseReceived} color="yellow" />
           <MetricCard label="Texted / Emailed" value={stats.textedEmailed} color="blue" />
           <MetricCard label="Dead" value={stats.dead} color="gray" />
+          <MetricCard label="On Deck for H2" value={onDeckH2Count} color="teal" />
+          <MetricCard label="Texted Today" value={textedTodayCount} color="green" />
         </div>
       )}
 
