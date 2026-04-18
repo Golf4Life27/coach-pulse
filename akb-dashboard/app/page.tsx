@@ -54,11 +54,11 @@ export default function ActNowPage() {
       l.liveStatus === "Active" &&
       !l.outreachStatus &&
       l.executionPath === "Auto Proceed" &&
-      l.approvedForOutreach !== 1
+      !l.approvedForOutreach
   );
 
   const onDeckH2Count = listings.filter(
-    (l) => l.approvedForOutreach === 1 && !l.outreachStatus
+    (l) => l.approvedForOutreach === true && !l.outreachStatus
   ).length;
 
   const todayISO = new Date().toISOString().split("T")[0];
