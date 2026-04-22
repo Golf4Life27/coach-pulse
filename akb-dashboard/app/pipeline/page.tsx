@@ -8,14 +8,33 @@ import {
   DOMDistribution,
   OfferTierBreakdown,
 } from "@/components/Charts";
+import FollowUpModal from "@/components/FollowUpModal";
 import { Listing, DashboardStats } from "@/lib/types";
 import { formatCurrency, buildSMSLink } from "@/lib/utils";
 import { showToast } from "@/components/Toast";
+
+interface FollowUpState {
+  variants: Array<{ label: string; body: string }>;
+  context: {
+    address: string;
+    list_price: number;
+    our_offer: number;
+    agent_first_name: string;
+    days_since_contact: number;
+    last_reply_excerpt: string;
+  };
+  agentPhone: string;
+}
 
 export default function PipelinePage() {
   const [listings, setListings] = useState<Listing[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // Follow-up modal state
+  const [followUp, setFollowUp] = useState<FollowUpState | null>(null);
+  const [followUpLoading, setFollowUpLoading] = useState<string | null>(null);
+  const [followUpError, setFollowUpError] = useState<{ recordId: string; message: string } | null>(null);
 
   // Filters
   const [cityFilter, setCityFilter] = useState("");
@@ -52,6 +71,32 @@ export default function PipelinePage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  const handleDraftFollowUp = useCallback(async (listing: Listing) => {
+    setFollowUpLoading(listing.id);
+    setFollowUpError(null);
+    try {
+      const res = await fetch("/api/claude/draft-followup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recordId: listing.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setFollowUpError({ recordId: listing.id, message: data.error || `Error ${res.status}` });
+        return;
+      }
+      setFollowUp({
+        variants: data.variants,
+        context: data.context,
+        agentPhone: listing.agentPhone || "",
+      });
+    } catch {
+      setFollowUpError({ recordId: listing.id, message: "Network error" });
+    } finally {
+      setFollowUpLoading(null);
+    }
+  }, []);
 
   const cities = useMemo(
     () => [...new Set(listings.map((l) => l.city).filter(Boolean))].sort(),
@@ -318,7 +363,23 @@ export default function PipelinePage() {
                     {l.agentName || "—"}
                   </td>
                   <td className="py-2 px-2 text-center">
-                    <div className="flex gap-1 justify-center">
+                    <div className="flex gap-1 justify-center items-center">
+                      {l.outreachStatus === "Negotiating" && (
+                        <>
+                          <button
+                            onClick={() => handleDraftFollowUp(l)}
+                            disabled={followUpLoading === l.id}
+                            className="bg-purple-600 hover:bg-purple-500 text-white text-xs font-semibold px-2 py-2 rounded transition-colors min-h-[44px] disabled:opacity-50 whitespace-nowrap"
+                          >
+                            {followUpLoading === l.id ? "..." : "Draft"}
+                          </button>
+                          {followUpError?.recordId === l.id && (
+                            <span className="text-red-400 text-xs max-w-[80px] truncate" title={followUpError.message}>
+                              {followUpError.message}
+                            </span>
+                          )}
+                        </>
+                      )}
                       {l.agentPhone && (
                         <a
                           href={buildSMSLink(l.agentPhone, l.agentName, l.address, l.city, l.mao)}
@@ -350,6 +411,16 @@ export default function PipelinePage() {
           )}
         </div>
       </div>
+
+      {/* Follow-up Modal */}
+      {followUp && (
+        <FollowUpModal
+          variants={followUp.variants}
+          context={followUp.context}
+          agentPhone={followUp.agentPhone}
+          onClose={() => setFollowUp(null)}
+        />
+      )}
     </div>
   );
 }
