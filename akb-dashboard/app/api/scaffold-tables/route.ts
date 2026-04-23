@@ -37,7 +37,7 @@ export async function POST() {
 
   try {
     results.agent_proposals = await createTable("Agent_Proposals", [
-      { name: "Proposal_ID", type: "autoNumber" },
+      { name: "Proposal_ID", type: "singleLineText" },
       { name: "Proposal_Type", type: "singleSelect", options: { choices: [
         { name: "follow_up" }, { name: "kill_dead_deal" },
         { name: "suggest_dispo_price" }, { name: "surface_stale" },

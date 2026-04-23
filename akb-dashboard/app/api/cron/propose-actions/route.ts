@@ -225,6 +225,7 @@ async function createProposal(
     },
     body: JSON.stringify({
       fields: {
+        Proposal_ID: `${candidate.proposalType}-${Date.now()}`,
         Proposal_Type: candidate.proposalType,
         Record_ID: candidate.recordId,
         Record_Address: candidate.address,
