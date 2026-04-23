@@ -1,11 +1,11 @@
-import Anthropic from "@anthropic-ai/sdk";
-
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const AIRTABLE_PAT = process.env.AIRTABLE_PAT!;
 const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
 const LISTINGS_TABLE = "tbldMjKBgPiq45Jjs";
+const MAX_PROPOSALS_PER_RUN = 50;
+const AIRTABLE_BATCH_SIZE = 10;
 
 function getProposalsTableId(): string | null {
   return process.env.AGENT_PROPOSALS_TABLE_ID ?? null;
@@ -100,8 +100,7 @@ async function fetchExistingPendingProposals(
     const data = await res.json();
     for (const rec of data.records) {
       const f = rec.fields as Record<string, unknown>;
-      const key = `${f.Record_ID}:${f.Proposal_Type}`;
-      pending.add(key);
+      pending.add(`${f.Record_ID}:${f.Proposal_Type}`);
     }
     offset = data.offset;
   } while (offset);
@@ -131,186 +130,130 @@ interface RuleMatch {
   passedTimeFilter: number;
 }
 
+const PRIORITY_ORDER: Record<string, number> = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+
 function findCandidates(listings: ListingRecord[]): {
   candidates: ProposalCandidate[];
-  debug: {
-    statusCounts: Record<string, number>;
-    rules: RuleMatch[];
-  };
+  debug: { statusCounts: Record<string, number>; rules: RuleMatch[] };
 } {
   const candidates: ProposalCandidate[] = [];
   const statusCounts: Record<string, number> = {};
   const rules: RuleMatch[] = [];
 
   for (const l of listings) {
-    const s = l.outreachStatus || "(empty)";
-    statusCounts[s] = (statusCounts[s] || 0) + 1;
+    statusCounts[l.outreachStatus || "(empty)"] =
+      (statusCounts[l.outreachStatus || "(empty)"] || 0) + 1;
   }
 
-  // --- FOLLOW_UP RULES ---
-
-  // Negotiating >= 3 days → HIGH
   const negotiating = listings.filter((l) => l.outreachStatus === "Negotiating");
-  const negotiatingFollowUp = negotiating.filter((l) => daysSince(l.lastContacted) >= 3);
-  rules.push({ rule: "follow_up: Negotiating >= 3d", total: negotiating.length, passedTimeFilter: negotiatingFollowUp.length });
-  for (const l of negotiatingFollowUp) {
-    candidates.push({
-      recordId: l.id, address: l.address, proposalType: "follow_up", priority: "HIGH",
-      rule: "Negotiating >= 3d",
-      context: `${l.address} — Negotiating, ${daysSince(l.lastContacted)} days silent. Agent: ${l.agentName}. List: $${l.listPrice.toLocaleString()}.`,
-    });
-  }
-
-  // Offer Accepted >= 2 days → HIGH
   const offerAccepted = listings.filter((l) => l.outreachStatus === "Offer Accepted");
-  const oaFollowUp = offerAccepted.filter((l) => daysSince(l.lastContacted) >= 2);
-  rules.push({ rule: "follow_up: Offer Accepted >= 2d", total: offerAccepted.length, passedTimeFilter: oaFollowUp.length });
-  for (const l of oaFollowUp) {
-    candidates.push({
-      recordId: l.id, address: l.address, proposalType: "follow_up", priority: "HIGH",
-      rule: "Offer Accepted >= 2d",
-      context: `${l.address} — Offer Accepted, ${daysSince(l.lastContacted)} days silent. Agent: ${l.agentName}. List: $${l.listPrice.toLocaleString()}.`,
-    });
-  }
-
-  // Response Received >= 4 days → MEDIUM
   const responseReceived = listings.filter((l) => l.outreachStatus === "Response Received");
-  const rrFollowUp = responseReceived.filter((l) => daysSince(l.lastContacted) >= 4);
-  rules.push({ rule: "follow_up: Response Received >= 4d", total: responseReceived.length, passedTimeFilter: rrFollowUp.length });
-  for (const l of rrFollowUp) {
-    candidates.push({
-      recordId: l.id, address: l.address, proposalType: "follow_up", priority: "MEDIUM",
-      rule: "Response Received >= 4d",
-      context: `${l.address} — Response Received, ${daysSince(l.lastContacted)} days silent. Agent: ${l.agentName}. List: $${l.listPrice.toLocaleString()}.`,
-    });
-  }
-
-  // Texted >= 5 days AND <= 13 days → LOW (soft nudge window)
   const texted = listings.filter((l) => l.outreachStatus === "Texted");
-  const textedFollowUp = texted.filter((l) => {
-    const d = daysSince(l.lastContacted);
-    return d >= 5 && d <= 13;
-  });
-  rules.push({ rule: "follow_up: Texted 5-13d", total: texted.length, passedTimeFilter: textedFollowUp.length });
-  for (const l of textedFollowUp) {
-    candidates.push({
-      recordId: l.id, address: l.address, proposalType: "follow_up", priority: "LOW",
-      rule: "Texted 5-13d",
-      context: `${l.address} — Texted ${daysSince(l.lastContacted)} days ago, no reply yet. Agent: ${l.agentName}.`,
-    });
-  }
-
-  // --- KILL_DEAD_DEAL RULES ---
-
-  // Texted >= 14 days → HIGH
-  const textedDead = texted.filter((l) => daysSince(l.lastContacted) >= 14);
-  rules.push({ rule: "kill_dead_deal: Texted >= 14d", total: texted.length, passedTimeFilter: textedDead.length });
-  for (const l of textedDead) {
-    candidates.push({
-      recordId: l.id, address: l.address, proposalType: "kill_dead_deal", priority: "HIGH",
-      rule: "Texted >= 14d",
-      context: `${l.address} — Texted ${daysSince(l.lastContacted)} days ago, no response logged.`,
-    });
-  }
-
-  // Response Received >= 21 days → MEDIUM
-  const rrDead = responseReceived.filter((l) => daysSince(l.lastContacted) >= 21);
-  rules.push({ rule: "kill_dead_deal: Response Received >= 21d", total: responseReceived.length, passedTimeFilter: rrDead.length });
-  for (const l of rrDead) {
-    candidates.push({
-      recordId: l.id, address: l.address, proposalType: "kill_dead_deal", priority: "MEDIUM",
-      rule: "Response Received >= 21d",
-      context: `${l.address} — Response Received but ${daysSince(l.lastContacted)} days silent. Agent ghosted.`,
-    });
-  }
-
-  // Negotiating >= 21 days → HIGH
-  const negotiatingDead = negotiating.filter((l) => daysSince(l.lastContacted) >= 21);
-  rules.push({ rule: "kill_dead_deal: Negotiating >= 21d", total: negotiating.length, passedTimeFilter: negotiatingDead.length });
-  for (const l of negotiatingDead) {
-    candidates.push({
-      recordId: l.id, address: l.address, proposalType: "kill_dead_deal", priority: "HIGH",
-      rule: "Negotiating >= 21d",
-      context: `${l.address} — Negotiating but ${daysSince(l.lastContacted)} days silent. Deal is dead.`,
-    });
-  }
-
-  // --- SURFACE_STALE RULES ---
-
-  // Emailed >= 7 days → LOW
   const emailed = listings.filter((l) => l.outreachStatus === "Emailed");
-  const emailedStale = emailed.filter((l) => daysSince(l.lastContacted) >= 7);
-  rules.push({ rule: "surface_stale: Emailed >= 7d", total: emailed.length, passedTimeFilter: emailedStale.length });
-  for (const l of emailedStale) {
-    candidates.push({
-      recordId: l.id, address: l.address, proposalType: "surface_stale", priority: "LOW",
-      rule: "Emailed >= 7d",
-      context: `${l.address} — Emailed ${daysSince(l.lastContacted)} days ago, no response. Cold email path.`,
-    });
+
+  function push(subset: ListingRecord[], filter: (l: ListingRecord) => boolean, type: string, priority: "HIGH" | "MEDIUM" | "LOW", ruleName: string, ctxFn: (l: ListingRecord) => string) {
+    const passed = subset.filter(filter);
+    rules.push({ rule: `${type}: ${ruleName}`, total: subset.length, passedTimeFilter: passed.length });
+    for (const l of passed) {
+      candidates.push({ recordId: l.id, address: l.address, proposalType: type, priority, rule: ruleName, context: ctxFn(l) });
+    }
   }
+
+  // FOLLOW_UP
+  push(negotiating, (l) => daysSince(l.lastContacted) >= 3, "follow_up", "HIGH", "Negotiating >= 3d",
+    (l) => `${l.address} — Negotiating, ${daysSince(l.lastContacted)}d silent. Agent: ${l.agentName}. List: $${l.listPrice.toLocaleString()}.`);
+  push(offerAccepted, (l) => daysSince(l.lastContacted) >= 2, "follow_up", "HIGH", "Offer Accepted >= 2d",
+    (l) => `${l.address} — Offer Accepted, ${daysSince(l.lastContacted)}d silent. Agent: ${l.agentName}. List: $${l.listPrice.toLocaleString()}.`);
+  push(responseReceived, (l) => daysSince(l.lastContacted) >= 4, "follow_up", "MEDIUM", "Response Received >= 4d",
+    (l) => `${l.address} — Response Received, ${daysSince(l.lastContacted)}d silent. Agent: ${l.agentName}. List: $${l.listPrice.toLocaleString()}.`);
+  push(texted, (l) => { const d = daysSince(l.lastContacted); return d >= 5 && d <= 13; }, "follow_up", "LOW", "Texted 5-13d",
+    (l) => `${l.address} — Texted ${daysSince(l.lastContacted)}d ago, no reply. Agent: ${l.agentName}.`);
+
+  // KILL_DEAD_DEAL
+  push(texted, (l) => daysSince(l.lastContacted) >= 14, "kill_dead_deal", "HIGH", "Texted >= 14d",
+    (l) => `${l.address} — Texted ${daysSince(l.lastContacted)}d ago, no response.`);
+  push(responseReceived, (l) => daysSince(l.lastContacted) >= 21, "kill_dead_deal", "MEDIUM", "Response Received >= 21d",
+    (l) => `${l.address} — Response Received but ${daysSince(l.lastContacted)}d silent. Agent ghosted.`);
+  push(negotiating, (l) => daysSince(l.lastContacted) >= 21, "kill_dead_deal", "HIGH", "Negotiating >= 21d",
+    (l) => `${l.address} — Negotiating but ${daysSince(l.lastContacted)}d silent. Dead.`);
+
+  // SURFACE_STALE
+  push(emailed, (l) => daysSince(l.lastContacted) >= 7, "surface_stale", "LOW", "Emailed >= 7d",
+    (l) => `${l.address} — Emailed ${daysSince(l.lastContacted)}d ago, no response. Cold email path.`);
+
+  // Sort: HIGH first, then MEDIUM, then LOW. Within same priority, oldest silence first.
+  candidates.sort((a, b) => {
+    const pd = PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
+    if (pd !== 0) return pd;
+    return 0; // stable sort preserves insertion order (oldest listings first from Airtable)
+  });
 
   return { candidates, debug: { statusCounts, rules } };
 }
 
-async function generateReasoning(
-  candidate: ProposalCandidate,
-  apiKey: string
-): Promise<string> {
-  const client = new Anthropic({ apiKey });
-  const message = await client.messages.create({
-    model: "claude-sonnet-4-5-20250514",
-    max_tokens: 256,
-    messages: [
-      {
-        role: "user",
-        content: `You are an operations assistant for AKB Solutions wholesale real estate. Generate a 1-2 sentence reasoning for why we should take this action.
-
-Record: ${candidate.context}
-Proposed action: ${candidate.proposalType}
-Priority: ${candidate.priority}
-
-Return only the reasoning text, no JSON.`,
-      },
-    ],
-  });
-  const textBlock = message.content.find((b) => b.type === "text");
-  return textBlock?.type === "text" ? textBlock.text : "Auto-generated proposal.";
+function buildReasoning(candidate: ProposalCandidate): string {
+  const parts: Record<string, string> = {
+    "follow_up": `Silent for multiple days after ${candidate.rule.split(" ")[0]} status. A follow-up nudge maintains deal momentum and signals continued interest.`,
+    "kill_dead_deal": `No response after extended silence (${candidate.rule}). Marking dead frees pipeline focus and prevents wasted outreach on unresponsive agents.`,
+    "surface_stale": `Cold email with no response for 7+ days. Flagging for review to decide on re-approach strategy or channel switch.`,
+  };
+  return parts[candidate.proposalType] || "Auto-generated proposal based on silence threshold.";
 }
 
-async function createProposal(
+async function batchCreateProposals(
   tableId: string,
-  candidate: ProposalCandidate,
-  reasoning: string
-): Promise<void> {
-  const payload: Record<string, unknown> = { recordId: candidate.recordId };
-  if (candidate.proposalType === "follow_up") {
-    payload.action = "open_draft_modal";
-  } else if (candidate.proposalType === "kill_dead_deal") {
-    payload.action = "set_outreach_status_dead";
-  } else if (candidate.proposalType === "surface_stale") {
-    payload.action = "flag_for_review";
+  candidates: ProposalCandidate[]
+): Promise<{ created: number; errors: string[] }> {
+  let created = 0;
+  const errors: string[] = [];
+
+  for (let i = 0; i < candidates.length; i += AIRTABLE_BATCH_SIZE) {
+    const batch = candidates.slice(i, i + AIRTABLE_BATCH_SIZE);
+    const records = batch.map((c) => {
+      const payload: Record<string, unknown> = { recordId: c.recordId };
+      if (c.proposalType === "follow_up") payload.action = "open_draft_modal";
+      else if (c.proposalType === "kill_dead_deal") payload.action = "set_outreach_status_dead";
+      else if (c.proposalType === "surface_stale") payload.action = "flag_for_review";
+
+      return {
+        fields: {
+          Proposal_ID: `${c.proposalType}-${Date.now()}-${i + batch.indexOf(c)}`,
+          Proposal_Type: c.proposalType,
+          Priority: c.priority,
+          Record_ID: c.recordId,
+          Record_Address: c.address,
+          Reasoning: `[${c.priority}] ${buildReasoning(c)}`,
+          Suggested_Action_Payload: JSON.stringify(payload),
+          Status: "Pending",
+        },
+      };
+    });
+
+    try {
+      const res = await fetch(
+        `https://api.airtable.com/v0/${BASE_ID}/${tableId}`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${AIRTABLE_PAT}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ records, typecast: true }),
+        }
+      );
+
+      if (!res.ok) {
+        const errText = await res.text();
+        errors.push(`Batch ${Math.floor(i / AIRTABLE_BATCH_SIZE)}: ${res.status} ${errText}`);
+      } else {
+        created += batch.length;
+      }
+    } catch (err) {
+      errors.push(`Batch ${Math.floor(i / AIRTABLE_BATCH_SIZE)}: ${String(err)}`);
+    }
   }
 
-  await fetch(`https://api.airtable.com/v0/${BASE_ID}/${tableId}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${AIRTABLE_PAT}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      fields: {
-        Proposal_ID: `${candidate.proposalType}-${Date.now()}`,
-        Proposal_Type: candidate.proposalType,
-        Priority: candidate.priority,
-        Record_ID: candidate.recordId,
-        Record_Address: candidate.address,
-        Reasoning: `[${candidate.priority}] ${reasoning}`,
-        Suggested_Action_Payload: JSON.stringify(payload),
-        Status: "Pending",
-      },
-      typecast: true,
-    }),
-  });
+  return { created, errors };
 }
 
 export async function GET() {
@@ -322,24 +265,14 @@ export async function POST() {
 }
 
 async function handleCron() {
-  const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
   const proposalsTableId = getProposalsTableId();
 
   if (!AIRTABLE_PAT) {
     return Response.json({ error: "AIRTABLE_PAT not set" }, { status: 500 });
   }
-  if (!ANTHROPIC_API_KEY) {
-    return Response.json(
-      { error: "ANTHROPIC_API_KEY not set" },
-      { status: 500 }
-    );
-  }
   if (!proposalsTableId) {
     return Response.json(
-      {
-        error:
-          "AGENT_PROPOSALS_TABLE_ID not set. Run POST /api/scaffold-tables first, then set the env var.",
-      },
+      { error: "AGENT_PROPOSALS_TABLE_ID not set. Run POST /api/scaffold-tables first, then set the env var." },
       { status: 500 }
     );
   }
@@ -348,34 +281,29 @@ async function handleCron() {
     const listings = await fetchListings();
     const { candidates, debug } = findCandidates(listings);
 
-    const existingPending =
-      await fetchExistingPendingProposals(proposalsTableId);
+    // Pre-flight dedupe: fetch all pending proposals once into memory
+    const existingPending = await fetchExistingPendingProposals(proposalsTableId);
 
     const newCandidates = candidates.filter(
       (c) => !existingPending.has(`${c.recordId}:${c.proposalType}`)
     );
 
-    const priorityCounts = { HIGH: 0, MEDIUM: 0, LOW: 0 };
-    let created = 0;
-    const errors: string[] = [];
+    // Cap at MAX_PROPOSALS_PER_RUN (already sorted by priority)
+    const capped = newCandidates.slice(0, MAX_PROPOSALS_PER_RUN);
+    const skipped = newCandidates.length - capped.length;
 
-    for (const candidate of newCandidates) {
-      try {
-        const reasoning = await generateReasoning(candidate, ANTHROPIC_API_KEY);
-        await createProposal(proposalsTableId, candidate, reasoning);
-        created++;
-        priorityCounts[candidate.priority]++;
-      } catch (err) {
-        const msg = `${candidate.address} (${candidate.proposalType}): ${String(err)}`;
-        console.error(`[propose-actions] Failed:`, msg);
-        errors.push(msg);
-      }
-    }
+    // Batch insert (no Claude API calls — reasoning is template-based)
+    const { created, errors } = await batchCreateProposals(proposalsTableId, capped);
+
+    const priorityCounts = { HIGH: 0, MEDIUM: 0, LOW: 0 };
+    for (const c of capped) priorityCounts[c.priority]++;
 
     return Response.json({
       scanned: listings.length,
-      candidates: candidates.length,
+      candidatesFound: candidates.length,
       deduped: candidates.length - newCandidates.length,
+      capped: capped.length,
+      skippedForNextRun: skipped,
       created,
       createdByPriority: priorityCounts,
       errors: errors.length > 0 ? errors : undefined,
