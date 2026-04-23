@@ -1,3 +1,4 @@
+// POST /api/scaffold-tables — creates Agent_Proposals, ZIP_Intelligence, Confirmed_Flips
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
