@@ -15,17 +15,19 @@ interface Proposal {
 }
 
 const typeColors: Record<string, string> = {
-  draft_followup: "border-purple-500 text-purple-400",
-  mark_dead: "border-red-500 text-red-400",
-  send_buyer_nudge: "border-blue-500 text-blue-400",
+  follow_up: "border-purple-500 text-purple-400",
+  kill_dead_deal: "border-red-500 text-red-400",
   suggest_dispo_price: "border-yellow-500 text-yellow-400",
+  surface_stale: "border-blue-500 text-blue-400",
+  flag_price_drop: "border-orange-500 text-orange-400",
 };
 
 const typeLabels: Record<string, string> = {
-  draft_followup: "Draft Follow-Up",
-  mark_dead: "Mark Dead",
-  send_buyer_nudge: "Buyer Nudge",
+  follow_up: "Follow Up",
+  kill_dead_deal: "Kill Dead Deal",
   suggest_dispo_price: "Dispo Price",
+  surface_stale: "Surface Stale",
+  flag_price_drop: "Price Drop",
 };
 
 export default function QueuePage() {

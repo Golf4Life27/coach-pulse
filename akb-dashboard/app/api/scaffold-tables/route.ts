@@ -37,9 +37,11 @@ export async function POST() {
 
   try {
     results.agent_proposals = await createTable("Agent_Proposals", [
+      { name: "Proposal_ID", type: "autoNumber" },
       { name: "Proposal_Type", type: "singleSelect", options: { choices: [
-        { name: "draft_followup" }, { name: "mark_dead" },
-        { name: "send_buyer_nudge" }, { name: "suggest_dispo_price" },
+        { name: "follow_up" }, { name: "kill_dead_deal" },
+        { name: "suggest_dispo_price" }, { name: "surface_stale" },
+        { name: "flag_price_drop" },
       ]}},
       { name: "Record_ID", type: "singleLineText" },
       { name: "Record_Address", type: "singleLineText" },

@@ -142,7 +142,7 @@ function findCandidates(listings: ListingRecord[]): ProposalCandidate[] {
       candidates.push({
         recordId: l.id,
         address: l.address,
-        proposalType: "draft_followup",
+        proposalType: "follow_up",
         context: `${l.address} — Negotiating, ${daysSince(l.lastContacted)} days silent. Agent: ${l.agentName}. List: $${l.listPrice.toLocaleString()}.`,
       });
     }
@@ -157,7 +157,7 @@ function findCandidates(listings: ListingRecord[]): ProposalCandidate[] {
       candidates.push({
         recordId: l.id,
         address: l.address,
-        proposalType: "mark_dead",
+        proposalType: "kill_dead_deal",
         context: `${l.address} — Texted ${daysSince(l.lastContacted)} days ago, no response logged.`,
       });
     }
@@ -170,7 +170,7 @@ function findCandidates(listings: ListingRecord[]): ProposalCandidate[] {
       candidates.push({
         recordId: l.id,
         address: l.address,
-        proposalType: "send_buyer_nudge",
+        proposalType: "surface_stale",
         context: `${l.address} — Offer Accepted, ${hoursSince(l.lastContacted)} hours since last contact. Agent: ${l.agentName}.`,
       });
     }
@@ -209,11 +209,11 @@ async function createProposal(
   reasoning: string
 ): Promise<void> {
   const payload: Record<string, unknown> = { recordId: candidate.recordId };
-  if (candidate.proposalType === "draft_followup") {
+  if (candidate.proposalType === "follow_up") {
     payload.action = "open_draft_modal";
-  } else if (candidate.proposalType === "mark_dead") {
+  } else if (candidate.proposalType === "kill_dead_deal") {
     payload.action = "set_outreach_status_dead";
-  } else if (candidate.proposalType === "send_buyer_nudge") {
+  } else if (candidate.proposalType === "surface_stale") {
     payload.action = "open_draft_modal";
   }
 
