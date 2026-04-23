@@ -45,6 +45,9 @@ export async function POST() {
       ]}},
       { name: "Record_ID", type: "singleLineText" },
       { name: "Record_Address", type: "singleLineText" },
+      { name: "Priority", type: "singleSelect", options: { choices: [
+        { name: "HIGH" }, { name: "MEDIUM" }, { name: "LOW" },
+      ]}},
       { name: "Reasoning", type: "multilineText" },
       { name: "Suggested_Action_Payload", type: "multilineText" },
       { name: "Status", type: "singleSelect", options: { choices: [
