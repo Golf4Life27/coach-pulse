@@ -364,7 +364,7 @@ export default function PipelinePage() {
                   </td>
                   <td className="py-2 px-2 text-center">
                     <div className="flex gap-1 justify-center items-center">
-                      {l.outreachStatus === "Negotiating" && (
+                      {(l.outreachStatus === "Negotiating" || l.outreachStatus === "Offer Accepted") && (
                         <>
                           <button
                             onClick={() => handleDraftFollowUp(l)}

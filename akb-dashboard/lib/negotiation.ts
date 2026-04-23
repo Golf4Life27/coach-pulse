@@ -26,6 +26,8 @@ export interface NegotiationContext {
   last_reply_excerpt: string;
 }
 
+const ALLOWED_STATUSES = ["Negotiating", "Offer Accepted"];
+
 export async function getNegotiationContext(
   recordId: string
 ): Promise<NegotiationContext> {
@@ -54,7 +56,7 @@ export async function getNegotiationContext(
   const outreachStatus = fields[NEGOTIATION_FIELD_IDS.outreachStatus] as
     | string
     | undefined;
-  if (outreachStatus !== "Negotiating") {
+  if (!outreachStatus || !ALLOWED_STATUSES.includes(outreachStatus)) {
     throw new NotNegotiatingError(outreachStatus ?? "empty");
   }
 
