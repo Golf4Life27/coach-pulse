@@ -15,7 +15,7 @@ export interface Listing {
   agentPhone: string | null;
   agentEmail: string | null;
   verificationUrl: string | null;
-  verificationNotes: string | null;
+  notes: string | null;
   distressScore: number | null;
   distressBucket: string | null;
   bedrooms: number | null;
@@ -26,6 +26,11 @@ export interface Listing {
   flipScore: number | null;
   offMarketOverride: boolean;
   restrictionText: string | null;
+  ddChecklist: string[] | null;
+  doNotText: boolean;
+  state: string | null;
+  actionHoldUntil: string | null;
+  actionCardState: "Open" | "Held" | "Cleared" | null;
 }
 
 export interface Deal {

@@ -68,11 +68,11 @@ export default function NegotiationCard({ listing }: NegotiationCardProps) {
       </div>
 
       {/* Last Note */}
-      {listing.verificationNotes && (
+      {listing.notes && (
         <div className="mb-3">
           <p className="text-xs text-gray-500 mb-1">Last Note:</p>
           <p className="text-xs text-gray-300 bg-[#161b22] rounded p-2 line-clamp-3">
-            {getLastNote(listing.verificationNotes)}
+            {getLastNote(listing.notes)}
           </p>
         </div>
       )}

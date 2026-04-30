@@ -25,7 +25,7 @@ const LISTING_FIELDS: Record<string, string> = {
   fldee9MOstjNDKjnm: "agentPhone",
   fldzdck2fhd6DZ3Oq: "agentEmail",
   fldXrW8CWUphUfKgJ: "verificationUrl",
-  fldwKGxZly6O8qyPu: "verificationNotes",
+  fldwKGxZly6O8qyPu: "notes",
   fldwSjhdhEKVzpVRQ: "distressScore",
   fldpFHAXujnz9x72x: "distressBucket",
   fld5GBaHtwvLY3sq8: "bedrooms",
@@ -36,6 +36,11 @@ const LISTING_FIELDS: Record<string, string> = {
   fldyiFT48fudbF34k: "flipScore",
   fldytROucQFdlPGLm: "offMarketOverride",
   fldapf2ZXpIWTZfSX: "restrictionText",
+  fldZVZT98A6cEmJB3: "ddChecklist",
+  fldoXlPt9s6a1oopo: "doNotText",
+  fldSlDQvgCyr0J8tI: "state",
+  fldkYeP8onCHil0pd: "actionHoldUntil",
+  fldiNKFpIBUYgg7el: "actionCardState",
 };
 
 const DEAL_FIELDS: Record<string, string> = {
