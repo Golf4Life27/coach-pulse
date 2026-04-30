@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { StaleCard as StaleCardData } from "@/lib/actionQueue";
 import { formatCurrency, buildSMSLink } from "@/lib/utils";
 import { showToast } from "@/components/Toast";
@@ -55,7 +56,12 @@ export default function StaleCard({ card, onActionComplete }: Props) {
               <span className="text-xs text-gray-500">held until {card.holdUntil}</span>
             )}
           </div>
-          <h3 className="text-white font-semibold text-sm mt-1">{card.address}</h3>
+          <Link
+            href={`/pipeline/${card.recordId}`}
+            className="block text-white font-semibold text-sm mt-1 hover:underline"
+          >
+            {card.address}
+          </Link>
           <p className="text-gray-500 text-xs">
             {card.agentName ?? "—"} · {card.daysSilent} days silent
             {card.lastOutreachDate ? ` · last ${card.lastOutreachDate.slice(0, 10)}` : ""}

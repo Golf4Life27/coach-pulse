@@ -163,6 +163,33 @@ export async function getListings(): Promise<Listing[]> {
   return listings;
 }
 
+export async function getListing(id: string): Promise<Listing | null> {
+  const cacheKey = `listing:${id}`;
+  const cached = getCached<Listing>(cacheKey);
+  if (cached) return cached;
+
+  const params = new URLSearchParams();
+  Object.keys(LISTING_FIELDS).forEach((f) => params.append("fields[]", f));
+  params.set("returnFieldsByFieldId", "true");
+  const url = `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}/${id}?${params.toString()}`;
+
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${AIRTABLE_PAT}` },
+    cache: "no-store",
+  });
+
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Airtable error ${res.status}: ${errText}`);
+  }
+
+  const data = await res.json();
+  const listing = mapRecord<Listing>(data, LISTING_FIELDS);
+  setCache(cacheKey, listing);
+  return listing;
+}
+
 export async function getDeals(): Promise<Deal[]> {
   const cacheKey = "deals";
   const cached = getCached<Deal[]>(cacheKey);
@@ -250,8 +277,9 @@ export async function updateListingRecord(
     throw new Error(`Airtable update error ${res.status}: ${errText}`);
   }
 
-  // Invalidate listings cache after write
+  // Invalidate both the list cache and the per-record cache for this listing.
   delete cache["listings"];
+  delete cache[`listing:${recordId}`];
 }
 
 export async function updateDealRecord(
