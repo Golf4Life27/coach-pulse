@@ -5,18 +5,26 @@ export const runtime = "nodejs";
 export const maxDuration = 30;
 
 // Field IDs (mirrors lib/airtable.ts mapping). Centralised here so the
-// action handlers PATCH the right Airtable columns.
+// action handlers PATCH the right Airtable columns. Listing- and deal-side
+// Action_Card_State / Action_Hold_Until are separate columns on separate
+// tables, so they get distinct keys.
 const FIELD = {
-  outreachStatus: "fldGIgqwyCJg4uFyv",
-  ddChecklist: "fldZVZT98A6cEmJB3",
-  actionCardState: "fldiNKFpIBUYgg7el",
-  actionHoldUntil: "fldkYeP8onCHil0pd",
+  // Listings
+  listingOutreachStatus: "fldGIgqwyCJg4uFyv",
+  listingDDChecklist: "fldZVZT98A6cEmJB3",
+  listingActionCardState: "fldiNKFpIBUYgg7el",
+  listingActionHoldUntil: "fldkYeP8onCHil0pd",
+  // Deals
   dealClosingStatus: "fldTvNokAK5AEqz9z",
   dealStatus: "fldned9bMeMSKWruL",
+  dealBuyerBlastStatus: "fldWIL8UzG6y2zjY0",
+  dealActionCardState: "fldi7i3WinAohQ3aS",
+  dealActionHoldUntil: "fldDmZjkunw6iZujf",
 } as const;
 
 interface ActionBody {
   recordId: string;
+  table?: "listings" | "deals"; // used by `hold` and `clear`
   until?: string; // YYYY-MM-DD, used by `hold`
 }
 
@@ -26,40 +34,69 @@ const HANDLERS: Record<string, Handler> = {
   // Listing-side actions
   async mark_dead({ recordId }) {
     await updateListingRecord(recordId, {
-      [FIELD.outreachStatus]: "Dead",
-      [FIELD.actionCardState]: "Cleared",
+      [FIELD.listingOutreachStatus]: "Dead",
+      [FIELD.listingActionCardState]: "Cleared",
     });
   },
   async mark_dd_complete({ recordId }) {
     await updateListingRecord(recordId, {
-      [FIELD.ddChecklist]: [...ALL_DD_ITEMS],
-      [FIELD.actionCardState]: "Cleared",
-    });
-  },
-  async hold({ recordId, until }) {
-    if (!until || !/^\d{4}-\d{2}-\d{2}$/.test(until)) {
-      throw new Error("Invalid 'until' (expected YYYY-MM-DD)");
-    }
-    await updateListingRecord(recordId, {
-      [FIELD.actionCardState]: "Held",
-      [FIELD.actionHoldUntil]: until,
-    });
-  },
-  async clear({ recordId }) {
-    await updateListingRecord(recordId, {
-      [FIELD.actionCardState]: "Cleared",
+      [FIELD.listingDDChecklist]: [...ALL_DD_ITEMS],
+      [FIELD.listingActionCardState]: "Cleared",
     });
   },
 
-  // Deal-side actions
+  // Shared hold/clear — the `table` param picks which record we PATCH.
+  // Defaults to listings for backwards compatibility with the listing cards.
+  async hold({ recordId, until, table = "listings" }) {
+    if (!until || !/^\d{4}-\d{2}-\d{2}$/.test(until)) {
+      throw new Error("Invalid 'until' (expected YYYY-MM-DD)");
+    }
+    if (table === "deals") {
+      await updateDealRecord(recordId, {
+        [FIELD.dealActionCardState]: "Held",
+        [FIELD.dealActionHoldUntil]: until,
+      });
+    } else {
+      await updateListingRecord(recordId, {
+        [FIELD.listingActionCardState]: "Held",
+        [FIELD.listingActionHoldUntil]: until,
+      });
+    }
+  },
+  async clear({ recordId, table = "listings" }) {
+    if (table === "deals") {
+      await updateDealRecord(recordId, {
+        [FIELD.dealActionCardState]: "Cleared",
+      });
+    } else {
+      await updateListingRecord(recordId, {
+        [FIELD.listingActionCardState]: "Cleared",
+      });
+    }
+  },
+
+  // Deal-side actions. Each deal action also clears the Action Queue card
+  // since the decision has been made (Buyer_Blast="Sent" / Closing_Status=
+  // "Contract Signed" / Status="Failed" aren't all terminal in pipeline
+  // terms, but the card itself no longer needs Alex's attention).
   async sign_contract({ recordId }) {
     await updateDealRecord(recordId, {
       [FIELD.dealClosingStatus]: "Contract Signed",
+      [FIELD.dealActionCardState]: "Cleared",
     });
   },
   async walk_away({ recordId }) {
     await updateDealRecord(recordId, {
       [FIELD.dealStatus]: "Failed",
+      [FIELD.dealActionCardState]: "Cleared",
+    });
+  },
+  async send_buyer_blast({ recordId }) {
+    // Sets Buyer_Blast_Status only — does NOT trigger Scenario G yet
+    // (per Step 2.5 decision; that wiring lands in a later step).
+    await updateDealRecord(recordId, {
+      [FIELD.dealBuyerBlastStatus]: "Sent",
+      [FIELD.dealActionCardState]: "Cleared",
     });
   },
 };

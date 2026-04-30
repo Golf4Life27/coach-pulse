@@ -91,18 +91,25 @@ function daysBetween(iso: string | null, now: Date): number | null {
   return Math.floor((now.getTime() - d.getTime()) / 86_400_000);
 }
 
-function effectiveCardState(listing: Listing, now: Date): CardState {
-  const stored: CardState = listing.actionCardState ?? "Open";
-  if (stored !== "Held") return stored;
-  if (!listing.actionHoldUntil) return "Open";
-  const until = new Date(listing.actionHoldUntil);
+// Shared by listing and deal classifiers. Held cards resurface as Open once
+// holdUntil has passed.
+function effectiveCardState(
+  stored: CardState | null | undefined,
+  holdUntil: string | null,
+  now: Date,
+): CardState {
+  const state: CardState = stored ?? "Open";
+  if (state !== "Held") return state;
+  if (!holdUntil) return "Open";
+  const until = new Date(holdUntil);
   if (Number.isNaN(until.getTime())) return "Open";
-  // Resurface the card once the hold date has passed.
   return until.getTime() <= now.getTime() ? "Open" : "Held";
 }
 
-function isTexas(state: string | null): boolean {
-  if (!state) return false;
+// Step 2.5: relaxed from strict "TX" to "TX or unknown" — listings without a
+// state value still pass, since not all records have been backfilled.
+function isTexasOrUnknown(state: string | null): boolean {
+  if (!state) return true;
   return state.trim().toUpperCase() === "TX";
 }
 
@@ -110,7 +117,11 @@ function classifyListing(listing: Listing, now: Date): ActionCard | null {
   if (listing.outreachStatus !== "Negotiating") return null;
   if (listing.doNotText) return null;
 
-  const cardState = effectiveCardState(listing, now);
+  const cardState = effectiveCardState(
+    listing.actionCardState,
+    listing.actionHoldUntil,
+    now,
+  );
   if (cardState === "Cleared") return null;
 
   const dir = latestMessageDirection(listing.notes);
@@ -175,11 +186,20 @@ function classifyListing(listing: Listing, now: Date): ActionCard | null {
   return null;
 }
 
-function classifyDeal(deal: Deal): ActionCard | null {
+function classifyDeal(deal: Deal, now: Date): ActionCard | null {
+  // Terminal-status backstop — keeps old closed/failed deals out of the queue
+  // even if Action_Card_State was never populated on them.
   if (deal.status && TERMINAL_DEAL_STATUS.has(deal.status)) return null;
   if (deal.closingStatus && TERMINAL_CLOSING_STATUS.has(deal.closingStatus)) {
     return null;
   }
+
+  const cardState = effectiveCardState(
+    deal.actionCardState,
+    deal.actionHoldUntil,
+    now,
+  );
+  if (cardState === "Cleared") return null;
 
   const contract = deal.contractPrice;
   const fee = deal.assignmentFee;
@@ -191,10 +211,8 @@ function classifyDeal(deal: Deal): ActionCard | null {
     kind: "deal",
     recordId: deal.id,
     table: "deals",
-    // Deals have no actionCardState column yet — see Step 2 summary.
-    // Treat them as always Open until that decision is made.
-    cardState: "Open",
-    holdUntil: null,
+    cardState,
+    holdUntil: deal.actionHoldUntil,
     address: deal.propertyAddress,
     contractPrice: contract,
     assignmentPrice,
@@ -229,7 +247,7 @@ export function buildActionQueue(
   const held: ActionCard[] = [];
 
   for (const listing of listings) {
-    if (!isTexas(listing.state)) continue;
+    if (!isTexasOrUnknown(listing.state)) continue;
     const card = classifyListing(listing, now);
     if (!card) continue;
     if (card.cardState === "Held") held.push(card);
@@ -237,9 +255,10 @@ export function buildActionQueue(
   }
 
   for (const deal of deals) {
-    const card = classifyDeal(deal);
+    const card = classifyDeal(deal, now);
     if (!card) continue;
-    open.push(card);
+    if (card.cardState === "Held") held.push(card);
+    else open.push(card);
   }
 
   open.sort(compareCards);

@@ -3,6 +3,7 @@
 import { DealCard as DealCardData } from "@/lib/actionQueue";
 import { formatCurrency } from "@/lib/utils";
 import { showToast } from "@/components/Toast";
+import HoldButton from "./HoldButton";
 
 interface Props {
   card: DealCardData;
@@ -21,28 +22,40 @@ async function postAction(type: string, body: Record<string, unknown>) {
   }
 }
 
-const SCHEMA_PENDING_MSG =
-  "Send Buyer Blast: no schema target yet — see Step 2 summary for the decision Alex needs to make.";
-const HOLD_PENDING_MSG =
-  "Hold-for-Later on Deal cards needs Deal-side Action_Card_State / Action_Hold_Until fields — see Step 2 summary.";
-
 export default function DealCard({ card, onActionComplete }: Props) {
-  const handle = async (type: string) => {
+  const handle = async (type: string, extra: Record<string, unknown> = {}) => {
     try {
-      await postAction(type, { recordId: card.recordId });
+      await postAction(type, {
+        recordId: card.recordId,
+        table: "deals",
+        ...extra,
+      });
       onActionComplete();
     } catch (err) {
       showToast(String(err));
     }
   };
 
+  const isHeld = card.cardState === "Held";
+
   return (
-    <div className="bg-[#1c2128] rounded-lg border border-emerald-500/40 hover:border-emerald-500 p-4 transition-colors">
+    <div
+      className={`bg-[#1c2128] rounded-lg border p-4 transition-colors ${
+        isHeld
+          ? "border-[#30363d] opacity-60"
+          : "border-emerald-500/40 hover:border-emerald-500"
+      }`}
+    >
       <div className="flex justify-between items-start mb-3">
         <div>
-          <span className="px-2 py-0.5 rounded text-xs font-bold bg-emerald-500/20 text-emerald-400">
-            DEAL
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="px-2 py-0.5 rounded text-xs font-bold bg-emerald-500/20 text-emerald-400">
+              DEAL
+            </span>
+            {isHeld && card.holdUntil && (
+              <span className="text-xs text-gray-500">held until {card.holdUntil}</span>
+            )}
+          </div>
           <h3 className="text-white font-semibold text-sm mt-1">{card.address}</h3>
           <p className="text-gray-500 text-xs">
             {card.closingStatus ?? card.status ?? "Status —"}
@@ -68,7 +81,7 @@ export default function DealCard({ card, onActionComplete }: Props) {
       <div className="flex gap-2 flex-wrap">
         <button
           type="button"
-          onClick={() => showToast(SCHEMA_PENDING_MSG)}
+          onClick={() => handle("send_buyer_blast")}
           className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold py-2.5 rounded min-h-[44px]"
         >
           Send Buyer Blast
@@ -87,13 +100,7 @@ export default function DealCard({ card, onActionComplete }: Props) {
         >
           Walk Away
         </button>
-        <button
-          type="button"
-          onClick={() => showToast(HOLD_PENDING_MSG)}
-          className="flex-1 bg-[#30363d] hover:bg-[#3d444d] text-gray-300 text-xs font-semibold py-2.5 rounded min-h-[44px]"
-        >
-          Hold
-        </button>
+        <HoldButton onHold={(until) => handle("hold", { until })} />
       </div>
     </div>
   );

@@ -49,6 +49,9 @@ export interface Deal {
   beds: number | null;
   baths: number | null;
   sqft: number | null;
+  buyerBlastStatus: "Pending" | "Sent" | "Closed" | null;
+  actionCardState: "Open" | "Held" | "Cleared" | null;
+  actionHoldUntil: string | null;
 }
 
 export interface Buyer {

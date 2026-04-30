@@ -58,6 +58,9 @@ const DEAL_FIELDS: Record<string, string> = {
   fldxsnwsG1wExkW96: "beds",
   fldPSZKOxGvU7sLY8: "baths",
   fldExcij4rL2mmYdb: "sqft",
+  fldWIL8UzG6y2zjY0: "buyerBlastStatus",
+  fldi7i3WinAohQ3aS: "actionCardState",
+  fldDmZjkunw6iZujf: "actionHoldUntil",
 };
 
 const BUYER_FIELDS: Record<string, string> = {
