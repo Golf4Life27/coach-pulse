@@ -250,3 +250,26 @@ export async function updateListingRecord(
   // Invalidate listings cache after write
   delete cache["listings"];
 }
+
+export async function updateDealRecord(
+  recordId: string,
+  fields: Record<string, unknown>
+): Promise<void> {
+  const url = `https://api.airtable.com/v0/${BASE_ID}/${DEALS_TABLE}/${recordId}`;
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${AIRTABLE_PAT}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ fields, typecast: true }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    console.error(`[Airtable] PATCH ${url} failed: ${res.status} ${errText}`);
+    throw new Error(`Airtable update error ${res.status}: ${errText}`);
+  }
+
+  delete cache["deals"];
+}
