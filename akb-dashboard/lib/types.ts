@@ -77,6 +77,26 @@ export interface DashboardStats {
   rejected: number;
 }
 
+// Morning-briefing summary served by /api/briefing. Numbers are computed from
+// already-cached listings + deals; some fields ride on data we don't yet have
+// a clean source for and are returned as zero/null with a reason in `gaps`.
+export interface Briefing {
+  pendingResponses: number;
+  activeNegotiations: number;
+  staleNegotiations: number;
+  dealDeadlines7d: number;
+  textsToday: number;
+  responseRateToday: number | null;
+  makeErrors24h: number;
+  gaps: BriefingGap[];
+}
+
+export type BriefingGap =
+  | "dealDeadlines7d"
+  | "responseRateToday"
+  | "makeErrors24h"
+  | "pendingResponsesSinceLogin";
+
 export interface ProspectiveBuyer {
   id: string;
   fullName: string;
