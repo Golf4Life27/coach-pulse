@@ -5,6 +5,7 @@ import Navigation from "@/components/Navigation";
 import QuotesBar from "@/components/QuotesBar";
 import ToastContainer from "@/components/Toast";
 import CommandBar from "@/components/CommandBar";
+import CommandBarFAB from "@/components/CommandBarFAB";
 
 export const metadata: Metadata = {
   title: "AKB Solutions — Pipeline Dashboard",
@@ -30,6 +31,7 @@ export default function RootLayout({
           <Navigation />
           <main className="max-w-7xl mx-auto px-4 py-6">{children}</main>
           <CommandBar />
+          <CommandBarFAB />
         </AuthGate>
         <ToastContainer />
       </body>
