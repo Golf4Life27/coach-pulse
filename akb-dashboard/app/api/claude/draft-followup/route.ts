@@ -113,7 +113,7 @@ Current Outreach_Status: Negotiating`;
   try {
     const client = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
     const message = await client.messages.create({
-      model: "claude-sonnet-4-5-20250514",
+      model: "claude-sonnet-4-5-20250929",
       max_tokens: 512,
       system: SYSTEM_PROMPT,
       messages: [{ role: "user", content: userMessage }],
