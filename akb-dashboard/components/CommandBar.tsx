@@ -3,6 +3,11 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { showToast } from "@/components/Toast";
+import {
+  COMMAND_BAR_OPEN_EVENT,
+  consumePendingDetail,
+  getHoveredCard,
+} from "@/lib/commandBus";
 
 interface CommandResult {
   intent: "navigate" | "action" | "query" | "unclear";
@@ -22,16 +27,32 @@ export default function CommandBar({ onDraftFollowUp }: CommandBarProps) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<CommandResult | null>(null);
+  const [contextRecordId, setContextRecordId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
 
+  const openWith = useCallback(
+    (opts: { contextRecordId?: string | null; prefill?: string }) => {
+      setOpen(true);
+      setResult(null);
+      setInput(opts.prefill ?? "");
+      setContextRecordId(opts.contextRecordId ?? null);
+    },
+    [],
+  );
+
+  // Cmd+K hotkey: lock context to whichever card the user was hovering.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
         e.preventDefault();
-        setOpen((prev) => !prev);
-        setResult(null);
-        setInput("");
+        setOpen((prev) => {
+          if (prev) return false;
+          setResult(null);
+          setInput("");
+          setContextRecordId(getHoveredCard());
+          return true;
+        });
       }
       if (e.key === "Escape" && open) {
         setOpen(false);
@@ -40,6 +61,19 @@ export default function CommandBar({ onDraftFollowUp }: CommandBarProps) {
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [open]);
+
+  // Imperative open from cards (e.g. Counter button on a Response card).
+  useEffect(() => {
+    const handler = () => {
+      const detail = consumePendingDetail();
+      openWith({
+        contextRecordId: detail.contextRecordId ?? getHoveredCard(),
+        prefill: detail.prefill,
+      });
+    };
+    window.addEventListener(COMMAND_BAR_OPEN_EVENT, handler);
+    return () => window.removeEventListener(COMMAND_BAR_OPEN_EVENT, handler);
+  }, [openWith]);
 
   useEffect(() => {
     if (open) inputRef.current?.focus();
@@ -57,7 +91,12 @@ export default function CommandBar({ onDraftFollowUp }: CommandBarProps) {
         const res = await fetch("/api/claude/command", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ command: input }),
+          body: JSON.stringify({
+            command: input,
+            ...(contextRecordId
+              ? { propertyContext: { recordId: contextRecordId } }
+              : {}),
+          }),
         });
         const data = await res.json();
 
@@ -87,7 +126,7 @@ export default function CommandBar({ onDraftFollowUp }: CommandBarProps) {
         setLoading(false);
       }
     },
-    [input, loading, router, onDraftFollowUp]
+    [input, loading, router, onDraftFollowUp, contextRecordId],
   );
 
   if (!open) return null;
@@ -108,7 +147,11 @@ export default function CommandBar({ onDraftFollowUp }: CommandBarProps) {
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="What do you need? (e.g. 'total spread on active deals')"
+              placeholder={
+                contextRecordId
+                  ? "Ask about this property…"
+                  : "What do you need? (e.g. 'total spread on active deals')"
+              }
               className="flex-1 bg-transparent text-white text-sm py-3 focus:outline-none placeholder-gray-600"
               disabled={loading}
             />
@@ -118,6 +161,11 @@ export default function CommandBar({ onDraftFollowUp }: CommandBarProps) {
               </span>
             )}
           </div>
+          {contextRecordId && (
+            <div className="px-4 py-1.5 border-b border-[#30363d] text-[10px] text-blue-400 bg-blue-500/5">
+              context: {contextRecordId}
+            </div>
+          )}
         </form>
 
         {result && (

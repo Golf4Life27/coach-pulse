@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ResponseCard as ResponseCardData } from "@/lib/actionQueue";
 import { formatCurrency, buildQuickSMSLink } from "@/lib/utils";
 import { showToast } from "@/components/Toast";
+import { setHoveredCard, openCommandBar } from "@/lib/commandBus";
 import HoldButton from "./HoldButton";
 
 interface Props {
@@ -37,6 +38,8 @@ export default function ResponseCard({ card, onActionComplete }: Props) {
 
   return (
     <div
+      onMouseEnter={() => setHoveredCard(card.recordId)}
+      onMouseLeave={() => setHoveredCard(null)}
       className={`bg-[#1c2128] rounded-lg border p-4 transition-colors ${
         isHeld
           ? "border-[#30363d] opacity-60"
@@ -103,9 +106,11 @@ export default function ResponseCard({ card, onActionComplete }: Props) {
         <button
           type="button"
           onClick={() =>
-            showToast(
-              "Counter composer ships in Step 6 — use Cmd+K with this card focused once it's wired.",
-            )
+            openCommandBar({
+              contextRecordId: card.recordId,
+              prefill:
+                "Draft a counter offer reply to this agent. Apply the 65% rule and entity-flexibility language.",
+            })
           }
           className="flex-1 bg-[#30363d] hover:bg-[#3d444d] text-gray-200 text-xs font-semibold py-2.5 rounded min-h-[44px]"
         >

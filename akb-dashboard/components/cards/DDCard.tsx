@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { DDCard as DDCardData } from "@/lib/actionQueue";
 import { showToast } from "@/components/Toast";
+import { setHoveredCard } from "@/lib/commandBus";
 import HoldButton from "./HoldButton";
 
 interface Props {
@@ -67,6 +68,8 @@ export default function DDCard({ card, onActionComplete }: Props) {
 
   return (
     <div
+      onMouseEnter={() => setHoveredCard(card.recordId)}
+      onMouseLeave={() => setHoveredCard(null)}
       className={`bg-[#1c2128] rounded-lg border p-4 transition-colors ${
         isHeld
           ? "border-[#30363d] opacity-60"

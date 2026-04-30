@@ -1,4 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { getListing } from "@/lib/airtable";
+import { parseConversation } from "@/lib/notes";
+import { ALL_DD_ITEMS } from "@/lib/actionQueue";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -64,28 +67,106 @@ async function fetchSummaryData(): Promise<string> {
   return JSON.stringify({ listings: listings.slice(0, 100), deals });
 }
 
-const SYSTEM_PROMPT = `You are the command interpreter for AKB Solutions' wholesale pipeline dashboard.
+function formatCurrency(n: number | null | undefined): string {
+  if (n == null) return "—";
+  return `$${Math.round(n).toLocaleString("en-US")}`;
+}
+
+async function buildPropertyContext(recordId: string): Promise<string | null> {
+  const listing = await getListing(recordId);
+  if (!listing) return null;
+
+  const checked = new Set(listing.ddChecklist ?? []);
+  const missing = ALL_DD_ITEMS.filter((i) => !checked.has(i));
+  const ddLine = `${checked.size}/${ALL_DD_ITEMS.length} complete${
+    missing.length ? ` (missing: ${missing.join(", ")})` : ""
+  }`;
+
+  const entries = parseConversation(listing.notes);
+  const conversation = entries.length
+    ? entries
+        .map((e) => {
+          const ts = e.timestamp ?? "—";
+          const tag =
+            e.type === "outbound"
+              ? "OUTBOUND ALEX"
+              : e.type === "inbound"
+              ? "INBOUND"
+              : "system";
+          return `[${ts}] (${tag}) ${e.text}`;
+        })
+        .join("\n")
+    : "(no conversation history yet)";
+
+  return [
+    "## FOCUSED PROPERTY",
+    `Address: ${listing.address}${
+      listing.city ? `, ${listing.city}` : ""
+    }${listing.state ? `, ${listing.state}` : ""}${
+      listing.zip ? ` ${listing.zip}` : ""
+    }`,
+    `Agent: ${listing.agentName ?? "—"}${
+      listing.agentPhone ? ` (${listing.agentPhone})` : ""
+    }`,
+    `Outreach Status: ${listing.outreachStatus ?? "—"}`,
+    `List Price: ${formatCurrency(listing.listPrice)}`,
+    `MAO (65% rule): ${formatCurrency(listing.mao)}`,
+    `DOM: ${listing.dom ?? "—"}`,
+    `Last Outreach: ${listing.lastOutreachDate ?? "—"}`,
+    `DD Checklist: ${ddLine}`,
+    `Do_Not_Text: ${listing.doNotText ? "TRUE (outreach paused)" : "false"}`,
+    "",
+    "## CONVERSATION HISTORY (oldest → newest)",
+    conversation,
+  ].join("\n");
+}
+
+const SYSTEM_PROMPT = `You are the command interpreter and assistant for AKB Solutions' wholesale pipeline dashboard.
 
 You receive a natural language command and must classify it as one of four intents, then return a structured JSON response.
 
-INTENTS:
+## AKB SOLUTIONS — BUSINESS RULES (apply to every response)
+
+OFFER FORMULA: All offers are 65% of the seller's list price, rounded up to the nearest $250. Never use AVM, ARV, or estimated values to derive an offer — only the 65% rule.
+
+DD CHECKLIST (required before contracting):
+1. Bed/Bath Verified
+2. Vacancy Status Known
+3. Roof Age Asked
+4. HVAC Age Asked
+5. Water Heater Age Asked
+6. Showing Access Confirmed
+
+NEVER DISCLOSE TO BUYERS:
+- Contract Price
+- ARV
+- Estimated Repairs
+Anything sent to a buyer must show ONLY the Assignment Price.
+
+ENTITY FLEXIBILITY LANGUAGE: When discussing the closing entity with sellers or listing agents, use "We may close under one of our affiliated entities." Never use the word "assignable."
+
+GEOGRAPHIC SCOPE: Memphis (TN) is PAUSED for new acquisitions. New outreach is TX only. TN deals already in motion can still close.
+
+CANONICAL FIELD NAME: The status pipeline field is "Outreach_Status" (NOT "Pipeline_Status"). Statuses use the exact Airtable choice names: Not Contacted, Texted, Emailed, Response Received, Negotiating, Offer Accepted, Dead, Manual Review, Inbound Lead.
+
+## INTENTS
 1. "navigate" — user wants to go to a page or record. Return the dashboard route.
    Routes: / (ACT NOW), /pipeline, /deals, /buyers, /system
    If they reference a specific property, search the data for it and return the best route.
 
 2. "action" — user wants to trigger a dashboard action. Currently supported:
-   - "draft_followup" — draft a follow-up message for a Negotiating/Offer Accepted record.
-     Return the recordId of the matching listing.
+   - "draft_followup" — draft a follow-up message for a Negotiating/Offer Accepted record. Return the recordId of the matching listing.
 
-3. "query" — user is asking a question about their data. Read the provided listings and deals data, compute the answer, and return it as plain text.
-   Examples: total spread, deal count, pipeline stats, how many negotiating, etc.
+3. "query" — user is asking a question about their data, OR asking you to draft a message (counter offer, follow-up, DD questions, etc.) for a focused property. Read any FOCUSED PROPERTY context plus the listings/deals summary, compute or compose the answer, and return it as plain text in "answer". Apply the business rules above when drafting any seller- or agent-facing message.
 
 4. "unclear" — you can't determine the intent. Return a clarifying question.
 
-DATA CONTEXT (provided in user message):
-You will receive a JSON summary of the current Listings_V1 and Deals tables. Use this to answer queries and find records by address/agent name.
+## DATA CONTEXT
+The user message contains:
+- An optional FOCUSED PROPERTY block with that property's fields and parsed conversation history. Use this when the user asks about "this property" or wants you to draft a reply.
+- A JSON summary of the current Listings_V1 and Deals tables. Use this for queries that span the pipeline and to find records by address/agent name.
 
-RESPONSE FORMAT — return exactly this JSON:
+## RESPONSE FORMAT — return exactly this JSON
 {
   "intent": "navigate" | "action" | "query" | "unclear",
   "route": "/pipeline" | null,
@@ -94,6 +175,11 @@ RESPONSE FORMAT — return exactly this JSON:
   "answer": "text answer for query intent" | null,
   "clarification": "question for unclear intent" | null
 }`;
+
+interface CommandRequestBody {
+  command?: string;
+  propertyContext?: { recordId?: string };
+}
 
 export async function POST(req: Request) {
   const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
@@ -111,7 +197,7 @@ export async function POST(req: Request) {
     );
   }
 
-  let body: { command?: string };
+  let body: CommandRequestBody;
   try {
     const text = await req.text();
     if (!text.trim()) {
@@ -122,7 +208,7 @@ export async function POST(req: Request) {
     return Response.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { command } = body;
+  const { command, propertyContext } = body;
   if (!command || !command.trim()) {
     return Response.json({ error: "Missing command" }, { status: 400 });
   }
@@ -135,18 +221,40 @@ export async function POST(req: Request) {
     summaryData = '{"listings":[],"deals":[]}';
   }
 
+  let propertyBlock: string | null = null;
+  if (propertyContext?.recordId) {
+    try {
+      propertyBlock = await buildPropertyContext(propertyContext.recordId);
+    } catch (err) {
+      console.error("[command] Failed to load property context:", err);
+      // Non-fatal — continue without the focused property block.
+    }
+  }
+
+  const userMessage = [
+    propertyBlock,
+    `## COMMAND\n"${command}"`,
+    `## DATA SUMMARY\n${summaryData}`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
   try {
     const client = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
     const message = await client.messages.create({
       model: "claude-sonnet-4-5-20250514",
       max_tokens: 1024,
-      system: SYSTEM_PROMPT,
-      messages: [
+      // System prompt is static across requests — cache it. The volatile
+      // pieces (command, data summary, property context) live in the user
+      // message, after the cached prefix, so they don't invalidate the cache.
+      system: [
         {
-          role: "user",
-          content: `Command: "${command}"\n\nData context:\n${summaryData}`,
+          type: "text",
+          text: SYSTEM_PROMPT,
+          cache_control: { type: "ephemeral" },
         },
       ],
+      messages: [{ role: "user", content: userMessage }],
     });
 
     const textBlock = message.content.find((b) => b.type === "text");
@@ -169,7 +277,6 @@ export async function POST(req: Request) {
 
     const parsed = JSON.parse(raw.slice(jsonStart, jsonEnd + 1));
 
-    // Log to Airtable Command_Log if table exists (best-effort, don't block)
     logCommand(command, parsed).catch(() => {});
 
     return Response.json(parsed);
