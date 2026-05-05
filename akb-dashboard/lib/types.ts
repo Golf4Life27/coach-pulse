@@ -31,6 +31,8 @@ export interface Listing {
   state: string | null;
   actionHoldUntil: string | null;
   actionCardState: "Open" | "Held" | "Cleared" | null;
+  lastInboundAt: string | null;
+  lastOutboundAt: string | null;
 }
 
 export interface Deal {

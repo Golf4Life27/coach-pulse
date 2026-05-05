@@ -82,7 +82,11 @@ const KIND_RANK: Record<CardKind, number> = {
   stale: 3,
 };
 
-const STALE_THRESHOLD_DAYS = 7;
+const STALE_THRESHOLDS: Record<string, number> = {
+  Negotiating: 2,
+  "Response Received": 3,
+};
+const DEFAULT_STALE_DAYS = 7;
 
 function daysBetween(iso: string | null, now: Date): number | null {
   if (!iso) return null;
@@ -106,15 +110,16 @@ function effectiveCardState(
   return until.getTime() <= now.getTime() ? "Open" : "Held";
 }
 
-// Step 2.5: relaxed from strict "TX" to "TX or unknown" — listings without a
-// state value still pass, since not all records have been backfilled.
-function isTexasOrUnknown(state: string | null): boolean {
+const ACTIVE_MARKETS = new Set(["TX", "MI"]);
+
+function isActiveMarket(state: string | null): boolean {
   if (!state) return true;
-  return state.trim().toUpperCase() === "TX";
+  return ACTIVE_MARKETS.has(state.trim().toUpperCase());
 }
 
 function classifyListing(listing: Listing, now: Date): ActionCard | null {
-  if (listing.outreachStatus !== "Negotiating") return null;
+  const ACTIONABLE_STATUSES = new Set(["Negotiating", "Response Received"]);
+  if (!ACTIONABLE_STATUSES.has(listing.outreachStatus ?? "")) return null;
   if (listing.doNotText) return null;
 
   const cardState = effectiveCardState(
@@ -124,7 +129,14 @@ function classifyListing(listing: Listing, now: Date): ActionCard | null {
   );
   if (cardState === "Cleared") return null;
 
-  const dir = latestMessageDirection(listing.notes);
+  let dir: "inbound" | "outbound" | null = null;
+  if (listing.lastInboundAt || listing.lastOutboundAt) {
+    const inbound = listing.lastInboundAt ? new Date(listing.lastInboundAt).getTime() : 0;
+    const outbound = listing.lastOutboundAt ? new Date(listing.lastOutboundAt).getTime() : 0;
+    dir = inbound > outbound ? "inbound" : "outbound";
+  } else {
+    dir = latestMessageDirection(listing.notes);
+  }
   const checked = new Set(listing.ddChecklist ?? []);
   const missing = ALL_DD_ITEMS.filter((item) => !checked.has(item));
   const days = daysBetween(listing.lastOutreachDate, now);
@@ -165,7 +177,8 @@ function classifyListing(listing: Listing, now: Date): ActionCard | null {
     };
   }
 
-  if (days !== null && days >= STALE_THRESHOLD_DAYS) {
+  const staleThreshold = STALE_THRESHOLDS[listing.outreachStatus ?? ""] ?? DEFAULT_STALE_DAYS;
+  if (days !== null && days >= staleThreshold) {
     return {
       id: `stale:${listing.id}`,
       kind: "stale",
@@ -235,9 +248,8 @@ export interface ActionQueueResult {
 }
 
 // Pure function — testable in isolation.
-// State filter: only TX listings produce cards. Deals are not state-filtered
-// because they represent already-acquired contracts; the Memphis pause is
-// for new outreach, not for closing existing deals.
+// State filter: only active-market listings produce cards (TX, MI). Deals are
+// not state-filtered because they represent already-acquired contracts.
 export function buildActionQueue(
   listings: Listing[],
   deals: Deal[],
@@ -247,7 +259,7 @@ export function buildActionQueue(
   const held: ActionCard[] = [];
 
   for (const listing of listings) {
-    if (!isTexasOrUnknown(listing.state)) continue;
+    if (!isActiveMarket(listing.state)) continue;
     const card = classifyListing(listing, now);
     if (!card) continue;
     if (card.cardState === "Held") held.push(card);
