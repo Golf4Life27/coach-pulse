@@ -41,7 +41,7 @@ export async function POST() {
       { name: "Proposal_Type", type: "singleSelect", options: { choices: [
         { name: "follow_up" }, { name: "kill_dead_deal" },
         { name: "suggest_dispo_price" }, { name: "surface_stale" },
-        { name: "flag_price_drop" },
+        { name: "flag_price_drop" }, { name: "jarvis_reply" },
       ]}},
       { name: "Record_ID", type: "singleLineText" },
       { name: "Record_Address", type: "singleLineText" },

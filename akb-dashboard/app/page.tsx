@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import MetricCard from "@/components/MetricCard";
 import ActionQueue from "@/components/ActionQueue";
 import BriefingStrip from "@/components/BriefingStrip";
+import JarvisFeed from "@/components/JarvisFeed";
 import { Briefing, DashboardStats } from "@/lib/types";
 import { showToast } from "@/components/Toast";
 
@@ -72,6 +73,8 @@ export default function ActNowPage() {
       </div>
 
       <BriefingStrip briefing={briefing} previousLogin={previousLogin} />
+
+      <JarvisFeed />
 
       <ActionQueue />
 

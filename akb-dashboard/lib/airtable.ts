@@ -41,10 +41,8 @@ const LISTING_FIELDS: Record<string, string> = {
   fldSlDQvgCyr0J8tI: "state",
   fldkYeP8onCHil0pd: "actionHoldUntil",
   fldiNKFpIBUYgg7el: "actionCardState",
-  // TODO: replace with real field IDs after creating Last_Inbound_At and
-  // Last_Outbound_At DateTime fields in Listings_V1
-  // fldXXXXXXXXXXXXXXX: "lastInboundAt",
-  // fldYYYYYYYYYYYYYYY: "lastOutboundAt",
+  fld3IhR1DXzcVuq6F: "lastInboundAt",
+  fldaK4lR5UNvycg11: "lastOutboundAt",
 };
 
 const DEAL_FIELDS: Record<string, string> = {

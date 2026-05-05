@@ -20,6 +20,7 @@ const typeColors: Record<string, string> = {
   suggest_dispo_price: "border-yellow-500 text-yellow-400",
   surface_stale: "border-blue-500 text-blue-400",
   flag_price_drop: "border-orange-500 text-orange-400",
+  jarvis_reply: "border-purple-500 text-purple-400",
 };
 
 const typeLabels: Record<string, string> = {
@@ -28,6 +29,7 @@ const typeLabels: Record<string, string> = {
   suggest_dispo_price: "Dispo Price",
   surface_stale: "Surface Stale",
   flag_price_drop: "Price Drop",
+  jarvis_reply: "Jarvis Reply",
 };
 
 export default function QueuePage() {
