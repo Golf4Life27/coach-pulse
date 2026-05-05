@@ -110,12 +110,8 @@ function effectiveCardState(
   return until.getTime() <= now.getTime() ? "Open" : "Held";
 }
 
-const ACTIVE_MARKETS = new Set(["TX", "MI"]);
-
-function isActiveMarket(state: string | null): boolean {
-  if (!state) return true;
-  return ACTIVE_MARKETS.has(state.trim().toUpperCase());
-}
+// No state filtering — all markets visible on the dashboard.
+// Wholesaling restrictions are handled at the outreach level, not the UI level.
 
 function classifyListing(listing: Listing, now: Date): ActionCard | null {
   const ACTIONABLE_STATUSES = new Set(["Negotiating", "Response Received"]);
@@ -248,8 +244,7 @@ export interface ActionQueueResult {
 }
 
 // Pure function — testable in isolation.
-// State filter: only active-market listings produce cards (TX, MI). Deals are
-// not state-filtered because they represent already-acquired contracts.
+// No state filtering — all markets visible. Restrictions handled at outreach.
 export function buildActionQueue(
   listings: Listing[],
   deals: Deal[],
@@ -259,7 +254,6 @@ export function buildActionQueue(
   const held: ActionCard[] = [];
 
   for (const listing of listings) {
-    if (!isActiveMarket(listing.state)) continue;
     const card = classifyListing(listing, now);
     if (!card) continue;
     if (card.cardState === "Held") held.push(card);
