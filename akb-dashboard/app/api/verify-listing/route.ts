@@ -168,10 +168,11 @@ async function queryRentCast(
 // --- Redfin via ScraperAPI (Redfin blocks Vercel IPs directly) ---
 
 const SCRAPER_API_KEY = "ae7d80d248c38825b69bc5acd43c9803";
-const SCRAPER_TIMEOUT_MS = 10_000;
+const SCRAPER_AUTOCOMPLETE_TIMEOUT_MS = 20_000;
+const SCRAPER_PAGE_TIMEOUT_MS = 15_000;
 
-function scraperUrl(targetUrl: string): string {
-  return `https://api.scraperapi.com?api_key=${SCRAPER_API_KEY}&url=${encodeURIComponent(targetUrl)}&timeout=10000`;
+function scraperUrl(targetUrl: string, timeoutSec: number = 20): string {
+  return `https://api.scraperapi.com?api_key=${SCRAPER_API_KEY}&url=${encodeURIComponent(targetUrl)}&timeout=${timeoutSec * 1000}`;
 }
 
 async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
@@ -191,7 +192,7 @@ async function fetchRedfinUrl(
   const rawQuery = `${address}, ${city}, ${state}`;
   const redfinTarget = `https://www.redfin.com/stingray/do/location-autocomplete?location=${encodeURIComponent(rawQuery)}&v=2`;
   try {
-    const res = await fetchWithTimeout(scraperUrl(redfinTarget), SCRAPER_TIMEOUT_MS);
+    const res = await fetchWithTimeout(scraperUrl(redfinTarget, 20), SCRAPER_AUTOCOMPLETE_TIMEOUT_MS);
 
     if (!res.ok) {
       return { url: null, error: `ScraperAPI ${res.status}` };
@@ -236,7 +237,7 @@ async function fetchRedfinUrl(
   } catch (err) {
     const msg = String(err);
     if (msg.includes("abort")) {
-      return { url: null, error: "Redfin autocomplete timed out (10s)" };
+      return { url: null, error: "Redfin autocomplete timed out (20s)" };
     }
     return { url: null, error: `ScraperAPI error: ${msg}` };
   }
@@ -246,7 +247,7 @@ async function fetchRedfinPage(
   url: string
 ): Promise<{ description: string; isOffMarket: boolean } | null> {
   try {
-    const res = await fetchWithTimeout(scraperUrl(url), SCRAPER_TIMEOUT_MS);
+    const res = await fetchWithTimeout(scraperUrl(url, 15), SCRAPER_PAGE_TIMEOUT_MS);
     if (!res.ok) {
       console.log(`[verify] Redfin page ${res.status} for ${url}`);
       return null;
