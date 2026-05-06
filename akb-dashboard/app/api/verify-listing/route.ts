@@ -399,6 +399,8 @@ async function verifyOne(
   const agentPhone = (fields[F.agentPhone] as string) ?? "";
   const existingNotes = (fields[F.notes] as string) ?? null;
 
+  console.log(`[verify] verifyOne: recordId=${recordId}, address="${address}", city="${city}", state="${state}", zip="${zip}", phone="${agentPhone}", fieldKeys=${Object.keys(fields).join(",")}`);
+
   if (!address.trim()) {
     return { recordId, address, liveStatus: "Unknown", executionPath: "Reject", source: "skip", redfinUrl: null, keywordScore: null, error: "Empty address" };
   }
@@ -423,94 +425,119 @@ async function verifyOne(
     return { recordId, address, liveStatus: "Unknown", executionPath: "Manual Review", source: "phone_validation", redfinUrl: null, keywordScore: null };
   }
 
-  // Step 1: RentCast
-  let rentCastActive = false;
+  // Step 1: RentCast (primary verification)
+  let rentCastListings: RentCastListing[] = [];
   let rentCastError: string | null = null;
   try {
-    const listings = await queryRentCast(address, city, state, zip);
-    rentCastActive = listings.length > 0;
+    rentCastListings = await queryRentCast(address, city, state, zip);
   } catch (err) {
     rentCastError = String(err);
     console.error(`[verify] RentCast error for ${address}:`, err);
   }
 
-  // Step 2: Redfin direct page fetch (single ScraperAPI call, no autocomplete)
-  const redfin = await fetchRedfinDirect(address, city, state, zip);
-  const redfinUrl = redfin.url;
+  const rentCastActive = rentCastListings.length > 0;
+  const rcListing = rentCastListings[0];
 
-  // --- Decision logic ---
-  // Rule: NEVER auto-approve on RentCast alone. Redfin must confirm.
-
-  // Case 1: Redfin confirms off-market → Reject regardless of RentCast
-  if (redfin.isOffMarket) {
-    await patchRecord(recordId, {
-      [W.liveStatus]: "Off Market",
-      [W.executionPath]: "Reject",
-      [W.verifiedOnMarket]: false,
-      [W.verificationSource]: `RentCast (${rentCastActive ? "active" : "empty"}) + Redfin (off-market)`,
-      ...(redfinUrl ? { [W.verificationUrl]: redfinUrl } : {}),
-      [W.lastVerified]: new Date().toISOString(),
-      [W.restrictionText]: redfin.description.slice(0, 5000),
-      [W.notes]: appendNote(existingNotes, `Redfin confirms off-market.${rentCastActive ? " RentCast had active listing (stale data)." : ""}`),
-    });
-    return { recordId, address, liveStatus: "Off Market", executionPath: "Reject", source: "Redfin", redfinUrl, keywordScore: null };
-  }
-
-  // Case 2: Redfin page loaded, not off-market → run keyword scoring
-  if (redfinUrl && redfin.description) {
-    const kw = scoreDescription(redfin.description);
-    await patchRecord(recordId, {
-      [W.liveStatus]: "Active",
-      [W.executionPath]: kw.executionPath,
-      [W.verifiedOnMarket]: true,
-      [W.verificationSource]: `RentCast (${rentCastActive ? "active" : "empty"}) + Redfin (verified)`,
-      [W.verificationUrl]: redfinUrl,
-      [W.lastVerified]: new Date().toISOString(),
-      [W.restrictionRiskLevel]: kw.riskLevel,
-      [W.restrictionKeywordFlag]: kw.keywordFlag,
-      [W.restrictionText]: redfin.description.slice(0, 5000),
-      [W.notes]: appendNote(existingNotes, `Redfin verified active. ${kw.details}`),
-    });
-    return { recordId, address, liveStatus: "Active", executionPath: kw.executionPath, source: "RentCast+Redfin", redfinUrl, keywordScore: kw.score };
-  }
-
-  // Case 3: Redfin returned a page but no description (empty page / redirect)
-  if (redfinUrl) {
-    await patchRecord(recordId, {
-      [W.liveStatus]: "Active",
-      [W.executionPath]: "Manual Review",
-      [W.verifiedOnMarket]: true,
-      [W.verificationSource]: `RentCast (${rentCastActive ? "active" : "empty"}) + Redfin (page loaded, no description)`,
-      [W.verificationUrl]: redfinUrl,
-      [W.lastVerified]: new Date().toISOString(),
-      [W.notes]: appendNote(existingNotes, "Redfin page loaded but no description found. Manual review for keyword check."),
-    });
-    return { recordId, address, liveStatus: "Active", executionPath: "Manual Review", source: "RentCast+Redfin(partial)", redfinUrl, keywordScore: null };
-  }
-
-  // Case 4: No Redfin page AND RentCast empty → Off Market
+  // RentCast empty → Off Market, done
   if (!rentCastActive) {
     await patchRecord(recordId, {
       [W.liveStatus]: "Off Market",
       [W.executionPath]: "Reject",
       [W.verifiedOnMarket]: false,
-      [W.verificationSource]: `RentCast (empty) + Redfin (${redfin.error ?? "no page"})`,
+      [W.verificationSource]: rentCastError ? `RentCast error: ${rentCastError}` : "RentCast (no active listing)",
       [W.lastVerified]: new Date().toISOString(),
-      [W.notes]: appendNote(existingNotes, `RentCast: no active listing. Redfin: ${redfin.error ?? "not found"}. Off Market.`),
+      [W.notes]: appendNote(existingNotes, rentCastError
+        ? `RentCast error: ${rentCastError}. Marking Off Market.`
+        : "RentCast: no active listing found. Off Market."),
     });
-    return { recordId, address, liveStatus: "Off Market", executionPath: "Reject", source: "RentCast+Redfin", redfinUrl: null, keywordScore: null };
+    return { recordId, address, liveStatus: "Off Market", executionPath: "Reject", source: "RentCast", redfinUrl: null, keywordScore: null };
   }
 
-  // Case 5: RentCast says active but Redfin failed → Manual Review
+  // RentCast confirms active — log details
+  const rcAny = rcListing as unknown as Record<string, unknown>;
+  const rcPrice = rcAny.price as number | undefined;
+  const rcDom = rcAny.daysOnMarket as number | undefined;
+  const rcLastSeen = rcAny.lastSeenDate as string | undefined;
+  const rcStatus = rcAny.status as string | undefined;
+  console.log(`[verify] RentCast active: price=${rcPrice}, dom=${rcDom}, lastSeen=${rcLastSeen}, status=${rcStatus}`);
+
+  // Step 2: Redfin stingray (optional — for keyword scoring only)
+  let redfinUrl: string | null = null;
+  let keywordScore: number | null = null;
+  let kwDetails = "";
+  let redfinError: string | null = null;
+
+  try {
+    console.log(`[verify] Step 2: Redfin stingray for "${address}", "${city}", "${state}", "${zip}"`);
+    const redfin = await fetchRedfinDirect(address, city, state, zip);
+    console.log(`[verify] Redfin result: url=${redfin.url}, status=${redfin.listingStatus}, offMarket=${redfin.isOffMarket}, error=${redfin.error ?? "none"}`);
+
+    redfinUrl = redfin.url;
+    redfinError = redfin.error ?? null;
+
+    // If Redfin says off-market but RentCast says active, trust Redfin (more current)
+    if (redfin.isOffMarket) {
+      await patchRecord(recordId, {
+        [W.liveStatus]: "Off Market",
+        [W.executionPath]: "Reject",
+        [W.verifiedOnMarket]: false,
+        [W.verificationSource]: "RentCast (active — stale) + Redfin (off-market)",
+        ...(redfinUrl ? { [W.verificationUrl]: redfinUrl } : {}),
+        [W.lastVerified]: new Date().toISOString(),
+        [W.restrictionText]: redfin.description.slice(0, 5000),
+        [W.notes]: appendNote(existingNotes, `RentCast active but Redfin confirms off-market (status: ${redfin.listingStatus}). Rejecting.`),
+      });
+      return { recordId, address, liveStatus: "Off Market", executionPath: "Reject", source: "Redfin-override", redfinUrl, keywordScore: null };
+    }
+
+    // Run keyword scoring on Redfin description if available
+    if (redfin.description) {
+      const kw = scoreDescription(redfin.description);
+      keywordScore = kw.score;
+      kwDetails = kw.details;
+
+      // If keywords trigger Reject or Manual Review, respect that
+      if (kw.executionPath !== "Auto Proceed") {
+        await patchRecord(recordId, {
+          [W.liveStatus]: "Active",
+          [W.executionPath]: kw.executionPath,
+          [W.verifiedOnMarket]: true,
+          [W.verificationSource]: "RentCast (active) + Redfin (keyword scored)",
+          ...(redfinUrl ? { [W.verificationUrl]: redfinUrl } : {}),
+          [W.lastVerified]: new Date().toISOString(),
+          [W.restrictionRiskLevel]: kw.riskLevel,
+          [W.restrictionKeywordFlag]: kw.keywordFlag,
+          [W.restrictionText]: redfin.description.slice(0, 5000),
+          [W.notes]: appendNote(existingNotes, `RentCast active. Redfin keyword check: ${kw.details}`),
+        });
+        return { recordId, address, liveStatus: "Active", executionPath: kw.executionPath, source: "RentCast+Redfin", redfinUrl, keywordScore: kw.score };
+      }
+    }
+  } catch (err) {
+    redfinError = String(err);
+    console.log(`[verify] Redfin failed (non-fatal): ${redfinError}`);
+  }
+
+  // RentCast active + Redfin either passed keywords or was unavailable → Auto Proceed
+  const source = redfinUrl ? "RentCast+Redfin" : "RentCast-only";
+  const noteText = redfinUrl
+    ? `RentCast active (price: $${rcPrice?.toLocaleString() ?? "?"}, DOM: ${rcDom ?? "?"}). Redfin keyword check passed. ${kwDetails}`
+    : `RentCast active (price: $${rcPrice?.toLocaleString() ?? "?"}, DOM: ${rcDom ?? "?"}, lastSeen: ${rcLastSeen ?? "?"}). Redfin: ${redfinError ?? "skipped"}. No keyword check — proceeding on RentCast data.`;
+
   await patchRecord(recordId, {
     [W.liveStatus]: "Active",
-    [W.executionPath]: "Manual Review",
-    [W.verifiedOnMarket]: false,
-    [W.verificationSource]: `RentCast (active) + Redfin (${redfin.error ?? "failed"})`,
+    [W.executionPath]: "Auto Proceed",
+    [W.verifiedOnMarket]: true,
+    [W.verificationSource]: source,
+    ...(redfinUrl ? { [W.verificationUrl]: redfinUrl } : {}),
     [W.lastVerified]: new Date().toISOString(),
-    [W.notes]: appendNote(existingNotes, `RentCast: active. Redfin: ${redfin.error ?? "failed"}. Cannot confirm — Manual Review.`),
+    ...(keywordScore !== null ? {
+      [W.restrictionRiskLevel]: "None",
+      [W.restrictionKeywordFlag]: false,
+    } : {}),
+    [W.notes]: appendNote(existingNotes, noteText),
   });
-  return { recordId, address, liveStatus: "Active", executionPath: "Manual Review", source: "unconfirmed", redfinUrl: null, keywordScore: null };
+  return { recordId, address, liveStatus: "Active", executionPath: "Auto Proceed", source, redfinUrl, keywordScore };
 }
 
 // --- Route handler ---
