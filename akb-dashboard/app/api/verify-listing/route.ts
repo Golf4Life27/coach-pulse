@@ -6,7 +6,6 @@ const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
 const LISTINGS_TABLE = "tbldMjKBgPiq45Jjs";
 const RENTCAST_API_KEY = process.env.RENTCAST_API_KEY!;
 
-// Field IDs for reading
 const F = {
   address: "fldwvp72hKTfiHHjj",
   city: "fldjbiNuHXzPzVWFk",
@@ -18,142 +17,29 @@ const F = {
   notes: "fldwKGxZly6O8qyPu",
 };
 
-// Field IDs for writing
 const W = {
   liveStatus: "fldCKnC1nnXEnTUKL",
   executionPath: "fldOrWvqKcc1g6Lka",
   verifiedOnMarket: "fldCxApxYiiB8eYFI",
   verificationSource: "flddEHrMOoBPVfqgk",
-  verificationUrl: "fldXrW8CWUphUfKgJ",
   lastVerified: "fld2eUkKaC4pMjIdd",
   notes: "fldwKGxZly6O8qyPu",
   restrictionRiskLevel: "fld5dV65Wr9b6bjo3",
   restrictionKeywordFlag: "fldSpBUMzTzFtp59k",
-  restrictionText: "fldapf2ZXpIWTZfSX",
 };
-
-// --- Keyword scoring ---
-
-const HARD_REJECT_KEYWORDS = [
-  "no wholesalers", "auction", "hud", "bank-owned reo",
-];
-
-const FLIP_KEYWORDS = [
-  "remodeled", "renovated", "fully updated", "move-in ready",
-  "new kitchen", "new bathroom", "new roof", "new hvac",
-  "granite", "quartz countertops", "stainless steel",
-  "open concept", "fresh paint", "new flooring",
-];
-
-const DISTRESS_KEYWORDS = [
-  "as-is", "investor special", "needs work", "tlc", "fixer",
-  "handyman", "estate sale", "probate", "vacant", "fire damage",
-  "foundation issues", "mold",
-];
-
-interface KeywordResult {
-  score: number;
-  executionPath: "Auto Proceed" | "Manual Review" | "Reject";
-  riskLevel: "None" | "Low" | "High";
-  keywordFlag: boolean;
-  details: string;
-}
-
-function scoreDescription(description: string): KeywordResult {
-  const lower = description.toLowerCase();
-  let score = 0;
-  const matched: string[] = [];
-
-  for (const kw of HARD_REJECT_KEYWORDS) {
-    if (lower.includes(kw)) {
-      score += 10;
-      matched.push(`HARD REJECT: "${kw}"`);
-    }
-  }
-
-  for (const kw of FLIP_KEYWORDS) {
-    if (lower.includes(kw)) {
-      score += 1;
-      matched.push(`flip: "${kw}"`);
-    }
-  }
-
-  for (const kw of DISTRESS_KEYWORDS) {
-    if (lower.includes(kw)) {
-      score -= 1;
-      matched.push(`distress: "${kw}"`);
-    }
-  }
-
-  let executionPath: "Auto Proceed" | "Manual Review" | "Reject";
-  let riskLevel: "None" | "Low" | "High";
-
-  if (score >= 10) {
-    executionPath = "Reject";
-    riskLevel = "High";
-  } else if (score >= 4) {
-    executionPath = "Manual Review";
-    riskLevel = "High";
-  } else {
-    executionPath = "Auto Proceed";
-    riskLevel = score > 0 ? "Low" : "None";
-  }
-
-  return {
-    score,
-    executionPath,
-    riskLevel,
-    keywordFlag: matched.length > 0,
-    details: matched.length > 0
-      ? `Score ${score}. Matches: ${matched.join(", ")}`
-      : `Score ${score}. No keyword matches.`,
-  };
-}
-
-// --- Off-market detection ---
-
-const OFF_MARKET_PHRASES = [
-  "off the market", "no longer available", "sold on",
-  "pending sale", "sale pending", "this home is not for sale",
-  "this listing has been removed",
-];
-
-function detectOffMarket(text: string): boolean {
-  const lower = text.toLowerCase();
-  return OFF_MARKET_PHRASES.some((phrase) => lower.includes(phrase));
-}
 
 // --- RentCast API ---
 
-interface RentCastListing {
-  id: string;
-  addressLine1?: string;
-  city?: string;
-  state?: string;
-  zipCode?: string;
-  status?: string;
-  price?: number;
-  daysOnMarket?: number;
-  listedDate?: string;
-}
-
 async function queryRentCast(
   address: string, city: string, state: string, zip: string
-): Promise<RentCastListing[]> {
+): Promise<Record<string, unknown>[]> {
   const params = new URLSearchParams({
-    address: address,
-    city: city,
-    state: state,
-    zipCode: zip,
-    status: "active",
+    address, city, state, zipCode: zip, status: "active",
   });
 
   const res = await fetch(
     `https://api.rentcast.io/v1/listings/sale?${params.toString()}`,
-    {
-      headers: { "X-Api-Key": RENTCAST_API_KEY },
-      cache: "no-store",
-    }
+    { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" }
   );
 
   if (!res.ok) {
@@ -162,125 +48,77 @@ async function queryRentCast(
     throw new Error(`RentCast error ${res.status}: ${errText}`);
   }
 
-  const data = await res.json();
-  // Log full response to see all available fields
-  console.log(`[verify] RentCast raw response (${JSON.stringify(data).length} chars): ${JSON.stringify(data).slice(0, 3000)}`);
-  return data;
+  return await res.json();
 }
 
-// --- Redfin stingray JSON API via ScraperAPI ---
+// --- Flip detection ---
 
-const SCRAPER_API_KEY = "ae7d80d248c38825b69bc5acd43c9803";
-const SCRAPER_TIMEOUT_MS = 20_000;
+const FLIP_THRESHOLD = 2.0; // list price >= 2x last sale = flip
+const FLIP_WINDOW_MONTHS = 24;
 
-function scraperUrl(targetUrl: string): string {
-  return `https://api.scraperapi.com?api_key=${SCRAPER_API_KEY}&premium=true&url=${encodeURIComponent(targetUrl)}&timeout=20000`;
+interface FlipCheck {
+  flipDetected: boolean;
+  flipScore: number;
+  lastSalePrice: number | null;
+  lastSaleDate: string | null;
+  priceRatio: number | null;
+  details: string;
 }
 
-async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, { cache: "no-store", signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
+function checkFlip(listing: Record<string, unknown>): FlipCheck {
+  const listPrice = listing.price as number | undefined;
+  const lastSalePrice = listing.lastSalePrice as number | undefined;
+  const lastSaleDate = listing.lastSaleDate as string | undefined;
 
-function buildRedfinPath(address: string, city: string, state: string, zip: string): string {
-  const slugify = (s: string) =>
-    s.trim().replace(/[^a-zA-Z0-9\s]/g, "").replace(/\s+/g, "-");
-  const zipPart = zip ? `-${zip.trim()}` : "";
-  return `/${state.trim().toUpperCase()}/${slugify(city)}/${slugify(address)}${zipPart}`;
-}
-
-interface RedfinResult {
-  url: string | null;
-  description: string;
-  isOffMarket: boolean;
-  listingStatus: string | null;
-  error?: string;
-}
-
-async function fetchRedfinDirect(
-  address: string, city: string, state: string, zip: string
-): Promise<RedfinResult> {
-  if (!address || !city || !state) {
-    return { url: null, description: "", isOffMarket: false, listingStatus: null, error: "Missing address/city/state" };
-  }
-
-  const path = buildRedfinPath(address, city, state, zip);
-  const stingrayUrl = `https://www.redfin.com/stingray/api/home/details/initialInfo?al=1&path=${encodeURIComponent(path)}`;
-  console.log(`[verify] Redfin stingray: ${stingrayUrl}`);
-
-  try {
-    const res = await fetchWithTimeout(scraperUrl(stingrayUrl), SCRAPER_TIMEOUT_MS);
-
-    if (!res.ok) {
-      console.log(`[verify] Redfin stingray ${res.status}`);
-      return { url: null, description: "", isOffMarket: false, listingStatus: null, error: `Redfin stingray ${res.status}` };
-    }
-
-    const text = await res.text();
-    // Redfin wraps JSON responses in {}&&{...}
-    const jsonStr = text.replace(/^\{\}&&/, "");
-    let data: Record<string, unknown>;
-    try {
-      data = JSON.parse(jsonStr);
-    } catch {
-      console.log(`[verify] Redfin stingray not JSON (${text.length} chars): ${text.slice(0, 200)}`);
-      return { url: null, description: "", isOffMarket: false, listingStatus: null, error: "Redfin response not JSON" };
-    }
-
-    const payload = data?.payload as Record<string, unknown> | undefined;
-    if (!payload) {
-      console.log(`[verify] Redfin stingray: no payload. Keys: ${Object.keys(data).join(",")}`);
-      return { url: null, description: "", isOffMarket: false, listingStatus: null, error: "No payload in Redfin response" };
-    }
-
-    // Extract property info
-    const propertyId = payload.propertyId as string | undefined;
-    const listingId = payload.listingId as string | undefined;
-
-    // Build the canonical Redfin URL
-    const canonicalUrl = propertyId
-      ? `https://www.redfin.com${path}/home/${propertyId}`
-      : `https://www.redfin.com${path}`;
-
-    // Extract listing status from various payload locations
-    const basicInfo = payload.addressSectionInfo as Record<string, unknown> | undefined;
-    const listingStatus = (basicInfo?.status as string) ??
-      (payload.listingStatus as string) ??
-      null;
-
-    // Check if off-market
-    const isActive = listingStatus?.toLowerCase() === "active" ||
-      listingStatus?.toLowerCase() === "for sale";
-    const isSold = listingStatus?.toLowerCase().includes("sold") ?? false;
-    const isPending = listingStatus?.toLowerCase().includes("pending") ?? false;
-    const isOffMarket = isSold || isPending || (listingStatus !== null && !isActive);
-
-    // Extract description from payload if available
-    const description = (payload.listingRemarks as string) ??
-      (payload.publicRemarks as string) ??
-      ((payload.aboveTheFold as Record<string, unknown>)?.listingRemarks as string) ??
-      "";
-
-    console.log(`[verify] Redfin stingray OK: propertyId=${propertyId}, listingId=${listingId}, status="${listingStatus}", offMarket=${isOffMarket}`);
-
+  if (!listPrice || !lastSalePrice || !lastSaleDate) {
     return {
-      url: canonicalUrl,
-      description,
-      isOffMarket,
-      listingStatus,
+      flipDetected: false, flipScore: 0,
+      lastSalePrice: lastSalePrice ?? null,
+      lastSaleDate: lastSaleDate ?? null,
+      priceRatio: null,
+      details: "No sale history available for flip check.",
     };
-  } catch (err) {
-    const msg = String(err);
-    if (msg.includes("abort")) {
-      return { url: null, description: "", isOffMarket: false, listingStatus: null, error: "Redfin timed out (20s)" };
-    }
-    return { url: null, description: "", isOffMarket: false, listingStatus: null, error: `ScraperAPI error: ${msg}` };
   }
+
+  const saleDate = new Date(lastSaleDate);
+  const monthsAgo = (Date.now() - saleDate.getTime()) / (1000 * 60 * 60 * 24 * 30);
+  const ratio = listPrice / lastSalePrice;
+
+  if (monthsAgo > FLIP_WINDOW_MONTHS) {
+    return {
+      flipDetected: false, flipScore: 0,
+      lastSalePrice, lastSaleDate,
+      priceRatio: Math.round(ratio * 100) / 100,
+      details: `Last sale $${lastSalePrice.toLocaleString()} on ${lastSaleDate} (${Math.round(monthsAgo)}mo ago, outside ${FLIP_WINDOW_MONTHS}mo window).`,
+    };
+  }
+
+  const flipDetected = ratio >= FLIP_THRESHOLD;
+  // Score 0-10: 0 = no flip concern, 10 = extreme flip
+  const flipScore = flipDetected ? Math.min(10, Math.round((ratio - 1) * 5)) : Math.round(Math.max(0, (ratio - 1) * 3));
+
+  return {
+    flipDetected,
+    flipScore,
+    lastSalePrice,
+    lastSaleDate,
+    priceRatio: Math.round(ratio * 100) / 100,
+    details: flipDetected
+      ? `FLIP DETECTED: List $${listPrice.toLocaleString()} is ${ratio.toFixed(1)}x last sale $${lastSalePrice.toLocaleString()} (${lastSaleDate}, ${Math.round(monthsAgo)}mo ago).`
+      : `Last sale $${lastSalePrice.toLocaleString()} on ${lastSaleDate} (${Math.round(monthsAgo)}mo ago). Ratio: ${ratio.toFixed(1)}x. No flip concern.`,
+  };
+}
+
+// --- Stale data check ---
+
+const STALE_DAYS = 7;
+
+function isStaleData(lastSeenDate: string | undefined): { stale: boolean; daysSince: number | null } {
+  if (!lastSeenDate) return { stale: true, daysSince: null };
+  const d = new Date(lastSeenDate);
+  if (isNaN(d.getTime())) return { stale: true, daysSince: null };
+  const days = Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24));
+  return { stale: days > STALE_DAYS, daysSince: days };
 }
 
 // --- Phone validation ---
@@ -324,10 +162,7 @@ async function fetchUnverifiedRecords(): Promise<Array<{ id: string; fields: Rec
 
     const res = await fetch(
       `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}?${params.toString()}`,
-      {
-        headers: { Authorization: `Bearer ${AIRTABLE_PAT}` },
-        cache: "no-store",
-      }
+      { headers: { Authorization: `Bearer ${AIRTABLE_PAT}` }, cache: "no-store" }
     );
     if (!res.ok) break;
 
@@ -341,10 +176,7 @@ async function fetchUnverifiedRecords(): Promise<Array<{ id: string; fields: Rec
   return records;
 }
 
-async function patchRecord(
-  recordId: string,
-  fields: Record<string, unknown>
-): Promise<void> {
+async function patchRecord(recordId: string, fields: Record<string, unknown>): Promise<void> {
   await fetch(
     `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}/${recordId}`,
     {
@@ -366,8 +198,6 @@ function appendNote(existing: string | null, newNote: string): string {
   return existing ? `${existing}\n\n${stamped}` : stamped;
 }
 
-// --- Never-resurface list ---
-
 const NEVER_RESURFACE = new Set([
   "2715 monterey st", "714 hallie ave", "4330 pensacola ct",
   "9618 tamalpais dr", "811 manhattan dr", "1635 arbor pl",
@@ -375,7 +205,7 @@ const NEVER_RESURFACE = new Set([
   "707 n pine st", "8641 craige dr", "910 green st",
 ]);
 
-// --- Main verification logic ---
+// --- Main verification ---
 
 interface VerifyResult {
   recordId: string;
@@ -383,8 +213,18 @@ interface VerifyResult {
   liveStatus: string;
   executionPath: string;
   source: string;
-  redfinUrl: string | null;
-  keywordScore: number | null;
+  flipDetected: boolean;
+  flipScore: number;
+  flipDetails: string;
+  rentCast: {
+    status: string | null;
+    price: number | null;
+    dom: number | null;
+    lastSeenDate: string | null;
+    lastSalePrice: number | null;
+    lastSaleDate: string | null;
+    stale: boolean;
+  };
   error?: string;
 }
 
@@ -399,145 +239,140 @@ async function verifyOne(
   const agentPhone = (fields[F.agentPhone] as string) ?? "";
   const existingNotes = (fields[F.notes] as string) ?? null;
 
-  console.log(`[verify] verifyOne: recordId=${recordId}, address="${address}", city="${city}", state="${state}", zip="${zip}", phone="${agentPhone}", fieldKeys=${Object.keys(fields).join(",")}`);
+  const emptyResult = (overrides: Partial<VerifyResult>): VerifyResult => ({
+    recordId, address, liveStatus: "Unknown", executionPath: "Reject",
+    source: "skip", flipDetected: false, flipScore: 0, flipDetails: "",
+    rentCast: { status: null, price: null, dom: null, lastSeenDate: null, lastSalePrice: null, lastSaleDate: null, stale: false },
+    ...overrides,
+  });
 
   if (!address.trim()) {
-    return { recordId, address, liveStatus: "Unknown", executionPath: "Reject", source: "skip", redfinUrl: null, keywordScore: null, error: "Empty address" };
+    return emptyResult({ error: "Empty address" });
   }
 
-  // Never-resurface check
   if (NEVER_RESURFACE.has(address.trim().toLowerCase())) {
     await patchRecord(recordId, {
       [W.executionPath]: "Reject",
-      [W.notes]: appendNote(existingNotes, "Auto-rejected: address is on the never-resurface list."),
+      [W.notes]: appendNote(existingNotes, "Auto-rejected: never-resurface list."),
       [W.lastVerified]: new Date().toISOString(),
     });
-    return { recordId, address, liveStatus: "Rejected", executionPath: "Reject", source: "blocklist", redfinUrl: null, keywordScore: null };
+    return emptyResult({ liveStatus: "Rejected", source: "blocklist" });
   }
 
-  // Phone validation
   if (!isValidPhone(agentPhone)) {
     await patchRecord(recordId, {
       [W.executionPath]: "Manual Review",
-      [W.notes]: appendNote(existingNotes, "Agent phone missing or invalid. Manual review required."),
+      [W.notes]: appendNote(existingNotes, "Agent phone missing or invalid."),
       [W.lastVerified]: new Date().toISOString(),
     });
-    return { recordId, address, liveStatus: "Unknown", executionPath: "Manual Review", source: "phone_validation", redfinUrl: null, keywordScore: null };
+    return emptyResult({ executionPath: "Manual Review", source: "phone_validation" });
   }
 
-  // Step 1: RentCast (primary verification)
-  let rentCastListings: RentCastListing[] = [];
-  let rentCastError: string | null = null;
+  // RentCast query
+  let rcListings: Record<string, unknown>[] = [];
   try {
-    rentCastListings = await queryRentCast(address, city, state, zip);
+    rcListings = await queryRentCast(address, city, state, zip);
   } catch (err) {
-    rentCastError = String(err);
-    console.error(`[verify] RentCast error for ${address}:`, err);
-  }
-
-  const rentCastActive = rentCastListings.length > 0;
-  const rcListing = rentCastListings[0];
-
-  // RentCast empty → Off Market, done
-  if (!rentCastActive) {
     await patchRecord(recordId, {
       [W.liveStatus]: "Off Market",
       [W.executionPath]: "Reject",
       [W.verifiedOnMarket]: false,
-      [W.verificationSource]: rentCastError ? `RentCast error: ${rentCastError}` : "RentCast (no active listing)",
+      [W.verificationSource]: `RentCast error: ${String(err)}`,
       [W.lastVerified]: new Date().toISOString(),
-      [W.notes]: appendNote(existingNotes, rentCastError
-        ? `RentCast error: ${rentCastError}. Marking Off Market.`
-        : "RentCast: no active listing found. Off Market."),
+      [W.notes]: appendNote(existingNotes, `RentCast error: ${String(err)}.`),
     });
-    return { recordId, address, liveStatus: "Off Market", executionPath: "Reject", source: "RentCast", redfinUrl: null, keywordScore: null };
+    return emptyResult({ liveStatus: "Off Market", source: "RentCast-error", error: String(err) });
   }
 
-  // RentCast confirms active — log details
-  const rcAny = rcListing as unknown as Record<string, unknown>;
-  const rcPrice = rcAny.price as number | undefined;
-  const rcDom = rcAny.daysOnMarket as number | undefined;
-  const rcLastSeen = rcAny.lastSeenDate as string | undefined;
-  const rcStatus = rcAny.status as string | undefined;
-  console.log(`[verify] RentCast active: price=${rcPrice}, dom=${rcDom}, lastSeen=${rcLastSeen}, status=${rcStatus}`);
-
-  // Step 2: Redfin stingray (optional — for keyword scoring only)
-  let redfinUrl: string | null = null;
-  let keywordScore: number | null = null;
-  let kwDetails = "";
-  let redfinError: string | null = null;
-
-  try {
-    console.log(`[verify] Step 2: Redfin stingray for "${address}", "${city}", "${state}", "${zip}"`);
-    const redfin = await fetchRedfinDirect(address, city, state, zip);
-    console.log(`[verify] Redfin result: url=${redfin.url}, status=${redfin.listingStatus}, offMarket=${redfin.isOffMarket}, error=${redfin.error ?? "none"}`);
-
-    redfinUrl = redfin.url;
-    redfinError = redfin.error ?? null;
-
-    // If Redfin says off-market but RentCast says active, trust Redfin (more current)
-    if (redfin.isOffMarket) {
-      await patchRecord(recordId, {
-        [W.liveStatus]: "Off Market",
-        [W.executionPath]: "Reject",
-        [W.verifiedOnMarket]: false,
-        [W.verificationSource]: "RentCast (active — stale) + Redfin (off-market)",
-        ...(redfinUrl ? { [W.verificationUrl]: redfinUrl } : {}),
-        [W.lastVerified]: new Date().toISOString(),
-        [W.restrictionText]: redfin.description.slice(0, 5000),
-        [W.notes]: appendNote(existingNotes, `RentCast active but Redfin confirms off-market (status: ${redfin.listingStatus}). Rejecting.`),
-      });
-      return { recordId, address, liveStatus: "Off Market", executionPath: "Reject", source: "Redfin-override", redfinUrl, keywordScore: null };
-    }
-
-    // Run keyword scoring on Redfin description if available
-    if (redfin.description) {
-      const kw = scoreDescription(redfin.description);
-      keywordScore = kw.score;
-      kwDetails = kw.details;
-
-      // If keywords trigger Reject or Manual Review, respect that
-      if (kw.executionPath !== "Auto Proceed") {
-        await patchRecord(recordId, {
-          [W.liveStatus]: "Active",
-          [W.executionPath]: kw.executionPath,
-          [W.verifiedOnMarket]: true,
-          [W.verificationSource]: "RentCast (active) + Redfin (keyword scored)",
-          ...(redfinUrl ? { [W.verificationUrl]: redfinUrl } : {}),
-          [W.lastVerified]: new Date().toISOString(),
-          [W.restrictionRiskLevel]: kw.riskLevel,
-          [W.restrictionKeywordFlag]: kw.keywordFlag,
-          [W.restrictionText]: redfin.description.slice(0, 5000),
-          [W.notes]: appendNote(existingNotes, `RentCast active. Redfin keyword check: ${kw.details}`),
-        });
-        return { recordId, address, liveStatus: "Active", executionPath: kw.executionPath, source: "RentCast+Redfin", redfinUrl, keywordScore: kw.score };
-      }
-    }
-  } catch (err) {
-    redfinError = String(err);
-    console.log(`[verify] Redfin failed (non-fatal): ${redfinError}`);
+  if (rcListings.length === 0) {
+    await patchRecord(recordId, {
+      [W.liveStatus]: "Off Market",
+      [W.executionPath]: "Reject",
+      [W.verifiedOnMarket]: false,
+      [W.verificationSource]: "RentCast (no active listing)",
+      [W.lastVerified]: new Date().toISOString(),
+      [W.notes]: appendNote(existingNotes, "RentCast: no active listing found. Off Market."),
+    });
+    return emptyResult({ liveStatus: "Off Market", source: "RentCast" });
   }
 
-  // RentCast active + Redfin either passed keywords or was unavailable → Auto Proceed
-  const source = redfinUrl ? "RentCast+Redfin" : "RentCast-only";
-  const noteText = redfinUrl
-    ? `RentCast active (price: $${rcPrice?.toLocaleString() ?? "?"}, DOM: ${rcDom ?? "?"}). Redfin keyword check passed. ${kwDetails}`
-    : `RentCast active (price: $${rcPrice?.toLocaleString() ?? "?"}, DOM: ${rcDom ?? "?"}, lastSeen: ${rcLastSeen ?? "?"}). Redfin: ${redfinError ?? "skipped"}. No keyword check — proceeding on RentCast data.`;
+  const rc = rcListings[0];
+  const rcStatus = (rc.status as string) ?? null;
+  const rcPrice = (rc.price as number) ?? null;
+  const rcDom = (rc.daysOnMarket as number) ?? null;
+  const rcLastSeen = (rc.lastSeenDate as string) ?? null;
 
+  // Flip detection
+  const flip = checkFlip(rc);
+
+  // Stale data check
+  const staleCheck = isStaleData(rcLastSeen ?? undefined);
+
+  const rcData = {
+    status: rcStatus, price: rcPrice, dom: rcDom,
+    lastSeenDate: rcLastSeen,
+    lastSalePrice: flip.lastSalePrice,
+    lastSaleDate: flip.lastSaleDate,
+    stale: staleCheck.stale,
+  };
+
+  console.log(`[verify] ${address}: RentCast status=${rcStatus}, price=${rcPrice}, dom=${rcDom}, lastSeen=${rcLastSeen}, stale=${staleCheck.stale}, flip=${flip.flipDetected} (${flip.priceRatio}x)`);
+
+  // Decision: flip detected → Manual Review
+  if (flip.flipDetected) {
+    await patchRecord(recordId, {
+      [W.liveStatus]: "Active",
+      [W.executionPath]: "Manual Review",
+      [W.verifiedOnMarket]: true,
+      [W.verificationSource]: "RentCast",
+      [W.lastVerified]: new Date().toISOString(),
+      [W.restrictionRiskLevel]: "High",
+      [W.restrictionKeywordFlag]: true,
+      [W.notes]: appendNote(existingNotes, `RentCast active. ${flip.details}`),
+    });
+    return {
+      recordId, address, liveStatus: "Active", executionPath: "Manual Review",
+      source: "RentCast", flipDetected: true, flipScore: flip.flipScore,
+      flipDetails: flip.details, rentCast: rcData,
+    };
+  }
+
+  // Decision: stale lastSeenDate → Manual Review
+  if (staleCheck.stale) {
+    const staleNote = staleCheck.daysSince !== null
+      ? `lastSeenDate is ${staleCheck.daysSince} days old (threshold: ${STALE_DAYS}).`
+      : "No lastSeenDate — data freshness unknown.";
+    await patchRecord(recordId, {
+      [W.liveStatus]: "Active",
+      [W.executionPath]: "Manual Review",
+      [W.verifiedOnMarket]: true,
+      [W.verificationSource]: "RentCast (stale data)",
+      [W.lastVerified]: new Date().toISOString(),
+      [W.notes]: appendNote(existingNotes, `RentCast active but stale. ${staleNote} ${flip.details}`),
+    });
+    return {
+      recordId, address, liveStatus: "Active", executionPath: "Manual Review",
+      source: "RentCast-stale", flipDetected: false, flipScore: flip.flipScore,
+      flipDetails: flip.details, rentCast: rcData,
+    };
+  }
+
+  // Active, fresh, no flip → Auto Proceed
   await patchRecord(recordId, {
     [W.liveStatus]: "Active",
     [W.executionPath]: "Auto Proceed",
     [W.verifiedOnMarket]: true,
-    [W.verificationSource]: source,
-    ...(redfinUrl ? { [W.verificationUrl]: redfinUrl } : {}),
+    [W.verificationSource]: "RentCast",
     [W.lastVerified]: new Date().toISOString(),
-    ...(keywordScore !== null ? {
-      [W.restrictionRiskLevel]: "None",
-      [W.restrictionKeywordFlag]: false,
-    } : {}),
-    [W.notes]: appendNote(existingNotes, noteText),
+    [W.restrictionRiskLevel]: flip.flipScore > 0 ? "Low" : "None",
+    [W.restrictionKeywordFlag]: false,
+    [W.notes]: appendNote(existingNotes, `RentCast verified active (price: $${rcPrice?.toLocaleString() ?? "?"}, DOM: ${rcDom ?? "?"}, lastSeen: ${rcLastSeen ?? "?"}). ${flip.details}`),
   });
-  return { recordId, address, liveStatus: "Active", executionPath: "Auto Proceed", source, redfinUrl, keywordScore };
+  return {
+    recordId, address, liveStatus: "Active", executionPath: "Auto Proceed",
+    source: "RentCast", flipDetected: false, flipScore: flip.flipScore,
+    flipDetails: flip.details, rentCast: rcData,
+  };
 }
 
 // --- Route handler ---
@@ -547,79 +382,94 @@ export async function POST(req: Request) {
     return Response.json({ error: "AIRTABLE_PAT not set" }, { status: 500 });
   }
   if (!RENTCAST_API_KEY) {
-    return Response.json({ error: "RENTCAST_API_KEY not set — add it to Vercel env vars" }, { status: 500 });
+    return Response.json({ error: "RENTCAST_API_KEY not set" }, { status: 500 });
   }
 
-  let body: { recordId?: string; batch?: boolean };
+  let body: { recordId?: string; recordIds?: string[]; batch?: boolean };
   try {
     const text = await req.text();
-    if (!text.trim()) {
-      return Response.json({ error: "Empty body" }, { status: 400 });
-    }
+    if (!text.trim()) return Response.json({ error: "Empty body" }, { status: 400 });
     body = JSON.parse(text);
   } catch {
     return Response.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
   try {
-    // Single record mode
+    // Single record
     if (body.recordId) {
       const record = await fetchRecord(body.recordId);
       if (!record || record.rawError) {
         return Response.json(
-          { error: "Record not found or Airtable error", detail: record?.rawError ?? "fetchRecord returned null" },
+          { error: "Record not found", detail: record?.rawError },
           { status: 404 }
         );
       }
-
       const result = await verifyOne(body.recordId, record.fields);
       return Response.json({ results: [result], total: 1 });
     }
 
-    // Batch mode — process all unverified
-    if (body.batch) {
-      const records = await fetchUnverifiedRecords();
+    // Multiple specific records
+    if (body.recordIds && Array.isArray(body.recordIds)) {
       const results: VerifyResult[] = [];
-
-      for (const rec of records) {
+      for (const rid of body.recordIds.slice(0, 50)) {
         try {
-          const result = await verifyOne(rec.id, rec.fields);
-          results.push(result);
+          const record = await fetchRecord(rid);
+          if (!record || record.rawError) {
+            results.push({
+              recordId: rid, address: "", liveStatus: "Error", executionPath: "Manual Review",
+              source: "error", flipDetected: false, flipScore: 0, flipDetails: "",
+              rentCast: { status: null, price: null, dom: null, lastSeenDate: null, lastSalePrice: null, lastSaleDate: null, stale: false },
+              error: record?.rawError ?? "not found",
+            });
+            continue;
+          }
+          results.push(await verifyOne(rid, record.fields));
         } catch (err) {
           results.push({
-            recordId: rec.id,
-            address: (rec.fields[F.address] as string) ?? "",
-            liveStatus: "Error",
-            executionPath: "Manual Review",
-            source: "error",
-            redfinUrl: null,
-            keywordScore: null,
+            recordId: rid, address: "", liveStatus: "Error", executionPath: "Manual Review",
+            source: "error", flipDetected: false, flipScore: 0, flipDetails: "",
+            rentCast: { status: null, price: null, dom: null, lastSeenDate: null, lastSalePrice: null, lastSaleDate: null, stale: false },
             error: String(err),
           });
         }
       }
+      return Response.json({ results, total: results.length });
+    }
 
+    // Batch unverified
+    if (body.batch) {
+      const records = await fetchUnverifiedRecords();
+      const results: VerifyResult[] = [];
+      for (const rec of records) {
+        try {
+          results.push(await verifyOne(rec.id, rec.fields));
+        } catch (err) {
+          results.push({
+            recordId: rec.id, address: (rec.fields[F.address] as string) ?? "",
+            liveStatus: "Error", executionPath: "Manual Review",
+            source: "error", flipDetected: false, flipScore: 0, flipDetails: "",
+            rentCast: { status: null, price: null, dom: null, lastSeenDate: null, lastSalePrice: null, lastSaleDate: null, stale: false },
+            error: String(err),
+          });
+        }
+      }
       const summary = {
         total: results.length,
-        active: results.filter((r) => r.liveStatus === "Active").length,
-        offMarket: results.filter((r) => r.liveStatus === "Off Market").length,
+        autoProceed: results.filter((r) => r.executionPath === "Auto Proceed").length,
         manualReview: results.filter((r) => r.executionPath === "Manual Review").length,
         rejected: results.filter((r) => r.executionPath === "Reject").length,
+        flipsDetected: results.filter((r) => r.flipDetected).length,
         errors: results.filter((r) => r.error).length,
       };
-
       return Response.json({ summary, results });
     }
 
     return Response.json(
-      { error: "Provide either recordId (string) or batch (true)" },
+      { error: "Provide recordId, recordIds (array), or batch: true" },
       { status: 400 }
     );
   } catch (err) {
     console.error("[verify-listing] Error:", err);
-    return Response.json(
-      { error: "Verification failed", detail: String(err) },
-      { status: 500 }
-    );
+    return Response.json({ error: "Verification failed", detail: String(err) }, { status: 500 });
   }
 }
