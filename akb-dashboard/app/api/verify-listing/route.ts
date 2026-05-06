@@ -396,6 +396,8 @@ async function verifyOne(
   const agentPhone = (fields[F.agentPhone] as string) ?? "";
   const existingNotes = (fields[F.notes] as string) ?? null;
 
+  console.log(`[verify] verifyOne: recordId=${recordId}, address="${address}", city="${city}", state="${state}", zip="${zip}", phone="${agentPhone}", fieldKeys=${Object.keys(fields).join(",")}`);
+
   if (!address.trim()) {
     return { recordId, address, liveStatus: "Unknown", executionPath: "Reject", source: "skip", redfinUrl: null, keywordScore: null, error: "Empty address" };
   }
@@ -432,7 +434,9 @@ async function verifyOne(
   }
 
   // Step 2: Redfin direct page fetch (single ScraperAPI call, no autocomplete)
+  console.log(`[verify] Step 2: calling fetchRedfinDirect("${address}", "${city}", "${state}", "${zip}")`);
   const redfin = await fetchRedfinDirect(address, city, state, zip);
+  console.log(`[verify] Redfin result: url=${redfin.url}, status=${redfin.listingStatus}, offMarket=${redfin.isOffMarket}, error=${redfin.error ?? "none"}`);
   const redfinUrl = redfin.url;
 
   // --- Decision logic ---
