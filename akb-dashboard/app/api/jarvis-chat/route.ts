@@ -11,6 +11,8 @@ function getProposalsTableId(): string | null {
   return process.env.AGENT_PROPOSALS_TABLE_ID ?? null;
 }
 
+const DEAD_STATUSES = new Set(["Dead", "Walked", "Terminated", "No Response"]);
+
 async function fetchPendingProposalCount(): Promise<number> {
   const tableId = getProposalsTableId();
   if (!tableId) return 0;
@@ -42,7 +44,8 @@ function buildContextSummary(
   queue: ReturnType<typeof buildActionQueue>,
   pendingProposals: number
 ): string {
-  const { open, held } = queue;
+  // Only include Open cards — exclude Held and Cleared
+  const open = queue.open;
   const responses = open.filter((c) => c.kind === "response");
   const deals = open.filter((c) => c.kind === "deal");
   const stale = open.filter((c) => c.kind === "stale");
@@ -51,7 +54,7 @@ function buildContextSummary(
   const lines = [
     "## CURRENT DASHBOARD STATE",
     `Open cards: ${open.length} (${responses.length} responses, ${deals.length} deals, ${dd.length} DD, ${stale.length} stale)`,
-    `Held cards: ${held.length}`,
+    `Held cards: ${queue.held.length}`,
     `Pending Jarvis proposals: ${pendingProposals}`,
     "",
   ];
@@ -60,19 +63,33 @@ function buildContextSummary(
     lines.push("## RESPONSE CARDS (agents replied — highest priority)");
     for (const c of responses) {
       if (c.kind !== "response") continue;
+      const loc = [c.city, c.state].filter(Boolean).join(", ");
       lines.push(
-        `- ${c.address}${c.city ? `, ${c.city}` : ""}${c.state ? `, ${c.state}` : ""}: Agent ${c.agentName ?? "—"}, List ${formatCurrency(c.listPrice)}, MAO ${formatCurrency(c.mao)}. They said: "${(c.inboundMessage ?? "").slice(0, 100)}"`
+        `- ${c.address}${loc ? `, ${loc}` : ""}: Agent ${c.agentName ?? "—"}, List ${formatCurrency(c.listPrice)}, MAO ${formatCurrency(c.mao)}, DOM ${c.dom ?? "—"}. They said: "${(c.inboundMessage ?? "").slice(0, 150)}"`
       );
     }
     lines.push("");
   }
 
   if (deals.length > 0) {
-    lines.push("## DEAL CARDS");
+    lines.push("## DEAL CARDS (under contract or closing)");
     for (const c of deals) {
       if (c.kind !== "deal") continue;
+      const loc = [c.city, c.state].filter(Boolean).join(", ");
       lines.push(
-        `- ${c.address}: Contract ${formatCurrency(c.contractPrice)}, Assignment ${formatCurrency(c.assignmentPrice)}, Spread ${formatCurrency(c.spread)}, Status: ${c.closingStatus ?? c.status ?? "—"}`
+        `- ${c.address}${loc ? `, ${loc}` : ""}: Contract ${formatCurrency(c.contractPrice)}, Assignment ${formatCurrency(c.assignmentPrice)}, Spread ${formatCurrency(c.spread)}, Status: ${c.closingStatus ?? c.status ?? "—"}`
+      );
+    }
+    lines.push("");
+  }
+
+  if (dd.length > 0) {
+    lines.push("## DD CARDS (due diligence incomplete)");
+    for (const c of dd) {
+      if (c.kind !== "dd") continue;
+      const loc = [c.city, c.state].filter(Boolean).join(", ");
+      lines.push(
+        `- ${c.address}${loc ? `, ${loc}` : ""}: Agent ${c.agentName ?? "—"}, Missing: ${c.missingItems.join(", ")}`
       );
     }
     lines.push("");
@@ -80,11 +97,14 @@ function buildContextSummary(
 
   if (stale.length > 0) {
     lines.push("## STALE CARDS (need follow-up)");
-    for (const c of stale.slice(0, 10)) {
+    for (const c of stale.slice(0, 15)) {
       if (c.kind !== "stale") continue;
-      lines.push(`- ${c.address}: ${c.daysSilent} days silent, Agent ${c.agentName ?? "—"}`);
+      const loc = [c.city, c.state].filter(Boolean).join(", ");
+      lines.push(
+        `- ${c.address}${loc ? `, ${loc}` : ""}: ${c.daysSilent} days silent, Agent ${c.agentName ?? "—"}, Last outreach: ${c.lastOutreachDate?.slice(0, 10) ?? "never"}`
+      );
     }
-    if (stale.length > 10) lines.push(`  ... and ${stale.length - 10} more`);
+    if (stale.length > 15) lines.push(`  ... and ${stale.length - 15} more`);
     lines.push("");
   }
 
@@ -95,16 +115,35 @@ const SYSTEM_PROMPT = `You are Jarvis, the AI operations assistant for AKB Solut
 
 Alex is asking you what to focus on right now. You have full visibility into the action queue, pending deals, and stale leads.
 
-BUSINESS RULES:
-- Offers are 65% of list price, rounded up to nearest $250
+## BUSINESS RULES
+- Offers are 65% of list price, rounded up to nearest $250. Never use AVM, ARV, or estimates.
 - Never use "assignable" — say "affiliated entity"
-- Never disclose contract price, ARV, or repairs to buyers
-- DD checklist must be complete before contracting
+- Never disclose contract price, ARV, or repairs to buyers. Buyers see Assignment Price only.
+- DD checklist must be complete before contracting.
 
-RESPONSE STYLE:
+## CRITICAL RULES
+- Never recommend sending an offer or PA if Outreach_Status is "Dead", "Walked", "Terminated", or "No Response".
+- Never recommend changing a price that the operator has already stated. If Notes show the operator held firm at a price, do not suggest a different number.
+- Never recommend new outreach on Memphis (TN) deals — Memphis acquisitions are PAUSED as of 4/26/2026 due to non-assignability clauses in brokerage contracts. Exception: deals already under contract. If a TN agent responds positively, flag that Memphis is paused and Alex needs to decide if this specific deal is worth pursuing despite the assignment clause risk.
+- If a deal shows a formal offer was already emailed (Notes contain "formal offer" or "purchase agreement" or "PA sent"), do not recommend sending another one — instead recommend following up on the existing offer.
+- If a listing has Do_Not_Text flagged, never recommend sending a text to that agent. Email or other contact methods only.
+- If outreach was sent today, do not recommend re-sending. If 3+ days ago, recommend follow-up.
+- Always show city and state with each property address.
+
+## RESPONSE FORMAT
+Structure your response in these sections:
+
+## CONTRACTS READY (agents who said yes — send purchase agreements NOW)
+## ACTIVE NEGOTIATIONS (counters, pricing discussions — need a decision)
+## FOLLOW-UPS NEEDED (stale conversations — need a nudge)
+## NEW RESPONSES (agents replied but situation unclear — need review)
+
+Only include categories that have items. If nothing is urgent, say "Pipeline is clean — no immediate actions needed" and suggest proactive moves like running new PropStream exports or following up on pending contracts.
+
+## STYLE
 - Be direct and actionable. Number your recommendations.
 - Lead with the highest-ROI action (biggest spread, hottest lead, or most time-sensitive)
-- Reference specific properties by address and agent name
+- Reference specific properties by address, city/state, and agent name
 - If an agent replied, that's always top priority
 - Keep it under 200 words unless asked to elaborate
 - Use casual but professional tone — you're Alex's operations co-pilot`;
@@ -136,11 +175,18 @@ export async function POST(req: Request) {
   }
 
   try {
-    const [listings, deals, pendingCount] = await Promise.all([
+    const [allListings, deals, pendingCount] = await Promise.all([
       getListings(),
       getDeals(),
       fetchPendingProposalCount(),
     ]);
+
+    // Filter out dead/walked/terminated listings before building queue
+    const listings = allListings.filter(
+      (l) =>
+        !DEAD_STATUSES.has(l.outreachStatus ?? "") &&
+        l.actionCardState !== "Cleared"
+    );
 
     const queue = buildActionQueue(listings, deals);
     const contextSummary = buildContextSummary(queue, pendingCount);
@@ -148,7 +194,10 @@ export async function POST(req: Request) {
     // Inject context into the first user message
     const messages = body.messages.map((m, i) => {
       if (i === 0 && m.role === "user") {
-        return { role: m.role, content: `${contextSummary}\n\n---\n\nAlex says: ${m.content}` };
+        return {
+          role: m.role,
+          content: `${contextSummary}\n\n---\n\nAlex says: ${m.content}`,
+        };
       }
       return m;
     });

@@ -86,12 +86,19 @@ export function latestMessageDirection(
   return null;
 }
 
+function isGarbageLine(text: string): boolean {
+  if (text.length < 5) return true;
+  if (/^\d+$/.test(text.trim())) return true;
+  if (/\btest\b/i.test(text)) return true;
+  return false;
+}
+
 export function lastInboundLine(
   notes: string | null | undefined,
 ): string | null {
   const entries = parseConversation(notes);
   for (let i = entries.length - 1; i >= 0; i--) {
-    if (entries[i].type === "inbound" && !entries[i].text.toLowerCase().includes("test"))
+    if (entries[i].type === "inbound" && !isGarbageLine(entries[i].text))
       return entries[i].text;
   }
   return null;
@@ -102,7 +109,7 @@ export function lastOutboundLine(
 ): string | null {
   const entries = parseConversation(notes);
   for (let i = entries.length - 1; i >= 0; i--) {
-    if (entries[i].type === "outbound" && !entries[i].text.toLowerCase().includes("test"))
+    if (entries[i].type === "outbound" && !isGarbageLine(entries[i].text))
       return entries[i].text;
   }
   return null;
