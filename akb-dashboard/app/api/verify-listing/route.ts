@@ -165,14 +165,13 @@ async function queryRentCast(
   return await res.json();
 }
 
-// --- Redfin via ScraperAPI (Redfin blocks Vercel IPs directly) ---
+// --- Redfin direct URL construction + ScraperAPI page fetch ---
 
 const SCRAPER_API_KEY = "ae7d80d248c38825b69bc5acd43c9803";
-const SCRAPER_AUTOCOMPLETE_TIMEOUT_MS = 20_000;
-const SCRAPER_PAGE_TIMEOUT_MS = 15_000;
+const SCRAPER_TIMEOUT_MS = 20_000;
 
-function scraperUrl(targetUrl: string, timeoutSec: number = 20): string {
-  return `https://api.scraperapi.com?api_key=${SCRAPER_API_KEY}&url=${encodeURIComponent(targetUrl)}&timeout=${timeoutSec * 1000}`;
+function scraperUrl(targetUrl: string): string {
+  return `https://api.scraperapi.com?api_key=${SCRAPER_API_KEY}&url=${encodeURIComponent(targetUrl)}&timeout=20000`;
 }
 
 async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
@@ -185,92 +184,68 @@ async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Respons
   }
 }
 
-async function fetchRedfinUrl(
-  address: string, city: string, state: string, zip: string
-): Promise<{ url: string | null; error?: string }> {
-  // Only try one query to save time — "Address, City, State" is the most reliable
-  const rawQuery = `${address}, ${city}, ${state}`;
-  const redfinTarget = `https://www.redfin.com/stingray/do/location-autocomplete?location=${encodeURIComponent(rawQuery)}&v=2`;
-  try {
-    const res = await fetchWithTimeout(scraperUrl(redfinTarget, 20), SCRAPER_AUTOCOMPLETE_TIMEOUT_MS);
-
-    if (!res.ok) {
-      return { url: null, error: `ScraperAPI ${res.status}` };
-    }
-
-    const text = await res.text();
-    console.log(`[verify] Redfin autocomplete (${text.length} chars): ${text.slice(0, 300)}`);
-
-    const jsonStr = text.replace(/^\{\}&&/, "");
-    let data: Record<string, unknown>;
-    try {
-      data = JSON.parse(jsonStr);
-    } catch {
-      return { url: null, error: "Redfin response not JSON" };
-    }
-
-    const payload = data?.payload as Record<string, unknown> | undefined;
-    const sections = (payload?.sections ?? []) as Array<{ rows?: Array<Record<string, unknown>> }>;
-    const exactMatch = payload?.exactMatch as Record<string, unknown> | undefined;
-
-    if (exactMatch?.url) {
-      return { url: `https://www.redfin.com${exactMatch.url}` };
-    }
-
-    for (const section of sections) {
-      for (const row of section.rows ?? []) {
-        if (row.url && (row.type === "2" || String(row.url).includes("/home/"))) {
-          return { url: `https://www.redfin.com${row.url}` };
-        }
-      }
-    }
-
-    for (const section of sections) {
-      for (const row of section.rows ?? []) {
-        if (row.url && String(row.url).startsWith("/")) {
-          return { url: `https://www.redfin.com${row.url}` };
-        }
-      }
-    }
-
-    return { url: null, error: "No address match in Redfin results" };
-  } catch (err) {
-    const msg = String(err);
-    if (msg.includes("abort")) {
-      return { url: null, error: "Redfin autocomplete timed out (20s)" };
-    }
-    return { url: null, error: `ScraperAPI error: ${msg}` };
-  }
+function buildRedfinUrl(address: string, city: string, state: string): string {
+  const slugify = (s: string) =>
+    s.trim().replace(/[^a-zA-Z0-9\s]/g, "").replace(/\s+/g, "-");
+  return `https://www.redfin.com/${state.trim().toUpperCase()}/${slugify(city)}/${slugify(address)}`;
 }
 
-async function fetchRedfinPage(
-  url: string
-): Promise<{ description: string; isOffMarket: boolean } | null> {
+interface RedfinResult {
+  url: string | null;
+  description: string;
+  isOffMarket: boolean;
+  error?: string;
+}
+
+async function fetchRedfinDirect(
+  address: string, city: string, state: string
+): Promise<RedfinResult> {
+  if (!address || !city || !state) {
+    return { url: null, description: "", isOffMarket: false, error: "Missing address/city/state" };
+  }
+
+  const candidateUrl = buildRedfinUrl(address, city, state);
+  console.log(`[verify] Trying Redfin URL: ${candidateUrl}`);
+
   try {
-    const res = await fetchWithTimeout(scraperUrl(url, 15), SCRAPER_PAGE_TIMEOUT_MS);
-    if (!res.ok) {
-      console.log(`[verify] Redfin page ${res.status} for ${url}`);
-      return null;
+    const res = await fetchWithTimeout(scraperUrl(candidateUrl), SCRAPER_TIMEOUT_MS);
+
+    if (res.status === 404) {
+      console.log(`[verify] Redfin 404 for ${candidateUrl}`);
+      return { url: null, description: "", isOffMarket: false, error: "Redfin 404 — address format didn't match" };
     }
+
+    if (!res.ok) {
+      console.log(`[verify] ScraperAPI ${res.status} for ${candidateUrl}`);
+      return { url: null, description: "", isOffMarket: false, error: `ScraperAPI ${res.status}` };
+    }
+
     const html = await res.text();
 
-    const descMatch = html.match(
-      /<meta\s+name="description"\s+content="([^"]*)"/i
-    );
+    // Redfin may redirect to a canonical URL with /home/ID — extract from HTML
+    const canonicalMatch = html.match(/<link\s+rel="canonical"\s+href="([^"]*redfin\.com[^"]*)"/i);
+    const finalUrl = canonicalMatch ? canonicalMatch[1] : candidateUrl;
+
+    const descMatch = html.match(/<meta\s+name="description"\s+content="([^"]*)"/i);
     const description = descMatch ? descMatch[1] : "";
 
     const schemaOffMarket = html.includes('"availability":"OutOfStock"') ||
       html.includes('"availability":"https://schema.org/OutOfStock"');
     const phraseOffMarket = detectOffMarket(html);
 
+    console.log(`[verify] Redfin OK: ${finalUrl} (${html.length} chars, offMarket=${schemaOffMarket || phraseOffMarket})`);
+
     return {
+      url: finalUrl,
       description,
       isOffMarket: schemaOffMarket || phraseOffMarket,
     };
   } catch (err) {
     const msg = String(err);
-    console.log(`[verify] Redfin page ${msg.includes("abort") ? "timed out" : "error"}: ${msg}`);
-    return null;
+    if (msg.includes("abort")) {
+      return { url: null, description: "", isOffMarket: false, error: "Redfin timed out (20s)" };
+    }
+    return { url: null, description: "", isOffMarket: false, error: `ScraperAPI error: ${msg}` };
   }
 }
 
@@ -425,38 +400,31 @@ async function verifyOne(
     console.error(`[verify] RentCast error for ${address}:`, err);
   }
 
-  // Step 2: Redfin search + page fetch (always attempted)
-  const redfin = await fetchRedfinUrl(address, city, state, zip);
+  // Step 2: Redfin direct page fetch (single ScraperAPI call, no autocomplete)
+  const redfin = await fetchRedfinDirect(address, city, state);
   const redfinUrl = redfin.url;
-  let redfinPage: { description: string; isOffMarket: boolean } | null = null;
-  let redfinBlocked = false;
-
-  if (redfinUrl) {
-    redfinPage = await fetchRedfinPage(redfinUrl);
-    if (!redfinPage) redfinBlocked = true;
-  }
 
   // --- Decision logic ---
   // Rule: NEVER auto-approve on RentCast alone. Redfin must confirm.
 
   // Case 1: Redfin confirms off-market → Reject regardless of RentCast
-  if (redfinPage?.isOffMarket) {
+  if (redfin.isOffMarket) {
     await patchRecord(recordId, {
       [W.liveStatus]: "Off Market",
       [W.executionPath]: "Reject",
       [W.verifiedOnMarket]: false,
       [W.verificationSource]: `RentCast (${rentCastActive ? "active" : "empty"}) + Redfin (off-market)`,
-      [W.verificationUrl]: redfinUrl,
+      ...(redfinUrl ? { [W.verificationUrl]: redfinUrl } : {}),
       [W.lastVerified]: new Date().toISOString(),
-      [W.restrictionText]: redfinPage.description.slice(0, 5000),
+      [W.restrictionText]: redfin.description.slice(0, 5000),
       [W.notes]: appendNote(existingNotes, `Redfin confirms off-market.${rentCastActive ? " RentCast had active listing (stale data)." : ""}`),
     });
     return { recordId, address, liveStatus: "Off Market", executionPath: "Reject", source: "Redfin", redfinUrl, keywordScore: null };
   }
 
   // Case 2: Redfin page loaded, not off-market → run keyword scoring
-  if (redfinPage) {
-    const kw = scoreDescription(redfinPage.description);
+  if (redfinUrl && redfin.description) {
+    const kw = scoreDescription(redfin.description);
     await patchRecord(recordId, {
       [W.liveStatus]: "Active",
       [W.executionPath]: kw.executionPath,
@@ -466,42 +434,49 @@ async function verifyOne(
       [W.lastVerified]: new Date().toISOString(),
       [W.restrictionRiskLevel]: kw.riskLevel,
       [W.restrictionKeywordFlag]: kw.keywordFlag,
-      [W.restrictionText]: redfinPage.description.slice(0, 5000),
+      [W.restrictionText]: redfin.description.slice(0, 5000),
       [W.notes]: appendNote(existingNotes, `Redfin verified active. ${kw.details}`),
     });
     return { recordId, address, liveStatus: "Active", executionPath: kw.executionPath, source: "RentCast+Redfin", redfinUrl, keywordScore: kw.score };
   }
 
-  // Case 3: No Redfin URL found AND RentCast empty → Off Market
-  if (!redfinUrl && !rentCastActive) {
+  // Case 3: Redfin returned a page but no description (empty page / redirect)
+  if (redfinUrl) {
+    await patchRecord(recordId, {
+      [W.liveStatus]: "Active",
+      [W.executionPath]: "Manual Review",
+      [W.verifiedOnMarket]: true,
+      [W.verificationSource]: `RentCast (${rentCastActive ? "active" : "empty"}) + Redfin (page loaded, no description)`,
+      [W.verificationUrl]: redfinUrl,
+      [W.lastVerified]: new Date().toISOString(),
+      [W.notes]: appendNote(existingNotes, "Redfin page loaded but no description found. Manual review for keyword check."),
+    });
+    return { recordId, address, liveStatus: "Active", executionPath: "Manual Review", source: "RentCast+Redfin(partial)", redfinUrl, keywordScore: null };
+  }
+
+  // Case 4: No Redfin page AND RentCast empty → Off Market
+  if (!rentCastActive) {
     await patchRecord(recordId, {
       [W.liveStatus]: "Off Market",
       [W.executionPath]: "Reject",
       [W.verifiedOnMarket]: false,
-      [W.verificationSource]: "RentCast (empty) + Redfin (no URL)",
+      [W.verificationSource]: `RentCast (empty) + Redfin (${redfin.error ?? "no page"})`,
       [W.lastVerified]: new Date().toISOString(),
-      [W.notes]: appendNote(existingNotes, `RentCast: no active listing. Redfin: ${redfin.error ?? "no match found"}. Off Market.`),
+      [W.notes]: appendNote(existingNotes, `RentCast: no active listing. Redfin: ${redfin.error ?? "not found"}. Off Market.`),
     });
     return { recordId, address, liveStatus: "Off Market", executionPath: "Reject", source: "RentCast+Redfin", redfinUrl: null, keywordScore: null };
   }
 
-  // Case 4: Redfin unreachable (blocked, no URL, or page fetch failed)
-  // RentCast may say active but we can't confirm → Manual Review
-  const sourceNote = [
-    `RentCast: ${rentCastActive ? "active" : rentCastError ? `error (${rentCastError})` : "empty"}`,
-    redfinUrl ? `Redfin URL found but page ${redfinBlocked ? "blocked (403/captcha)" : "not fetchable"}` : `Redfin: ${redfin.error ?? "no URL found"}`,
-  ].join(". ");
-
+  // Case 5: RentCast says active but Redfin failed → Manual Review
   await patchRecord(recordId, {
-    [W.liveStatus]: rentCastActive ? "Active" : "URL Not Found",
+    [W.liveStatus]: "Active",
     [W.executionPath]: "Manual Review",
     [W.verifiedOnMarket]: false,
-    [W.verificationSource]: sourceNote,
-    ...(redfinUrl ? { [W.verificationUrl]: redfinUrl } : {}),
+    [W.verificationSource]: `RentCast (active) + Redfin (${redfin.error ?? "failed"})`,
     [W.lastVerified]: new Date().toISOString(),
-    [W.notes]: appendNote(existingNotes, `${sourceNote}. Cannot confirm on Redfin — routing to Manual Review.`),
+    [W.notes]: appendNote(existingNotes, `RentCast: active. Redfin: ${redfin.error ?? "failed"}. Cannot confirm — Manual Review.`),
   });
-  return { recordId, address, liveStatus: rentCastActive ? "Active" : "URL Not Found", executionPath: "Manual Review", source: "unconfirmed", redfinUrl, keywordScore: null };
+  return { recordId, address, liveStatus: "Active", executionPath: "Manual Review", source: "unconfirmed", redfinUrl: null, keywordScore: null };
 }
 
 // --- Route handler ---
