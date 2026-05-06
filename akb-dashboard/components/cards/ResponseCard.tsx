@@ -1,8 +1,9 @@
 "use client";
 
+import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import { ResponseCard as ResponseCardData } from "@/lib/actionQueue";
-import { formatCurrency, buildQuickSMSLink } from "@/lib/utils";
+import { formatCurrency } from "@/lib/utils";
 import { showToast } from "@/components/Toast";
 import { setHoveredCard, openCommandBar } from "@/lib/commandBus";
 import HoldButton from "./HoldButton";
@@ -24,13 +25,59 @@ async function postAction(type: string, body: Record<string, unknown>) {
   }
 }
 
+function cleanPhone(phone: string): string {
+  const digits = phone.replace(/[^0-9]/g, "");
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  return `+${digits}`;
+}
+
 export default function ResponseCard({ card, onActionComplete }: Props) {
+  const [replyOpen, setReplyOpen] = useState(false);
+  const [replyText, setReplyText] = useState("");
+  const [sending, setSending] = useState(false);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (replyOpen && inputRef.current) inputRef.current.focus();
+  }, [replyOpen]);
+
   const handle = async (type: string, extra: Record<string, unknown> = {}) => {
     try {
       await postAction(type, { recordId: card.recordId, ...extra });
       onActionComplete();
     } catch (err) {
       showToast(String(err));
+    }
+  };
+
+  const handleSend = async () => {
+    if (!replyText.trim() || !card.agentPhone || sending) return;
+    setSending(true);
+    try {
+      const res = await fetch("/api/jarvis-send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          proposalId: `manual-reply-${Date.now()}`,
+          to: cleanPhone(card.agentPhone),
+          message: replyText.trim(),
+          recordId: card.recordId,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showToast(data.error || "Send failed");
+        return;
+      }
+      showToast("Sent via Quo", "success");
+      setReplyOpen(false);
+      setReplyText("");
+      handle("clear");
+    } catch {
+      showToast("Send failed");
+    } finally {
+      setSending(false);
     }
   };
 
@@ -93,15 +140,52 @@ export default function ResponseCard({ card, onActionComplete }: Props) {
         </div>
       )}
 
+      {/* Inline reply input */}
+      {replyOpen && (
+        <div className="mb-3 space-y-2">
+          <textarea
+            ref={inputRef}
+            value={replyText}
+            onChange={(e) => setReplyText(e.target.value)}
+            placeholder={`Reply to ${card.agentName?.split(" ")[0] ?? "agent"}...`}
+            rows={3}
+            className="w-full bg-[#0d1117] border border-emerald-500/50 rounded p-2.5 text-sm text-white focus:outline-none focus:border-emerald-400 resize-y placeholder-gray-600"
+            disabled={sending}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSend();
+              if (e.key === "Escape") { setReplyOpen(false); setReplyText(""); }
+            }}
+          />
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={handleSend}
+              disabled={sending || !replyText.trim()}
+              className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold py-2 rounded min-h-[44px] disabled:opacity-50"
+            >
+              {sending ? "Sending..." : "Send via Quo"}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setReplyOpen(false); setReplyText(""); }}
+              className="bg-[#30363d] hover:bg-[#3d444d] text-gray-300 text-xs font-semibold px-4 py-2 rounded min-h-[44px]"
+            >
+              Cancel
+            </button>
+          </div>
+          <p className="text-[10px] text-gray-600">Cmd+Enter to send · Esc to cancel</p>
+        </div>
+      )}
+
       <div className="flex gap-2 flex-wrap">
-        {card.agentPhone && (
-          <a
-            href={buildQuickSMSLink(card.agentPhone)}
-            onClick={() => handle("clear")}
-            className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold text-center py-2.5 rounded min-h-[44px] flex items-center justify-center"
+        {card.agentPhone && !replyOpen && (
+          <button
+            type="button"
+            onClick={() => setReplyOpen(true)}
+            className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold text-center py-2.5 rounded min-h-[44px]"
           >
             Reply
-          </a>
+          </button>
         )}
         <button
           type="button"
