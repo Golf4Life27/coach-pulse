@@ -162,7 +162,10 @@ async function queryRentCast(
     throw new Error(`RentCast error ${res.status}: ${errText}`);
   }
 
-  return await res.json();
+  const data = await res.json();
+  // Log full response to see all available fields
+  console.log(`[verify] RentCast raw response (${JSON.stringify(data).length} chars): ${JSON.stringify(data).slice(0, 3000)}`);
+  return data;
 }
 
 // --- Redfin stingray JSON API via ScraperAPI ---
