@@ -106,6 +106,21 @@ export async function POST(req: Request) {
     for (const listing of toSend) {
       const phone = toE164(listing.agentPhone!);
       const cleanedPhone = phone.replace(/[^0-9]/g, "").slice(-10);
+      const offerNum = roundToNearest250(listing.listPrice! * 0.65);
+
+      if (offerNum < 5000) {
+        results.push({
+          recordId: listing.id,
+          address: listing.address,
+          agentName: listing.agentName,
+          agentPhone: phone,
+          offer: formatOffer(listing.listPrice!),
+          status: "skipped",
+          error: "Offer below $5K floor — likely rental or data error",
+        });
+        skipped++;
+        continue;
+      }
 
       if (phoneSeen.has(cleanedPhone)) {
         results.push({
