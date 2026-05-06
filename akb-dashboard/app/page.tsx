@@ -6,6 +6,7 @@ import ActionQueue from "@/components/ActionQueue";
 import BriefingStrip from "@/components/BriefingStrip";
 import JarvisFeed from "@/components/JarvisFeed";
 import JarvisChat from "@/components/JarvisChat";
+import OutreachPanel from "@/components/OutreachPanel";
 import { Briefing, DashboardStats } from "@/lib/types";
 import { showToast } from "@/components/Toast";
 
@@ -75,6 +76,8 @@ export default function ActNowPage() {
       </div>
 
       <BriefingStrip briefing={briefing} previousLogin={previousLogin} />
+
+      <OutreachPanel />
 
       <JarvisFeed />
 
