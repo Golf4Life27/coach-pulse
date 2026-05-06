@@ -168,87 +168,87 @@ async function queryRentCast(
 // --- Redfin via ScraperAPI (Redfin blocks Vercel IPs directly) ---
 
 const SCRAPER_API_KEY = "ae7d80d248c38825b69bc5acd43c9803";
+const SCRAPER_TIMEOUT_MS = 10_000;
 
 function scraperUrl(targetUrl: string): string {
-  return `https://api.scraperapi.com?api_key=${SCRAPER_API_KEY}&url=${encodeURIComponent(targetUrl)}`;
+  return `https://api.scraperapi.com?api_key=${SCRAPER_API_KEY}&url=${encodeURIComponent(targetUrl)}&timeout=10000`;
+}
+
+async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { cache: "no-store", signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function fetchRedfinUrl(
   address: string, city: string, state: string, zip: string
 ): Promise<{ url: string | null; error?: string }> {
-  const queries = [
-    `${address}, ${city}, ${state}`,
-    `${address}, ${city}, ${state} ${zip}`,
-  ];
+  // Only try one query to save time — "Address, City, State" is the most reliable
+  const rawQuery = `${address}, ${city}, ${state}`;
+  const redfinTarget = `https://www.redfin.com/stingray/do/location-autocomplete?location=${encodeURIComponent(rawQuery)}&v=2`;
+  try {
+    const res = await fetchWithTimeout(scraperUrl(redfinTarget), SCRAPER_TIMEOUT_MS);
 
-  for (const rawQuery of queries) {
-    const redfinTarget = `https://www.redfin.com/stingray/do/location-autocomplete?location=${encodeURIComponent(rawQuery)}&v=2`;
-    try {
-      const res = await fetch(scraperUrl(redfinTarget), { cache: "no-store" });
-
-      if (!res.ok) {
-        console.log(`[verify] ScraperAPI→Redfin ${res.status} for: "${rawQuery}"`);
-        continue;
-      }
-
-      const text = await res.text();
-      console.log(`[verify] Redfin autocomplete for "${rawQuery}" (${text.length} chars): ${text.slice(0, 500)}`);
-
-      const jsonStr = text.replace(/^\{\}&&/, "");
-      let data: Record<string, unknown>;
-      try {
-        data = JSON.parse(jsonStr);
-      } catch {
-        console.log(`[verify] Redfin response not JSON for "${rawQuery}"`);
-        continue;
-      }
-
-      const payload = data?.payload as Record<string, unknown> | undefined;
-      const sections = (payload?.sections ?? []) as Array<{ rows?: Array<Record<string, unknown>> }>;
-      const exactMatch = payload?.exactMatch as Record<string, unknown> | undefined;
-
-      if (exactMatch?.url) {
-        const url = `https://www.redfin.com${exactMatch.url}`;
-        console.log(`[verify] Redfin exactMatch: ${url}`);
-        return { url };
-      }
-
-      for (const section of sections) {
-        for (const row of section.rows ?? []) {
-          if (row.url && (row.type === "2" || String(row.url).includes("/home/"))) {
-            const url = `https://www.redfin.com${row.url}`;
-            console.log(`[verify] Redfin match: ${url} (type=${row.type})`);
-            return { url };
-          }
-        }
-      }
-
-      for (const section of sections) {
-        for (const row of section.rows ?? []) {
-          if (row.url && String(row.url).startsWith("/")) {
-            const url = `https://www.redfin.com${row.url}`;
-            console.log(`[verify] Redfin fallback: ${url}`);
-            return { url };
-          }
-        }
-      }
-
-      console.log(`[verify] Redfin no matches for "${rawQuery}". Sections: ${sections.length}`);
-    } catch (err) {
-      console.log(`[verify] ScraperAPI error for "${rawQuery}": ${String(err)}`);
+    if (!res.ok) {
+      return { url: null, error: `ScraperAPI ${res.status}` };
     }
-  }
 
-  return { url: null, error: "No Redfin match via ScraperAPI" };
+    const text = await res.text();
+    console.log(`[verify] Redfin autocomplete (${text.length} chars): ${text.slice(0, 300)}`);
+
+    const jsonStr = text.replace(/^\{\}&&/, "");
+    let data: Record<string, unknown>;
+    try {
+      data = JSON.parse(jsonStr);
+    } catch {
+      return { url: null, error: "Redfin response not JSON" };
+    }
+
+    const payload = data?.payload as Record<string, unknown> | undefined;
+    const sections = (payload?.sections ?? []) as Array<{ rows?: Array<Record<string, unknown>> }>;
+    const exactMatch = payload?.exactMatch as Record<string, unknown> | undefined;
+
+    if (exactMatch?.url) {
+      return { url: `https://www.redfin.com${exactMatch.url}` };
+    }
+
+    for (const section of sections) {
+      for (const row of section.rows ?? []) {
+        if (row.url && (row.type === "2" || String(row.url).includes("/home/"))) {
+          return { url: `https://www.redfin.com${row.url}` };
+        }
+      }
+    }
+
+    for (const section of sections) {
+      for (const row of section.rows ?? []) {
+        if (row.url && String(row.url).startsWith("/")) {
+          return { url: `https://www.redfin.com${row.url}` };
+        }
+      }
+    }
+
+    return { url: null, error: "No address match in Redfin results" };
+  } catch (err) {
+    const msg = String(err);
+    if (msg.includes("abort")) {
+      return { url: null, error: "Redfin autocomplete timed out (10s)" };
+    }
+    return { url: null, error: `ScraperAPI error: ${msg}` };
+  }
 }
 
 async function fetchRedfinPage(
   url: string
 ): Promise<{ description: string; isOffMarket: boolean } | null> {
   try {
-    const res = await fetch(scraperUrl(url), { cache: "no-store" });
+    const res = await fetchWithTimeout(scraperUrl(url), SCRAPER_TIMEOUT_MS);
     if (!res.ok) {
-      console.log(`[verify] ScraperAPI→Redfin page ${res.status} for ${url}`);
+      console.log(`[verify] Redfin page ${res.status} for ${url}`);
       return null;
     }
     const html = await res.text();
@@ -267,7 +267,8 @@ async function fetchRedfinPage(
       isOffMarket: schemaOffMarket || phraseOffMarket,
     };
   } catch (err) {
-    console.log(`[verify] ScraperAPI page fetch error: ${String(err)}`);
+    const msg = String(err);
+    console.log(`[verify] Redfin page ${msg.includes("abort") ? "timed out" : "error"}: ${msg}`);
     return null;
   }
 }
