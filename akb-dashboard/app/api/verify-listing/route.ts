@@ -53,7 +53,7 @@ async function queryRentCast(
 
 // --- Flip detection ---
 
-const FLIP_THRESHOLD = 2.0; // list price >= 2x last sale = flip
+const FLIP_THRESHOLD = 1.5; // list price >= 1.5x last sale within window = flip
 const FLIP_WINDOW_MONTHS = 24;
 
 interface FlipCheck {
