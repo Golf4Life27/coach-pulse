@@ -91,7 +91,8 @@ export function lastInboundLine(
 ): string | null {
   const entries = parseConversation(notes);
   for (let i = entries.length - 1; i >= 0; i--) {
-    if (entries[i].type === "inbound") return entries[i].text;
+    if (entries[i].type === "inbound" && !entries[i].text.toLowerCase().includes("test"))
+      return entries[i].text;
   }
   return null;
 }
@@ -101,7 +102,8 @@ export function lastOutboundLine(
 ): string | null {
   const entries = parseConversation(notes);
   for (let i = entries.length - 1; i >= 0; i--) {
-    if (entries[i].type === "outbound") return entries[i].text;
+    if (entries[i].type === "outbound" && !entries[i].text.toLowerCase().includes("test"))
+      return entries[i].text;
   }
   return null;
 }

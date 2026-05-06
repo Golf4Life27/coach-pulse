@@ -16,6 +16,8 @@ interface CardBase {
   cardState: CardState;
   holdUntil: string | null;
   address: string;
+  city: string | null;
+  state: string | null;
 }
 
 export interface ResponseCard extends CardBase {
@@ -148,6 +150,8 @@ function classifyListing(listing: Listing, now: Date): ActionCard | null {
       cardState,
       holdUntil: listing.actionHoldUntil,
       address: listing.address,
+      city: listing.city,
+      state: listing.state,
       agentName: listing.agentName,
       agentPhone: listing.agentPhone,
       listPrice: listing.listPrice,
@@ -167,6 +171,8 @@ function classifyListing(listing: Listing, now: Date): ActionCard | null {
       cardState,
       holdUntil: listing.actionHoldUntil,
       address: listing.address,
+      city: listing.city,
+      state: listing.state,
       agentName: listing.agentName,
       agentPhone: listing.agentPhone,
       missingItems: missing,
@@ -183,6 +189,8 @@ function classifyListing(listing: Listing, now: Date): ActionCard | null {
       cardState,
       holdUntil: listing.actionHoldUntil,
       address: listing.address,
+      city: listing.city,
+      state: listing.state,
       agentName: listing.agentName,
       agentPhone: listing.agentPhone,
       listPrice: listing.listPrice,
@@ -223,6 +231,8 @@ function classifyDeal(deal: Deal, now: Date): ActionCard | null {
     cardState,
     holdUntil: deal.actionHoldUntil,
     address: deal.propertyAddress,
+    city: deal.city,
+    state: null,
     contractPrice: contract,
     assignmentPrice,
     spread: fee,

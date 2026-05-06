@@ -90,7 +90,7 @@ export default function DDCard({ card, onActionComplete }: Props) {
             href={`/pipeline/${card.recordId}`}
             className="block text-white font-semibold text-sm mt-1 hover:underline"
           >
-            {card.address}
+            {card.address}{card.city || card.state ? `, ${[card.city, card.state].filter(Boolean).join(", ")}` : ""}
           </Link>
           <p className="text-gray-500 text-xs">{card.agentName ?? "—"}</p>
         </div>

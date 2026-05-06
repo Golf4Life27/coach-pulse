@@ -56,7 +56,9 @@ export default function DealCard({ card, onActionComplete }: Props) {
               <span className="text-xs text-gray-500">held until {card.holdUntil}</span>
             )}
           </div>
-          <h3 className="text-white font-semibold text-sm mt-1">{card.address}</h3>
+          <h3 className="text-white font-semibold text-sm mt-1">
+            {card.address}{card.city || card.state ? `, ${[card.city, card.state].filter(Boolean).join(", ")}` : ""}
+          </h3>
           <p className="text-gray-500 text-xs">
             {card.closingStatus ?? card.status ?? "Status —"}
           </p>

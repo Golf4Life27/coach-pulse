@@ -5,6 +5,7 @@ import MetricCard from "@/components/MetricCard";
 import ActionQueue from "@/components/ActionQueue";
 import BriefingStrip from "@/components/BriefingStrip";
 import JarvisFeed from "@/components/JarvisFeed";
+import JarvisChat from "@/components/JarvisChat";
 import { Briefing, DashboardStats } from "@/lib/types";
 import { showToast } from "@/components/Toast";
 
@@ -62,6 +63,7 @@ export default function ActNowPage() {
               Updated {lastUpdated.toLocaleTimeString()}
             </span>
           )}
+          <JarvisChat />
           <button
             type="button"
             onClick={fetchData}
