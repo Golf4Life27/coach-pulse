@@ -82,6 +82,14 @@ export async function POST(req: Request) {
   try {
     const listings = await getListings();
 
+    // Build global phone dedup: phones already contacted on ANY record
+    const contactedPhones = new Set<string>();
+    for (const l of listings) {
+      if (l.agentPhone && l.outreachStatus) {
+        contactedPhones.add(l.agentPhone.replace(/[^0-9]/g, "").slice(-10));
+      }
+    }
+
     // Filter for outreach-ready records per spec
     const qualified = listings.filter((l) => {
       if (l.executionPath !== "Auto Proceed") return false;
@@ -100,7 +108,7 @@ export async function POST(req: Request) {
     let failed = 0;
     let skipped = 0;
 
-    // Dedupe by phone — don't text the same agent twice in one batch
+    // Batch-level dedup (within this run)
     const phoneSeen = new Set<string>();
 
     for (const listing of toSend) {
@@ -122,6 +130,22 @@ export async function POST(req: Request) {
         continue;
       }
 
+      // Global dedup: agent already contacted on another property
+      if (contactedPhones.has(cleanedPhone)) {
+        results.push({
+          recordId: listing.id,
+          address: listing.address,
+          agentName: listing.agentName,
+          agentPhone: phone,
+          offer: formatOffer(listing.listPrice!),
+          status: "skipped",
+          error: "Agent already contacted on another property",
+        });
+        skipped++;
+        continue;
+      }
+
+      // Batch dedup: same agent in this run
       if (phoneSeen.has(cleanedPhone)) {
         results.push({
           recordId: listing.id,
@@ -173,6 +197,7 @@ export async function POST(req: Request) {
           ),
         });
 
+        contactedPhones.add(cleanedPhone);
         results.push({
           recordId: listing.id,
           address: listing.address,
