@@ -165,41 +165,35 @@ async function queryRentCast(
   return await res.json();
 }
 
-// --- Redfin search + fetch ---
+// --- Redfin via ScraperAPI (Redfin blocks Vercel IPs directly) ---
+
+const SCRAPER_API_KEY = "ae7d80d248c38825b69bc5acd43c9803";
+
+function scraperUrl(targetUrl: string): string {
+  return `https://api.scraperapi.com?api_key=${SCRAPER_API_KEY}&url=${encodeURIComponent(targetUrl)}`;
+}
 
 async function fetchRedfinUrl(
   address: string, city: string, state: string, zip: string
-): Promise<{ url: string | null; error?: string; debug?: unknown }> {
-  // Try multiple query formats — Redfin autocomplete is picky about formatting
+): Promise<{ url: string | null; error?: string }> {
   const queries = [
     `${address}, ${city}, ${state}`,
     `${address}, ${city}, ${state} ${zip}`,
-    address,
   ];
 
   for (const rawQuery of queries) {
-    const query = encodeURIComponent(rawQuery);
+    const redfinTarget = `https://www.redfin.com/stingray/do/location-autocomplete?location=${encodeURIComponent(rawQuery)}&v=2`;
     try {
-      const apiUrl = `https://www.redfin.com/stingray/do/location-autocomplete?location=${query}&v=2`;
-      const res = await fetch(apiUrl, {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-          "Accept": "*/*",
-          "Referer": "https://www.redfin.com/",
-        },
-        cache: "no-store",
-      });
+      const res = await fetch(scraperUrl(redfinTarget), { cache: "no-store" });
 
       if (!res.ok) {
-        console.log(`[verify] Redfin autocomplete ${res.status} for query: "${rawQuery}"`);
+        console.log(`[verify] ScraperAPI→Redfin ${res.status} for: "${rawQuery}"`);
         continue;
       }
 
       const text = await res.text();
-      console.log(`[verify] Redfin raw response for "${rawQuery}" (${text.length} chars): ${text.slice(0, 500)}`);
+      console.log(`[verify] Redfin autocomplete for "${rawQuery}" (${text.length} chars): ${text.slice(0, 500)}`);
 
-      // Redfin wraps JSON in {}&&{...} — strip the prefix
       const jsonStr = text.replace(/^\{\}&&/, "");
       let data: Record<string, unknown>;
       try {
@@ -213,76 +207,67 @@ async function fetchRedfinUrl(
       const sections = (payload?.sections ?? []) as Array<{ rows?: Array<Record<string, unknown>> }>;
       const exactMatch = payload?.exactMatch as Record<string, unknown> | undefined;
 
-      // Check exactMatch first (Redfin returns this for precise address hits)
       if (exactMatch?.url) {
         const url = `https://www.redfin.com${exactMatch.url}`;
         console.log(`[verify] Redfin exactMatch: ${url}`);
         return { url };
       }
 
-      // Check sections for address-type results
       for (const section of sections) {
         for (const row of section.rows ?? []) {
-          // type "2" = address, but also accept any row with a url containing /home/
           if (row.url && (row.type === "2" || String(row.url).includes("/home/"))) {
             const url = `https://www.redfin.com${row.url}`;
-            console.log(`[verify] Redfin section match: ${url} (type=${row.type})`);
+            console.log(`[verify] Redfin match: ${url} (type=${row.type})`);
             return { url };
           }
         }
       }
 
-      // Accept any row with a URL as last resort
       for (const section of sections) {
         for (const row of section.rows ?? []) {
           if (row.url && String(row.url).startsWith("/")) {
             const url = `https://www.redfin.com${row.url}`;
-            console.log(`[verify] Redfin fallback match: ${url}`);
+            console.log(`[verify] Redfin fallback: ${url}`);
             return { url };
           }
         }
       }
 
-      console.log(`[verify] Redfin no matches for "${rawQuery}". Sections: ${sections.length}, payload keys: ${Object.keys(payload ?? {}).join(",")}`);
+      console.log(`[verify] Redfin no matches for "${rawQuery}". Sections: ${sections.length}`);
     } catch (err) {
-      console.log(`[verify] Redfin fetch error for "${rawQuery}": ${String(err)}`);
+      console.log(`[verify] ScraperAPI error for "${rawQuery}": ${String(err)}`);
     }
   }
 
-  return { url: null, error: `No Redfin match for any query variant` };
+  return { url: null, error: "No Redfin match via ScraperAPI" };
 }
 
 async function fetchRedfinPage(
   url: string
 ): Promise<{ description: string; isOffMarket: boolean } | null> {
   try {
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      },
-      cache: "no-store",
-    });
-    if (!res.ok) return null;
+    const res = await fetch(scraperUrl(url), { cache: "no-store" });
+    if (!res.ok) {
+      console.log(`[verify] ScraperAPI→Redfin page ${res.status} for ${url}`);
+      return null;
+    }
     const html = await res.text();
 
-    // Extract description from meta tag
     const descMatch = html.match(
       /<meta\s+name="description"\s+content="([^"]*)"/i
     );
     const description = descMatch ? descMatch[1] : "";
 
-    // Check schema.org availability
     const schemaOffMarket = html.includes('"availability":"OutOfStock"') ||
       html.includes('"availability":"https://schema.org/OutOfStock"');
-
     const phraseOffMarket = detectOffMarket(html);
 
     return {
       description,
       isOffMarket: schemaOffMarket || phraseOffMarket,
     };
-  } catch {
+  } catch (err) {
+    console.log(`[verify] ScraperAPI page fetch error: ${String(err)}`);
     return null;
   }
 }
