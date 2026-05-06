@@ -165,7 +165,7 @@ async function queryRentCast(
   return await res.json();
 }
 
-// --- Redfin direct URL construction + ScraperAPI page fetch ---
+// --- Redfin stingray JSON API via ScraperAPI ---
 
 const SCRAPER_API_KEY = "ae7d80d248c38825b69bc5acd43c9803";
 const SCRAPER_TIMEOUT_MS = 20_000;
@@ -184,68 +184,99 @@ async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Respons
   }
 }
 
-function buildRedfinUrl(address: string, city: string, state: string): string {
+function buildRedfinPath(address: string, city: string, state: string, zip: string): string {
   const slugify = (s: string) =>
     s.trim().replace(/[^a-zA-Z0-9\s]/g, "").replace(/\s+/g, "-");
-  return `https://www.redfin.com/${state.trim().toUpperCase()}/${slugify(city)}/${slugify(address)}`;
+  const zipPart = zip ? `-${zip.trim()}` : "";
+  return `/${state.trim().toUpperCase()}/${slugify(city)}/${slugify(address)}${zipPart}`;
 }
 
 interface RedfinResult {
   url: string | null;
   description: string;
   isOffMarket: boolean;
+  listingStatus: string | null;
   error?: string;
 }
 
 async function fetchRedfinDirect(
-  address: string, city: string, state: string
+  address: string, city: string, state: string, zip: string
 ): Promise<RedfinResult> {
   if (!address || !city || !state) {
-    return { url: null, description: "", isOffMarket: false, error: "Missing address/city/state" };
+    return { url: null, description: "", isOffMarket: false, listingStatus: null, error: "Missing address/city/state" };
   }
 
-  const candidateUrl = buildRedfinUrl(address, city, state);
-  console.log(`[verify] Trying Redfin URL: ${candidateUrl}`);
+  const path = buildRedfinPath(address, city, state, zip);
+  const stingrayUrl = `https://www.redfin.com/stingray/api/home/details/initialInfo?al=1&path=${encodeURIComponent(path)}`;
+  console.log(`[verify] Redfin stingray: ${stingrayUrl}`);
 
   try {
-    const res = await fetchWithTimeout(scraperUrl(candidateUrl), SCRAPER_TIMEOUT_MS);
-
-    if (res.status === 404) {
-      console.log(`[verify] Redfin 404 for ${candidateUrl}`);
-      return { url: null, description: "", isOffMarket: false, error: "Redfin 404 — address format didn't match" };
-    }
+    const res = await fetchWithTimeout(scraperUrl(stingrayUrl), SCRAPER_TIMEOUT_MS);
 
     if (!res.ok) {
-      console.log(`[verify] ScraperAPI ${res.status} for ${candidateUrl}`);
-      return { url: null, description: "", isOffMarket: false, error: `ScraperAPI ${res.status}` };
+      console.log(`[verify] Redfin stingray ${res.status}`);
+      return { url: null, description: "", isOffMarket: false, listingStatus: null, error: `Redfin stingray ${res.status}` };
     }
 
-    const html = await res.text();
+    const text = await res.text();
+    // Redfin wraps JSON responses in {}&&{...}
+    const jsonStr = text.replace(/^\{\}&&/, "");
+    let data: Record<string, unknown>;
+    try {
+      data = JSON.parse(jsonStr);
+    } catch {
+      console.log(`[verify] Redfin stingray not JSON (${text.length} chars): ${text.slice(0, 200)}`);
+      return { url: null, description: "", isOffMarket: false, listingStatus: null, error: "Redfin response not JSON" };
+    }
 
-    // Redfin may redirect to a canonical URL with /home/ID — extract from HTML
-    const canonicalMatch = html.match(/<link\s+rel="canonical"\s+href="([^"]*redfin\.com[^"]*)"/i);
-    const finalUrl = canonicalMatch ? canonicalMatch[1] : candidateUrl;
+    const payload = data?.payload as Record<string, unknown> | undefined;
+    if (!payload) {
+      console.log(`[verify] Redfin stingray: no payload. Keys: ${Object.keys(data).join(",")}`);
+      return { url: null, description: "", isOffMarket: false, listingStatus: null, error: "No payload in Redfin response" };
+    }
 
-    const descMatch = html.match(/<meta\s+name="description"\s+content="([^"]*)"/i);
-    const description = descMatch ? descMatch[1] : "";
+    // Extract property info
+    const propertyId = payload.propertyId as string | undefined;
+    const listingId = payload.listingId as string | undefined;
 
-    const schemaOffMarket = html.includes('"availability":"OutOfStock"') ||
-      html.includes('"availability":"https://schema.org/OutOfStock"');
-    const phraseOffMarket = detectOffMarket(html);
+    // Build the canonical Redfin URL
+    const canonicalUrl = propertyId
+      ? `https://www.redfin.com${path}/home/${propertyId}`
+      : `https://www.redfin.com${path}`;
 
-    console.log(`[verify] Redfin OK: ${finalUrl} (${html.length} chars, offMarket=${schemaOffMarket || phraseOffMarket})`);
+    // Extract listing status from various payload locations
+    const basicInfo = payload.addressSectionInfo as Record<string, unknown> | undefined;
+    const listingStatus = (basicInfo?.status as string) ??
+      (payload.listingStatus as string) ??
+      null;
+
+    // Check if off-market
+    const isActive = listingStatus?.toLowerCase() === "active" ||
+      listingStatus?.toLowerCase() === "for sale";
+    const isSold = listingStatus?.toLowerCase().includes("sold") ?? false;
+    const isPending = listingStatus?.toLowerCase().includes("pending") ?? false;
+    const isOffMarket = isSold || isPending || (listingStatus !== null && !isActive);
+
+    // Extract description from payload if available
+    const description = (payload.listingRemarks as string) ??
+      (payload.publicRemarks as string) ??
+      ((payload.aboveTheFold as Record<string, unknown>)?.listingRemarks as string) ??
+      "";
+
+    console.log(`[verify] Redfin stingray OK: propertyId=${propertyId}, listingId=${listingId}, status="${listingStatus}", offMarket=${isOffMarket}`);
 
     return {
-      url: finalUrl,
+      url: canonicalUrl,
       description,
-      isOffMarket: schemaOffMarket || phraseOffMarket,
+      isOffMarket,
+      listingStatus,
     };
   } catch (err) {
     const msg = String(err);
     if (msg.includes("abort")) {
-      return { url: null, description: "", isOffMarket: false, error: "Redfin timed out (20s)" };
+      return { url: null, description: "", isOffMarket: false, listingStatus: null, error: "Redfin timed out (20s)" };
     }
-    return { url: null, description: "", isOffMarket: false, error: `ScraperAPI error: ${msg}` };
+    return { url: null, description: "", isOffMarket: false, listingStatus: null, error: `ScraperAPI error: ${msg}` };
   }
 }
 
@@ -401,7 +432,7 @@ async function verifyOne(
   }
 
   // Step 2: Redfin direct page fetch (single ScraperAPI call, no autocomplete)
-  const redfin = await fetchRedfinDirect(address, city, state);
+  const redfin = await fetchRedfinDirect(address, city, state, zip);
   const redfinUrl = redfin.url;
 
   // --- Decision logic ---
