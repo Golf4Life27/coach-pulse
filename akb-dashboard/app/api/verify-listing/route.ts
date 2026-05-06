@@ -169,52 +169,87 @@ async function queryRentCast(
 
 async function fetchRedfinUrl(
   address: string, city: string, state: string, zip: string
-): Promise<{ url: string | null; error?: string }> {
-  // Use Redfin's own search endpoint instead of Google (which blocks server IPs)
-  const query = encodeURIComponent(`${address} ${city} ${state} ${zip}`);
-  try {
-    const res = await fetch(
-      `https://www.redfin.com/stingray/do/location-autocomplete?location=${query}&v=2`,
-      {
+): Promise<{ url: string | null; error?: string; debug?: unknown }> {
+  // Try multiple query formats — Redfin autocomplete is picky about formatting
+  const queries = [
+    `${address}, ${city}, ${state}`,
+    `${address}, ${city}, ${state} ${zip}`,
+    address,
+  ];
+
+  for (const rawQuery of queries) {
+    const query = encodeURIComponent(rawQuery);
+    try {
+      const apiUrl = `https://www.redfin.com/stingray/do/location-autocomplete?location=${query}&v=2`;
+      const res = await fetch(apiUrl, {
         headers: {
           "User-Agent":
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-          "Accept": "application/json",
+          "Accept": "*/*",
+          "Referer": "https://www.redfin.com/",
         },
         cache: "no-store",
-      }
-    );
-    if (!res.ok) {
-      return { url: null, error: `Redfin autocomplete ${res.status}` };
-    }
-    const text = await res.text();
-    // Redfin wraps JSON in {}&&{...} — strip the prefix
-    const jsonStr = text.replace(/^\{\}&&/, "");
-    const data = JSON.parse(jsonStr);
+      });
 
-    const results = data?.payload?.sections ?? [];
-    for (const section of results) {
-      for (const row of section.rows ?? []) {
-        if (row.url && row.type === "2") {
-          // type 2 = address match
-          return { url: `https://www.redfin.com${row.url}` };
+      if (!res.ok) {
+        console.log(`[verify] Redfin autocomplete ${res.status} for query: "${rawQuery}"`);
+        continue;
+      }
+
+      const text = await res.text();
+      console.log(`[verify] Redfin raw response for "${rawQuery}" (${text.length} chars): ${text.slice(0, 500)}`);
+
+      // Redfin wraps JSON in {}&&{...} — strip the prefix
+      const jsonStr = text.replace(/^\{\}&&/, "");
+      let data: Record<string, unknown>;
+      try {
+        data = JSON.parse(jsonStr);
+      } catch {
+        console.log(`[verify] Redfin response not JSON for "${rawQuery}"`);
+        continue;
+      }
+
+      const payload = data?.payload as Record<string, unknown> | undefined;
+      const sections = (payload?.sections ?? []) as Array<{ rows?: Array<Record<string, unknown>> }>;
+      const exactMatch = payload?.exactMatch as Record<string, unknown> | undefined;
+
+      // Check exactMatch first (Redfin returns this for precise address hits)
+      if (exactMatch?.url) {
+        const url = `https://www.redfin.com${exactMatch.url}`;
+        console.log(`[verify] Redfin exactMatch: ${url}`);
+        return { url };
+      }
+
+      // Check sections for address-type results
+      for (const section of sections) {
+        for (const row of section.rows ?? []) {
+          // type "2" = address, but also accept any row with a url containing /home/
+          if (row.url && (row.type === "2" || String(row.url).includes("/home/"))) {
+            const url = `https://www.redfin.com${row.url}`;
+            console.log(`[verify] Redfin section match: ${url} (type=${row.type})`);
+            return { url };
+          }
         }
       }
-    }
 
-    // Fallback: any result with a /home/ URL
-    for (const section of results) {
-      for (const row of section.rows ?? []) {
-        if (row.url && row.url.includes("/home/")) {
-          return { url: `https://www.redfin.com${row.url}` };
+      // Accept any row with a URL as last resort
+      for (const section of sections) {
+        for (const row of section.rows ?? []) {
+          if (row.url && String(row.url).startsWith("/")) {
+            const url = `https://www.redfin.com${row.url}`;
+            console.log(`[verify] Redfin fallback match: ${url}`);
+            return { url };
+          }
         }
       }
-    }
 
-    return { url: null, error: "No address match in Redfin autocomplete" };
-  } catch (err) {
-    return { url: null, error: `Redfin search failed: ${String(err)}` };
+      console.log(`[verify] Redfin no matches for "${rawQuery}". Sections: ${sections.length}, payload keys: ${Object.keys(payload ?? {}).join(",")}`);
+    } catch (err) {
+      console.log(`[verify] Redfin fetch error for "${rawQuery}": ${String(err)}`);
+    }
   }
+
+  return { url: null, error: `No Redfin match for any query variant` };
 }
 
 async function fetchRedfinPage(
