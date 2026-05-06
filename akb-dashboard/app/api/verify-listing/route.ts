@@ -171,7 +171,7 @@ const SCRAPER_API_KEY = "ae7d80d248c38825b69bc5acd43c9803";
 const SCRAPER_TIMEOUT_MS = 20_000;
 
 function scraperUrl(targetUrl: string): string {
-  return `https://api.scraperapi.com?api_key=${SCRAPER_API_KEY}&url=${encodeURIComponent(targetUrl)}&timeout=20000`;
+  return `https://api.scraperapi.com?api_key=${SCRAPER_API_KEY}&premium=true&url=${encodeURIComponent(targetUrl)}&timeout=20000`;
 }
 
 async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
