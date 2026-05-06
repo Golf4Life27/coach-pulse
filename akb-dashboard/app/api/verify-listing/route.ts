@@ -235,22 +235,22 @@ function isValidPhone(phone: string | null): boolean {
 
 // --- Airtable helpers ---
 
-async function fetchRecord(recordId: string): Promise<Record<string, unknown> | null> {
-  const fieldIds = Object.values(F);
+async function fetchRecord(recordId: string): Promise<{ fields: Record<string, unknown>; rawError?: string } | null> {
   const params = new URLSearchParams();
-  fieldIds.forEach((f) => params.append("fields[]", f));
   params.set("returnFieldsByFieldId", "true");
 
-  const res = await fetch(
-    `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}/${recordId}?${params.toString()}`,
-    {
-      headers: { Authorization: `Bearer ${AIRTABLE_PAT}` },
-      cache: "no-store",
-    }
-  );
-  if (!res.ok) return null;
+  const url = `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}/${recordId}?${params.toString()}`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${AIRTABLE_PAT}` },
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    console.error(`[verify] fetchRecord ${recordId} failed: ${res.status} ${errText}`);
+    return { fields: {}, rawError: `Airtable ${res.status}: ${errText}` };
+  }
   const data = await res.json();
-  return data.fields as Record<string, unknown>;
+  return { fields: data.fields as Record<string, unknown> };
 }
 
 async function fetchUnverifiedRecords(): Promise<Array<{ id: string; fields: Record<string, unknown> }>> {
@@ -259,7 +259,7 @@ async function fetchUnverifiedRecords(): Promise<Array<{ id: string; fields: Rec
 
   do {
     const params = new URLSearchParams();
-    params.set("filterByFormula", `AND({${W.executionPath}}='',{${F.address}}!='')`);
+    params.set("filterByFormula", `AND({Execution_Path}='',{Address}!='')`);
     Object.values(F).forEach((f) => params.append("fields[]", f));
     params.set("returnFieldsByFieldId", "true");
     params.set("maxRecords", "50");
@@ -507,12 +507,15 @@ export async function POST(req: Request) {
   try {
     // Single record mode
     if (body.recordId) {
-      const fields = await fetchRecord(body.recordId);
-      if (!fields) {
-        return Response.json({ error: "Record not found" }, { status: 404 });
+      const record = await fetchRecord(body.recordId);
+      if (!record || record.rawError) {
+        return Response.json(
+          { error: "Record not found or Airtable error", detail: record?.rawError ?? "fetchRecord returned null" },
+          { status: 404 }
+        );
       }
 
-      const result = await verifyOne(body.recordId, fields);
+      const result = await verifyOne(body.recordId, record.fields);
       return Response.json({ results: [result], total: 1 });
     }
 
