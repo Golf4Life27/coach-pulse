@@ -1,5 +1,5 @@
 import { getListings, updateListingRecord } from "@/lib/airtable";
-import { getRecentInbound } from "@/lib/quo";
+import { getMessagesForParticipant } from "@/lib/quo";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -7,6 +7,8 @@ export const maxDuration = 60;
 const AIRTABLE_PAT = process.env.AIRTABLE_PAT!;
 const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
 const AIRTABLE_BATCH_SIZE = 10;
+const MAX_PHONES_PER_RUN = 25;
+const SCAN_WINDOW_MINUTES = 120;
 
 function getProposalsTableId(): string | null {
   return process.env.AGENT_PROPOSALS_TABLE_ID ?? null;
@@ -14,6 +16,13 @@ function getProposalsTableId(): string | null {
 
 function cleanPhone(phone: string): string {
   return phone.replace(/[^0-9]/g, "").slice(-10);
+}
+
+function toE164(phone: string): string {
+  const digits = phone.replace(/[^0-9]/g, "");
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  return `+${digits}`;
 }
 
 function formatCurrency(n: number | null | undefined): string {
@@ -176,91 +185,128 @@ export async function GET(req: Request) {
   }
 
   try {
-    const [inboundMessages, listings] = await Promise.all([
-      getRecentInbound(6),
-      getListings(),
-    ]);
+    const listings = await getListings();
 
-    // Build phone-to-listing lookup
-    const phoneToListing = new Map<
-      string,
-      (typeof listings)[0]
-    >();
-    for (const listing of listings) {
-      if (listing.agentPhone) {
-        phoneToListing.set(cleanPhone(listing.agentPhone), listing);
-      }
+    // Only check actionable listings that have agent phones
+    const ACTIONABLE = new Set([
+      "Negotiating",
+      "Response Received",
+      "Offer Accepted",
+      "Texted",
+    ]);
+    const actionableListings = listings.filter(
+      (l) => l.agentPhone && ACTIONABLE.has(l.outreachStatus ?? "")
+    );
+
+    // Dedupe phones — multiple listings can share an agent phone
+    const phoneToListings = new Map<string, typeof actionableListings>();
+    for (const listing of actionableListings) {
+      const e164 = toE164(listing.agentPhone!);
+      const existing = phoneToListings.get(e164) ?? [];
+      existing.push(listing);
+      phoneToListings.set(e164, existing);
     }
+
+    // Cap phones per run to stay within timeout
+    const phones = Array.from(phoneToListings.keys()).slice(
+      0,
+      MAX_PHONES_PER_RUN
+    );
 
     // Pre-flight dedupe
     const existingPending =
       await fetchExistingPendingProposals(proposalsTableId);
 
+    let phonesChecked = 0;
+    let inboundFound = 0;
     let matched = 0;
     const newProposals: ProposalRecord[] = [];
-    const timestampUpdates: Array<{ id: string }> = [];
+    const timestampUpdates: string[] = [];
+    const errors: string[] = [];
 
-    for (const msg of inboundMessages) {
-      const cleanFrom = cleanPhone(msg.from);
-      const listing = phoneToListing.get(cleanFrom);
-      if (!listing) continue;
-      matched++;
+    for (const phone of phones) {
+      phonesChecked++;
+      try {
+        const messages = await getMessagesForParticipant(
+          phone,
+          SCAN_WINDOW_MINUTES
+        );
 
-      // Dedupe: skip if we already have a pending jarvis_reply for this listing
-      if (existingPending.has(`${listing.id}:jarvis_reply`)) continue;
+        // Find the most recent inbound message
+        const inbound = messages.find((m) => m.direction === "incoming");
+        if (!inbound) continue;
+        inboundFound++;
 
-      // Track for Last_Inbound_At update
-      timestampUpdates.push({ id: listing.id });
+        // Match to all listings with this phone
+        const matchedListings = phoneToListings.get(phone) ?? [];
+        for (const listing of matchedListings) {
+          matched++;
 
-      // Generate AI draft
-      const draftResponse = await generateDraftResponse(listing, msg.body);
+          if (existingPending.has(`${listing.id}:jarvis_reply`)) continue;
 
-      const actionPayload = JSON.stringify({
-        recordId: listing.id,
-        action: "send_sms",
-        to: msg.from,
-        draftBody: draftResponse,
-        inboundBody: msg.body,
-      });
+          timestampUpdates.push(listing.id);
 
-      newProposals.push({
-        fields: {
-          Proposal_ID: `jarvis_reply-${Date.now()}-${newProposals.length}`,
-          Proposal_Type: "jarvis_reply",
-          Priority: "HIGH",
-          Record_ID: listing.id,
-          Record_Address: listing.address,
-          Reasoning: `Inbound from ${listing.agentName || "agent"}: "${msg.body.slice(0, 200)}"`,
-          Suggested_Action_Payload: actionPayload,
-          Status: "Pending",
-        },
-      });
+          const draftResponse = await generateDraftResponse(
+            listing,
+            inbound.body
+          );
 
-      // Mark as seen in dedupe set
-      existingPending.add(`${listing.id}:jarvis_reply`);
+          const actionPayload = JSON.stringify({
+            recordId: listing.id,
+            action: "send_sms",
+            to: phone,
+            draftBody: draftResponse,
+            inboundBody: inbound.body,
+          });
+
+          newProposals.push({
+            fields: {
+              Proposal_ID: `jarvis_reply-${Date.now()}-${newProposals.length}`,
+              Proposal_Type: "jarvis_reply",
+              Priority: "HIGH",
+              Record_ID: listing.id,
+              Record_Address: listing.address,
+              Reasoning: `Inbound from ${listing.agentName || "agent"}: "${inbound.body.slice(0, 200)}"`,
+              Suggested_Action_Payload: actionPayload,
+              Status: "Pending",
+            },
+          });
+
+          existingPending.add(`${listing.id}:jarvis_reply`);
+        }
+      } catch (err) {
+        errors.push(`${phone}: ${String(err)}`);
+      }
     }
 
     // Batch create proposals
-    const created = newProposals.length > 0
-      ? await batchCreateProposals(proposalsTableId, newProposals)
-      : 0;
+    const created =
+      newProposals.length > 0
+        ? await batchCreateProposals(proposalsTableId, newProposals)
+        : 0;
 
     // Update Last_Inbound_At on matched listings
-    for (const { id } of timestampUpdates) {
+    for (const id of timestampUpdates) {
       try {
         await updateListingRecord(id, {
           fld3IhR1DXzcVuq6F: new Date().toISOString(),
         });
       } catch (err) {
-        console.error(`[Jarvis] Failed to stamp Last_Inbound_At on ${id}:`, err);
+        console.error(
+          `[Jarvis] Failed to stamp Last_Inbound_At on ${id}:`,
+          err
+        );
       }
     }
 
     return Response.json({
-      scanned: inboundMessages.length,
+      phonesInPool: phoneToListings.size,
+      phonesChecked,
+      inboundFound,
       matched,
       proposalsCreated: created,
       skippedDedupe: matched - newProposals.length,
+      errors: errors.length > 0 ? errors : undefined,
       timestamp: new Date().toISOString(),
     });
   } catch (err) {
