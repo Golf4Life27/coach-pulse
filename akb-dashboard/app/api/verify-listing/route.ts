@@ -316,9 +316,49 @@ async function verifyOne(
     stale: staleCheck.stale,
   };
 
-  console.log(`[verify] ${address}: RentCast status=${rcStatus}, price=${rcPrice}, dom=${rcDom}, lastSeen=${rcLastSeen}, stale=${staleCheck.stale}, flip=${flip.flipDetected} (${flip.priceRatio}x)`);
+  const rcStatusLower = (rcStatus ?? "").toLowerCase();
+  const isRcActive = rcStatusLower === "active" || rcStatusLower === "for sale";
 
-  // Decision: flip detected → Manual Review
+  console.log(`[verify] ${address}: RentCast status=${rcStatus}, isActive=${isRcActive}, price=${rcPrice}, dom=${rcDom}, lastSeen=${rcLastSeen}, stale=${staleCheck.stale}, flip=${flip.flipDetected} (${flip.priceRatio}x)`);
+
+  // Decision: RentCast returned a listing but status is not Active → Reject
+  if (!isRcActive) {
+    await patchRecord(recordId, {
+      [W.liveStatus]: "Off Market",
+      [W.executionPath]: "Reject",
+      [W.verifiedOnMarket]: false,
+      [W.verificationSource]: `RentCast (status: ${rcStatus})`,
+      [W.lastVerified]: new Date().toISOString(),
+      [W.notes]: appendNote(existingNotes, `RentCast returned listing but status="${rcStatus}" (not Active). Off Market.`),
+    });
+    return {
+      recordId, address, liveStatus: "Off Market", executionPath: "Reject",
+      source: "RentCast", flipDetected: false, flipScore: 0,
+      flipDetails: "", rentCast: rcData,
+    };
+  }
+
+  // Decision: stale lastSeenDate → Reject (confirmed off-market by data age)
+  if (staleCheck.stale) {
+    const staleNote = staleCheck.daysSince !== null
+      ? `lastSeenDate is ${staleCheck.daysSince} days old (threshold: ${STALE_DAYS}).`
+      : "No lastSeenDate — data freshness unknown.";
+    await patchRecord(recordId, {
+      [W.liveStatus]: "Off Market",
+      [W.executionPath]: "Reject",
+      [W.verifiedOnMarket]: false,
+      [W.verificationSource]: "RentCast (stale data)",
+      [W.lastVerified]: new Date().toISOString(),
+      [W.notes]: appendNote(existingNotes, `RentCast status Active but data stale. ${staleNote} Rejecting.`),
+    });
+    return {
+      recordId, address, liveStatus: "Off Market", executionPath: "Reject",
+      source: "RentCast-stale", flipDetected: false, flipScore: flip.flipScore,
+      flipDetails: flip.details, rentCast: rcData,
+    };
+  }
+
+  // Decision: flip detected → Manual Review (ambiguous — needs human judgment)
   if (flip.flipDetected) {
     await patchRecord(recordId, {
       [W.liveStatus]: "Active",
@@ -333,26 +373,6 @@ async function verifyOne(
     return {
       recordId, address, liveStatus: "Active", executionPath: "Manual Review",
       source: "RentCast", flipDetected: true, flipScore: flip.flipScore,
-      flipDetails: flip.details, rentCast: rcData,
-    };
-  }
-
-  // Decision: stale lastSeenDate → Manual Review
-  if (staleCheck.stale) {
-    const staleNote = staleCheck.daysSince !== null
-      ? `lastSeenDate is ${staleCheck.daysSince} days old (threshold: ${STALE_DAYS}).`
-      : "No lastSeenDate — data freshness unknown.";
-    await patchRecord(recordId, {
-      [W.liveStatus]: "Active",
-      [W.executionPath]: "Manual Review",
-      [W.verifiedOnMarket]: true,
-      [W.verificationSource]: "RentCast (stale data)",
-      [W.lastVerified]: new Date().toISOString(),
-      [W.notes]: appendNote(existingNotes, `RentCast active but stale. ${staleNote} ${flip.details}`),
-    });
-    return {
-      recordId, address, liveStatus: "Active", executionPath: "Manual Review",
-      source: "RentCast-stale", flipDetected: false, flipScore: flip.flipScore,
       flipDetails: flip.details, rentCast: rcData,
     };
   }
