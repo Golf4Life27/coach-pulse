@@ -1,430 +1,564 @@
-// POST /api/verify-listing — Called by Make.com to verify listings via Anthropic + web search
-
-
-// Force Node.js runtime (not Edge) — we need full Node APIs
 export const runtime = "nodejs";
-
-// Web search + LLM inference can take 30-60s
 export const maxDuration = 60;
 
-const SYSTEM_PROMPT = `You are a real estate listing verification and valuation agent for AKB Solutions, a wholesale real estate company in Texas.
+const AIRTABLE_PAT = process.env.AIRTABLE_PAT!;
+const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
+const LISTINGS_TABLE = "tbldMjKBgPiq45Jjs";
+const RENTCAST_API_KEY = process.env.RENTCAST_API_KEY!;
 
-Your job is to do TWO things for every property:
-1. Verify the listing status on Redfin
-2. Estimate the After Repair Value (ARV) using recent sold comps
+// Field IDs for reading
+const F = {
+  address: "fldwvp72hKTfiHHjj",
+  city: "fldjbiNuHXzPzVWFk",
+  state: "fldSlDQvgCyr0J8tI",
+  zip: "fld9PTaKkgBNtvWbB",
+  agentPhone: "fldee9MOstjNDKjnm",
+  executionPath: "fldOrWvqKcc1g6Lka",
+  liveStatus: "fldCKnC1nnXEnTUKL",
+  notes: "fldwKGxZly6O8qyPu",
+};
 
-You have web search access. Use it thoroughly.
+// Field IDs for writing
+const W = {
+  liveStatus: "fldCKnC1nnXEnTUKL",
+  executionPath: "fldOrWvqKcc1g6Lka",
+  verifiedOnMarket: "fldCxApxYiiB8eYFI",
+  verificationSource: "flddEHrMOoBPVfqgk",
+  verificationUrl: "fldXrW8CWUphUfKgJ",
+  lastVerified: "fld2eUkKaC4pMjIdd",
+  notes: "fldwKGxZly6O8qyPu",
+  restrictionRiskLevel: "fld5dV65Wr9b6bjo3",
+  restrictionKeywordFlag: "fldSpBUMzTzFtp59k",
+  restrictionText: "fldapf2ZXpIWTZfSX",
+};
 
----
+// --- Keyword scoring ---
 
-PART 1 — LISTING VERIFICATION
+const HARD_REJECT_KEYWORDS = [
+  "no wholesalers", "auction", "hud", "bank-owned reo",
+];
 
-Steps:
-1. If no Redfin URL provided, search Redfin for the exact address
-2. Read the listing page — confirm status, price, days on market, description, agent info
-3. Check for off-market signals in page text: "off the market", "sold on", "pending sale", "no longer available", "contingent", "sale pending"
-4. Score flip/renovation keywords in description (1 point each): "completely renovated", "brand new", "move-in ready", "quartz countertops", "stainless steel appliances", "virtually staged", "LVP", "new cabinets", "modern finishes", "turnkey", "fully updated", "renovated", "remodeled", "updated kitchen", "updated bathrooms"
-5. Auto-reject triggers (regardless of score): "new construction", "new build", "2024 build", "2025 build"
+const FLIP_KEYWORDS = [
+  "remodeled", "renovated", "fully updated", "move-in ready",
+  "new kitchen", "new bathroom", "new roof", "new hvac",
+  "granite", "quartz countertops", "stainless steel",
+  "open concept", "fresh paint", "new flooring",
+];
 
-Execution path logic:
-- Auto-reject keywords found → execution_path: "Reject", reject_reason: state the keyword
-- Off-market signals found → execution_path: "Reject", off_market_override: true
-- flip_score >= 7 → execution_path: "Reject"
-- flip_score >= 4 → execution_path: "Manual Review"
-- Listing active, flip_score < 4 → execution_path: "Auto Proceed"
+const DISTRESS_KEYWORDS = [
+  "as-is", "investor special", "needs work", "tlc", "fixer",
+  "handyman", "estate sale", "probate", "vacant", "fire damage",
+  "foundation issues", "mold",
+];
 
----
-
-PART 2 — ARV ESTIMATION
-
-Only run this if the listing is NOT rejected in Part 1. If execution_path is "Reject", return null for all ARV fields.
-
-Steps:
-1. Search Redfin or Zillow for recently SOLD comparable properties near the subject address
-2. Target: 3-6 comps within 0.5 miles, sold within 90 days, similar sqft (within 20%), same bed/bath count, same property type (SFR)
-3. If 90-day comps are scarce, expand to 180 days and note this in reasoning
-4. For each comp, note: address, sale price, sqft, beds, baths, sale date, distance from subject
-5. Calculate adjusted $/sqft for RENOVATED condition (use comps that were renovated/updated as your benchmark)
-6. ARV = adjusted $/sqft × subject sqft
-7. Estimate rehab cost based on condition signals from the listing description and photos:
-   - Light cosmetic (paint, flooring, fixtures): $8-15/sqft
-   - Moderate (kitchen/bath updates + cosmetic): $15-25/sqft
-   - Heavy (systems + full interior): $25-40/sqft
-   - Gut rehab (structural issues): $40-60/sqft
-8. Assign confidence level:
-   - HIGH: 3+ strong comps within 0.5mi sold <90 days, tight price cluster
-   - MEDIUM: 2-3 decent comps with some gaps in recency or distance
-   - LOW: fewer than 2 relevant comps or wide price variance
-
-ARV rules:
-- NEVER use list price or PropStream estimated value as a proxy for ARV
-- Base ARV on what the property would sell for AFTER renovation, not current condition
-- Be conservative — it is better to underestimate ARV than overestimate it
-
----
-
-CRITICAL RULES:
-- Never use AVM, Zestimate, or PropStream Est_Value in any calculation
-- ARV is always based on sold comp analysis only
-- Be conservative on both ARV and rehab estimates
-- If you cannot find reliable comps, set arv_confidence to "LOW" and explain why
-
----
-
-Respond ONLY with valid JSON, no markdown, no explanation, no backticks:
-
-{
-  "verified_on_market": boolean,
-  "off_market_override": boolean,
-  "execution_path": "Auto Proceed" | "Manual Review" | "Reject",
-  "flip_score": number,
-  "redfin_url": string | null,
-  "redfin_dom": number | null,
-  "redfin_list_price": number | null,
-  "agent_name": string | null,
-  "agent_phone": string | null,
-  "agent_email": string | null,
-  "reject_reason": string | null,
-  "arv_estimated": number | null,
-  "arv_confidence": "HIGH" | "MEDIUM" | "LOW" | null,
-  "arv_comp_count": number | null,
-  "arv_comp_avg_psf": number | null,
-  "arv_comp_details": string | null,
-  "rehab_est_low": number | null,
-  "rehab_est_high": number | null,
-  "condition_score": number | null,
-  "verification_notes": "2-3 sentence plain English summary of listing status, flip risk, ARV confidence, and verdict"
-}`;
-
-interface VerifyRequest {
-  recordId: string;
-  address: string;
-  city: string;
-  state: string;
-  zip: string;
-  listPrice: number | string | null;
-  domCalc: number | string | null;
-  existingRedfinUrl: string | null;
-  existingNotes?: string | null;
+interface KeywordResult {
+  score: number;
+  executionPath: "Auto Proceed" | "Manual Review" | "Reject";
+  riskLevel: "None" | "Low" | "High";
+  keywordFlag: boolean;
+  details: string;
 }
 
-interface VerifyVerdict {
-  verified_on_market: boolean;
-  off_market_override: boolean;
-  execution_path: "Auto Proceed" | "Manual Review" | "Reject";
-  flip_score: number;
-  redfin_url: string | null;
-  redfin_dom: number | null;
-  redfin_list_price: number | null;
-  agent_name: string | null;
-  agent_phone: string | null;
-  agent_email: string | null;
-  reject_reason: string | null;
-  arv_estimated: number | null;
-  arv_confidence: "HIGH" | "MEDIUM" | "LOW" | null;
-  arv_comp_count: number | null;
-  arv_comp_avg_psf: number | null;
-  arv_comp_details: string | null;
-  rehab_est_low: number | null;
-  rehab_est_high: number | null;
-  condition_score: number | null;
-  verification_notes: string;
-}
+function scoreDescription(description: string): KeywordResult {
+  const lower = description.toLowerCase();
+  let score = 0;
+  const matched: string[] = [];
 
-function buildUserMessage(req: VerifyRequest): string {
-  const parts = [
-    `Verify this property for wholesale acquisition:`,
-    `Address: ${req.address}, ${req.city}, ${req.state} ${req.zip}`,
-  ];
+  for (const kw of HARD_REJECT_KEYWORDS) {
+    if (lower.includes(kw)) {
+      score += 10;
+      matched.push(`HARD REJECT: "${kw}"`);
+    }
+  }
 
-  if (req.existingRedfinUrl) {
-    parts.push(`Known Redfin URL: ${req.existingRedfinUrl}`);
+  for (const kw of FLIP_KEYWORDS) {
+    if (lower.includes(kw)) {
+      score += 1;
+      matched.push(`flip: "${kw}"`);
+    }
+  }
+
+  for (const kw of DISTRESS_KEYWORDS) {
+    if (lower.includes(kw)) {
+      score -= 1;
+      matched.push(`distress: "${kw}"`);
+    }
+  }
+
+  let executionPath: "Auto Proceed" | "Manual Review" | "Reject";
+  let riskLevel: "None" | "Low" | "High";
+
+  if (score >= 10) {
+    executionPath = "Reject";
+    riskLevel = "High";
+  } else if (score >= 4) {
+    executionPath = "Manual Review";
+    riskLevel = "High";
   } else {
-    parts.push("No Redfin URL on file — please search for it.");
+    executionPath = "Auto Proceed";
+    riskLevel = score > 0 ? "Low" : "None";
   }
 
-  const listPrice =
-    req.listPrice != null && req.listPrice !== ""
-      ? parseFloat(String(req.listPrice))
-      : NaN;
-  const domCalc =
-    req.domCalc != null && req.domCalc !== ""
-      ? parseFloat(String(req.domCalc))
-      : NaN;
+  return {
+    score,
+    executionPath,
+    riskLevel,
+    keywordFlag: matched.length > 0,
+    details: matched.length > 0
+      ? `Score ${score}. Matches: ${matched.join(", ")}`
+      : `Score ${score}. No keyword matches.`,
+  };
+}
 
-  if (!isNaN(listPrice)) {
-    parts.push(
-      `PropStream list price: $${listPrice.toLocaleString("en-US")}`
-    );
-  }
-  if (!isNaN(domCalc)) {
-    parts.push(`PropStream DOM estimate: ${domCalc} days`);
-  }
+// --- Off-market detection ---
 
-  parts.push(
-    "",
-    "Find the active Redfin listing, read the full description and status, and return your verdict as JSON."
+const OFF_MARKET_PHRASES = [
+  "off the market", "no longer available", "sold on",
+  "pending sale", "sale pending", "this home is not for sale",
+  "this listing has been removed",
+];
+
+function detectOffMarket(text: string): boolean {
+  const lower = text.toLowerCase();
+  return OFF_MARKET_PHRASES.some((phrase) => lower.includes(phrase));
+}
+
+// --- RentCast API ---
+
+interface RentCastListing {
+  id: string;
+  addressLine1?: string;
+  city?: string;
+  state?: string;
+  zipCode?: string;
+  status?: string;
+  price?: number;
+  daysOnMarket?: number;
+  listedDate?: string;
+}
+
+async function queryRentCast(
+  address: string, city: string, state: string, zip: string
+): Promise<RentCastListing[]> {
+  const params = new URLSearchParams({
+    address: address,
+    city: city,
+    state: state,
+    zipCode: zip,
+    status: "active",
+  });
+
+  const res = await fetch(
+    `https://api.rentcast.io/v1/listings/sale?${params.toString()}`,
+    {
+      headers: { "X-Api-Key": RENTCAST_API_KEY },
+      cache: "no-store",
+    }
   );
 
-  return parts.join("\n");
+  if (!res.ok) {
+    if (res.status === 404 || res.status === 422) return [];
+    const errText = await res.text();
+    throw new Error(`RentCast error ${res.status}: ${errText}`);
+  }
+
+  return await res.json();
 }
 
-function buildNotesAppend(
-  existing: string | null,
-  verdict: VerifyVerdict
-): string {
-  const today = new Date().toLocaleDateString("en-US", {
-    month: "numeric",
-    day: "numeric",
-    year: "2-digit",
-  });
-  const arvLine = verdict.arv_estimated
-    ? ` ARV: $${verdict.arv_estimated.toLocaleString()} (${verdict.arv_confidence} confidence, ${verdict.arv_comp_count} comps). Rehab est: $${verdict.rehab_est_low?.toLocaleString()}\u2013$${verdict.rehab_est_high?.toLocaleString()}.`
-    : "";
-  const newNote = `${today} \u2014 [Agent Verify+ARV] ${verdict.execution_path}. Flip score: ${verdict.flip_score}.${arvLine} ${verdict.verification_notes}`;
-  return existing ? `${existing}\n\n${newNote}` : newNote;
+// --- Redfin direct fetch ---
+
+async function fetchRedfinUrl(
+  address: string, city: string, state: string, zip: string
+): Promise<string | null> {
+  const query = encodeURIComponent(`${address} ${city} ${state} ${zip} Redfin`);
+  try {
+    const res = await fetch(
+      `https://www.google.com/search?q=${query}&num=5`,
+      {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        },
+        cache: "no-store",
+      }
+    );
+    if (!res.ok) return null;
+    const html = await res.text();
+    const match = html.match(/https:\/\/www\.redfin\.com\/[^"'\s]*\/home\/\d+/);
+    return match ? match[0] : null;
+  } catch {
+    return null;
+  }
 }
+
+async function fetchRedfinPage(
+  url: string
+): Promise<{ description: string; isOffMarket: boolean } | null> {
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      },
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+
+    // Extract description from meta tag
+    const descMatch = html.match(
+      /<meta\s+name="description"\s+content="([^"]*)"/i
+    );
+    const description = descMatch ? descMatch[1] : "";
+
+    // Check schema.org availability
+    const schemaOffMarket = html.includes('"availability":"OutOfStock"') ||
+      html.includes('"availability":"https://schema.org/OutOfStock"');
+
+    const phraseOffMarket = detectOffMarket(html);
+
+    return {
+      description,
+      isOffMarket: schemaOffMarket || phraseOffMarket,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// --- Phone validation ---
+
+function isValidPhone(phone: string | null): boolean {
+  if (!phone) return false;
+  return /[\d]/.test(phone);
+}
+
+// --- Airtable helpers ---
+
+async function fetchRecord(recordId: string): Promise<Record<string, unknown> | null> {
+  const fieldIds = Object.values(F);
+  const params = new URLSearchParams();
+  fieldIds.forEach((f) => params.append("fields[]", f));
+  params.set("returnFieldsByFieldId", "true");
+
+  const res = await fetch(
+    `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}/${recordId}?${params.toString()}`,
+    {
+      headers: { Authorization: `Bearer ${AIRTABLE_PAT}` },
+      cache: "no-store",
+    }
+  );
+  if (!res.ok) return null;
+  const data = await res.json();
+  return data.fields as Record<string, unknown>;
+}
+
+async function fetchUnverifiedRecords(): Promise<Array<{ id: string; fields: Record<string, unknown> }>> {
+  const records: Array<{ id: string; fields: Record<string, unknown> }> = [];
+  let offset: string | undefined;
+
+  do {
+    const params = new URLSearchParams();
+    params.set("filterByFormula", `AND({${W.executionPath}}='',{${F.address}}!='')`);
+    Object.values(F).forEach((f) => params.append("fields[]", f));
+    params.set("returnFieldsByFieldId", "true");
+    params.set("maxRecords", "50");
+    if (offset) params.set("offset", offset);
+
+    const res = await fetch(
+      `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}?${params.toString()}`,
+      {
+        headers: { Authorization: `Bearer ${AIRTABLE_PAT}` },
+        cache: "no-store",
+      }
+    );
+    if (!res.ok) break;
+
+    const data = await res.json();
+    for (const rec of data.records) {
+      records.push({ id: rec.id, fields: rec.fields });
+    }
+    offset = data.offset;
+  } while (offset && records.length < 50);
+
+  return records;
+}
+
+async function patchRecord(
+  recordId: string,
+  fields: Record<string, unknown>
+): Promise<void> {
+  await fetch(
+    `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}/${recordId}`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${AIRTABLE_PAT}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ fields, typecast: true }),
+    }
+  );
+}
+
+function appendNote(existing: string | null, newNote: string): string {
+  const today = new Date().toLocaleDateString("en-US", {
+    month: "numeric", day: "numeric", year: "2-digit",
+  });
+  const stamped = `${today} — [Verify] ${newNote}`;
+  return existing ? `${existing}\n\n${stamped}` : stamped;
+}
+
+// --- Never-resurface list ---
+
+const NEVER_RESURFACE = new Set([
+  "2715 monterey st", "714 hallie ave", "4330 pensacola ct",
+  "9618 tamalpais dr", "811 manhattan dr", "1635 arbor pl",
+  "4448 marcell ave", "2725 bowling green ave", "2011 ramsey ave",
+  "707 n pine st", "8641 craige dr", "910 green st",
+]);
+
+// --- Main verification logic ---
+
+interface VerifyResult {
+  recordId: string;
+  address: string;
+  liveStatus: string;
+  executionPath: string;
+  source: string;
+  redfinUrl: string | null;
+  keywordScore: number | null;
+  error?: string;
+}
+
+async function verifyOne(
+  recordId: string,
+  fields: Record<string, unknown>
+): Promise<VerifyResult> {
+  const address = (fields[F.address] as string) ?? "";
+  const city = (fields[F.city] as string) ?? "";
+  const state = (fields[F.state] as string) ?? "";
+  const zip = (fields[F.zip] as string) ?? "";
+  const agentPhone = (fields[F.agentPhone] as string) ?? "";
+  const existingNotes = (fields[F.notes] as string) ?? null;
+
+  if (!address.trim()) {
+    return { recordId, address, liveStatus: "Unknown", executionPath: "Reject", source: "skip", redfinUrl: null, keywordScore: null, error: "Empty address" };
+  }
+
+  // Never-resurface check
+  if (NEVER_RESURFACE.has(address.trim().toLowerCase())) {
+    await patchRecord(recordId, {
+      [W.executionPath]: "Reject",
+      [W.notes]: appendNote(existingNotes, "Auto-rejected: address is on the never-resurface list."),
+      [W.lastVerified]: new Date().toISOString(),
+    });
+    return { recordId, address, liveStatus: "Rejected", executionPath: "Reject", source: "blocklist", redfinUrl: null, keywordScore: null };
+  }
+
+  // Phone validation
+  if (!isValidPhone(agentPhone)) {
+    await patchRecord(recordId, {
+      [W.executionPath]: "Manual Review",
+      [W.notes]: appendNote(existingNotes, "Agent phone missing or invalid. Manual review required."),
+      [W.lastVerified]: new Date().toISOString(),
+    });
+    return { recordId, address, liveStatus: "Unknown", executionPath: "Manual Review", source: "phone_validation", redfinUrl: null, keywordScore: null };
+  }
+
+  // Step 1: RentCast
+  let rentCastActive = false;
+  try {
+    const listings = await queryRentCast(address, city, state, zip);
+    rentCastActive = listings.length > 0;
+  } catch (err) {
+    console.error(`[verify] RentCast error for ${address}:`, err);
+    // Fall through to Redfin check
+  }
+
+  if (!rentCastActive) {
+    // RentCast says no active listing — check Redfin to confirm
+    const redfinUrl = await fetchRedfinUrl(address, city, state, zip);
+    if (!redfinUrl) {
+      await patchRecord(recordId, {
+        [W.liveStatus]: "Off Market",
+        [W.executionPath]: "Reject",
+        [W.verifiedOnMarket]: false,
+        [W.verificationSource]: "RentCast (no active listing found)",
+        [W.lastVerified]: new Date().toISOString(),
+        [W.notes]: appendNote(existingNotes, "RentCast: no active listing. Redfin: no URL found. Marking Off Market."),
+      });
+      return { recordId, address, liveStatus: "Off Market", executionPath: "Reject", source: "RentCast+Redfin", redfinUrl: null, keywordScore: null };
+    }
+
+    // Found a Redfin URL — check the page
+    const page = await fetchRedfinPage(redfinUrl);
+    if (page?.isOffMarket) {
+      await patchRecord(recordId, {
+        [W.liveStatus]: "Off Market",
+        [W.executionPath]: "Reject",
+        [W.verifiedOnMarket]: false,
+        [W.verificationSource]: "RentCast + Redfin Direct",
+        [W.verificationUrl]: redfinUrl,
+        [W.lastVerified]: new Date().toISOString(),
+        [W.restrictionText]: page.description.slice(0, 5000),
+        [W.notes]: appendNote(existingNotes, "RentCast: no active. Redfin page confirms off-market."),
+      });
+      return { recordId, address, liveStatus: "Off Market", executionPath: "Reject", source: "RentCast+Redfin", redfinUrl, keywordScore: null };
+    }
+
+    // Redfin page exists but doesn't clearly say off-market — Manual Review
+    if (page) {
+      const kw = scoreDescription(page.description);
+      await patchRecord(recordId, {
+        [W.liveStatus]: "Active",
+        [W.executionPath]: kw.executionPath,
+        [W.verifiedOnMarket]: true,
+        [W.verificationSource]: "RentCast + Redfin Direct",
+        [W.verificationUrl]: redfinUrl,
+        [W.lastVerified]: new Date().toISOString(),
+        [W.restrictionRiskLevel]: kw.riskLevel,
+        [W.restrictionKeywordFlag]: kw.keywordFlag,
+        [W.restrictionText]: page.description.slice(0, 5000),
+        [W.notes]: appendNote(existingNotes, `RentCast empty but Redfin active. ${kw.details}`),
+      });
+      return { recordId, address, liveStatus: "Active", executionPath: kw.executionPath, source: "RentCast+Redfin", redfinUrl, keywordScore: kw.score };
+    }
+
+    // Redfin fetch failed (403/captcha)
+    await patchRecord(recordId, {
+      [W.liveStatus]: "URL Not Found",
+      [W.executionPath]: "Manual Review",
+      [W.verificationSource]: "RentCast (no listing) + Redfin (fetch blocked)",
+      [W.verificationUrl]: redfinUrl,
+      [W.lastVerified]: new Date().toISOString(),
+      [W.notes]: appendNote(existingNotes, "RentCast: no listing. Redfin URL found but page fetch blocked. Manual review."),
+    });
+    return { recordId, address, liveStatus: "URL Not Found", executionPath: "Manual Review", source: "RentCast+Redfin(blocked)", redfinUrl, keywordScore: null };
+  }
+
+  // Step 2: RentCast says active — verify on Redfin
+  const redfinUrl = await fetchRedfinUrl(address, city, state, zip);
+  let description = "";
+  let isOffMarket = false;
+
+  if (redfinUrl) {
+    const page = await fetchRedfinPage(redfinUrl);
+    if (page) {
+      description = page.description;
+      isOffMarket = page.isOffMarket;
+    }
+  }
+
+  if (isOffMarket) {
+    await patchRecord(recordId, {
+      [W.liveStatus]: "Off Market",
+      [W.executionPath]: "Reject",
+      [W.verifiedOnMarket]: false,
+      [W.verificationSource]: "RentCast + Redfin Direct",
+      [W.verificationUrl]: redfinUrl,
+      [W.lastVerified]: new Date().toISOString(),
+      [W.restrictionText]: description.slice(0, 5000),
+      [W.notes]: appendNote(existingNotes, "RentCast: active. But Redfin page shows off-market signals. Rejecting."),
+    });
+    return { recordId, address, liveStatus: "Off Market", executionPath: "Reject", source: "RentCast+Redfin", redfinUrl, keywordScore: null };
+  }
+
+  // Active — run keyword scoring
+  const kw = scoreDescription(description);
+
+  await patchRecord(recordId, {
+    [W.liveStatus]: "Active",
+    [W.executionPath]: kw.executionPath,
+    [W.verifiedOnMarket]: true,
+    [W.verificationSource]: "RentCast + Redfin Direct",
+    [W.verificationUrl]: redfinUrl,
+    [W.lastVerified]: new Date().toISOString(),
+    [W.restrictionRiskLevel]: kw.riskLevel,
+    [W.restrictionKeywordFlag]: kw.keywordFlag,
+    [W.restrictionText]: description.slice(0, 5000),
+    [W.notes]: appendNote(existingNotes, `Verified active. ${kw.details}`),
+  });
+
+  return { recordId, address, liveStatus: "Active", executionPath: kw.executionPath, source: "RentCast+Redfin", redfinUrl, keywordScore: kw.score };
+}
+
+// --- Route handler ---
 
 export async function POST(req: Request) {
-  console.log("[verify-listing] called", req.method, req.url);
+  if (!AIRTABLE_PAT) {
+    return Response.json({ error: "AIRTABLE_PAT not set" }, { status: 500 });
+  }
+  if (!RENTCAST_API_KEY) {
+    return Response.json({ error: "RENTCAST_API_KEY not set — add it to Vercel env vars" }, { status: 500 });
+  }
 
-  // Read body ONCE as text, then parse — never mix req.text() and req.json()
-  let body: VerifyRequest;
+  let body: { recordId?: string; batch?: boolean };
   try {
     const text = await req.text();
-    console.log("[verify-listing] raw body length:", text.length);
-    if (!text || text.trim() === "") {
-      return Response.json(
-        { error: "Empty body received" },
-        { status: 400 }
-      );
+    if (!text.trim()) {
+      return Response.json({ error: "Empty body" }, { status: 400 });
     }
     body = JSON.parse(text);
-  } catch (e) {
-    console.error("[verify-listing] JSON parse failed:", e);
-    return Response.json(
-      { error: "JSON parse failed", detail: String(e) },
-      { status: 400 }
-    );
+  } catch {
+    return Response.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
   try {
-    const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-    const AIRTABLE_PAT = process.env.AIRTABLE_PAT;
-    const AIRTABLE_BASE_ID =
-      process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
-    const AIRTABLE_TABLE_ID =
-      process.env.AIRTABLE_TABLE_ID || "tbldMjKBgPiq45Jjs";
+    // Single record mode
+    if (body.recordId) {
+      const fields = await fetchRecord(body.recordId);
+      if (!fields) {
+        return Response.json({ error: "Record not found" }, { status: 404 });
+      }
 
-    if (!ANTHROPIC_API_KEY) {
-      return Response.json(
-        { error: "ANTHROPIC_API_KEY not configured" },
-        { status: 500 }
-      );
-    }
-    if (!AIRTABLE_PAT) {
-      return Response.json(
-        { error: "AIRTABLE_PAT not configured" },
-        { status: 500 }
-      );
+      const result = await verifyOne(body.recordId, fields);
+      return Response.json({ results: [result], total: 1 });
     }
 
-  const { recordId, address, city } = body;
-  if (!recordId || !address || !city) {
-    return Response.json(
-      { error: "Missing required fields: recordId, address, city" },
-      { status: 400 }
-    );
-  }
+    // Batch mode — process all unverified
+    if (body.batch) {
+      const records = await fetchUnverifiedRecords();
+      const results: VerifyResult[] = [];
 
-  // --- Call Anthropic API with web search ---
-  let verdict: VerifyVerdict;
+      for (const rec of records) {
+        try {
+          const result = await verifyOne(rec.id, rec.fields);
+          results.push(result);
+        } catch (err) {
+          results.push({
+            recordId: rec.id,
+            address: (rec.fields[F.address] as string) ?? "",
+            liveStatus: "Error",
+            executionPath: "Manual Review",
+            source: "error",
+            redfinUrl: null,
+            keywordScore: null,
+            error: String(err),
+          });
+        }
+      }
 
-  try {
-    const anthropicRes = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 16000,
-        tools: [{ type: "web_search_20250305", name: "web_search" }],
-        system: SYSTEM_PROMPT,
-        messages: [{ role: "user", content: buildUserMessage(body) }],
-      }),
-    });
-
-    if (!anthropicRes.ok) {
-      const errText = await anthropicRes.text();
-      console.error(
-        `[verify-listing] Anthropic API error ${anthropicRes.status}: ${errText}`
-      );
-      return Response.json(
-        { error: `Anthropic API error: ${anthropicRes.status}`, detail: errText },
-        { status: 500 }
-      );
-    }
-
-    const anthropicData = await anthropicRes.json();
-
-    // Extract the last text block from the response
-    const textBlocks = (
-      anthropicData.content as Array<{ type: string; text?: string }>
-    ).filter((block) => block.type === "text" && block.text);
-
-    if (textBlocks.length === 0) {
-      console.error(
-        "[verify-listing] No text block in Anthropic response:",
-        JSON.stringify(anthropicData.content)
-      );
-      return Response.json(
-        { error: "No text response from Anthropic", raw: anthropicData.content },
-        { status: 500 }
-      );
-    }
-
-    const rawText = textBlocks[textBlocks.length - 1].text!;
-
-    // Extract JSON object from response — Claude may prefix with prose
-    const jsonStart = rawText.indexOf("{");
-    const jsonEnd = rawText.lastIndexOf("}");
-
-    if (jsonStart === -1 || jsonEnd === -1 || jsonEnd <= jsonStart) {
-      console.error(
-        "[verify-listing] No JSON object found in response. Raw text:",
-        rawText
-      );
-      return Response.json(
-        { error: "No JSON found in Anthropic response", rawText },
-        { status: 500 }
-      );
-    }
-
-    const jsonStr = rawText.slice(jsonStart, jsonEnd + 1);
-
-    try {
-      verdict = JSON.parse(jsonStr);
-    } catch (parseErr) {
-      console.error(
-        "[verify-listing] JSON parse failed. Raw text:",
-        rawText
-      );
-      return Response.json(
-        {
-          error: "Failed to parse verdict JSON",
-          rawText,
-          parseError: String(parseErr),
-        },
-        { status: 500 }
-      );
-    }
-  } catch (err) {
-    console.error("[verify-listing] Anthropic fetch error:", err);
-    return Response.json(
-      { error: "Failed to call Anthropic API", detail: String(err) },
-      { status: 500 }
-    );
-  }
-
-  // --- PATCH Airtable (skip for test calls) ---
-  let airtableSuccess = false;
-
-  if (recordId !== "TEST_ONLY") {
-    try {
-      const airtableFields: Record<string, unknown> = {
-        // Verification fields
-        fldCxApxYiiB8eYFI: verdict.verified_on_market,
-        fldytROucQFdlPGLm: verdict.off_market_override,
-        fldOrWvqKcc1g6Lka: verdict.execution_path,
-        fldyiFT48fudbF34k: verdict.flip_score,
-        fldwKGxZly6O8qyPu: buildNotesAppend(
-          body.existingNotes ?? null,
-          verdict
-        ),
-        fld2eUkKaC4pMjIdd: new Date().toISOString(),
-        // ARV fields (only write if not null)
-        ...(verdict.arv_estimated !== null && {
-          fldGrbFgkHVxkqJSX: verdict.arv_estimated,
-        }),
-        ...(verdict.arv_confidence !== null && {
-          fldDcIiUajkvi8Wz3: verdict.arv_confidence,
-        }),
-        ...(verdict.arv_comp_count !== null && {
-          fldyukQHGzGdxoDGf: verdict.arv_comp_count,
-        }),
-        ...(verdict.arv_comp_avg_psf !== null && {
-          fld9uJ3xRjkHGYruM: verdict.arv_comp_avg_psf,
-        }),
-        ...(verdict.arv_comp_details !== null && {
-          fld82wv8rM9t6Awjd: verdict.arv_comp_details,
-        }),
-        ...(verdict.rehab_est_low !== null && {
-          fld1I0vcWZbp56GKc: verdict.rehab_est_low,
-        }),
-        ...(verdict.rehab_est_high !== null && {
-          fldAcdeYJQbEyYNU2: verdict.rehab_est_high,
-        }),
-        ...(verdict.condition_score !== null && {
-          fldkE6xgHeCvmyKJy: verdict.condition_score,
-        }),
-        fldqmB24Iog0t2r0a: new Date().toISOString(), // ARV_Last_Run
+      const summary = {
+        total: results.length,
+        active: results.filter((r) => r.liveStatus === "Active").length,
+        offMarket: results.filter((r) => r.liveStatus === "Off Market").length,
+        manualReview: results.filter((r) => r.executionPath === "Manual Review").length,
+        rejected: results.filter((r) => r.executionPath === "Reject").length,
+        errors: results.filter((r) => r.error).length,
       };
 
-      // Conditional fields
-      if (verdict.redfin_url)
-        airtableFields["fldXrW8CWUphUfKgJ"] = verdict.redfin_url;
-      if (verdict.agent_name)
-        airtableFields["fld69oB0no6tfguom"] = verdict.agent_name;
-      if (verdict.agent_phone)
-        airtableFields["fldee9MOstjNDKjnm"] = verdict.agent_phone;
-      if (verdict.agent_email)
-        airtableFields["fldzdck2fhd6DZ3Oq"] = verdict.agent_email;
-
-      const airtableRes = await fetch(
-        `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_TABLE_ID}/${recordId}`,
-        {
-          method: "PATCH",
-          headers: {
-            Authorization: `Bearer ${AIRTABLE_PAT}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ fields: airtableFields, typecast: true }),
-        }
-      );
-
-      if (!airtableRes.ok) {
-        const errText = await airtableRes.text();
-        console.error(
-          `[verify-listing] Airtable PATCH failed ${airtableRes.status}: ${errText}`
-        );
-        // Don't fail the response — still return verdict
-      } else {
-        airtableSuccess = true;
-      }
-    } catch (err) {
-      console.error("[verify-listing] Airtable fetch error:", err);
+      return Response.json({ summary, results });
     }
-  } else {
-    airtableSuccess = true; // test mode
-  }
 
-  return Response.json({
-    success: true,
-    recordId,
-    airtableUpdated: airtableSuccess,
-    verdict,
-  });
-
-  } catch (topLevelErr) {
-    console.error("[verify-listing] Unhandled error:", topLevelErr);
     return Response.json(
-      {
-        error: "Unhandled server error",
-        detail: String(topLevelErr),
-      },
+      { error: "Provide either recordId (string) or batch (true)" },
+      { status: 400 }
+    );
+  } catch (err) {
+    console.error("[verify-listing] Error:", err);
+    return Response.json(
+      { error: "Verification failed", detail: String(err) },
       { status: 500 }
     );
   }
