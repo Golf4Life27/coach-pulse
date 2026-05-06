@@ -165,29 +165,55 @@ async function queryRentCast(
   return await res.json();
 }
 
-// --- Redfin direct fetch ---
+// --- Redfin search + fetch ---
 
 async function fetchRedfinUrl(
   address: string, city: string, state: string, zip: string
-): Promise<string | null> {
-  const query = encodeURIComponent(`${address} ${city} ${state} ${zip} Redfin`);
+): Promise<{ url: string | null; error?: string }> {
+  // Use Redfin's own search endpoint instead of Google (which blocks server IPs)
+  const query = encodeURIComponent(`${address} ${city} ${state} ${zip}`);
   try {
     const res = await fetch(
-      `https://www.google.com/search?q=${query}&num=5`,
+      `https://www.redfin.com/stingray/do/location-autocomplete?location=${query}&v=2`,
       {
         headers: {
           "User-Agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          "Accept": "application/json",
         },
         cache: "no-store",
       }
     );
-    if (!res.ok) return null;
-    const html = await res.text();
-    const match = html.match(/https:\/\/www\.redfin\.com\/[^"'\s]*\/home\/\d+/);
-    return match ? match[0] : null;
-  } catch {
-    return null;
+    if (!res.ok) {
+      return { url: null, error: `Redfin autocomplete ${res.status}` };
+    }
+    const text = await res.text();
+    // Redfin wraps JSON in {}&&{...} — strip the prefix
+    const jsonStr = text.replace(/^\{\}&&/, "");
+    const data = JSON.parse(jsonStr);
+
+    const results = data?.payload?.sections ?? [];
+    for (const section of results) {
+      for (const row of section.rows ?? []) {
+        if (row.url && row.type === "2") {
+          // type 2 = address match
+          return { url: `https://www.redfin.com${row.url}` };
+        }
+      }
+    }
+
+    // Fallback: any result with a /home/ URL
+    for (const section of results) {
+      for (const row of section.rows ?? []) {
+        if (row.url && row.url.includes("/home/")) {
+          return { url: `https://www.redfin.com${row.url}` };
+        }
+      }
+    }
+
+    return { url: null, error: "No address match in Redfin autocomplete" };
+  } catch (err) {
+    return { url: null, error: `Redfin search failed: ${String(err)}` };
   }
 }
 
@@ -368,119 +394,92 @@ async function verifyOne(
 
   // Step 1: RentCast
   let rentCastActive = false;
+  let rentCastError: string | null = null;
   try {
     const listings = await queryRentCast(address, city, state, zip);
     rentCastActive = listings.length > 0;
   } catch (err) {
+    rentCastError = String(err);
     console.error(`[verify] RentCast error for ${address}:`, err);
-    // Fall through to Redfin check
   }
 
-  if (!rentCastActive) {
-    // RentCast says no active listing — check Redfin to confirm
-    const redfinUrl = await fetchRedfinUrl(address, city, state, zip);
-    if (!redfinUrl) {
-      await patchRecord(recordId, {
-        [W.liveStatus]: "Off Market",
-        [W.executionPath]: "Reject",
-        [W.verifiedOnMarket]: false,
-        [W.verificationSource]: "RentCast (no active listing found)",
-        [W.lastVerified]: new Date().toISOString(),
-        [W.notes]: appendNote(existingNotes, "RentCast: no active listing. Redfin: no URL found. Marking Off Market."),
-      });
-      return { recordId, address, liveStatus: "Off Market", executionPath: "Reject", source: "RentCast+Redfin", redfinUrl: null, keywordScore: null };
-    }
-
-    // Found a Redfin URL — check the page
-    const page = await fetchRedfinPage(redfinUrl);
-    if (page?.isOffMarket) {
-      await patchRecord(recordId, {
-        [W.liveStatus]: "Off Market",
-        [W.executionPath]: "Reject",
-        [W.verifiedOnMarket]: false,
-        [W.verificationSource]: "RentCast + Redfin Direct",
-        [W.verificationUrl]: redfinUrl,
-        [W.lastVerified]: new Date().toISOString(),
-        [W.restrictionText]: page.description.slice(0, 5000),
-        [W.notes]: appendNote(existingNotes, "RentCast: no active. Redfin page confirms off-market."),
-      });
-      return { recordId, address, liveStatus: "Off Market", executionPath: "Reject", source: "RentCast+Redfin", redfinUrl, keywordScore: null };
-    }
-
-    // Redfin page exists but doesn't clearly say off-market — Manual Review
-    if (page) {
-      const kw = scoreDescription(page.description);
-      await patchRecord(recordId, {
-        [W.liveStatus]: "Active",
-        [W.executionPath]: kw.executionPath,
-        [W.verifiedOnMarket]: true,
-        [W.verificationSource]: "RentCast + Redfin Direct",
-        [W.verificationUrl]: redfinUrl,
-        [W.lastVerified]: new Date().toISOString(),
-        [W.restrictionRiskLevel]: kw.riskLevel,
-        [W.restrictionKeywordFlag]: kw.keywordFlag,
-        [W.restrictionText]: page.description.slice(0, 5000),
-        [W.notes]: appendNote(existingNotes, `RentCast empty but Redfin active. ${kw.details}`),
-      });
-      return { recordId, address, liveStatus: "Active", executionPath: kw.executionPath, source: "RentCast+Redfin", redfinUrl, keywordScore: kw.score };
-    }
-
-    // Redfin fetch failed (403/captcha)
-    await patchRecord(recordId, {
-      [W.liveStatus]: "URL Not Found",
-      [W.executionPath]: "Manual Review",
-      [W.verificationSource]: "RentCast (no listing) + Redfin (fetch blocked)",
-      [W.verificationUrl]: redfinUrl,
-      [W.lastVerified]: new Date().toISOString(),
-      [W.notes]: appendNote(existingNotes, "RentCast: no listing. Redfin URL found but page fetch blocked. Manual review."),
-    });
-    return { recordId, address, liveStatus: "URL Not Found", executionPath: "Manual Review", source: "RentCast+Redfin(blocked)", redfinUrl, keywordScore: null };
-  }
-
-  // Step 2: RentCast says active — verify on Redfin
-  const redfinUrl = await fetchRedfinUrl(address, city, state, zip);
-  let description = "";
-  let isOffMarket = false;
+  // Step 2: Redfin search + page fetch (always attempted)
+  const redfin = await fetchRedfinUrl(address, city, state, zip);
+  const redfinUrl = redfin.url;
+  let redfinPage: { description: string; isOffMarket: boolean } | null = null;
+  let redfinBlocked = false;
 
   if (redfinUrl) {
-    const page = await fetchRedfinPage(redfinUrl);
-    if (page) {
-      description = page.description;
-      isOffMarket = page.isOffMarket;
-    }
+    redfinPage = await fetchRedfinPage(redfinUrl);
+    if (!redfinPage) redfinBlocked = true;
   }
 
-  if (isOffMarket) {
+  // --- Decision logic ---
+  // Rule: NEVER auto-approve on RentCast alone. Redfin must confirm.
+
+  // Case 1: Redfin confirms off-market → Reject regardless of RentCast
+  if (redfinPage?.isOffMarket) {
     await patchRecord(recordId, {
       [W.liveStatus]: "Off Market",
       [W.executionPath]: "Reject",
       [W.verifiedOnMarket]: false,
-      [W.verificationSource]: "RentCast + Redfin Direct",
+      [W.verificationSource]: `RentCast (${rentCastActive ? "active" : "empty"}) + Redfin (off-market)`,
       [W.verificationUrl]: redfinUrl,
       [W.lastVerified]: new Date().toISOString(),
-      [W.restrictionText]: description.slice(0, 5000),
-      [W.notes]: appendNote(existingNotes, "RentCast: active. But Redfin page shows off-market signals. Rejecting."),
+      [W.restrictionText]: redfinPage.description.slice(0, 5000),
+      [W.notes]: appendNote(existingNotes, `Redfin confirms off-market.${rentCastActive ? " RentCast had active listing (stale data)." : ""}`),
     });
-    return { recordId, address, liveStatus: "Off Market", executionPath: "Reject", source: "RentCast+Redfin", redfinUrl, keywordScore: null };
+    return { recordId, address, liveStatus: "Off Market", executionPath: "Reject", source: "Redfin", redfinUrl, keywordScore: null };
   }
 
-  // Active — run keyword scoring
-  const kw = scoreDescription(description);
+  // Case 2: Redfin page loaded, not off-market → run keyword scoring
+  if (redfinPage) {
+    const kw = scoreDescription(redfinPage.description);
+    await patchRecord(recordId, {
+      [W.liveStatus]: "Active",
+      [W.executionPath]: kw.executionPath,
+      [W.verifiedOnMarket]: true,
+      [W.verificationSource]: `RentCast (${rentCastActive ? "active" : "empty"}) + Redfin (verified)`,
+      [W.verificationUrl]: redfinUrl,
+      [W.lastVerified]: new Date().toISOString(),
+      [W.restrictionRiskLevel]: kw.riskLevel,
+      [W.restrictionKeywordFlag]: kw.keywordFlag,
+      [W.restrictionText]: redfinPage.description.slice(0, 5000),
+      [W.notes]: appendNote(existingNotes, `Redfin verified active. ${kw.details}`),
+    });
+    return { recordId, address, liveStatus: "Active", executionPath: kw.executionPath, source: "RentCast+Redfin", redfinUrl, keywordScore: kw.score };
+  }
+
+  // Case 3: No Redfin URL found AND RentCast empty → Off Market
+  if (!redfinUrl && !rentCastActive) {
+    await patchRecord(recordId, {
+      [W.liveStatus]: "Off Market",
+      [W.executionPath]: "Reject",
+      [W.verifiedOnMarket]: false,
+      [W.verificationSource]: "RentCast (empty) + Redfin (no URL)",
+      [W.lastVerified]: new Date().toISOString(),
+      [W.notes]: appendNote(existingNotes, `RentCast: no active listing. Redfin: ${redfin.error ?? "no match found"}. Off Market.`),
+    });
+    return { recordId, address, liveStatus: "Off Market", executionPath: "Reject", source: "RentCast+Redfin", redfinUrl: null, keywordScore: null };
+  }
+
+  // Case 4: Redfin unreachable (blocked, no URL, or page fetch failed)
+  // RentCast may say active but we can't confirm → Manual Review
+  const sourceNote = [
+    `RentCast: ${rentCastActive ? "active" : rentCastError ? `error (${rentCastError})` : "empty"}`,
+    redfinUrl ? `Redfin URL found but page ${redfinBlocked ? "blocked (403/captcha)" : "not fetchable"}` : `Redfin: ${redfin.error ?? "no URL found"}`,
+  ].join(". ");
 
   await patchRecord(recordId, {
-    [W.liveStatus]: "Active",
-    [W.executionPath]: kw.executionPath,
-    [W.verifiedOnMarket]: true,
-    [W.verificationSource]: "RentCast + Redfin Direct",
-    [W.verificationUrl]: redfinUrl,
+    [W.liveStatus]: rentCastActive ? "Active" : "URL Not Found",
+    [W.executionPath]: "Manual Review",
+    [W.verifiedOnMarket]: false,
+    [W.verificationSource]: sourceNote,
+    ...(redfinUrl ? { [W.verificationUrl]: redfinUrl } : {}),
     [W.lastVerified]: new Date().toISOString(),
-    [W.restrictionRiskLevel]: kw.riskLevel,
-    [W.restrictionKeywordFlag]: kw.keywordFlag,
-    [W.restrictionText]: description.slice(0, 5000),
-    [W.notes]: appendNote(existingNotes, `Verified active. ${kw.details}`),
+    [W.notes]: appendNote(existingNotes, `${sourceNote}. Cannot confirm on Redfin — routing to Manual Review.`),
   });
-
-  return { recordId, address, liveStatus: "Active", executionPath: kw.executionPath, source: "RentCast+Redfin", redfinUrl, keywordScore: kw.score };
+  return { recordId, address, liveStatus: rentCastActive ? "Active" : "URL Not Found", executionPath: "Manual Review", source: "unconfirmed", redfinUrl, keywordScore: null };
 }
 
 // --- Route handler ---
