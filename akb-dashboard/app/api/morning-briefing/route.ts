@@ -161,12 +161,13 @@ export async function GET() {
         continue;
       }
 
-      // FOLLOW UP: Texted 5+ days ago with no inbound
+      // FOLLOW UP: Texted AND Last_Outbound_At is 5+ days old AND no inbound reply after
       if (
         l.outreachStatus === "Texted" &&
-        daysSince(l.lastOutboundAt ?? l.lastOutreachDate) !== null &&
-        (daysSince(l.lastOutboundAt ?? l.lastOutreachDate) ?? 0) >= 5 &&
-        (l.lastInboundAt === null || (daysSince(l.lastInboundAt) ?? 999) > (daysSince(l.lastOutboundAt ?? l.lastOutreachDate) ?? 0))
+        l.lastOutboundAt &&
+        daysSince(l.lastOutboundAt) !== null &&
+        (daysSince(l.lastOutboundAt) ?? 0) >= 5 &&
+        (l.lastInboundAt === null || new Date(l.lastInboundAt).getTime() < new Date(l.lastOutboundAt).getTime())
       ) {
         followUp.push(item);
         continue;

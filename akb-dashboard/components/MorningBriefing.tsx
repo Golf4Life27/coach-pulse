@@ -39,6 +39,8 @@ function formatCurrency(n: number | null): string {
   return "$" + Math.round(n).toLocaleString("en-US");
 }
 
+const PREVIEW_LIMIT = 5;
+
 interface SectionProps {
   title: string;
   icon: string;
@@ -47,7 +49,12 @@ interface SectionProps {
 }
 
 function BriefingSection({ title, icon, color, items }: SectionProps) {
+  const [expanded, setExpanded] = useState(false);
+
   if (items.length === 0) return null;
+
+  const visible = expanded ? items : items.slice(0, PREVIEW_LIMIT);
+  const hasMore = items.length > PREVIEW_LIMIT;
 
   return (
     <div className="space-y-2">
@@ -55,7 +62,7 @@ function BriefingSection({ title, icon, color, items }: SectionProps) {
         {icon} {title} ({items.length})
       </h3>
       <div className="space-y-1.5">
-        {items.map((item) => {
+        {visible.map((item) => {
           const loc = [item.city, item.state].filter(Boolean).join(", ");
           return (
             <div
@@ -64,12 +71,9 @@ function BriefingSection({ title, icon, color, items }: SectionProps) {
             >
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <Link
-                    href={`/pipeline/${item.recordId}`}
-                    className="text-xs text-white font-semibold hover:underline truncate"
-                  >
+                  <span className="text-xs text-white font-semibold truncate">
                     {item.address}{loc ? `, ${loc}` : ""}
-                  </Link>
+                  </span>
                   {item.daysSinceTouch !== null && (
                     <span
                       className={`text-[10px] font-bold flex-shrink-0 ${
@@ -88,16 +92,35 @@ function BriefingSection({ title, icon, color, items }: SectionProps) {
                   {item.agentName ?? "—"} · {formatCurrency(item.listPrice)} → {formatCurrency(item.offer)} · {item.lastActivity}
                 </p>
               </div>
-              <Link
-                href={`/pipeline/${item.recordId}`}
-                className="text-[10px] bg-[#30363d] hover:bg-[#3d444d] text-gray-300 px-2 py-1 rounded flex-shrink-0"
-              >
-                Open
-              </Link>
+              <div className="flex gap-1.5 flex-shrink-0">
+                {item.agentPhone && (
+                  <a
+                    href={`tel:${item.agentPhone}`}
+                    className="text-[10px] text-blue-400 hover:text-blue-300"
+                  >
+                    Call
+                  </a>
+                )}
+                <Link
+                  href={`/pipeline/${item.recordId}`}
+                  className="text-[10px] bg-[#30363d] hover:bg-[#3d444d] text-gray-300 px-2 py-1 rounded"
+                >
+                  Open
+                </Link>
+              </div>
             </div>
           );
         })}
       </div>
+      {hasMore && (
+        <button
+          type="button"
+          onClick={() => setExpanded(!expanded)}
+          className="text-[10px] text-gray-500 hover:text-gray-300 transition-colors"
+        >
+          {expanded ? "Show less" : `Show all (${items.length})`}
+        </button>
+      )}
     </div>
   );
 }
