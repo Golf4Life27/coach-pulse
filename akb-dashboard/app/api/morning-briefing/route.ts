@@ -135,10 +135,18 @@ export async function GET() {
         continue;
       }
 
-      // RESPOND TODAY: inbound in last 48h with no outbound after
+      // RESPOND TODAY: Response Received status (agent replied, needs attention)
+      // Uses status as primary signal since lastInboundAt may not be populated yet
+      if (l.outreachStatus === "Response Received") {
+        respondToday.push(item);
+        continue;
+      }
+
+      // Also catch: inbound timestamp in last 48h with no outbound after (for Negotiating records)
       const inboundHours = hoursSince(l.lastInboundAt);
       const outboundHours = hoursSince(l.lastOutboundAt);
       if (
+        l.outreachStatus === "Negotiating" &&
         inboundHours !== null &&
         inboundHours <= 48 &&
         (outboundHours === null || outboundHours > inboundHours)
@@ -161,16 +169,21 @@ export async function GET() {
         continue;
       }
 
-      // FOLLOW UP: Texted AND Last_Outbound_At is 5+ days old AND no inbound reply after
-      if (
-        l.outreachStatus === "Texted" &&
-        l.lastOutboundAt &&
-        daysSince(l.lastOutboundAt) !== null &&
-        (daysSince(l.lastOutboundAt) ?? 0) >= 5 &&
-        (l.lastInboundAt === null || new Date(l.lastInboundAt).getTime() < new Date(l.lastOutboundAt).getTime())
-      ) {
-        followUp.push(item);
-        continue;
+      // FOLLOW UP: Texted 5+ days ago with no inbound reply
+      // Use lastOutboundAt if available, fall back to lastOutreachDate for records
+      // where outreach was sent but timestamp field hasn't been populated
+      if (l.outreachStatus === "Texted") {
+        const outboundDate = l.lastOutboundAt ?? l.lastOutreachDate;
+        const outboundDays = daysSince(outboundDate);
+        if (
+          outboundDays !== null &&
+          outboundDays >= 5 &&
+          (l.lastInboundAt === null ||
+            (outboundDate && new Date(l.lastInboundAt).getTime() < new Date(outboundDate).getTime()))
+        ) {
+          followUp.push(item);
+          continue;
+        }
       }
 
       // STALE: Negotiating or Response Received with 7+ days no activity
