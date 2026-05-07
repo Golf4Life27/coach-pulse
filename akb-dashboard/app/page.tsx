@@ -1,73 +1,51 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import MetricCard from "@/components/MetricCard";
-import ActionQueue from "@/components/ActionQueue";
-import BriefingStrip from "@/components/BriefingStrip";
+import MorningBriefing from "@/components/MorningBriefing";
+import PipelineBoard from "@/components/PipelineBoard";
+import OutreachPanel from "@/components/OutreachPanel";
 import JarvisFeed from "@/components/JarvisFeed";
 import JarvisChat from "@/components/JarvisChat";
-import OutreachPanel from "@/components/OutreachPanel";
-import { Briefing, DashboardStats } from "@/lib/types";
+import ActionQueue from "@/components/ActionQueue";
 import { showToast } from "@/components/Toast";
 
 const LAST_LOGIN_KEY = "akb_dashboard_last_login";
 
-export default function ActNowPage() {
-  const [briefing, setBriefing] = useState<Briefing | null>(null);
-  const [stats, setStats] = useState<DashboardStats | null>(null);
+export default function CommandCenter() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const [previousLogin, setPreviousLogin] = useState<string | null>(null);
+  const [refreshKey, setRefreshKey] = useState(0);
 
-  // Read previous login once on mount, then stamp the current visit.
   useEffect(() => {
     try {
-      const prev = window.localStorage.getItem(LAST_LOGIN_KEY);
-      setPreviousLogin(prev);
       window.localStorage.setItem(LAST_LOGIN_KEY, new Date().toISOString());
-    } catch {
-      // localStorage unavailable (private mode, SSR) — non-fatal.
-    }
+    } catch { /* non-fatal */ }
   }, []);
 
-  const fetchData = useCallback(async () => {
-    try {
-      const [briefingRes, statsRes] = await Promise.all([
-        fetch("/api/briefing"),
-        fetch("/api/stats"),
-      ]);
-      if (!briefingRes.ok || !statsRes.ok) throw new Error("API error");
-      const [briefingData, statsData] = await Promise.all([
-        briefingRes.json(),
-        statsRes.json(),
-      ]);
-      setBriefing(briefingData);
-      setStats(statsData);
-      setLastUpdated(new Date());
-    } catch {
-      showToast("Failed to refresh dashboard. Showing last known data.");
-    }
+  const refresh = useCallback(() => {
+    setRefreshKey((k) => k + 1);
+    setLastUpdated(new Date());
+    showToast("Refreshed", "success");
   }, []);
 
   useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 60_000);
-    return () => clearInterval(interval);
-  }, [fetchData]);
+    setLastUpdated(new Date());
+  }, []);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" key={refreshKey}>
+      {/* Header */}
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold text-white">ACT NOW</h1>
+        <h1 className="text-xl font-bold text-white">COMMAND CENTER</h1>
         <div className="flex items-center gap-3">
           {lastUpdated && (
             <span className="text-xs text-gray-500">
-              Updated {lastUpdated.toLocaleTimeString()}
+              {lastUpdated.toLocaleTimeString()}
             </span>
           )}
           <JarvisChat />
           <button
             type="button"
-            onClick={fetchData}
+            onClick={refresh}
             className="text-xs bg-[#1c2128] border border-[#30363d] text-gray-300 px-3 py-1.5 rounded hover:bg-[#30363d] transition-colors"
           >
             Refresh
@@ -75,29 +53,27 @@ export default function ActNowPage() {
         </div>
       </div>
 
-      <BriefingStrip briefing={briefing} previousLogin={previousLogin} />
+      {/* Morning Briefing — auto-generated prioritized actions */}
+      <MorningBriefing />
 
+      {/* Outreach Controls */}
       <OutreachPanel />
 
+      {/* Jarvis Inbound Feed */}
       <JarvisFeed />
 
-      <ActionQueue />
+      {/* Pipeline Board — Kanban view */}
+      <PipelineBoard />
 
-      {stats && (
-        <section>
-          <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-3">
-            Ambient Stats
-          </h2>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-            <MetricCard label="Negotiating" value={stats.negotiating} color="orange" />
-            <MetricCard label="Responses" value={stats.responseReceived} color="yellow" />
-            <MetricCard label="Texted / Emailed" value={stats.textedEmailed} color="blue" />
-            <MetricCard label="Dead" value={stats.dead} color="gray" />
-            <MetricCard label="Auto Proceed" value={stats.autoProceed} color="teal" />
-            <MetricCard label="Verified Active" value={stats.verifiedActive} color="green" />
-          </div>
-        </section>
-      )}
+      {/* Legacy Action Queue — keeping for now as fallback */}
+      <details className="group">
+        <summary className="text-xs text-gray-600 cursor-pointer hover:text-gray-400 select-none">
+          Show legacy Action Queue
+        </summary>
+        <div className="mt-3">
+          <ActionQueue />
+        </div>
+      </details>
     </div>
   );
 }
