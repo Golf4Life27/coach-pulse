@@ -1,4 +1,4 @@
-import { updateListingRecord, updateDealRecord } from "@/lib/airtable";
+import { updateListingRecord, updateDealRecord, getListing } from "@/lib/airtable";
 import { ALL_DD_ITEMS } from "@/lib/actionQueue";
 
 export const runtime = "nodejs";
@@ -24,8 +24,10 @@ const FIELD = {
 
 interface ActionBody {
   recordId: string;
-  table?: "listings" | "deals"; // used by `hold` and `clear`
-  until?: string; // YYYY-MM-DD, used by `hold`
+  table?: "listings" | "deals";
+  until?: string;
+  note?: string;
+  reason?: string;
 }
 
 type Handler = (body: ActionBody) => Promise<void>;
@@ -92,12 +94,17 @@ const HANDLERS: Record<string, Handler> = {
     });
   },
   async send_buyer_blast({ recordId }) {
-    // Sets Buyer_Blast_Status only — does NOT trigger Scenario G yet
-    // (per Step 2.5 decision; that wiring lands in a later step).
     await updateDealRecord(recordId, {
       [FIELD.dealBuyerBlastStatus]: "Sent",
       [FIELD.dealActionCardState]: "Cleared",
     });
+  },
+  async append_note({ recordId, note }) {
+    if (!note) return;
+    const listing = await getListing(recordId);
+    const existing = listing?.notes ?? "";
+    const full = existing ? `${existing}\n\n${note}` : note;
+    await updateListingRecord(recordId, { fldwKGxZly6O8qyPu: full });
   },
 };
 
