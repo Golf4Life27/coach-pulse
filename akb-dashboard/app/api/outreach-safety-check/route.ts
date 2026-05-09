@@ -176,6 +176,35 @@ export async function POST(req: Request) {
     return NextResponse.json(result, { status: 200 });
   }
 
+  // Check 6 — Pre-offer screen on first outreach. If listing has no prior
+  // outreach (lastOutreachDate empty) AND no pre-offer-screen has run, we
+  // block until the operator runs the screen. This is the Ford St guard.
+  const isFirstOutreach = !listing.lastOutreachDate || (ac.totalOutreaches === 0);
+  if (isFirstOutreach && !listing.preOfferScreenAt) {
+    const result: SafetyCheckResult = {
+      passed: false,
+      reason: "cooldown",
+      warnings: [
+        `Pre-offer screen has not run on ${listing.address}. Run /api/pre-offer-screen first or this outreach may fire on a property with hidden flags (fire damage, negative spread, distress mismatch).`,
+      ],
+      agentContext: ac,
+    };
+    return NextResponse.json(result, { status: 200 });
+  }
+
+  // Check 7 — Pre-offer screen prior result was Block.
+  if (listing.preOfferScreenResult === "Block") {
+    const result: SafetyCheckResult = {
+      passed: false,
+      reason: "cooldown",
+      warnings: [
+        `Pre-offer screen flagged BLOCKERS on ${listing.address}: ${(listing.preOfferScreenNotes ?? "").split("\n").filter((l) => l.startsWith("BLOCK:")).join(" / ")}. Resolve before contacting.`,
+      ],
+      agentContext: ac,
+    };
+    return NextResponse.json(result, { status: 200 });
+  }
+
   const result: SafetyCheckResult = { passed: true, warnings: [], agentContext: ac };
   return NextResponse.json(result);
 }

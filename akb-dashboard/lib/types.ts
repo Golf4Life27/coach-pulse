@@ -33,6 +33,32 @@ export interface Listing {
   actionCardState: "Open" | "Held" | "Cleared" | null;
   lastInboundAt: string | null;
   lastOutboundAt: string | null;
+  // Phase 3 — photo analysis
+  estRehabLow?: number | null;
+  estRehabMid?: number | null;
+  estRehabHigh?: number | null;
+  photoConfidence?: number | null;
+  lineItemsJson?: string | null;
+  redFlags?: string[] | string | null;
+  photoAnalyzedAt?: string | null;
+  visualVerified?: boolean;
+  visualSource?: string | null;
+  // Phase 3 — ARV validation
+  realArvLow?: number | null;
+  realArvHigh?: number | null;
+  realArvMedian?: number | null;
+  investorMao?: number | null;
+  yourMao?: number | null;
+  autoApproveV2?: boolean;
+  arvValidatedAt?: string | null;
+  // Phase 3 — pre-offer screen
+  preOfferScreenResult?: "Pass" | "Block" | "Warn" | null;
+  preOfferScreenNotes?: string | null;
+  preOfferScreenAt?: string | null;
+  // Phase 3 — DD volley
+  ddVolleyText1SentAt?: string | null;
+  ddVolleyText2SentAt?: string | null;
+  ddVolleyText3SentAt?: string | null;
 }
 
 export interface Deal {

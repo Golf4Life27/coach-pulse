@@ -136,8 +136,9 @@ async function fetchExistingDedupeKeys(): Promise<Set<string>> {
 
 async function batchCreateRecords(
   records: Array<{ fields: Record<string, unknown> }>
-): Promise<number> {
+): Promise<{ created: number; ids: string[] }> {
   let created = 0;
+  const ids: string[] = [];
   for (let i = 0; i < records.length; i += AIRTABLE_BATCH_SIZE) {
     const batch = records.slice(i, i + AIRTABLE_BATCH_SIZE);
     const res = await fetch(
@@ -152,13 +153,58 @@ async function batchCreateRecords(
       }
     );
     if (res.ok) {
+      const data = (await res.json()) as { records?: Array<{ id: string }> };
+      for (const r of data.records ?? []) ids.push(r.id);
       created += batch.length;
     } else {
       const errText = await res.text();
       console.error(`[process-intake] Batch create failed:`, errText);
     }
   }
-  return created;
+  return { created, ids };
+}
+
+async function chainPreOfferScreen(origin: string, cookie: string, recordIds: string[]): Promise<void> {
+  // Fire-and-forget: photo-analysis → arv-validate → pre-offer-screen for
+  // each newly created auto-proceed record. Best-effort; failures are
+  // logged but don't block the intake response.
+  await Promise.all(
+    recordIds.map(async (id) => {
+      try {
+        const headers: Record<string, string> = {};
+        if (cookie) headers.cookie = cookie;
+        const photo = await fetch(`${origin}/api/photo-analysis/${id}`, { headers, cache: "no-store" });
+        if (!photo.ok) return;
+        const arv = await fetch(`${origin}/api/arv-validate/${id}`, { headers, cache: "no-store" });
+        if (!arv.ok) return;
+        const screen = await fetch(`${origin}/api/pre-offer-screen/${id}`, {
+          method: "POST",
+          headers: { ...headers, "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        if (!screen.ok) return;
+        const result = (await screen.json()) as { passed: boolean; blockers: Array<{ check: string; reason: string }> };
+        if (!result.passed) {
+          // Move record to Manual Review
+          await fetch(`https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}/${id}`, {
+            method: "PATCH",
+            headers: {
+              Authorization: `Bearer ${AIRTABLE_PAT}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              fields: {
+                Outreach_Status: "Manual Review",
+              },
+              typecast: true,
+            }),
+          });
+        }
+      } catch (err) {
+        console.error(`[process-intake] Chain failed for ${id}:`, err);
+      }
+    }),
+  );
 }
 
 // --- Main handler ---
@@ -289,9 +335,20 @@ export async function POST(req: Request) {
 
   // Create all records in Airtable (new + rejected)
   const allToCreate = [...newRecords, ...rejectedRecords];
-  const created = allToCreate.length > 0
+  const createResult = allToCreate.length > 0
     ? await batchCreateRecords(allToCreate)
-    : 0;
+    : { created: 0, ids: [] as string[] };
+
+  // Phase 3: chain photo → ARV → pre-offer screen for the records that
+  // entered as Auto-Proceed candidates (the first newRecords.length ids
+  // correspond to passing rows). Fire-and-forget — we don't await, but we
+  // start it before returning so each row begins processing.
+  const newIds = createResult.ids.slice(0, newRecords.length);
+  const origin = (() => { try { return new URL(req.url).origin; } catch { return null; } })();
+  if (origin && newIds.length > 0) {
+    const cookie = req.headers.get("cookie") ?? "";
+    void chainPreOfferScreen(origin, cookie, newIds);
+  }
 
   return Response.json({
     total,
@@ -299,7 +356,8 @@ export async function POST(req: Request) {
     dupes,
     new: newCount,
     rejected: filtered,
-    created,
+    created: createResult.created,
     errors: total - dupes - newCount - filtered,
+    preOfferScreenChained: newIds.length,
   });
 }
