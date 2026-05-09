@@ -89,10 +89,10 @@ function BriefingSection({ title, icon, color, items }: SectionProps) {
         {visible.map((item) => {
           const loc = [item.city, item.state].filter(Boolean).join(", ");
           return (
-            <div
+            <Link
               key={item.recordId}
-              className="bg-[#1c2128] rounded border border-[#30363d] p-2.5 flex items-center justify-between gap-3 cursor-pointer hover:border-gray-500 transition-colors"
-              onClick={() => window.location.href = `/pipeline/${item.recordId}`}
+              href={`/pipeline/${item.recordId}`}
+              className="bg-[#1c2128] rounded border border-[#30363d] p-2.5 flex items-center justify-between gap-3 cursor-pointer hover:border-gray-500 transition-colors block"
             >
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
@@ -117,25 +117,26 @@ function BriefingSection({ title, icon, color, items }: SectionProps) {
                   {item.agentName ?? "—"} · {formatCurrency(item.listPrice)} → {formatCurrency(item.offer)} · {item.lastActivity}
                 </p>
               </div>
-              <div className="flex gap-1.5 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+              <div className="flex gap-1.5 flex-shrink-0" onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}>
                 {item.agentPhone && (
                   <a
                     href={`tel:${item.agentPhone}`}
                     className="text-[10px] text-blue-400 hover:text-blue-300"
+                    onClick={(e) => e.stopPropagation()}
                   >
                     Call
                   </a>
                 )}
                 <button
                   type="button"
-                  onClick={() => handleKill(item.recordId)}
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleKill(item.recordId); }}
                   disabled={killing === item.recordId}
                   className="text-[10px] bg-red-900/40 hover:bg-red-900/60 text-red-300 px-2 py-1 rounded disabled:opacity-50"
                 >
                   {killing === item.recordId ? "..." : "Kill"}
                 </button>
               </div>
-            </div>
+            </Link>
           );
         })}
       </div>
