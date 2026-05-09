@@ -60,6 +60,23 @@ export default function PipelineBoard() {
   const [listings, setListings] = useState<Listing[]>([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [killed, setKilled] = useState<Set<string>>(new Set());
+  const [killing, setKilling] = useState<string | null>(null);
+
+  const handleKill = async (recordId: string) => {
+    setKilling(recordId);
+    try {
+      const res = await fetch("/api/actions/mark_dead", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recordId }),
+      });
+      if (!res.ok) { showToast("Failed to mark dead"); return; }
+      setKilled((prev) => new Set(prev).add(recordId));
+      showToast("Marked Dead", "success");
+    } catch { showToast("Failed"); }
+    finally { setKilling(null); }
+  };
 
   const fetchData = useCallback(async () => {
     try {
@@ -96,7 +113,7 @@ export default function PipelineBoard() {
 
   const columnData = COLUMNS.map((col) => {
     const cards: CardData[] = listings
-      .filter((l) => l.outreachStatus === col.key)
+      .filter((l) => l.outreachStatus === col.key && !killed.has(l.id))
       .map((l) => ({
         listing: l,
         daysSinceTouch: daysSince(lastTouch(l)),
@@ -217,6 +234,14 @@ export default function PipelineBoard() {
                             >
                               Open
                             </Link>
+                            <button
+                              type="button"
+                              onClick={() => handleKill(card.listing.id)}
+                              disabled={killing === card.listing.id}
+                              className="text-[10px] bg-red-900/40 hover:bg-red-900/60 text-red-300 px-2 py-1 rounded disabled:opacity-50"
+                            >
+                              {killing === card.listing.id ? "..." : "Kill"}
+                            </button>
                           </div>
                         </div>
                       )}

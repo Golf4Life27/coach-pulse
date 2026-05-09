@@ -50,16 +50,40 @@ interface SectionProps {
 
 function BriefingSection({ title, icon, color, items }: SectionProps) {
   const [expanded, setExpanded] = useState(false);
+  const [killed, setKilled] = useState<Set<string>>(new Set());
+  const [killing, setKilling] = useState<string | null>(null);
+
+  const handleKill = async (recordId: string) => {
+    setKilling(recordId);
+    try {
+      const res = await fetch("/api/actions/mark_dead", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recordId }),
+      });
+      if (!res.ok) {
+        showToast("Failed to mark dead");
+        return;
+      }
+      setKilled((prev) => new Set(prev).add(recordId));
+      showToast("Marked Dead", "success");
+    } catch {
+      showToast("Failed");
+    } finally {
+      setKilling(null);
+    }
+  };
 
   if (items.length === 0) return null;
 
-  const visible = expanded ? items : items.slice(0, PREVIEW_LIMIT);
-  const hasMore = items.length > PREVIEW_LIMIT;
+  const liveItems = items.filter((i) => !killed.has(i.recordId));
+  const visible = expanded ? liveItems : liveItems.slice(0, PREVIEW_LIMIT);
+  const hasMore = liveItems.length > PREVIEW_LIMIT;
 
   return (
     <div className="space-y-2">
       <h3 className={`text-xs font-bold uppercase tracking-wider ${color}`}>
-        {icon} {title} ({items.length})
+        {icon} {title} ({liveItems.length})
       </h3>
       <div className="space-y-1.5">
         {visible.map((item) => {
@@ -67,7 +91,8 @@ function BriefingSection({ title, icon, color, items }: SectionProps) {
           return (
             <div
               key={item.recordId}
-              className="bg-[#1c2128] rounded border border-[#30363d] p-2.5 flex items-center justify-between gap-3"
+              className="bg-[#1c2128] rounded border border-[#30363d] p-2.5 flex items-center justify-between gap-3 cursor-pointer hover:border-gray-500 transition-colors"
+              onClick={() => window.location.href = `/pipeline/${item.recordId}`}
             >
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
@@ -92,7 +117,7 @@ function BriefingSection({ title, icon, color, items }: SectionProps) {
                   {item.agentName ?? "—"} · {formatCurrency(item.listPrice)} → {formatCurrency(item.offer)} · {item.lastActivity}
                 </p>
               </div>
-              <div className="flex gap-1.5 flex-shrink-0">
+              <div className="flex gap-1.5 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
                 {item.agentPhone && (
                   <a
                     href={`tel:${item.agentPhone}`}
@@ -101,12 +126,14 @@ function BriefingSection({ title, icon, color, items }: SectionProps) {
                     Call
                   </a>
                 )}
-                <Link
-                  href={`/pipeline/${item.recordId}`}
-                  className="text-[10px] bg-[#30363d] hover:bg-[#3d444d] text-gray-300 px-2 py-1 rounded"
+                <button
+                  type="button"
+                  onClick={() => handleKill(item.recordId)}
+                  disabled={killing === item.recordId}
+                  className="text-[10px] bg-red-900/40 hover:bg-red-900/60 text-red-300 px-2 py-1 rounded disabled:opacity-50"
                 >
-                  Open
-                </Link>
+                  {killing === item.recordId ? "..." : "Kill"}
+                </button>
               </div>
             </div>
           );
@@ -118,7 +145,7 @@ function BriefingSection({ title, icon, color, items }: SectionProps) {
           onClick={() => setExpanded(!expanded)}
           className="text-[10px] text-gray-500 hover:text-gray-300 transition-colors"
         >
-          {expanded ? "Show less" : `Show all (${items.length})`}
+          {expanded ? "Show less" : `Show all (${liveItems.length})`}
         </button>
       )}
     </div>
