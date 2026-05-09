@@ -6,6 +6,7 @@ import PipelineBoard from "@/components/PipelineBoard";
 import OutreachPanel from "@/components/OutreachPanel";
 import JarvisFeed from "@/components/JarvisFeed";
 import JarvisChat from "@/components/JarvisChat";
+import JarvisGreeting from "@/components/JarvisGreeting";
 import ActionQueue from "@/components/ActionQueue";
 import { showToast } from "@/components/Toast";
 
@@ -52,6 +53,9 @@ export default function CommandCenter() {
           </button>
         </div>
       </div>
+
+      {/* Jarvis Phase 1 — depth-aware ACT NOW cards */}
+      <JarvisGreeting />
 
       {/* Morning Briefing — auto-generated prioritized actions */}
       <MorningBriefing />
