@@ -135,14 +135,17 @@ export async function GET() {
         continue;
       }
 
-      // RESPOND TODAY: Response Received status (agent replied, needs attention)
-      // Uses status as primary signal since lastInboundAt may not be populated yet
-      if (l.outreachStatus === "Response Received") {
+      // RESPOND TODAY: Response Received within the last 7 days (not ancient ones)
+      if (
+        l.outreachStatus === "Response Received" &&
+        item.daysSinceTouch !== null &&
+        item.daysSinceTouch <= 7
+      ) {
         respondToday.push(item);
         continue;
       }
 
-      // Also catch: inbound timestamp in last 48h with no outbound after (for Negotiating records)
+      // Also catch: Negotiating with inbound timestamp in last 48h and no outbound after
       const inboundHours = hoursSince(l.lastInboundAt);
       const outboundHours = hoursSince(l.lastOutboundAt);
       if (
@@ -170,16 +173,18 @@ export async function GET() {
       }
 
       // FOLLOW UP: Texted 5+ days ago with no inbound reply
-      // Use lastOutboundAt if available, fall back to lastOutreachDate for records
-      // where outreach was sent but timestamp field hasn't been populated
-      if (l.outreachStatus === "Texted") {
-        const outboundDate = l.lastOutboundAt ?? l.lastOutreachDate;
-        const outboundDays = daysSince(outboundDate);
+      // Require lastOutboundAt strictly — no fallback to lastOutreachDate
+      // which gets stamped by verification, not actual texting
+      if (
+        l.outreachStatus === "Texted" &&
+        l.lastOutboundAt
+      ) {
+        const outboundDays = daysSince(l.lastOutboundAt);
         if (
           outboundDays !== null &&
           outboundDays >= 5 &&
           (l.lastInboundAt === null ||
-            (outboundDate && new Date(l.lastInboundAt).getTime() < new Date(outboundDate).getTime()))
+            new Date(l.lastInboundAt).getTime() < new Date(l.lastOutboundAt).getTime())
         ) {
           followUp.push(item);
           continue;

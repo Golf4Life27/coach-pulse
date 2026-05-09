@@ -170,8 +170,9 @@ export async function getListing(id: string): Promise<Listing | null> {
   const cached = getCached<Listing>(cacheKey);
   if (cached) return cached;
 
+  // Fetch full record without fields[] filter — avoids 422 if any field ID
+  // doesn't exist on the table. mapRecord handles missing fields gracefully.
   const params = new URLSearchParams();
-  Object.keys(LISTING_FIELDS).forEach((f) => params.append("fields[]", f));
   params.set("returnFieldsByFieldId", "true");
   const url = `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}/${id}?${params.toString()}`;
 
