@@ -8,7 +8,7 @@ const DEALS_TABLE = "tblKDYhaghKe6dToW";
 const BUYERS_TABLE = "tbl4Rr07vq0mTftZB";
 const PROSPECTIVE_BUYERS_TABLE = "tblyPAkwRyrlPIP59";
 
-// Field IDs
+// Field IDs (used for list endpoints with returnFieldsByFieldId=true)
 const LISTING_FIELDS: Record<string, string> = {
   fldwvp72hKTfiHHjj: "address",
   fldjbiNuHXzPzVWFk: "city",
@@ -43,6 +43,43 @@ const LISTING_FIELDS: Record<string, string> = {
   fldiNKFpIBUYgg7el: "actionCardState",
   fld3IhR1DXzcVuq6F: "lastInboundAt",
   fldaK4lR5UNvycg11: "lastOutboundAt",
+};
+
+// Reverse map: field name -> prop name (for single-record GET which returns field names)
+const LISTING_NAME_MAP: Record<string, string> = {
+  "Address": "address",
+  "City": "city",
+  "Zip": "zip",
+  "List_Price": "listPrice",
+  "MAO_V1": "mao",
+  "DOM_Calc_V2": "dom",
+  "Offer_Tier": "offerTier",
+  "Live_Status": "liveStatus",
+  "Execution_Path": "executionPath",
+  "Outreach_Status": "outreachStatus",
+  "Last_Outreach_Date": "lastOutreachDate",
+  "Agent_Name": "agentName",
+  "Agent_Phone": "agentPhone",
+  "Agent_Email": "agentEmail",
+  "Verification_URL": "verificationUrl",
+  "Verification_Notes": "notes",
+  "Distress_Score": "distressScore",
+  "Distress_Bucket": "distressBucket",
+  "Bedrooms": "bedrooms",
+  "Bathrooms": "bathrooms",
+  "Building_SqFt": "buildingSqFt",
+  "Stage_Calc_V2": "stageCalc",
+  "Approved_For_Outreach": "approvedForOutreach",
+  "Flip_Score": "flipScore",
+  "Off_Market_Override": "offMarketOverride",
+  "Restriction_Text": "restrictionText",
+  "DD_Checklist": "ddChecklist",
+  "Do_Not_Text": "doNotText",
+  "State": "state",
+  "Action_Hold_Until": "actionHoldUntil",
+  "Action_Card_State": "actionCardState",
+  "Last_Inbound_At": "lastInboundAt",
+  "Last_Outbound_At": "lastOutboundAt",
 };
 
 const DEAL_FIELDS: Record<string, string> = {
@@ -151,6 +188,31 @@ function mapRecord<T>(
   return mapped as T;
 }
 
+function mapRecordByName<T>(
+  record: Record<string, unknown>,
+  nameMap: Record<string, string>
+): T {
+  const fields = record.fields as Record<string, unknown>;
+  const mapped: Record<string, unknown> = { id: record.id };
+
+  // Map known field names to prop names
+  for (const [fieldName, propName] of Object.entries(nameMap)) {
+    mapped[propName] = fields[fieldName] ?? null;
+  }
+
+  // For any prop not yet set, try the prop name directly as a field name
+  // (handles cases where Airtable field name matches our prop name)
+  const mappedProps = new Set(Object.values(nameMap));
+  for (const [fieldName, value] of Object.entries(fields)) {
+    const camel = fieldName.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+    if (!mappedProps.has(camel) && value !== undefined) {
+      mapped[camel] = value;
+    }
+  }
+
+  return mapped as T;
+}
+
 export async function getListings(): Promise<Listing[]> {
   const cacheKey = "listings";
   const cached = getCached<Listing[]>(cacheKey);
@@ -170,11 +232,9 @@ export async function getListing(id: string): Promise<Listing | null> {
   const cached = getCached<Listing>(cacheKey);
   if (cached) return cached;
 
-  // Fetch full record without fields[] filter — avoids 422 if any field ID
-  // doesn't exist on the table. mapRecord handles missing fields gracefully.
-  const params = new URLSearchParams();
-  params.set("returnFieldsByFieldId", "true");
-  const url = `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}/${id}?${params.toString()}`;
+  // Single-record GET without returnFieldsByFieldId (Airtable returns 422
+  // with that param on single-record endpoints). Returns field names instead.
+  const url = `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}/${id}`;
 
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${AIRTABLE_PAT}` },
@@ -188,7 +248,7 @@ export async function getListing(id: string): Promise<Listing | null> {
   }
 
   const data = await res.json();
-  const listing = mapRecord<Listing>(data, LISTING_FIELDS);
+  const listing = mapRecordByName<Listing>(data, LISTING_NAME_MAP);
   setCache(cacheKey, listing);
   return listing;
 }
@@ -280,7 +340,6 @@ export async function updateListingRecord(
     throw new Error(`Airtable update error ${res.status}: ${errText}`);
   }
 
-  // Invalidate both the list cache and the per-record cache for this listing.
   delete cache["listings"];
   delete cache[`listing:${recordId}`];
 }
