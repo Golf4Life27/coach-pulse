@@ -3,6 +3,7 @@ export type CardType =
   | "OFFER_ACCEPTED_PA_NEEDED"
   | "STALE_REENGAGEMENT"
   | "AMBIGUOUS_NEEDS_REVIEW"
+  | "UNANSWERED_INBOUND_BLOCKING"
   ;
 
 export type ActionType =
@@ -53,6 +54,7 @@ export interface BroCard {
   score: number;
   options: ActionOption[];
   recommendation_index: number;
+  agentContext?: AgentContext;
   metadata: Record<string, unknown>;
 }
 
@@ -100,7 +102,52 @@ export const CARD_TYPE_CONFIG: Record<CardType, { icon: string; urgency: "critic
   OFFER_ACCEPTED_PA_NEEDED: { icon: "file-text", urgency: "critical", color: "red" },
   STALE_REENGAGEMENT: { icon: "clock", urgency: "medium", color: "amber" },
   AMBIGUOUS_NEEDS_REVIEW: { icon: "alert-triangle", urgency: "medium", color: "amber" },
+  UNANSWERED_INBOUND_BLOCKING: { icon: "alert-octagon", urgency: "critical", color: "red" },
 };
+
+export type DepthScore = 0 | 1 | 2 | 3;
+export type InferredTone = "formal" | "casual" | "friendly" | "transactional";
+
+export interface AgentContextProperty {
+  recordId: string;
+  address: string;
+  status: string;
+}
+
+export interface AgentContextUnanswered {
+  recordId: string;
+  address: string;
+  lastInboundAt: string;
+}
+
+export interface AgentContext {
+  identifier: string;
+  agentName: string;
+  totalListings: number;
+  totalOutreaches: number;
+  totalReplies: number;
+  lastInteractionAt: string | null;
+  daysSinceLastInteraction: number | null;
+  activeProperties: AgentContextProperty[];
+  propertiesWithUnansweredInbound: AgentContextUnanswered[];
+  depthScore: DepthScore;
+  inferredTone: InferredTone;
+  metadata?: Record<string, unknown>;
+}
+
+export type SafetyCheckReason =
+  | "cooldown"
+  | "reintroduction_detected"
+  | "unanswered_inbound"
+  | "tone_mismatch";
+
+export interface SafetyCheckResult {
+  passed: boolean;
+  reason?: SafetyCheckReason;
+  warnings: string[];
+  agentContext: AgentContext;
+  suggestedDraft?: string;
+}
 
 export const URGENCY_LABEL: Record<string, string> = {
   critical: "ACT NOW",
