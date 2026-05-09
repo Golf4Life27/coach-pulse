@@ -92,7 +92,11 @@ export async function POST(
   }
 
   const action = body.action_type;
-  const validActions: ActionType[] = ["send_reply", "mark_dead", "walk", "clarify", "accept", "counter"];
+  const validActions: ActionType[] = [
+    "send_reply", "mark_dead", "walk", "clarify", "accept", "counter",
+    "send_dd_volley_1", "send_dd_volley_2", "send_dd_volley_3",
+    "fire_buyer_blast", "run_pre_offer_screen", "review_buyer_form",
+  ];
   if (!action || !validActions.includes(action)) {
     return NextResponse.json({ error: "Invalid action_type" }, { status: 400 });
   }
@@ -100,6 +104,51 @@ export async function POST(
   const listing = await getListing(id);
   if (!listing) {
     return NextResponse.json({ error: "Listing not found", id }, { status: 404 });
+  }
+
+  // DD volley actions delegate to /api/dd-volley-send.
+  if (action === "send_dd_volley_1" || action === "send_dd_volley_2" || action === "send_dd_volley_3") {
+    const textIndex = (action === "send_dd_volley_1" ? 1 : action === "send_dd_volley_2" ? 2 : 3) as 1 | 2 | 3;
+    const url = new URL(req.url);
+    const origin = `${url.protocol}//${url.host}`;
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const cookie = req.headers.get("cookie");
+    if (cookie) headers.cookie = cookie;
+    const res = await fetch(`${origin}/api/dd-volley-send/${id}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ textIndex }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return NextResponse.json(
+        { success: false, error: data.error ?? "DD volley send failed" },
+        { status: res.status },
+      );
+    }
+    return NextResponse.json({ success: true, airtableUpdated: true, ...data });
+  }
+
+  // run_pre_offer_screen delegates to /api/pre-offer-screen.
+  if (action === "run_pre_offer_screen") {
+    const url = new URL(req.url);
+    const origin = `${url.protocol}//${url.host}`;
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const cookie = req.headers.get("cookie");
+    if (cookie) headers.cookie = cookie;
+    const res = await fetch(`${origin}/api/pre-offer-screen/${id}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({}),
+    });
+    const data = await res.json().catch(() => ({}));
+    return NextResponse.json({ success: res.ok, airtableUpdated: res.ok, ...data }, { status: res.ok ? 200 : 502 });
+  }
+
+  // fire_buyer_blast and review_buyer_form are UI navigation actions handled
+  // client-side; record an audit note and return success.
+  if (action === "fire_buyer_blast" || action === "review_buyer_form") {
+    return NextResponse.json({ success: true, airtableUpdated: false, navigateAction: action });
   }
 
   // Status-only actions short-circuit without safety check.

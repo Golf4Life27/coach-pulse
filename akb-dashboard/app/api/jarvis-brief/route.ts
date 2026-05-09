@@ -1,10 +1,12 @@
 import { NextResponse } from "next/server";
 import { getListings } from "@/lib/airtable";
 import { buildJarvisSystemPrompt, computeJarvisScore } from "@/lib/jarvis-system-prompt";
+import { getVolleyText } from "@/lib/dd-volley";
 import type {
   AgentContext,
   BroCard,
   CardType,
+  DDStatus,
   DealContext,
   JarvisBrief,
   TimelineEntry,
@@ -24,6 +26,7 @@ interface RankedDeal {
   score: number;
   outreachStatus: string | null;
   agentContext: AgentContext | null;
+  ddStatus: DDStatus | null;
 }
 
 function originFromReq(req: Request): string {
@@ -55,6 +58,18 @@ async function fetchAgentContext(origin: string, identifier: string, cookie: str
     const data = (await res.json()) as AgentContext | { error: string };
     if ("error" in data) return null;
     return data;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchDDStatus(origin: string, recordId: string, cookie: string | null): Promise<DDStatus | null> {
+  try {
+    const headers: Record<string, string> = {};
+    if (cookie) headers.cookie = cookie;
+    const res = await fetch(`${origin}/api/dd-status/${recordId}`, { headers, cache: "no-store" });
+    if (!res.ok) return null;
+    return (await res.json()) as DDStatus;
   } catch {
     return null;
   }
@@ -112,6 +127,16 @@ function coerceCardType(raw: unknown): CardType {
     "STALE_REENGAGEMENT",
     "AMBIGUOUS_NEEDS_REVIEW",
     "UNANSWERED_INBOUND_BLOCKING",
+    "PRE_OFFER_BLOCKED",
+    "DD_BLOCKER",
+    "DD_VOLLEY_TEXT_1_DUE",
+    "DD_VOLLEY_TEXT_2_DUE",
+    "DD_VOLLEY_TEXT_3_DUE",
+    "DD_VOLLEY_COMPLETE",
+    "BUYER_MATCH_READY",
+    "BUYER_WARMUP_DUE",
+    "BUYER_FORM_COMPLETED",
+    "BUYER_BLAST_RECOMMENDED",
   ];
   if (typeof raw === "string" && (allowed as string[]).includes(raw)) return raw as CardType;
   return "STALE_REENGAGEMENT";
@@ -159,7 +184,11 @@ function parseLLMCards(raw: string, ranked: RankedDeal[]): BroCard[] {
       })(),
       action_type: ((): BroCard["options"][number]["action_type"] => {
         const t = safeStr(o.action_type);
-        const allowed = ["send_reply", "mark_dead", "walk", "clarify", "accept", "counter"];
+        const allowed = [
+          "send_reply", "mark_dead", "walk", "clarify", "accept", "counter",
+          "send_dd_volley_1", "send_dd_volley_2", "send_dd_volley_3",
+          "fire_buyer_blast", "run_pre_offer_screen", "review_buyer_form",
+        ];
         return allowed.includes(t) ? (t as BroCard["options"][number]["action_type"]) : "clarify";
       })(),
       draft: typeof o.draft === "string" ? o.draft : undefined,
@@ -219,19 +248,31 @@ export async function GET(req: Request) {
           outreachStatus: status,
           multiListingAlert: x.ctx.multiListingAlert,
         });
-        return { context: x.ctx, score, outreachStatus: status, agentContext: null };
+        return { context: x.ctx, score, outreachStatus: status, agentContext: null, ddStatus: null };
       })
       .sort((a, b) => b.score - a.score)
       .slice(0, MAX_RANKED_FOR_LLM);
 
-    // Hydrate agentContext for the top-N.
+    // Hydrate agentContext + ddStatus in parallel for the top-N.
     await Promise.all(
       ranked.map(async (r) => {
         const id = r.context.agent.phone ?? r.context.agent.email;
-        if (!id) return;
-        r.agentContext = await fetchAgentContext(origin, id, cookie);
+        const [ac, dd] = await Promise.all([
+          id ? fetchAgentContext(origin, id, cookie) : Promise.resolve(null),
+          fetchDDStatus(origin, r.context.recordId, cookie),
+        ]);
+        r.agentContext = ac;
+        r.ddStatus = dd;
+        // DD score bump per spec: incomplete DD on Negotiating/Offer Accepted
+        // makes "send volley" the primary action and adds +50 to score.
+        if (r.ddStatus && (r.ddStatus.recommendedActions[0]?.action ?? "").startsWith("send_volley_text_")) {
+          r.score += 50;
+        }
       }),
     );
+
+    // Re-sort after the DD bumps so the LLM sees the most-urgent deals first.
+    ranked.sort((a, b) => b.score - a.score);
 
     if (ranked.length === 0) {
       const empty: JarvisBrief = {
@@ -254,7 +295,9 @@ export async function GET(req: Request) {
     const dealBlocks = ranked.map((r, i) => {
       const ctx = r.context;
       const ac = r.agentContext;
+      const dd = r.ddStatus;
       const lastInBody = (ctx.metadata?.lastInboundBody as string) ?? "—";
+      const ddLine = dd ? `\nddStatus: complete=${dd.ddCompleteCount}/${dd.ddTotal} canCounter=${dd.canCounter} canSignPA=${dd.canSignPA} volleyState=[t1=${dd.volleyState.text1SentAt ? "sent" : "pending"}, t2=${dd.volleyState.text2SentAt ? "sent" : "pending"}, t3=${dd.volleyState.text3SentAt ? "sent" : "pending"}] missing=[${dd.ddMissingItems.slice(0, 4).join(", ")}${dd.ddMissingItems.length > 4 ? "..." : ""}] nextAction=${dd.recommendedActions[0]?.action ?? "—"}` : "";
       return `### DEAL ${i + 1} — ${ctx.property.address}
 recordId: ${ctx.recordId}
 agent: ${ctx.agent.name ?? "—"} (phone: ${ctx.agent.phone ?? "—"}, email: ${ctx.agent.email ?? "—"})
@@ -263,7 +306,7 @@ listPrice: ${ctx.property.listPrice ?? "—"}
 hoursSinceInbound: ${ctx.hoursSinceInbound ?? "—"}
 hoursSinceOutbound: ${ctx.hoursSinceOutbound ?? "—"}
 responseDue: ${ctx.responseDue}
-multiListingAlert: ${ctx.multiListingAlert}${ac ? `\nagentContext: depthScore=${ac.depthScore} totalListings=${ac.totalListings} totalReplies=${ac.totalReplies} inferredTone=${ac.inferredTone} unanswered=${ac.propertiesWithUnansweredInbound.length} active=${ac.activeProperties.length}` : ""}
+multiListingAlert: ${ctx.multiListingAlert}${ac ? `\nagentContext: depthScore=${ac.depthScore} totalListings=${ac.totalListings} totalReplies=${ac.totalReplies} inferredTone=${ac.inferredTone} unanswered=${ac.propertiesWithUnansweredInbound.length} active=${ac.activeProperties.length}` : ""}${ddLine}
 lastInboundBody: ${lastInBody.slice(0, 200)}
 recent timeline:
 ${summarizeTimeline(ctx.timeline)}
@@ -294,7 +337,14 @@ Output ONLY a JSON array (no prose, no markdown fences). Each element must be a 
 
 For depthScore >= 1: NEVER write "this is Alex with AKB Solutions" in any draft. Drop the introduction.
 For depthScore == 3: be conversational; treat the agent as a colleague.
-If propertiesWithUnansweredInbound (per agentContext) is non-empty, prefer card_type="UNANSWERED_INBOUND_BLOCKING" and recommend responding on those threads first.`;
+If propertiesWithUnansweredInbound (per agentContext) is non-empty, prefer card_type="UNANSWERED_INBOUND_BLOCKING" and recommend responding on those threads first.
+
+DD V3.0 ENFORCEMENT (critical):
+- If the deal is in 'Negotiating' or 'Response Received' AND ddStatus.canCounter is false, the PRIMARY action MUST be "send_volley_text_1" / "send_volley_text_2" / "send_volley_text_3" (whichever is next per ddStatus.nextAction). card_type should be DD_VOLLEY_TEXT_1_DUE / DD_VOLLEY_TEXT_2_DUE / DD_VOLLEY_TEXT_3_DUE accordingly.
+- Use the ddStatus.recommendedActions[0].suggestedDraft as-is for the volley text — these are pre-locked SMS templates and must not be paraphrased.
+- DO NOT recommend "counter" actions when canCounter is false.
+- If outreachStatus is 'Offer Accepted' AND ddStatus.canSignPA is false, card_type=DD_BLOCKER and surface ddStatus.ddMissingItems in the why_this_matters.
+- If pre-offer-screen blocked the listing, card_type=PRE_OFFER_BLOCKED with the blocker reasons in why_this_matters.`;
 
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
