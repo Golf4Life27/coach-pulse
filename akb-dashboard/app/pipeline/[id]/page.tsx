@@ -2,10 +2,12 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
+import Link from "next/link";
 import { Listing } from "@/lib/types";
 import { formatCurrency } from "@/lib/utils";
 import { ALL_DD_ITEMS } from "@/lib/actionQueue";
 import { showToast } from "@/components/Toast";
+import type { DealContext } from "@/types/jarvis";
 
 function cleanPhone(phone: string): string {
   const digits = phone.replace(/[^0-9]/g, "");
@@ -58,6 +60,9 @@ export default function DealWorkspace() {
   }>>([]);
   const [convoLoading, setConvoLoading] = useState(false);
 
+  // Deal context (Jarvis Phase 1 keystone)
+  const [dealContext, setDealContext] = useState<DealContext | null>(null);
+
   // Reply composer
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyText, setReplyText] = useState("");
@@ -93,7 +98,16 @@ export default function DealWorkspace() {
       .finally(() => setConvoLoading(false));
   }, [params?.id]);
 
-  useEffect(() => { fetchListing(); fetchConversation(); }, [fetchListing, fetchConversation]);
+  const fetchDealContext = useCallback(() => {
+    const rid = params?.id;
+    if (!rid) return;
+    fetch(`/api/deal-context/${rid}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: DealContext | null) => { if (data && !("error" in data)) setDealContext(data); })
+      .catch(() => {});
+  }, [params?.id]);
+
+  useEffect(() => { fetchListing(); fetchConversation(); fetchDealContext(); }, [fetchListing, fetchConversation, fetchDealContext]);
 
   useEffect(() => {
     if (replyOpen && replyRef.current) replyRef.current.focus();
@@ -188,6 +202,42 @@ export default function DealWorkspace() {
           {listing.outreachStatus ?? "No Status"}
         </span>
       </div>
+
+      {/* Jarvis context strip — keystone deal-context surface */}
+      {dealContext && (
+        <div className="space-y-2">
+          {dealContext.responseDue && (
+            <div className="bg-red-500/10 border border-red-500/40 rounded px-3 py-2 text-xs text-red-300 flex items-center gap-2">
+              <span className="font-bold">RESPONSE DUE</span>
+              <span className="text-red-400/80">
+                Last inbound {dealContext.hoursSinceInbound !== null ? `${dealContext.hoursSinceInbound}h ago` : "—"} · agent waiting on you
+              </span>
+            </div>
+          )}
+          {dealContext.multiListingAlert && dealContext.siblingRecords && dealContext.siblingRecords.length > 0 && (
+            <div className="bg-amber-500/10 border border-amber-500/40 rounded px-3 py-2 text-xs text-amber-300 flex flex-wrap items-center gap-2">
+              <span className="font-bold">MULTI-LISTING AGENT</span>
+              <span className="text-amber-400/80">{dealContext.agent.name ?? "Agent"} also has:</span>
+              {dealContext.siblingRecords.slice(0, 4).map((s) => (
+                <Link key={s.recordId} href={`/pipeline/${s.recordId}`} className="underline hover:text-amber-200">
+                  {s.address}
+                </Link>
+              ))}
+              {dealContext.siblingRecords.length > 4 && (
+                <span className="text-amber-400/60">+{dealContext.siblingRecords.length - 4} more</span>
+              )}
+            </div>
+          )}
+          {dealContext.ambiguousMessages.length > 0 && (
+            <div className="bg-orange-500/10 border border-orange-500/40 rounded px-3 py-2 text-xs text-orange-300">
+              <span className="font-bold">AMBIGUOUS:</span>
+              <span className="ml-2 text-orange-400/80">
+                {dealContext.ambiguousMessages.length} message(s) could not be confidently matched to this property — may belong to a sibling listing.
+              </span>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Two columns */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
