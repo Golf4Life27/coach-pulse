@@ -3,10 +3,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Listing } from "@/lib/types";
-import { parseConversation } from "@/lib/notes";
 import { formatCurrency } from "@/lib/utils";
 import { ALL_DD_ITEMS } from "@/lib/actionQueue";
-import ConversationThread from "@/components/ConversationThread";
 import { showToast } from "@/components/Toast";
 
 function cleanPhone(phone: string): string {
@@ -53,6 +51,13 @@ export default function DealWorkspace() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Unified conversation
+  const [convoMessages, setConvoMessages] = useState<Array<{
+    id: string; source: string; direction: string; body: string;
+    timestamp: string; from: string; to: string;
+  }>>([]);
+  const [convoLoading, setConvoLoading] = useState(false);
+
   // Reply composer
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyText, setReplyText] = useState("");
@@ -77,7 +82,18 @@ export default function DealWorkspace() {
       .finally(() => setLoading(false));
   }, [params?.id]);
 
-  useEffect(() => { fetchListing(); }, [fetchListing]);
+  const fetchConversation = useCallback(() => {
+    const rid = params?.id;
+    if (!rid) return;
+    setConvoLoading(true);
+    fetch(`/api/conversations/${rid}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => { if (data?.messages) setConvoMessages(data.messages); })
+      .catch(() => {})
+      .finally(() => setConvoLoading(false));
+  }, [params?.id]);
+
+  useEffect(() => { fetchListing(); fetchConversation(); }, [fetchListing, fetchConversation]);
 
   useEffect(() => {
     if (replyOpen && replyRef.current) replyRef.current.focus();
@@ -106,6 +122,7 @@ export default function DealWorkspace() {
       setReplyOpen(false);
       setReplyText("");
       fetchListing();
+      setTimeout(fetchConversation, 2000);
     } catch { showToast("Send failed"); }
     finally { setSending(false); }
   };
@@ -115,7 +132,6 @@ export default function DealWorkspace() {
     setSavingNote(true);
     const today = new Date().toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "2-digit" });
     const stamped = `${today} — ${newNote.trim()}`;
-    const fullNotes = listing.notes ? `${listing.notes}\n\n${stamped}` : stamped;
     try {
       await fetch(`/api/actions/append_note`, {
         method: "POST",
@@ -147,12 +163,11 @@ export default function DealWorkspace() {
     return (
       <div className="py-20 text-center">
         <p className="text-red-400 mb-4">{error ?? "Listing not found"}</p>
-        <button type="button" onClick={() => router.back()} className="text-blue-400 hover:underline text-sm">← back</button>
+        <button type="button" onClick={() => router.back()} className="text-blue-400 hover:underline text-sm">&larr; back</button>
       </div>
     );
   }
 
-  const entries = parseConversation(listing.notes);
   const offer = listing.listPrice ? roundOffer(listing.listPrice) : null;
   const checked = new Set(listing.ddChecklist ?? []);
   const bbcNum = parseFloat(bbcCeiling);
@@ -163,7 +178,7 @@ export default function DealWorkspace() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <button type="button" onClick={() => router.push("/")} className="text-xs text-gray-500 hover:text-gray-300 mb-1">← Command Center</button>
+          <button type="button" onClick={() => router.push("/")} className="text-xs text-gray-500 hover:text-gray-300 mb-1">&larr; Command Center</button>
           <h1 className="text-lg font-bold text-white">{listing.address}</h1>
           <p className="text-gray-500 text-xs">
             {[listing.city, listing.state, listing.zip].filter(Boolean).join(", ")}
@@ -176,9 +191,8 @@ export default function DealWorkspace() {
 
       {/* Two columns */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* LEFT — Property Intel */}
+        {/* LEFT */}
         <div className="space-y-4 overflow-y-auto">
-          {/* Property Summary */}
           <div className="bg-[#1c2128] rounded-lg border border-[#30363d] p-4 space-y-2 text-xs">
             <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wider mb-2">Property Summary</h3>
             <div className="grid grid-cols-2 gap-2">
@@ -201,7 +215,6 @@ export default function DealWorkspace() {
             )}
           </div>
 
-          {/* DD Checklist */}
           <div className="bg-[#1c2128] rounded-lg border border-[#30363d] p-4">
             <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wider mb-2">DD Checklist ({checked.size}/{ALL_DD_ITEMS.length})</h3>
             <div className="space-y-1 mb-3">
@@ -213,7 +226,6 @@ export default function DealWorkspace() {
             </div>
           </div>
 
-          {/* Deal Analysis Tools */}
           <div className="bg-[#1c2128] rounded-lg border border-[#30363d] p-4 space-y-3">
             <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wider mb-2">Deal Analysis</h3>
             <div className="flex gap-2 flex-wrap">
@@ -236,7 +248,6 @@ export default function DealWorkspace() {
             </div>
           </div>
 
-          {/* Notes */}
           <div className="bg-[#1c2128] rounded-lg border border-[#30363d] p-4">
             <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wider mb-2">Notes</h3>
             {listing.notes && (
@@ -251,15 +262,54 @@ export default function DealWorkspace() {
           </div>
         </div>
 
-        {/* RIGHT — Communications + Actions */}
+        {/* RIGHT */}
         <div className="space-y-4 flex flex-col">
-          {/* Conversation Thread */}
           <div className="bg-[#1c2128] rounded-lg border border-[#30363d] p-4 flex-1 min-h-[300px] overflow-y-auto">
-            <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wider mb-3">Conversation</h3>
-            <ConversationThread entries={entries} emptyMessage="No conversation history. Send a text to start." />
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wider">Conversation</h3>
+              <button type="button" onClick={fetchConversation} className="text-[10px] text-gray-500 hover:text-gray-300">Refresh</button>
+            </div>
+            {convoLoading && convoMessages.length === 0 && (
+              <div className="text-gray-500 text-sm animate-pulse text-center py-8">Loading messages...</div>
+            )}
+            {!convoLoading && convoMessages.length === 0 && (
+              <div className="text-gray-500 text-sm text-center py-8">No conversation history. Send a text to start.</div>
+            )}
+            <div className="space-y-3">
+              {convoMessages.map((msg) => {
+                if (msg.direction === "system") {
+                  return (
+                    <div key={msg.id} className="text-center text-[10px] text-gray-500 py-1">
+                      {msg.timestamp && <span className="mr-1 opacity-60">{new Date(msg.timestamp).toLocaleDateString()}</span>}
+                      {msg.body}
+                    </div>
+                  );
+                }
+                const isOutbound = msg.direction === "outbound";
+                const sourceIcon = msg.source === "quo" ? "💬" : msg.source === "email" ? "📧" : "📝";
+                return (
+                  <div key={msg.id} className={`flex ${isOutbound ? "justify-end" : "justify-start"}`}>
+                    <div className="max-w-[80%]">
+                      <div className={`rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap ${
+                        isOutbound
+                          ? "bg-blue-600 text-white rounded-br-sm"
+                          : "bg-[#30363d] text-gray-200 rounded-bl-sm"
+                      }`}>
+                        {msg.body}
+                      </div>
+                      <div className={`flex items-center gap-1 mt-1 ${isOutbound ? "justify-end" : ""}`}>
+                        <span className="text-[9px]">{sourceIcon}</span>
+                        <span className="text-[10px] text-gray-500">
+                          {msg.from}{msg.timestamp ? ` · ${new Date(msg.timestamp).toLocaleString()}` : ""}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
 
-          {/* Reply Composer */}
           {replyOpen && (
             <div className="bg-[#1c2128] rounded-lg border border-emerald-500/50 p-3 space-y-2">
               <textarea ref={replyRef} value={replyText} onChange={(e) => setReplyText(e.target.value)} placeholder={`Reply to ${listing.agentName?.split(" ")[0] ?? "agent"}...`} rows={3} className="w-full bg-[#0d1117] border border-[#30363d] rounded p-2 text-sm text-white focus:outline-none focus:border-emerald-400 resize-y placeholder-gray-600" disabled={sending} onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSendReply(); if (e.key === "Escape") { setReplyOpen(false); setReplyText(""); } }} />
@@ -271,7 +321,6 @@ export default function DealWorkspace() {
             </div>
           )}
 
-          {/* Quick Actions */}
           <div className="bg-[#1c2128] rounded-lg border border-[#30363d] p-3">
             <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2">Quick Actions</h3>
             <div className="flex gap-2 flex-wrap">
