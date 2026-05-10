@@ -1,17 +1,17 @@
 // Gmail integration.
 //
 // Two modes:
-//   1. (Existing stub) getThreadsForEmail — read email history. Still a
-//      stub returning [] until OAuth read scope is wired. Notes already
-//      capture email content via the existing scan-replies pipeline.
+//   1. getThreadsForEmail — read email history (Phase 1 V2 fix).
+//      Requires gmail.readonly scope on the OAuth refresh token.
 //   2. (Phase 2) sendEmail / createDraft — send/draft outbound emails to
 //      buyers. Uses an OAuth refresh token (no per-user OAuth flow).
 //
-// Required env for send: GMAIL_OAUTH_CLIENT_ID, GMAIL_OAUTH_CLIENT_SECRET,
+// Required env: GMAIL_OAUTH_CLIENT_ID, GMAIL_OAUTH_CLIENT_SECRET,
 // GMAIL_REFRESH_TOKEN, GMAIL_FROM_ADDRESS.
 //
 // When any of these are missing, sendEmail/createDraft fall back to
 // returning a mailto: URL so callers can still surface drafts.
+// getThreadsForEmail returns [] when not configured.
 
 export interface GmailMessage {
   id: string;
@@ -22,11 +22,139 @@ export interface GmailMessage {
   date: string;
 }
 
+function decodeBase64Url(s: string): string {
+  if (!s) return "";
+  const padded = s.replace(/-/g, "+").replace(/_/g, "/");
+  try {
+    return Buffer.from(padded, "base64").toString("utf-8");
+  } catch {
+    return "";
+  }
+}
+
+interface GmailHeader { name: string; value: string }
+interface GmailMessagePart {
+  mimeType?: string;
+  headers?: GmailHeader[];
+  body?: { data?: string; size?: number };
+  parts?: GmailMessagePart[];
+}
+interface GmailFullMessage {
+  id: string;
+  threadId: string;
+  internalDate?: string;
+  payload?: GmailMessagePart;
+}
+
+function findHeader(headers: GmailHeader[] | undefined, name: string): string {
+  if (!headers) return "";
+  const lower = name.toLowerCase();
+  const h = headers.find((x) => x.name.toLowerCase() === lower);
+  return h?.value ?? "";
+}
+
+function extractBodyFromPayload(payload: GmailMessagePart | undefined): string {
+  if (!payload) return "";
+  // Prefer text/plain anywhere in the part tree.
+  const stack: GmailMessagePart[] = [payload];
+  let textPlain = "";
+  let textHtml = "";
+  while (stack.length > 0) {
+    const p = stack.pop()!;
+    const mime = (p.mimeType ?? "").toLowerCase();
+    const data = p.body?.data;
+    if (data) {
+      const decoded = decodeBase64Url(data);
+      if (mime === "text/plain" && !textPlain) textPlain = decoded;
+      else if (mime === "text/html" && !textHtml) textHtml = decoded;
+    }
+    if (p.parts) stack.push(...p.parts);
+  }
+  if (textPlain) return textPlain.trim();
+  if (textHtml) {
+    // Strip tags as a basic fallback.
+    return textHtml.replace(/<style[\s\S]*?<\/style>/gi, "")
+      .replace(/<script[\s\S]*?<\/script>/gi, "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+  return "";
+}
+
+function shapeMessage(msg: GmailFullMessage): GmailMessage {
+  const headers = msg.payload?.headers;
+  const subject = findHeader(headers, "Subject");
+  const from = findHeader(headers, "From");
+  const to = findHeader(headers, "To");
+  const dateHeader = findHeader(headers, "Date");
+  const body = extractBodyFromPayload(msg.payload);
+  const epoch = msg.internalDate ? parseInt(msg.internalDate, 10) : NaN;
+  const date = !isNaN(epoch) ? new Date(epoch).toISOString() : (dateHeader || "");
+  return { id: msg.id, from, to, subject, body, date };
+}
+
+const MAX_THREADS_TO_PULL = 50;
+const MAX_MESSAGES_PER_THREAD = 25;
+
 export async function getThreadsForEmail(
-  _email: string,
-  _sinceMinutes: number = 60 * 24 * 90,
+  email: string,
+  sinceMinutes: number = 60 * 24 * 90,
 ): Promise<GmailMessage[]> {
-  return [];
+  if (!email || !email.trim()) return [];
+  const token = await getAccessToken();
+  if (!token) return [];
+
+  const trimmed = email.trim().toLowerCase();
+  // Gmail accepts a relative `newer_than:Nd` query — convert sinceMinutes to days.
+  const days = Math.max(1, Math.ceil(sinceMinutes / (60 * 24)));
+  const q = `(from:${trimmed} OR to:${trimmed} OR cc:${trimmed}) newer_than:${days}d`;
+
+  // Step 1: list thread IDs
+  const listRes = await fetch(
+    `${GMAIL_API}/threads?q=${encodeURIComponent(q)}&maxResults=${MAX_THREADS_TO_PULL}`,
+    {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    },
+  );
+  if (!listRes.ok) {
+    const errText = await listRes.text().catch(() => "");
+    console.error(`[gmail] threads.list ${listRes.status}:`, errText);
+    return [];
+  }
+  const listData = (await listRes.json()) as { threads?: Array<{ id: string }> };
+  const threadIds = (listData.threads ?? []).map((t) => t.id);
+  if (threadIds.length === 0) return [];
+
+  // Step 2: fetch each thread (limit concurrency to 5).
+  const messages: GmailMessage[] = [];
+  const CONCURRENCY = 5;
+  for (let i = 0; i < threadIds.length; i += CONCURRENCY) {
+    const slice = threadIds.slice(i, i + CONCURRENCY);
+    const threadResults = await Promise.all(
+      slice.map(async (id) => {
+        const r = await fetch(`${GMAIL_API}/threads/${id}?format=full`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        });
+        if (!r.ok) return [] as GmailMessage[];
+        const data = (await r.json()) as { messages?: GmailFullMessage[] };
+        const msgs = (data.messages ?? []).slice(0, MAX_MESSAGES_PER_THREAD).map(shapeMessage);
+        return msgs;
+      }),
+    );
+    for (const arr of threadResults) messages.push(...arr);
+  }
+
+  // Sort oldest-first to match the timeline merger contract.
+  messages.sort((a, b) => {
+    const ta = a.date ? new Date(a.date).getTime() : 0;
+    const tb = b.date ? new Date(b.date).getTime() : 0;
+    return ta - tb;
+  });
+
+  return messages;
 }
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";

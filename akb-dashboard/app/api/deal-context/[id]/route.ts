@@ -67,7 +67,8 @@ export async function GET(
       }
     }
 
-    // Pull Gmail threads (currently a stub — see lib/gmail.ts).
+    // Pull Gmail threads. Requires GMAIL_REFRESH_TOKEN issued with the
+    // gmail.readonly scope; returns [] otherwise (see lib/gmail.ts).
     let gmailMessages: Awaited<ReturnType<typeof getThreadsForEmail>> = [];
     if (listing.agentEmail) {
       try {
