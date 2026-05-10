@@ -139,37 +139,58 @@ function CardBlock({ card, onAfterSend }: { card: BroCard; onAfterSend: () => vo
   }, [card.recordId, draft, subject, opt, sending, onAfterSend]);
 
   return (
-    <div className={`bg-[#1c2128] rounded-lg border ${URGENCY_BG[config.urgency] ?? "border-[#30363d]"} p-4 space-y-3`}>
+    <div className={`relative bg-[#1c2128] rounded-lg border ${URGENCY_BG[config.urgency] ?? "border-[#30363d]"} p-4 space-y-3`}>
+      {/* Card-level click-through. Action buttons sit above this in z-order
+          and stop propagation so they don't trigger workspace navigation. */}
+      <Link
+        href={`/pipeline/${card.recordId}`}
+        className="absolute inset-0 z-0 rounded-lg"
+        aria-label={`Open workspace for ${card.address}`}
+      />
+
       {/* Header */}
-      <div className="flex items-start justify-between gap-3">
+      <div className="relative z-10 flex items-start justify-between gap-3 pointer-events-none">
         <div className="space-y-1.5 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-[10px] font-bold tracking-widest text-red-400">{urgency}</span>
             <span className="text-[10px] uppercase tracking-wider text-gray-500">{card.card_type.replace(/_/g, " ")}</span>
             <span className="text-[10px] text-gray-500">score {card.score}</span>
+            {card.dealStage && (
+              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-[#0d1117] border border-[#30363d] text-gray-300">
+                {card.dealStage.replace(/_/g, " ")}
+              </span>
+            )}
+            {card.agentContext?.isPrincipal && (
+              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-purple-500/15 border border-purple-500/30 text-purple-300">
+                principal
+              </span>
+            )}
           </div>
           <h3 className="text-base font-bold text-white leading-tight">{card.headline}</h3>
-          <Link href={`/pipeline/${card.recordId}`} className="text-xs text-blue-400 hover:underline">
-            {card.address}
-          </Link>
+          <span className="text-xs text-blue-400">{card.address} ↗</span>
         </div>
         {card.agentContext && <AgentBadge ac={card.agentContext} />}
       </div>
 
       {/* Unanswered strip */}
-      {card.agentContext && <UnansweredStrip ac={card.agentContext} />}
+      {card.agentContext && (
+        <div className="relative z-10">
+          <UnansweredStrip ac={card.agentContext} />
+        </div>
+      )}
 
-      {/* Body */}
-      <div className="text-sm text-gray-300 space-y-1">
-        <p>{card.summary}</p>
+      {/* Body — non-interactive, but kept above the click-through layer so
+          text selection works without triggering navigation. */}
+      <div className="relative z-10 text-sm text-gray-300 space-y-1 pointer-events-none">
+        <p className="pointer-events-auto select-text">{card.summary}</p>
         {card.why_this_matters && (
-          <p className="text-xs text-gray-500 italic">{card.why_this_matters}</p>
+          <p className="pointer-events-auto select-text text-xs text-gray-500 italic">{card.why_this_matters}</p>
         )}
       </div>
 
       {/* Option tabs */}
       {card.options.length > 0 && (
-        <div className="space-y-2">
+        <div className="relative z-10 space-y-2">
           <div className="flex gap-1.5 flex-wrap">
             {card.options.map((o, i) => (
               <button

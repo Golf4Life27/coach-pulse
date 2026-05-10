@@ -18,6 +18,7 @@ export type CardType =
   | "COST_CLARIFICATION_PENDING"
   | "POST_ACCEPTANCE_DD_DUE"
   | "AWAITING_BUYER_PIPELINE"
+  | "RESURRECTION_OPPORTUNITY"
   ;
 
 export type ActionType =
@@ -75,6 +76,7 @@ export interface BroCard {
   options: ActionOption[];
   recommendation_index: number;
   agentContext?: AgentContext;
+  dealStage?: DealStage;
   metadata: Record<string, unknown>;
 }
 
@@ -143,6 +145,7 @@ export const CARD_TYPE_CONFIG: Record<CardType, { icon: string; urgency: "critic
   COST_CLARIFICATION_PENDING: { icon: "calculator", urgency: "high", color: "red" },
   POST_ACCEPTANCE_DD_DUE: { icon: "list-checks", urgency: "high", color: "amber" },
   AWAITING_BUYER_PIPELINE: { icon: "users", urgency: "high", color: "blue" },
+  RESURRECTION_OPPORTUNITY: { icon: "rotate-ccw", urgency: "critical", color: "red" },
 };
 
 export type DealStage =
@@ -184,6 +187,13 @@ export interface AgentContext {
   propertiesWithUnansweredInbound: AgentContextUnanswered[];
   depthScore: DepthScore;
   inferredTone: InferredTone;
+  // Set when the agent's inbound messages indicate they're a principal
+  // (seller, owner, or family-stake holder) rather than a pure listing
+  // agent. Affects negotiation strategy + drafting tone.
+  isPrincipal?: boolean;
+  // The text snippet that triggered the principal detection — included
+  // for transparency/debugging.
+  principalSignal?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -308,10 +318,19 @@ export type DDItem = typeof DD_V3_ITEMS[number];
 export interface DDStatus {
   recordId: string;
   outreachStatus: string | null;
+  // Effective complete count: count of UNIQUE items covered by formal
+  // checklist + informal timeline answers (capped at ddTotal).
   ddCompleteCount: number;
   ddTotal: number;
   ddCheckedItems: DDItem[];
   ddMissingItems: DDItem[];
+  // Items checked via the formal DD_Checklist multi-select on the record.
+  ddFormalAnsweredItems: DDItem[];
+  // Items the parser detected in inbound timeline messages, even if the
+  // formal checklist hasn't been ticked.
+  ddInformalAnsweredItems: DDItem[];
+  // Per-item evidence for informal answers (snippet + timestamp).
+  ddInformalEvidence?: Partial<Record<DDItem, { snippet: string; timestamp: string }>>;
   canCounter: boolean;
   canSignPA: boolean;
   volleyState: {

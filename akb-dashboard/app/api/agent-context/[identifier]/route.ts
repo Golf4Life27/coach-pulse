@@ -235,6 +235,31 @@ export async function GET(
 
     const inferredTone = await inferTone(inboundBodies, process.env.ANTHROPIC_API_KEY);
 
+    // Principal detection: agent's own inbound text reveals they're a
+    // seller/owner rather than just a listing agent. Affects negotiation
+    // tone (no agent-gatekeeper, can ask direct decisionmaker questions).
+    const PRINCIPAL_PATTERNS: RegExp[] = [
+      /\bi[\s']?(?:a|'|am|m)\s+(?:one\s+of\s+the\s+|the\s+|a\s+|my\s+own\s+)?(?:seller|owner|princip(?:al|le))s?\b/i,
+      /\bwe(?:'re|\s+are)\s+(?:the\s+)?(?:sellers?|owners?)\b/i,
+      /\bi\s+(?:own|listed)\s+(?:this|my|our|the)\s+(?:property|home|house|listing|building|place)\b/i,
+      /\bmy\s+(?:own|family('s)?)\s+(?:property|home|listing)\b/i,
+      /\bfamily\s+(?:property|home|house|estate|trust)\b/i,
+      /\bmy\s+own\s+listing\b/i,
+    ];
+    let isPrincipal = false;
+    let principalSignal: string | undefined;
+    for (const body of inboundBodies) {
+      for (const p of PRINCIPAL_PATTERNS) {
+        const m = body.match(p);
+        if (m) {
+          isPrincipal = true;
+          principalSignal = body.slice(0, 200);
+          break;
+        }
+      }
+      if (isPrincipal) break;
+    }
+
     const context: AgentContext = {
       identifier,
       agentName,
@@ -247,6 +272,8 @@ export async function GET(
       propertiesWithUnansweredInbound,
       depthScore,
       inferredTone,
+      isPrincipal,
+      principalSignal,
       metadata: {
         matchedRecordIds: matched.map((l) => l.id),
         notesOutreaches: totalOutreaches,

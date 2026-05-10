@@ -63,16 +63,12 @@ export interface DDCard extends CardBase {
 
 export type ActionCard = ResponseCard | DealCard | StaleCard | DDCard;
 
-// All six DD checklist choices on Listings_V1.DD_Checklist (multipleSelects).
-// Source of truth: get_table_schema on fldZVZT98A6cEmJB3.
-export const ALL_DD_ITEMS = [
-  "Bed/Bath Verified",
-  "Vacancy Status Known",
-  "Roof Age Asked",
-  "HVAC Age Asked",
-  "Water Heater Age Asked",
-  "Showing Access Confirmed",
-] as const;
+// DD checklist — DD V3.0 (12 items, no "Showing Access Confirmed" since
+// Alex is remote and end buyers walk during their inspection). Source of
+// truth lives in types/jarvis.DD_V3_ITEMS; we re-export so existing
+// callers keep working with the new schema.
+import { DD_V3_ITEMS } from "@/types/jarvis";
+export const ALL_DD_ITEMS = DD_V3_ITEMS;
 
 const TERMINAL_DEAL_STATUS = new Set(["Closed", "Failed"]);
 const TERMINAL_CLOSING_STATUS = new Set(["Closed", "Failed"]);

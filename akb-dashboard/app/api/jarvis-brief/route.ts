@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getListings } from "@/lib/airtable";
 import { buildJarvisSystemPrompt, computeJarvisScore } from "@/lib/jarvis-system-prompt";
 import { getVolleyText } from "@/lib/dd-volley";
+import { applyResurrection, evaluateResurrection } from "@/lib/resurrection";
+import { parseConversation } from "@/lib/notes";
 import type { Listing } from "@/lib/types";
 import type {
   AgentContext,
@@ -38,6 +40,7 @@ interface RankedDeal {
   outreachStatus: string | null;
   agentContext: AgentContext | null;
   ddStatus: DDStatus | null;
+  resurrected?: boolean;
 }
 
 function originFromReq(req: Request): string {
@@ -127,6 +130,7 @@ function fallbackBroCard(deal: RankedDeal, rank: number): BroCard {
     ],
     recommendation_index: 0,
     agentContext: deal.agentContext ?? undefined,
+    dealStage: ctx.dealStage,
     metadata: { fallback: true },
   };
 }
@@ -256,6 +260,7 @@ function parseLLMCards(raw: string, ranked: RankedDeal[]): BroCard[] {
         Math.max(0, options.length - 1),
       ),
       agentContext: deal.agentContext ?? undefined,
+      dealStage: deal.context.dealStage,
       metadata: typeof obj.metadata === "object" && obj.metadata !== null ? (obj.metadata as Record<string, unknown>) : {},
     });
   }
@@ -272,17 +277,53 @@ export async function GET(req: Request) {
   }
 
   const tStart = Date.now();
+  const resurrectedRecordIds = new Set<string>();
   try {
     const allListings = await getListings();
     const active = allListings.filter((l) => ACTIVE_STATUSES.has(l.outreachStatus ?? ""));
+
+    // Resurrection sweep: Dead records with a fresh inbound (post-kill) AND
+    // a non-rejection body get auto-flipped to "Response Received" so they
+    // join the active pool. Cheap: notes parsing only, no external fetches.
+    const tResurrect = Date.now();
+    const resurrected: Listing[] = [];
+    const dead = allListings.filter((l) => {
+      if (!l.lastInboundAt) return false;
+      return ["Dead", "Walked", "Terminated", "No Response"].includes(l.outreachStatus ?? "");
+    });
+    for (const l of dead) {
+      const entries = parseConversation(l.notes);
+      const lastInboundEntry = [...entries].reverse().find((e) => e.type === "inbound");
+      const evalResult = evaluateResurrection(l, lastInboundEntry?.text ?? null);
+      if (evalResult.resurrected && evalResult.inboundSnippet) {
+        resurrected.push(l);
+        resurrectedRecordIds.add(l.id);
+        // Fire-and-forget Airtable update + audit note. Doesn't block the
+        // brief's response time.
+        void applyResurrection(l, evalResult.inboundSnippet);
+      }
+    }
+    // Add resurrected listings into the active pool with status set to
+    // Response Received so downstream stage detection treats them correctly.
+    const activeWithResurrected: Listing[] = [
+      ...active,
+      ...resurrected.map((l) => ({ ...l, outreachStatus: "Response Received" } as Listing)),
+    ];
+    const resurrectMs = Date.now() - tResurrect;
 
     const origin = originFromReq(req);
     const cookie = req.headers.get("cookie");
 
     // PASS 1 — preliminary, field-only ranking. No external fetches.
     const tPass1 = Date.now();
-    const preliminaryRanked = active
-      .map((l) => ({ listing: l, prelim: computePreliminaryScore(l) }))
+    const preliminaryRanked = activeWithResurrected
+      .map((l) => {
+        let prelim = computePreliminaryScore(l);
+        // Resurrected records get a +90 bump per spec — high-leverage
+        // missed-opportunity recovery.
+        if (resurrectedRecordIds.has(l.id)) prelim += 90;
+        return { listing: l, prelim };
+      })
       .sort((a, b) => b.prelim - a.prelim)
       .slice(0, MAX_HYDRATE_CANDIDATES);
     const pass1Ms = Date.now() - tPass1;
@@ -306,13 +347,22 @@ export async function GET(req: Request) {
       .filter((x): x is { listing: typeof x.listing; prelim: number; ctx: DealContext } => Boolean(x.ctx))
       .map((x) => {
         const status = x.listing.outreachStatus;
-        const score = computeJarvisScore({
+        let score = computeJarvisScore({
           hoursSinceInbound: x.ctx.hoursSinceInbound,
           lastInboundBody: (x.ctx.metadata?.lastInboundBody as string) ?? null,
           outreachStatus: status,
           multiListingAlert: x.ctx.multiListingAlert,
         });
-        return { context: x.ctx, score, outreachStatus: status, agentContext: null, ddStatus: null };
+        const resurrected = resurrectedRecordIds.has(x.listing.id);
+        if (resurrected) score += 90;
+        return {
+          context: x.ctx,
+          score,
+          outreachStatus: status,
+          agentContext: null,
+          ddStatus: null,
+          resurrected,
+        };
       })
       .sort((a, b) => b.score - a.score)
       .slice(0, MAX_RANKED_FOR_LLM);
@@ -382,15 +432,16 @@ export async function GET(req: Request) {
       const stageLine = ctx.dealStage
         ? `\ndealStage: ${ctx.dealStage} signals=[paDrafting=${ctx.dealStageSignals?.paDrafting ?? false}, costClarificationPending=${ctx.dealStageSignals?.costClarificationPending ?? false}, inspectionStarted=${ctx.dealStageSignals?.inspectionStarted ?? false}]`
         : "";
+      const resurrectedLine = r.resurrected ? `\nresurrected: true (was Dead, fresh non-rejection inbound just landed)` : "";
       return `### DEAL ${i + 1} — ${ctx.property.address}
 recordId: ${ctx.recordId}
 agent: ${ctx.agent.name ?? "—"} (phone: ${ctx.agent.phone ?? "—"}, email: ${ctx.agent.email ?? "—"})
-outreachStatus: ${r.outreachStatus ?? "—"}${stageLine}
+outreachStatus: ${r.outreachStatus ?? "—"}${stageLine}${resurrectedLine}
 listPrice: ${ctx.property.listPrice ?? "—"}
 hoursSinceInbound: ${ctx.hoursSinceInbound ?? "—"}
 hoursSinceOutbound: ${ctx.hoursSinceOutbound ?? "—"}
 responseDue: ${ctx.responseDue}
-multiListingAlert: ${ctx.multiListingAlert}${ac ? `\nagentContext: depthScore=${ac.depthScore} totalListings=${ac.totalListings} totalReplies=${ac.totalReplies} inferredTone=${ac.inferredTone} unanswered=${ac.propertiesWithUnansweredInbound.length} active=${ac.activeProperties.length}` : ""}${ddLine}
+multiListingAlert: ${ctx.multiListingAlert}${ac ? `\nagentContext: depthScore=${ac.depthScore} totalListings=${ac.totalListings} totalReplies=${ac.totalReplies} inferredTone=${ac.inferredTone} unanswered=${ac.propertiesWithUnansweredInbound.length} active=${ac.activeProperties.length} isPrincipal=${ac.isPrincipal ?? false}${ac.principalSignal ? ` principalSignal="${ac.principalSignal.replace(/"/g, "'").slice(0, 80)}"` : ""}` : ""}${ddLine}
 lastInboundBody: ${lastInBody.slice(0, 200)}
 recent timeline:
 ${summarizeTimeline(ctx.timeline)}
@@ -437,7 +488,27 @@ STAGE-AWARE CARD SELECTION (overrides DD/negotiation defaults when post-acceptan
 - dealStage='inspection': card_type=DD_BLOCKER if any DD missing, otherwise STALE_REENGAGEMENT keyed to inspection scheduling.
 - dealStage='won' or 'dead': skip — do not surface.
 
-Where signals.costClarificationPending or signals.paDrafting are true, NEVER produce a draft that re-introduces Alex with the cold script. Honor depthScore + dealStage together.`;
+Where signals.costClarificationPending or signals.paDrafting are true, NEVER produce a draft that re-introduces Alex with the cold script. Honor depthScore + dealStage together.
+
+RESURRECTION (when resurrected: true on a deal block):
+- card_type=RESURRECTION_OPPORTUNITY (CRITICAL urgency).
+- The agent was previously dead and just sent a non-rejection inbound. Highest score in the brief.
+- summary should reference the resurrection event ("Re-engaged after going dark — agent reached out today").
+- Drafted reply should be casual + responsive — never the cold script. Reference the gap warmly ("Good to hear from you again").
+
+PRINCIPAL HANDLING (when agentContext.isPrincipal is true):
+- The "agent" is also the seller (or family-owner). Treat them as a decisionmaker, not as a listing-only intermediary.
+- Address by first name only ("Hey Kim" not "Kim Maloney").
+- Ask direct decisionmaker questions when negotiating ("what number actually gets this done for you?", "what are the must-haves on terms?"). Avoid agent-speak like "please ask the seller…" — they ARE the seller.
+- Reference family/ownership context respectfully if mentioned (estate, family liquidation, etc.).
+- Wholesale assignment language can be more direct.
+
+MULTIFAMILY COUNTER PRICING:
+- For multi-unit / non-SFR deals (4+ units, "plex" in address, or property type signals multifamily), do NOT default to the 65%-of-list rule when drafting a counter.
+- Compute: counter ≈ (Buyer's max acquisition based on cap-rate target) − $15K wholesale fee. Round to nearest $1K.
+- A reasonable buyer cap-rate target for 8-12% gross-rent multiplier markets: gross_rent_annual / 0.08–0.10.
+- If you cannot estimate gross rent, surface the deal as STALE_REENGAGEMENT asking for rent roll BEFORE proposing a counter.
+- Show the math in the BroCard summary: "8 units × $700/mo × 12 = $67,200 gross → buyer max ~$745K at 9% cap → counter $445K (yields $15K wholesale fee at $460K assignment)".`;
 
     const tLLM = Date.now();
     const res = await fetch("https://api.anthropic.com/v1/messages", {
@@ -466,11 +537,15 @@ Where signals.costClarificationPending or signals.paDrafting are true, NEVER pro
     }
     const llmMs = Date.now() - tLLM;
 
-    // Ensure agentContext is present on every card (LLM may drop it).
+    // Ensure agentContext + dealStage are present on every card (LLM may
+    // drop them — they live outside the JSON contract since the prompt
+    // doesn't ask for them explicitly).
     cards = cards.map((c) => {
-      if (c.agentContext) return c;
       const r = ranked.find((x) => x.context.recordId === c.recordId);
-      return r?.agentContext ? { ...c, agentContext: r.agentContext } : c;
+      const out: typeof c = { ...c };
+      if (!out.agentContext && r?.agentContext) out.agentContext = r.agentContext;
+      if (!out.dealStage && r?.context.dealStage) out.dealStage = r.context.dealStage;
+      return out;
     });
 
     const ambiguousQueue = ranked
