@@ -14,6 +14,10 @@ export type CardType =
   | "BUYER_WARMUP_DUE"
   | "BUYER_FORM_COMPLETED"
   | "BUYER_BLAST_RECOMMENDED"
+  | "PA_DRAFTING_AWAITING_RESPONSE"
+  | "COST_CLARIFICATION_PENDING"
+  | "POST_ACCEPTANCE_DD_DUE"
+  | "AWAITING_BUYER_PIPELINE"
   ;
 
 export type ActionType =
@@ -87,6 +91,12 @@ export interface DealContext {
   responseDue: boolean;
   multiListingAlert: boolean;
   siblingRecords?: { recordId: string; address: string }[];
+  dealStage?: DealStage;
+  dealStageSignals?: {
+    paDrafting: boolean;
+    costClarificationPending: boolean;
+    inspectionStarted: boolean;
+  };
   metadata: Record<string, unknown>;
 }
 
@@ -129,7 +139,23 @@ export const CARD_TYPE_CONFIG: Record<CardType, { icon: string; urgency: "critic
   BUYER_WARMUP_DUE: { icon: "thermometer", urgency: "medium", color: "amber" },
   BUYER_FORM_COMPLETED: { icon: "user-plus", urgency: "high", color: "blue" },
   BUYER_BLAST_RECOMMENDED: { icon: "send", urgency: "critical", color: "red" },
+  PA_DRAFTING_AWAITING_RESPONSE: { icon: "file-pen", urgency: "critical", color: "red" },
+  COST_CLARIFICATION_PENDING: { icon: "calculator", urgency: "high", color: "red" },
+  POST_ACCEPTANCE_DD_DUE: { icon: "list-checks", urgency: "high", color: "amber" },
+  AWAITING_BUYER_PIPELINE: { icon: "users", urgency: "high", color: "blue" },
 };
+
+export type DealStage =
+  | "cold"
+  | "outreach"
+  | "engaged"
+  | "negotiating"
+  | "accepted_pending_pa"
+  | "pa_signed"
+  | "inspection"
+  | "closing"
+  | "dead"
+  | "won";
 
 export type DepthScore = 0 | 1 | 2 | 3;
 export type InferredTone = "formal" | "casual" | "friendly" | "transactional";

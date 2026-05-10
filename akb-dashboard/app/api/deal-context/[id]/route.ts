@@ -4,6 +4,7 @@ import { getMessagesForParticipant } from "@/lib/quo";
 import { getThreadsForEmail } from "@/lib/gmail";
 import { parseConversation } from "@/lib/notes";
 import { mergeTimeline, computeResponseStatus } from "@/lib/timeline-merge";
+import { detectStageSignals, inferDealStage } from "@/lib/deal-stage";
 import type { DealContext } from "@/types/jarvis";
 
 export const runtime = "nodejs";
@@ -100,6 +101,13 @@ export async function GET(
 
     const status = computeResponseStatus(timeline);
 
+    const stageSignals = detectStageSignals(timeline);
+    const dealStage = inferDealStage({
+      outreachStatus: listing.outreachStatus,
+      timeline,
+      signals: stageSignals,
+    });
+
     const context: DealContext = {
       recordId: id,
       agent: {
@@ -122,6 +130,8 @@ export async function GET(
       responseDue: status.responseDue,
       multiListingAlert: siblings.length > 0,
       siblingRecords: siblings.map((s) => ({ recordId: s.recordId, address: s.address })),
+      dealStage,
+      dealStageSignals: stageSignals,
       metadata: {
         outreachStatus: listing.outreachStatus,
         lastInboundBody: status.lastInboundBody,

@@ -263,15 +263,26 @@ export async function GET(req: Request) {
         ]);
         r.agentContext = ac;
         r.ddStatus = dd;
-        // DD score bump per spec: incomplete DD on Negotiating/Offer Accepted
-        // makes "send volley" the primary action and adds +50 to score.
+
+        // Stage-aware bumps. Critical near-term signals beat DD-blocker urgency.
+        const stage = r.context.dealStage;
+        const signals = r.context.dealStageSignals;
+        if (signals?.costClarificationPending) r.score += 80;       // highest — Alex owes / awaits a number
+        if (signals?.paDrafting) r.score += 70;                     // PA is being drafted; respond now
+        if (stage === "accepted_pending_pa") r.score += 60;
+        if (stage === "inspection") r.score += 50;
+        if (stage === "won") r.score = Math.max(0, r.score - 100);  // de-prioritize closed deals
+
+        // DD score bump (existing): incomplete DD on Negotiating/Offer Accepted
+        // makes "send volley" the primary action and adds +50 to score. We
+        // keep this AFTER the stage bumps so cost/PA signals can still lead.
         if (r.ddStatus && (r.ddStatus.recommendedActions[0]?.action ?? "").startsWith("send_volley_text_")) {
           r.score += 50;
         }
       }),
     );
 
-    // Re-sort after the DD bumps so the LLM sees the most-urgent deals first.
+    // Re-sort after the bumps so the LLM sees the most-urgent deals first.
     ranked.sort((a, b) => b.score - a.score);
 
     if (ranked.length === 0) {
@@ -298,10 +309,13 @@ export async function GET(req: Request) {
       const dd = r.ddStatus;
       const lastInBody = (ctx.metadata?.lastInboundBody as string) ?? "—";
       const ddLine = dd ? `\nddStatus: complete=${dd.ddCompleteCount}/${dd.ddTotal} canCounter=${dd.canCounter} canSignPA=${dd.canSignPA} volleyState=[t1=${dd.volleyState.text1SentAt ? "sent" : "pending"}, t2=${dd.volleyState.text2SentAt ? "sent" : "pending"}, t3=${dd.volleyState.text3SentAt ? "sent" : "pending"}] missing=[${dd.ddMissingItems.slice(0, 4).join(", ")}${dd.ddMissingItems.length > 4 ? "..." : ""}] nextAction=${dd.recommendedActions[0]?.action ?? "—"}` : "";
+      const stageLine = ctx.dealStage
+        ? `\ndealStage: ${ctx.dealStage} signals=[paDrafting=${ctx.dealStageSignals?.paDrafting ?? false}, costClarificationPending=${ctx.dealStageSignals?.costClarificationPending ?? false}, inspectionStarted=${ctx.dealStageSignals?.inspectionStarted ?? false}]`
+        : "";
       return `### DEAL ${i + 1} — ${ctx.property.address}
 recordId: ${ctx.recordId}
 agent: ${ctx.agent.name ?? "—"} (phone: ${ctx.agent.phone ?? "—"}, email: ${ctx.agent.email ?? "—"})
-outreachStatus: ${r.outreachStatus ?? "—"}
+outreachStatus: ${r.outreachStatus ?? "—"}${stageLine}
 listPrice: ${ctx.property.listPrice ?? "—"}
 hoursSinceInbound: ${ctx.hoursSinceInbound ?? "—"}
 hoursSinceOutbound: ${ctx.hoursSinceOutbound ?? "—"}
@@ -321,7 +335,7 @@ Output ONLY a JSON array (no prose, no markdown fences). Each element must be a 
 {
   "rank": 1,
   "recordId": "rec...",
-  "card_type": "NEGOTIATION_RESPONSE_DUE" | "OFFER_ACCEPTED_PA_NEEDED" | "STALE_REENGAGEMENT" | "AMBIGUOUS_NEEDS_REVIEW" | "UNANSWERED_INBOUND_BLOCKING",
+  "card_type": "NEGOTIATION_RESPONSE_DUE" | "OFFER_ACCEPTED_PA_NEEDED" | "STALE_REENGAGEMENT" | "AMBIGUOUS_NEEDS_REVIEW" | "UNANSWERED_INBOUND_BLOCKING" | "PRE_OFFER_BLOCKED" | "DD_BLOCKER" | "DD_VOLLEY_TEXT_1_DUE" | "DD_VOLLEY_TEXT_2_DUE" | "DD_VOLLEY_TEXT_3_DUE" | "DD_VOLLEY_COMPLETE" | "BUYER_MATCH_READY" | "BUYER_WARMUP_DUE" | "BUYER_FORM_COMPLETED" | "BUYER_BLAST_RECOMMENDED" | "PA_DRAFTING_AWAITING_RESPONSE" | "COST_CLARIFICATION_PENDING" | "POST_ACCEPTANCE_DD_DUE" | "AWAITING_BUYER_PIPELINE",
   "address": "...",
   "agent": "...",
   "headline": "Single tight phrase, <=8 words",
@@ -344,7 +358,16 @@ DD V3.0 ENFORCEMENT (critical):
 - Use the ddStatus.recommendedActions[0].suggestedDraft as-is for the volley text — these are pre-locked SMS templates and must not be paraphrased.
 - DO NOT recommend "counter" actions when canCounter is false.
 - If outreachStatus is 'Offer Accepted' AND ddStatus.canSignPA is false, card_type=DD_BLOCKER and surface ddStatus.ddMissingItems in the why_this_matters.
-- If pre-offer-screen blocked the listing, card_type=PRE_OFFER_BLOCKED with the blocker reasons in why_this_matters.`;
+- If pre-offer-screen blocked the listing, card_type=PRE_OFFER_BLOCKED with the blocker reasons in why_this_matters.
+
+STAGE-AWARE CARD SELECTION (overrides DD/negotiation defaults when post-acceptance dynamics are in play):
+- dealStage='accepted_pending_pa' AND signals.costClarificationPending=true: card_type=COST_CLARIFICATION_PENDING. PRIMARY action is to respond with the cost breakdown (or to ask the agent for theirs if we owe them). DD volley still surfaces as a SECONDARY card if applicable but never as primary on this deal.
+- dealStage='accepted_pending_pa' AND signals.paDrafting=true: card_type=PA_DRAFTING_AWAITING_RESPONSE. PRIMARY action is to send the PA-relevant info (entity name, signing party, etc.). If DD is incomplete and the agent is drafting, secondary card_type=POST_ACCEPTANCE_DD_DUE warning that DD must be done before PA signs.
+- dealStage='accepted_pending_pa' with no signals: card_type=OFFER_ACCEPTED_PA_NEEDED with primary action to push for PA timing.
+- dealStage='inspection': card_type=DD_BLOCKER if any DD missing, otherwise STALE_REENGAGEMENT keyed to inspection scheduling.
+- dealStage='won' or 'dead': skip — do not surface.
+
+Where signals.costClarificationPending or signals.paDrafting are true, NEVER produce a draft that re-introduces Alex with the cold script. Honor depthScore + dealStage together.`;
 
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",

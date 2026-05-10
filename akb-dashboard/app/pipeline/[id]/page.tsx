@@ -206,6 +206,20 @@ export default function DealWorkspace() {
       {/* Jarvis context strip — keystone deal-context surface */}
       {dealContext && (
         <div className="space-y-2">
+          {dealContext.dealStage && (
+            <div className="text-[10px] uppercase tracking-widest text-gray-500">
+              Stage: <span className="text-gray-300">{dealContext.dealStage.replace(/_/g, " ")}</span>
+              {dealContext.dealStageSignals?.costClarificationPending && (
+                <span className="ml-2 text-amber-400">· cost clarification pending</span>
+              )}
+              {dealContext.dealStageSignals?.paDrafting && (
+                <span className="ml-2 text-red-400">· PA drafting</span>
+              )}
+              {dealContext.dealStageSignals?.inspectionStarted && (
+                <span className="ml-2 text-blue-400">· inspection</span>
+              )}
+            </div>
+          )}
           {dealContext.responseDue && (
             <div className="bg-red-500/10 border border-red-500/40 rounded px-3 py-2 text-xs text-red-300 flex items-center gap-2">
               <span className="font-bold">RESPONSE DUE</span>
