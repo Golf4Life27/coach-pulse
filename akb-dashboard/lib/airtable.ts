@@ -172,13 +172,40 @@ async function fetchAllRecords(
   tableId: string,
   fieldIds: string[]
 ): Promise<Record<string, unknown>[]> {
+  return fetchRecords(tableId, fieldIds);
+}
+
+interface FetchRecordsOptions {
+  filterByFormula?: string;
+  maxRecords?: number;
+  // Sort with field NAMES (not ids) — applies after the filter.
+  sort?: Array<{ field: string; direction?: "asc" | "desc" }>;
+}
+
+async function fetchRecords(
+  tableId: string,
+  fieldIds: string[],
+  opts: FetchRecordsOptions = {}
+): Promise<Record<string, unknown>[]> {
   const allRecords: Record<string, unknown>[] = [];
   let offset: string | undefined;
+  let collected = 0;
 
   do {
     const params = new URLSearchParams();
     fieldIds.forEach((f) => params.append("fields[]", f));
     params.set("returnFieldsByFieldId", "true");
+    if (opts.filterByFormula) params.set("filterByFormula", opts.filterByFormula);
+    if (opts.sort) {
+      opts.sort.forEach((s, i) => {
+        params.append(`sort[${i}][field]`, s.field);
+        if (s.direction) params.append(`sort[${i}][direction]`, s.direction);
+      });
+    }
+    if (opts.maxRecords) {
+      const remaining = Math.min(100, opts.maxRecords - collected);
+      params.set("pageSize", String(remaining));
+    }
     if (offset) params.set("offset", offset);
 
     const url = `https://api.airtable.com/v0/${BASE_ID}/${tableId}?${params.toString()}`;
@@ -193,7 +220,11 @@ async function fetchAllRecords(
     }
 
     const data = await res.json();
-    allRecords.push(...data.records);
+    for (const rec of data.records) {
+      allRecords.push(rec);
+      collected += 1;
+      if (opts.maxRecords && collected >= opts.maxRecords) return allRecords;
+    }
     offset = data.offset;
   } while (offset);
 
@@ -248,6 +279,72 @@ export async function getListings(): Promise<Listing[]> {
     LISTINGS_TABLE,
     Object.keys(LISTING_FIELDS)
   );
+  const listings = records.map((r) => mapRecord<Listing>(r, LISTING_FIELDS));
+  setCache(cacheKey, listings);
+  return listings;
+}
+
+// Server-side-filtered active listings — only the records the brief care
+// about. Used by /api/jarvis-brief Pass 1 to avoid pulling all ~1,200
+// records into memory before filtering.
+//
+// Includes:
+//   - Negotiating, Response Received, Counter Received, Offer Accepted
+//     (always, regardless of recency)
+//   - Texted, Emailed where Last_Outreach_Date is within recentDays
+export async function getActiveListingsForBrief(opts: {
+  recentDays?: number;
+  cacheKey?: string;
+} = {}): Promise<Listing[]> {
+  const recentDays = opts.recentDays ?? 7;
+  const cacheKey = opts.cacheKey ?? `listings:active:${recentDays}d`;
+  const cached = getCached<Listing[]>(cacheKey);
+  if (cached) return cached;
+
+  const formula = `OR(
+    {Outreach_Status}='Negotiating',
+    {Outreach_Status}='Response Received',
+    {Outreach_Status}='Counter Received',
+    {Outreach_Status}='Offer Accepted',
+    AND({Outreach_Status}='Texted', IS_AFTER({Last_Outreach_Date}, DATEADD(NOW(), -${recentDays}, 'days'))),
+    AND({Outreach_Status}='Emailed', IS_AFTER({Last_Outreach_Date}, DATEADD(NOW(), -${recentDays}, 'days')))
+  )`.replace(/\s+/g, " ");
+
+  const records = await fetchRecords(LISTINGS_TABLE, Object.keys(LISTING_FIELDS), {
+    filterByFormula: formula,
+  });
+  const listings = records.map((r) => mapRecord<Listing>(r, LISTING_FIELDS));
+  setCache(cacheKey, listings);
+  return listings;
+}
+
+// Resurrection candidate fetch — Dead-status records with a Last_Inbound_At
+// within maxAgeDays, sorted newest-inbound-first, hard capped at `cap`.
+//
+// We intentionally filter on Last_Inbound_At (not the kill date) because
+// resurrection requires a fresh inbound to even be possible — this is the
+// sharpest filter that excludes long-dormant Dead records.
+export async function getRecentlyDeadCandidates(opts: {
+  maxAgeDays?: number;
+  cap?: number;
+} = {}): Promise<Listing[]> {
+  const maxAgeDays = opts.maxAgeDays ?? 30;
+  const cap = opts.cap ?? 50;
+  const cacheKey = `listings:dead-recent:${maxAgeDays}d:${cap}`;
+  const cached = getCached<Listing[]>(cacheKey);
+  if (cached) return cached;
+
+  const formula = `AND(
+    OR({Outreach_Status}='Dead', {Outreach_Status}='Walked', {Outreach_Status}='Terminated', {Outreach_Status}='No Response'),
+    {Last_Inbound_At},
+    IS_AFTER({Last_Inbound_At}, DATEADD(NOW(), -${maxAgeDays}, 'days'))
+  )`.replace(/\s+/g, " ");
+
+  const records = await fetchRecords(LISTINGS_TABLE, Object.keys(LISTING_FIELDS), {
+    filterByFormula: formula,
+    sort: [{ field: "Last_Inbound_At", direction: "desc" }],
+    maxRecords: cap,
+  });
   const listings = records.map((r) => mapRecord<Listing>(r, LISTING_FIELDS));
   setCache(cacheKey, listings);
   return listings;

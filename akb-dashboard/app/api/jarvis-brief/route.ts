@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
-import { getListings } from "@/lib/airtable";
+import { getActiveListingsForBrief, getRecentlyDeadCandidates } from "@/lib/airtable";
 import { buildJarvisSystemPrompt, computeJarvisScore } from "@/lib/jarvis-system-prompt";
 import { getVolleyText } from "@/lib/dd-volley";
 import { applyResurrection, evaluateResurrection } from "@/lib/resurrection";
 import { parseConversation } from "@/lib/notes";
+import { compressForLLM, renderCompressedTimeline } from "@/lib/jarvis-llm-context";
 import type { Listing } from "@/lib/types";
 import type {
   AgentContext,
@@ -12,22 +13,19 @@ import type {
   DDStatus,
   DealContext,
   JarvisBrief,
-  TimelineEntry,
 } from "@/types/jarvis";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const ACTIVE_STATUSES = new Set(["Negotiating", "Response Received", "Offer Accepted"]);
 const MAX_BROCARDS = 3;
 const MAX_RANKED_FOR_LLM = 5;
-// Number of records that survive Pass 1 (field-only scoring) and get fully
-// hydrated in Pass 2. Keeping this small bounds the worst-case latency: each
-// hydrated record makes ~3 sub-API calls (deal-context, agent-context,
-// dd-status), and deal-context itself fans out to Quo (6 pages) + Gmail
-// (50 threads). 10 records × 3 calls each is the practical ceiling under
-// Vercel's 60s function cap.
-const MAX_HYDRATE_CANDIDATES = 10;
+// Top-K survivors after Pass 1 preliminary scoring. These get fully
+// hydrated in Pass 2 (deal-context + agent-context + dd-status). We only
+// surface MAX_BROCARDS cards at the end, so 5 gives the LLM enough
+// headroom for re-ranking without burning Pass 2 time on candidates
+// that have ~0 chance of placing in the top 3.
+const MAX_HYDRATE_CANDIDATES = 5;
 
 const ACCEPT_NOTE_RE = /accept|seller (?:agreed|said yes)|will move forward/i;
 const COUNTER_NOTE_RE = /counter|come up|come down/i;
@@ -87,18 +85,6 @@ async function fetchDDStatus(origin: string, recordId: string, cookie: string | 
   } catch {
     return null;
   }
-}
-
-function summarizeTimeline(timeline: TimelineEntry[], limit = 8): string {
-  return timeline
-    .slice(-limit)
-    .map((e) => {
-      const ts = e.timestamp ? new Date(e.timestamp).toISOString().replace("T", " ").slice(0, 16) : "—";
-      const dir = e.direction === "in" ? "AGENT" : "ALEX";
-      const ch = e.channel.toUpperCase();
-      return `[${ts}] ${dir} (${ch}): ${e.body.slice(0, 220).replace(/\n+/g, " ")}`;
-    })
-    .join("\n");
 }
 
 function fallbackBroCard(deal: RankedDeal, rank: number): BroCard {
@@ -279,54 +265,55 @@ export async function GET(req: Request) {
   const tStart = Date.now();
   const resurrectedRecordIds = new Set<string>();
   try {
-    const allListings = await getListings();
-    const active = allListings.filter((l) => ACTIVE_STATUSES.has(l.outreachStatus ?? ""));
+    // FETCH — server-side filtered. Only pulls records the brief actually
+    // cares about, avoiding the ~1,200-record full-table scan that was
+    // tipping us past the 60s cap.
+    const tFetch = Date.now();
+    const [active, deadCandidates] = await Promise.all([
+      getActiveListingsForBrief({ recentDays: 7 }),
+      getRecentlyDeadCandidates({ maxAgeDays: 30, cap: 50 }),
+    ]);
+    const fetchMs = Date.now() - tFetch;
+    console.log(`[jarvis-brief] fetch=${fetchMs}ms active=${active.length} deadCandidates=${deadCandidates.length}`);
 
-    // Resurrection sweep: Dead records with a fresh inbound (post-kill) AND
-    // a non-rejection body get auto-flipped to "Response Received" so they
-    // join the active pool. Cheap: notes parsing only, no external fetches.
-    const tResurrect = Date.now();
+    const origin = originFromReq(req);
+    const cookie = req.headers.get("cookie");
+
+    // PASS 1 — preliminary scoring + capped resurrection sweep.
+    const tPass1 = Date.now();
+
+    // Resurrection sweep over the capped Dead pool only (max 50 records).
+    // Cheap: notes parsing in-memory + Airtable update fire-and-forget.
     const resurrected: Listing[] = [];
-    const dead = allListings.filter((l) => {
-      if (!l.lastInboundAt) return false;
-      return ["Dead", "Walked", "Terminated", "No Response"].includes(l.outreachStatus ?? "");
-    });
-    for (const l of dead) {
+    for (const l of deadCandidates) {
       const entries = parseConversation(l.notes);
       const lastInboundEntry = [...entries].reverse().find((e) => e.type === "inbound");
       const evalResult = evaluateResurrection(l, lastInboundEntry?.text ?? null);
       if (evalResult.resurrected && evalResult.inboundSnippet) {
         resurrected.push(l);
         resurrectedRecordIds.add(l.id);
-        // Fire-and-forget Airtable update + audit note. Doesn't block the
-        // brief's response time.
+        // Fire-and-forget Airtable update + audit note.
         void applyResurrection(l, evalResult.inboundSnippet);
       }
     }
-    // Add resurrected listings into the active pool with status set to
-    // Response Received so downstream stage detection treats them correctly.
+    // Resurrected records virtually flip to Response Received so downstream
+    // stage detection + scoring treats them correctly.
     const activeWithResurrected: Listing[] = [
       ...active,
       ...resurrected.map((l) => ({ ...l, outreachStatus: "Response Received" } as Listing)),
     ];
-    const resurrectMs = Date.now() - tResurrect;
 
-    const origin = originFromReq(req);
-    const cookie = req.headers.get("cookie");
-
-    // PASS 1 — preliminary, field-only ranking. No external fetches.
-    const tPass1 = Date.now();
     const preliminaryRanked = activeWithResurrected
       .map((l) => {
         let prelim = computePreliminaryScore(l);
-        // Resurrected records get a +90 bump per spec — high-leverage
-        // missed-opportunity recovery.
+        // Resurrected records get +90 — high-leverage missed-opportunity recovery.
         if (resurrectedRecordIds.has(l.id)) prelim += 90;
         return { listing: l, prelim };
       })
       .sort((a, b) => b.prelim - a.prelim)
       .slice(0, MAX_HYDRATE_CANDIDATES);
     const pass1Ms = Date.now() - tPass1;
+    console.log(`[jarvis-brief] pass1=${pass1Ms}ms (active=${active.length} resurrected=${resurrected.length} candidates=${preliminaryRanked.length})`);
 
     // PASS 2 — fully hydrate the top-K candidates only. deal-context for each
     // is fetched in parallel; per-candidate, deal-context fans out internally.
@@ -402,7 +389,7 @@ export async function GET(req: Request) {
     // Re-sort after the bumps so the LLM sees the most-urgent deals first.
     ranked.sort((a, b) => b.score - a.score);
 
-    console.log(`[jarvis-brief] pass1=${pass1Ms}ms (active=${active.length} -> ${preliminaryRanked.length}) pass2=${pass2Ms}ms (hydrated=${ranked.length})`);
+    console.log(`[jarvis-brief] pass2=${pass2Ms}ms (hydrated=${ranked.length})`);
 
     if (ranked.length === 0) {
       const empty: JarvisBrief = {
@@ -424,27 +411,28 @@ export async function GET(req: Request) {
     });
 
     const dealBlocks = ranked.map((r, i) => {
-      const ctx = r.context;
       const ac = r.agentContext;
       const dd = r.ddStatus;
-      const lastInBody = (ctx.metadata?.lastInboundBody as string) ?? "—";
-      const ddLine = dd ? `\nddStatus: complete=${dd.ddCompleteCount}/${dd.ddTotal} canCounter=${dd.canCounter} canSignPA=${dd.canSignPA} volleyState=[t1=${dd.volleyState.text1SentAt ? "sent" : "pending"}, t2=${dd.volleyState.text2SentAt ? "sent" : "pending"}, t3=${dd.volleyState.text3SentAt ? "sent" : "pending"}] missing=[${dd.ddMissingItems.slice(0, 4).join(", ")}${dd.ddMissingItems.length > 4 ? "..." : ""}] nextAction=${dd.recommendedActions[0]?.action ?? "—"}` : "";
-      const stageLine = ctx.dealStage
-        ? `\ndealStage: ${ctx.dealStage} signals=[paDrafting=${ctx.dealStageSignals?.paDrafting ?? false}, costClarificationPending=${ctx.dealStageSignals?.costClarificationPending ?? false}, inspectionStarted=${ctx.dealStageSignals?.inspectionStarted ?? false}]`
+      const compressed = compressForLLM(r.context);
+      const lastInBody = compressed.lastInboundBody ?? "—";
+      const ddLine = dd ? `\nddStatus: complete=${dd.ddCompleteCount}/${dd.ddTotal} canCounter=${dd.canCounter} canSignPA=${dd.canSignPA} volleyState=[t1=${dd.volleyState.text1SentAt ? "sent" : "pending"}, t2=${dd.volleyState.text2SentAt ? "sent" : "pending"}, t3=${dd.volleyState.text3SentAt ? "sent" : "pending"}] missing=[${dd.ddMissingItems.slice(0, 4).join(", ")}${dd.ddMissingItems.length > 4 ? "..." : ""}] nextAction=${dd.recommendedActions[0]?.action ?? "—"}${dd.ddInformalAnsweredItems && dd.ddInformalAnsweredItems.length > 0 ? ` informallyAnswered=[${dd.ddInformalAnsweredItems.slice(0, 6).join(", ")}]` : ""}` : "";
+      const stageLine = compressed.dealStage
+        ? `\ndealStage: ${compressed.dealStage} signals=[paDrafting=${compressed.dealStageSignals?.paDrafting ?? false}, costClarificationPending=${compressed.dealStageSignals?.costClarificationPending ?? false}, inspectionStarted=${compressed.dealStageSignals?.inspectionStarted ?? false}]`
         : "";
       const resurrectedLine = r.resurrected ? `\nresurrected: true (was Dead, fresh non-rejection inbound just landed)` : "";
-      return `### DEAL ${i + 1} — ${ctx.property.address}
-recordId: ${ctx.recordId}
-agent: ${ctx.agent.name ?? "—"} (phone: ${ctx.agent.phone ?? "—"}, email: ${ctx.agent.email ?? "—"})
+      const notesLine = compressed.notesTail ? `\nnotesTail (last ~1000 chars): ${compressed.notesTail}` : "";
+      return `### DEAL ${i + 1} — ${compressed.property.address}
+recordId: ${compressed.recordId}
+agent: ${compressed.agent.name ?? "—"} (phone: ${compressed.agent.phone ?? "—"}, email: ${compressed.agent.email ?? "—"})
 outreachStatus: ${r.outreachStatus ?? "—"}${stageLine}${resurrectedLine}
-listPrice: ${ctx.property.listPrice ?? "—"}
-hoursSinceInbound: ${ctx.hoursSinceInbound ?? "—"}
-hoursSinceOutbound: ${ctx.hoursSinceOutbound ?? "—"}
-responseDue: ${ctx.responseDue}
-multiListingAlert: ${ctx.multiListingAlert}${ac ? `\nagentContext: depthScore=${ac.depthScore} totalListings=${ac.totalListings} totalReplies=${ac.totalReplies} inferredTone=${ac.inferredTone} unanswered=${ac.propertiesWithUnansweredInbound.length} active=${ac.activeProperties.length} isPrincipal=${ac.isPrincipal ?? false}${ac.principalSignal ? ` principalSignal="${ac.principalSignal.replace(/"/g, "'").slice(0, 80)}"` : ""}` : ""}${ddLine}
-lastInboundBody: ${lastInBody.slice(0, 200)}
-recent timeline:
-${summarizeTimeline(ctx.timeline)}
+listPrice: ${compressed.property.listPrice ?? "—"}
+hoursSinceInbound: ${compressed.hoursSinceInbound ?? "—"}
+hoursSinceOutbound: ${compressed.hoursSinceOutbound ?? "—"}
+responseDue: ${compressed.responseDue}
+multiListingAlert: ${compressed.multiListingAlert}${ac ? `\nagentContext: depthScore=${ac.depthScore} totalListings=${ac.totalListings} totalReplies=${ac.totalReplies} inferredTone=${ac.inferredTone} unanswered=${ac.propertiesWithUnansweredInbound.length} active=${ac.activeProperties.length} isPrincipal=${ac.isPrincipal ?? false}${ac.principalSignal ? ` principalSignal="${ac.principalSignal.replace(/"/g, "'").slice(0, 80)}"` : ""}` : ""}${ddLine}
+lastInboundBody: ${lastInBody}${notesLine}
+recent timeline (last ${compressed.timeline.length} conversational entries${compressed.timelineDroppedCount > 0 ? `, ${compressed.timelineDroppedCount} older dropped` : ""}):
+${renderCompressedTimeline(compressed)}
 score: ${r.score}`;
     }).join("\n\n");
 
