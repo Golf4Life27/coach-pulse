@@ -80,6 +80,32 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "Action_Card_State": "actionCardState",
   "Last_Inbound_At": "lastInboundAt",
   "Last_Outbound_At": "lastOutboundAt",
+  // ── Phase 3: photo analysis ──────────────────────────────────────────────
+  "Est_Rehab_Low": "estRehabLow",
+  "Est_Rehab_Mid": "estRehabMid",
+  "Est_Rehab_High": "estRehabHigh",
+  "Photo_Confidence": "photoConfidence",
+  "Line_Items_JSON": "lineItemsJson",
+  "Red_Flags": "redFlags",
+  "Photo_Analyzed_At": "photoAnalyzedAt",
+  "Visual_Verified": "visualVerified",
+  "Visual_Source": "visualSource",
+  // ── Phase 3: ARV validation ──────────────────────────────────────────────
+  "Real_ARV_Low": "realArvLow",
+  "Real_ARV_High": "realArvHigh",
+  "Real_ARV_Median": "realArvMedian",
+  "Investor_MAO": "investorMao",
+  "Your_MAO": "yourMao",
+  "Auto_Approve_v2": "autoApproveV2",
+  "ARV_Validated_At": "arvValidatedAt",
+  // ── Phase 3: pre-offer screen ────────────────────────────────────────────
+  "Pre_Offer_Screen_Result": "preOfferScreenResult",
+  "Pre_Offer_Screen_Notes": "preOfferScreenNotes",
+  "Pre_Offer_Screen_At": "preOfferScreenAt",
+  // ── Phase 3: DD volley ───────────────────────────────────────────────────
+  "DD_Volley_Text_1_Sent_At": "ddVolleyText1SentAt",
+  "DD_Volley_Text_2_Sent_At": "ddVolleyText2SentAt",
+  "DD_Volley_Text_3_Sent_At": "ddVolleyText3SentAt",
 };
 
 const DEAL_FIELDS: Record<string, string> = {

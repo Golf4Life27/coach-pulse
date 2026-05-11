@@ -1,18 +1,28 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { usePathname } from "next/navigation";
+
+const PUBLIC_PATH_PREFIXES = ["/buyer-intake"];
 
 export default function AuthGate({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  const isPublic = !!pathname && PUBLIC_PATH_PREFIXES.some((p) => pathname.startsWith(p));
+
   useEffect(() => {
+    if (isPublic) {
+      setAuthenticated(true);
+      return;
+    }
     // Check if already authenticated via cookie
     const isAuth = document.cookie.includes("akb-auth=authenticated");
     setAuthenticated(isAuth);
-  }, []);
+  }, [isPublic]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

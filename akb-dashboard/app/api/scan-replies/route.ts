@@ -81,15 +81,43 @@ const INTEREST_PATTERNS = [
   /\$\s*\d/i, // dollar amount mentioned
 ];
 
-type Classification = "rejection" | "interest" | "unknown";
+type Classification = "rejection" | "interest" | "counter" | "unknown";
+
+// A counter is detected when the agent quotes a specific number range or
+// floor — distinct from a generic interest signal. We require a price
+// reference plus counter language.
+const COUNTER_PRICE_RE = /\$\s*\d{1,3}[\s,.]?(?:\d{3}|k)\b/i;
+const COUNTER_LANGUAGE_PATTERNS = [
+  /\bcounter\b/i,
+  /\bcome\s+(?:up|down)\b/i,
+  /\bin\s+the\s+\$?\d/i,
+  /\b(?:looking|hoping)\s+(?:for|at)\s+\$?\d/i,
+  /\bbest\s+(?:and\s+)?final\b/i,
+  /\bnet\s+(?:to|of)\b/i,
+  /\bhighest\s+(?:we'?ll|i'?ll|they'?ll)\s+(?:go|do)\b/i,
+  /\b(?:lowest|min(?:imum)?)\s+(?:they|seller|we)\b/i,
+  /\bmeet\s+(?:in\s+the\s+)?middle\b/i,
+  /\bif\s+you\s+can\s+(?:do|come|go)\s+\$?\d/i,
+];
 
 function classifyReply(body: string): { classification: Classification; matchedPattern: string | null } {
   const trimmed = body.trim();
   if (!trimmed) return { classification: "unknown", matchedPattern: null };
 
+  // Rejection wins over everything — even if a price is mentioned, "not
+  // interested at $X" is still a rejection.
   for (const pat of REJECTION_PATTERNS) {
     if (pat.test(trimmed)) {
       return { classification: "rejection", matchedPattern: pat.source };
+    }
+  }
+
+  // Counter detection: must have a price token AND counter-flavored language.
+  if (COUNTER_PRICE_RE.test(trimmed)) {
+    for (const pat of COUNTER_LANGUAGE_PATTERNS) {
+      if (pat.test(trimmed)) {
+        return { classification: "counter", matchedPattern: pat.source };
+      }
     }
   }
 
@@ -109,6 +137,14 @@ function determineNewStatus(
   currentStatus: string | null
 ): string | null {
   if (classification === "rejection") return "Dead";
+  // A counter inbound on an active record promotes to "Counter Received".
+  // typecast=true on the update will create the option in Airtable on
+  // first use if it doesn't already exist.
+  if (classification === "counter") {
+    if (currentStatus === "Counter Received") return null; // already there
+    if (currentStatus === "Dead") return "Counter Received"; // resurrection
+    return "Counter Received";
+  }
   if (classification === "interest") return "Negotiating";
 
   // Unknown classification

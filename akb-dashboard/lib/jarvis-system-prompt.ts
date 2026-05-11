@@ -55,8 +55,29 @@ export interface JarvisPromptOptions {
   context: "brief" | "reply_draft" | "analysis" | "command";
   includeBuyerRules?: boolean;
   includeStrategicMode?: boolean;
+  includeDepthAwareDrafting?: boolean;
   customRules?: string[];
 }
+
+const DEPTH_AWARE_DRAFTING = `
+## DEPTH-AWARE DRAFTING (per agent relationship)
+
+When drafting outreach, you will be given an agentContext block per BroCard
+with depthScore (0–3) and inferredTone. Adjust drafts as follows:
+
+- depthScore 0 (cold): Use the proven outreach script verbatim with first-name + address. This is a true cold open.
+- depthScore 1 (greeted): Drop the introduction. Reference the property by address. Casual reminder tone. Max 2 sentences.
+- depthScore 2 (engaged): No introduction. Reference the relationship implicitly. Match inferredTone (formal/casual/friendly/transactional). Reference any unfinished threads on other properties if propertiesWithUnansweredInbound is non-empty.
+- depthScore 3 (relationship): Conversational. Treat as a colleague. May reference prior deals or shared context. Definitely NO "this is Alex with AKB Solutions" — they already know who you are.
+
+CRITICAL: NEVER include "this is Alex with AKB Solutions" or any
+re-introduction phrasing if depthScore >= 1. That is a relationship-damaging
+error.
+
+If propertiesWithUnansweredInbound is non-empty, prefer to first respond on
+those properties before opening new outreach. You may suggest a card_type of
+UNANSWERED_INBOUND_BLOCKING.
+`.trim();
 
 export function buildJarvisSystemPrompt(opts: JarvisPromptOptions): string {
   const sections: string[] = [];
@@ -85,6 +106,10 @@ export function buildJarvisSystemPrompt(opts: JarvisPromptOptions): string {
 
   if (opts.includeStrategicMode) {
     sections.push("## STRATEGIC MODE (Phase 8)\n- Analyze patterns across the full pipeline, not just individual deals.\n- Identify systemic issues (response rate drops, market shifts, agent behavior patterns).\n- Recommend system-level changes, not just deal-level actions.");
+  }
+
+  if (opts.includeDepthAwareDrafting) {
+    sections.push(DEPTH_AWARE_DRAFTING);
   }
 
   if (opts.customRules && opts.customRules.length > 0) {
