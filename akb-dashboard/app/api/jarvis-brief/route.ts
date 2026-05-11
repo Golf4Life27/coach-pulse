@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getListings } from "@/lib/airtable";
+import { getActiveListingsForBrief, getRecentlyDeadCandidates } from "@/lib/airtable";
 import { buildJarvisSystemPrompt, computeJarvisScore } from "@/lib/jarvis-system-prompt";
 import { getVolleyText } from "@/lib/dd-volley";
 import { applyResurrection, evaluateResurrection } from "@/lib/resurrection";
@@ -18,7 +18,6 @@ import type {
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const ACTIVE_STATUSES = new Set(["Negotiating", "Response Received", "Offer Accepted"]);
 const MAX_BROCARDS = 3;
 const MAX_RANKED_FOR_LLM = 5;
 // Number of records that survive Pass 1 (field-only scoring) and get fully
@@ -279,54 +278,55 @@ export async function GET(req: Request) {
   const tStart = Date.now();
   const resurrectedRecordIds = new Set<string>();
   try {
-    const allListings = await getListings();
-    const active = allListings.filter((l) => ACTIVE_STATUSES.has(l.outreachStatus ?? ""));
+    // FETCH — server-side filtered. Only pulls records the brief actually
+    // cares about, avoiding the ~1,200-record full-table scan that was
+    // tipping us past the 60s cap.
+    const tFetch = Date.now();
+    const [active, deadCandidates] = await Promise.all([
+      getActiveListingsForBrief({ recentDays: 7 }),
+      getRecentlyDeadCandidates({ maxAgeDays: 30, cap: 50 }),
+    ]);
+    const fetchMs = Date.now() - tFetch;
+    console.log(`[jarvis-brief] fetch=${fetchMs}ms active=${active.length} deadCandidates=${deadCandidates.length}`);
 
-    // Resurrection sweep: Dead records with a fresh inbound (post-kill) AND
-    // a non-rejection body get auto-flipped to "Response Received" so they
-    // join the active pool. Cheap: notes parsing only, no external fetches.
-    const tResurrect = Date.now();
+    const origin = originFromReq(req);
+    const cookie = req.headers.get("cookie");
+
+    // PASS 1 — preliminary scoring + capped resurrection sweep.
+    const tPass1 = Date.now();
+
+    // Resurrection sweep over the capped Dead pool only (max 50 records).
+    // Cheap: notes parsing in-memory + Airtable update fire-and-forget.
     const resurrected: Listing[] = [];
-    const dead = allListings.filter((l) => {
-      if (!l.lastInboundAt) return false;
-      return ["Dead", "Walked", "Terminated", "No Response"].includes(l.outreachStatus ?? "");
-    });
-    for (const l of dead) {
+    for (const l of deadCandidates) {
       const entries = parseConversation(l.notes);
       const lastInboundEntry = [...entries].reverse().find((e) => e.type === "inbound");
       const evalResult = evaluateResurrection(l, lastInboundEntry?.text ?? null);
       if (evalResult.resurrected && evalResult.inboundSnippet) {
         resurrected.push(l);
         resurrectedRecordIds.add(l.id);
-        // Fire-and-forget Airtable update + audit note. Doesn't block the
-        // brief's response time.
+        // Fire-and-forget Airtable update + audit note.
         void applyResurrection(l, evalResult.inboundSnippet);
       }
     }
-    // Add resurrected listings into the active pool with status set to
-    // Response Received so downstream stage detection treats them correctly.
+    // Resurrected records virtually flip to Response Received so downstream
+    // stage detection + scoring treats them correctly.
     const activeWithResurrected: Listing[] = [
       ...active,
       ...resurrected.map((l) => ({ ...l, outreachStatus: "Response Received" } as Listing)),
     ];
-    const resurrectMs = Date.now() - tResurrect;
 
-    const origin = originFromReq(req);
-    const cookie = req.headers.get("cookie");
-
-    // PASS 1 — preliminary, field-only ranking. No external fetches.
-    const tPass1 = Date.now();
     const preliminaryRanked = activeWithResurrected
       .map((l) => {
         let prelim = computePreliminaryScore(l);
-        // Resurrected records get a +90 bump per spec — high-leverage
-        // missed-opportunity recovery.
+        // Resurrected records get +90 — high-leverage missed-opportunity recovery.
         if (resurrectedRecordIds.has(l.id)) prelim += 90;
         return { listing: l, prelim };
       })
       .sort((a, b) => b.prelim - a.prelim)
       .slice(0, MAX_HYDRATE_CANDIDATES);
     const pass1Ms = Date.now() - tPass1;
+    console.log(`[jarvis-brief] pass1=${pass1Ms}ms (active=${active.length} resurrected=${resurrected.length} candidates=${preliminaryRanked.length})`);
 
     // PASS 2 — fully hydrate the top-K candidates only. deal-context for each
     // is fetched in parallel; per-candidate, deal-context fans out internally.
@@ -402,7 +402,7 @@ export async function GET(req: Request) {
     // Re-sort after the bumps so the LLM sees the most-urgent deals first.
     ranked.sort((a, b) => b.score - a.score);
 
-    console.log(`[jarvis-brief] pass1=${pass1Ms}ms (active=${active.length} -> ${preliminaryRanked.length}) pass2=${pass2Ms}ms (hydrated=${ranked.length})`);
+    console.log(`[jarvis-brief] pass2=${pass2Ms}ms (hydrated=${ranked.length})`);
 
     if (ranked.length === 0) {
       const empty: JarvisBrief = {
