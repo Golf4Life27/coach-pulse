@@ -1,0 +1,50 @@
+{
+  "$schema_note": "First-class validation anchors per Briefing §17 + §11. Highest weight in the truth hierarchy. When agent output diverges from these, the agent (or its config) is wrong, not the validation. Grows as deals close.",
+  "last_updated": "2026-05-12",
+  "source": "Briefing §11 + Bible v3 §9.2 + Refined Bible §11 (walked deal note)",
+  "version": 1,
+  "cases": [
+    {
+      "id": "highland",
+      "address": "1219 E Highland Blvd",
+      "city": "San Antonio",
+      "state": "TX",
+      "zip": "78210",
+      "status_note": "WALKED 4/30/2026. Used as math anchor only — no live outreach; on never-resurface list.",
+      "subject": {
+        "beds": 3,
+        "baths": 2,
+        "sqft": 1200,
+        "condition": "Fair"
+      },
+      "expectations": {
+        "arv_low": 200000,
+        "arv_mid": 215000,
+        "arv_high": 225000,
+        "rehab_low": 45000,
+        "rehab_mid": 55000,
+        "rehab_high": 65000,
+        "your_mao_target": 90000,
+        "your_mao_tolerance": 5000
+      }
+    },
+    {
+      "id": "sturtevant",
+      "address": "1973 Sturtevant St",
+      "city": "Detroit",
+      "state": "MI",
+      "zip": "48206",
+      "status_note": "Active negotiation (5/12). Dual-track validation: landlord track may exceed flipper track → creative-finance flag.",
+      "subject": {
+        "beds": 3,
+        "baths": 1,
+        "sqft": 1100,
+        "condition": "Poor"
+      },
+      "expectations": {
+        "dual_track_required": true,
+        "creative_finance_flag_expected_when_landlord_exceeds_flipper": true
+      }
+    }
+  ]
+}

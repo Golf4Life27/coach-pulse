@@ -1,0 +1,26 @@
+{
+  "$schema_note": "Comp-filter heuristics for Phase 4A (ARV Intelligence). Bible v3 §9.2 mandates \"reject distressed/cash/LLC sales,\" but RentCast doesn't expose buyer entity. These knobs approximate \"renovated retail comps\" via $/sqft floor relative to ZIP median + recency + similarity gates.",
+  "last_updated": "2026-05-12",
+  "source": "Bible v3 §9.2 + Crawler Roadmap §K (filters) + Phase 4A working assumption",
+  "version": 1,
+  "comp_filters": {
+    "max_age_days": 90,
+    "max_distance_miles": 0.5,
+    "sqft_ratio_min": 0.8,
+    "sqft_ratio_max": 1.2,
+    "beds_exact_match_required": true,
+    "min_comps_for_high_confidence": 5,
+    "min_comps_for_med_confidence": 3
+  },
+  "distressed_proxy": {
+    "_note": "Without buyer-entity data from RentCast, drop comps whose $/sqft is below this fraction of the ZIP median. Catches obvious cash/distressed flips that didn't see retail buyers.",
+    "drop_below_fraction_of_zip_median": 0.55,
+    "drop_above_fraction_of_zip_median": 1.80,
+    "apply_only_if_zip_has_at_least_comps": 4
+  },
+  "outputs": {
+    "_note": "Phase 4A returns both raw and filtered numbers so the Pricing Agent (and Alex) can see what was excluded.",
+    "include_excluded_comps": true,
+    "include_filter_quality_label": true
+  }
+}

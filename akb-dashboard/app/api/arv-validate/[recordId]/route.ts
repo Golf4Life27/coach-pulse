@@ -1,6 +1,19 @@
+// Record-based ARV wrapper. The math layer moved to
+// /api/arv-intelligence/[zip] (stateless, source of truth for ARV).
+//
+// This route stays for dashboard backward-compat: it reads the listing
+// from Airtable, calls the stateless endpoint via internal logic, then
+// derives Investor_MAO + Your_MAO using existing constants and persists
+// to the same Airtable fields the dashboard reads. The buyer math
+// formula here is a placeholder until Phase 4C (Week 2) lands the dual-
+// track Pricing Agent — same constants as before so the dashboard
+// behavior doesn't shift on this refactor.
+
 import { NextResponse } from "next/server";
 import { getListing, updateListingRecord } from "@/lib/airtable";
-import { getAvmValue, getSaleComparables, median, type RentCastSaleComp } from "@/lib/rentcast";
+import { getSaleComparables } from "@/lib/rentcast";
+import { computeArvIntelligence } from "@/lib/arv-intelligence";
+import { audit } from "@/lib/audit-log";
 import type { ArvValidationResult } from "@/types/jarvis";
 
 export const runtime = "nodejs";
@@ -9,34 +22,18 @@ export const maxDuration = 60;
 const CACHE_TTL_MS = 7 * 24 * 60 * 60_000;
 const cache: Record<string, { data: ArvValidationResult; ts: number }> = {};
 
+// Legacy buyer-math constants. Held here verbatim so the refactor is
+// purely additive — Phase 4C (Week 2) will replace this block with the
+// dual-track flipper + landlord math.
 const DEFAULT_BUYER_PROFIT = 30_000;
 const DEFAULT_WHOLESALE_FEE = 15_000;
 const CLOSING_COST_PCT = 0.13;
-
-function filterComps(comps: RentCastSaleComp[], targetSqft: number | null, targetBeds: number | null): RentCastSaleComp[] {
-  const sixMonthsAgo = Date.now() - 6 * 30 * 24 * 60 * 60_000;
-  return comps.filter((c) => {
-    if (!c.price || c.price <= 0) return false;
-    if (c.distance != null && c.distance > 0.5) return false;
-    if (c.saleDate) {
-      const t = new Date(c.saleDate).getTime();
-      if (!isNaN(t) && t < sixMonthsAgo) return false;
-    }
-    if (targetSqft != null && c.squareFootage != null) {
-      const ratio = c.squareFootage / targetSqft;
-      if (ratio < 0.8 || ratio > 1.2) return false;
-    }
-    if (targetBeds != null && c.bedrooms != null) {
-      if (c.bedrooms !== targetBeds) return false;
-    }
-    return true;
-  });
-}
 
 export async function GET(
   _req: Request,
   { params }: { params: Promise<{ recordId: string }> },
 ) {
+  const t0 = Date.now();
   const { recordId } = await params;
   if (!recordId || !recordId.startsWith("rec")) {
     return NextResponse.json({ error: "Invalid record id", recordId }, { status: 400 });
@@ -55,7 +52,8 @@ export async function GET(
   if (!listing) {
     return NextResponse.json({ error: "Listing not found", recordId }, { status: 404 });
   }
-  if (!listing.address || !listing.city || !listing.state || !listing.zip) {
+  const state = listing.state ?? null;
+  if (!listing.address || !listing.city || !state || !listing.zip) {
     return NextResponse.json({ error: "Listing missing address parts", recordId }, { status: 422 });
   }
   if (listing.estRehabMid == null) {
@@ -65,49 +63,38 @@ export async function GET(
     );
   }
 
-  const avmInput = {
-    address: listing.address,
-    city: listing.city,
-    state: listing.state,
-    zip: listing.zip,
-    bedrooms: listing.bedrooms,
-    bathrooms: listing.bathrooms,
-    squareFootage: listing.buildingSqFt,
-  };
-
-  let avm = null as Awaited<ReturnType<typeof getAvmValue>> | null;
-  let comps: RentCastSaleComp[] = [];
+  let comps;
   try {
-    [avm, comps] = await Promise.all([getAvmValue(avmInput), getSaleComparables(avmInput)]);
+    comps = await getSaleComparables({
+      address: listing.address,
+      city: listing.city,
+      state,
+      zip: listing.zip,
+      bedrooms: listing.bedrooms,
+      bathrooms: listing.bathrooms,
+      squareFootage: listing.buildingSqFt,
+    });
   } catch (err) {
-    console.error(`[arv-validate] RentCast error for ${recordId}:`, err);
     return NextResponse.json(
       { error: "RentCast call failed", detail: String(err), recordId },
       { status: 502 },
     );
   }
 
-  const filteredComps = filterComps(comps, listing.buildingSqFt, listing.bedrooms);
-  const compPrices = filteredComps.map((c) => c.price!).filter((p): p is number => p != null);
-  const compMedian = median(compPrices);
-  const asIs = avm?.price ?? null;
-
-  const arvByComp = compMedian;
-  const arvByAvm = asIs != null ? Math.round(asIs * 1.4) : null;
-  const arv_median =
-    arvByComp != null && arvByAvm != null
-      ? Math.max(arvByComp, arvByAvm)
-      : (arvByComp ?? arvByAvm);
-  const arv_low = compPrices.length > 0 ? Math.min(...compPrices) : (avm?.priceLow ?? null);
-  const arv_high = compPrices.length > 0 ? Math.max(...compPrices) : (avm?.priceHigh ?? null);
+  const arv = computeArvIntelligence(comps, {
+    zip: listing.zip,
+    beds: listing.bedrooms,
+    baths: listing.bathrooms,
+    sqft: listing.buildingSqFt,
+  });
 
   let investor_mao: number | null = null;
   let your_mao: number | null = null;
   let your_mao_pct: number | null = null;
 
-  if (arv_median != null && listing.estRehabMid != null) {
+  if (arv.arv_mid != null && listing.estRehabMid != null) {
     investor_mao = Math.round(
-      arv_median - listing.estRehabMid - arv_median * CLOSING_COST_PCT - DEFAULT_BUYER_PROFIT,
+      arv.arv_mid - listing.estRehabMid - arv.arv_mid * CLOSING_COST_PCT - DEFAULT_BUYER_PROFIT,
     );
     your_mao = investor_mao - DEFAULT_WHOLESALE_FEE;
     if (listing.listPrice && listing.listPrice > 0) {
@@ -126,11 +113,11 @@ export async function GET(
 
   const result: ArvValidationResult = {
     recordId,
-    arv_low,
-    arv_high,
-    arv_median,
-    comp_count: filteredComps.length,
-    as_is_value: asIs,
+    arv_low: arv.arv_low,
+    arv_high: arv.arv_high,
+    arv_median: arv.arv_mid,
+    comp_count: arv.comp_count_used,
+    as_is_value: null,
     investor_mao,
     your_mao,
     your_mao_pct,
@@ -141,9 +128,9 @@ export async function GET(
 
   try {
     await updateListingRecord(recordId, {
-      Real_ARV_Low: arv_low,
-      Real_ARV_High: arv_high,
-      Real_ARV_Median: arv_median,
+      Real_ARV_Low: arv.arv_low,
+      Real_ARV_High: arv.arv_high,
+      Real_ARV_Median: arv.arv_mid,
       Investor_MAO: investor_mao,
       Your_MAO: your_mao,
       Auto_Approve_v2: result.auto_approve_v2,
@@ -152,6 +139,28 @@ export async function GET(
   } catch (err) {
     console.error(`[arv-validate] Failed to persist for ${recordId}:`, err);
   }
+
+  await audit({
+    agent: "phase4a-wrapper",
+    event: "arv_validated",
+    recordId,
+    inputSummary: {
+      address: listing.address,
+      zip: listing.zip,
+      sqft: listing.buildingSqFt,
+      est_rehab_mid: listing.estRehabMid,
+    },
+    outputSummary: {
+      arv_mid: arv.arv_mid,
+      comp_count_used: arv.comp_count_used,
+      filter_quality: arv.filter_quality,
+      investor_mao,
+      your_mao,
+      spread_label,
+    },
+    decision: spread_label,
+    ms: Date.now() - t0,
+  });
 
   cache[recordId] = { data: result, ts: Date.now() };
   return NextResponse.json(result);
