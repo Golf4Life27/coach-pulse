@@ -8,6 +8,7 @@ import arvFilterJson from "./arv_filter.json";
 import validationCasesJson from "./validation_cases.json";
 import capRatesJson from "./cap_rates.json";
 import pricingRulesJson from "./pricing_rules.json";
+import arvUpliftJson from "./arv_uplift.json";
 
 export interface RehabRates {
   last_updated: string;
@@ -44,10 +45,34 @@ export interface ArvFilter {
     drop_above_fraction_of_zip_median: number;
     apply_only_if_zip_has_at_least_comps: number;
   };
+  bimodal_detection: {
+    default_gap_threshold: number;
+    min_cluster_size: number;
+    by_zip_prefix: Record<string, { gap_threshold: number }>;
+  };
+  cross_method_disagreement: {
+    threshold_pct: number;
+  };
   outputs: {
     include_excluded_comps: boolean;
     include_filter_quality_label: boolean;
   };
+}
+
+export type ArvDataStateDefault = "as_is" | "renovated";
+
+export interface ArvUpliftEntry {
+  multiplier: number;
+  data_state_default: ArvDataStateDefault;
+  market: string;
+}
+
+export interface ArvUplift {
+  last_updated: string;
+  source: string;
+  version: number;
+  _default: { multiplier: number; data_state_default: ArvDataStateDefault };
+  by_zip_prefix: Record<string, ArvUpliftEntry>;
 }
 
 export interface ValidationCase {
@@ -104,6 +129,7 @@ export const arvFilter = arvFilterJson as unknown as ArvFilter;
 export const validationCases = validationCasesJson as unknown as ValidationCases;
 export const capRates = capRatesJson as unknown as CapRates;
 export const pricingRules = pricingRulesJson as unknown as PricingRules;
+export const arvUplift = arvUpliftJson as unknown as ArvUplift;
 
 // Market multiplier lookup by ZIP. Falls back to default when ZIP prefix
 // isn't in the table. Returns both the number and the market label for
@@ -151,4 +177,38 @@ export function wholesaleFeeForZip(zip: string | null | undefined): {
     if (z.startsWith(prefix)) return entry;
   }
   return { floor_usd: pricingRules.wholesale_fee.floor_usd, market: "default" };
+}
+
+// ARV uplift lookup. Returns the per-market multiplier AND the
+// data_state_default — the discriminator for whether RentCast's typical
+// comp set in this market represents AS-IS or RENOVATED retail.
+//   Detroit/Memphis → as_is (uplift fires)
+//   SA/Dallas/Houston → renovated (uplift suppressed unless bimodal hides it)
+export function arvUpliftForZip(zip: string | null | undefined): ArvUpliftEntry {
+  if (!zip) {
+    return {
+      multiplier: arvUplift._default.multiplier,
+      data_state_default: arvUplift._default.data_state_default,
+      market: "unknown",
+    };
+  }
+  const z = zip.trim();
+  for (const [prefix, entry] of Object.entries(arvUplift.by_zip_prefix)) {
+    if (z.startsWith(prefix)) return entry;
+  }
+  return {
+    multiplier: arvUplift._default.multiplier,
+    data_state_default: arvUplift._default.data_state_default,
+    market: "default",
+  };
+}
+
+// Bimodal-detection gap threshold by ZIP prefix.
+export function bimodalGapThresholdForZip(zip: string | null | undefined): number {
+  if (!zip) return arvFilter.bimodal_detection.default_gap_threshold;
+  const z = zip.trim();
+  for (const [prefix, entry] of Object.entries(arvFilter.bimodal_detection.by_zip_prefix)) {
+    if (z.startsWith(prefix)) return entry.gap_threshold;
+  }
+  return arvFilter.bimodal_detection.default_gap_threshold;
 }

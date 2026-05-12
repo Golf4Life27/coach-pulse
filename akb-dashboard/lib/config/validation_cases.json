@@ -44,8 +44,17 @@
       "expectations": {
         "dual_track_required": true,
         "creative_finance_flag_expected_when_landlord_exceeds_flipper": true,
+        "arv_renovated_target": {
+          "_note": "Anchored to Briyana's $145K boots-on-ground renovated comp on Sturtevant St (5/12). Working tolerance ±10%. Alex's hand math: $51,548 + ($45K × 2.0) = $141,548 → 2.4% below anchor, lands inside band.",
+          "low": 130500,
+          "mid": 145000,
+          "high": 159500,
+          "expected_method": "uplift_model"
+        },
         "harness_checks": {
-          "_note": "Bible v3 doesn't pin Sturtevant to specific MAO numbers — it's qualitative validation that dual-track math runs and the creative-finance flag fires when applicable. Add target MAO numbers here once the deal closes.",
+          "_note": "Phase 4A bimodal-uplift smoke checks added 5/12. Pre-existing Phase 4C qualitative checks below.",
+          "arv_renovated_lands_in_target_band": true,
+          "arv_uplift_path_fires_for_detroit": true,
           "pricing_run_succeeds": true,
           "both_tracks_compute_when_rent_available": true,
           "creative_finance_flag_fires_when_delta_above_threshold": true

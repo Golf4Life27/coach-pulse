@@ -28,10 +28,17 @@ function withinRange(actual: number | null | undefined, low: number, high: numbe
   return actual >= low && actual <= high;
 }
 
+function parseNum(v: string | null): number | null {
+  if (!v) return null;
+  const n = Number(v);
+  return isNaN(n) ? null : n;
+}
+
 export async function GET(req: Request) {
   const t0 = Date.now();
   const url = new URL(req.url);
   const skipPhotos = url.searchParams.get("skip_photos") === "1";
+  const rehabOverride = parseNum(url.searchParams.get("rehab_mid"));
 
   const vcase = getValidationCase("highland");
   if (!vcase) {
@@ -54,35 +61,30 @@ export async function GET(req: Request) {
     beds: vcase.subject.beds ?? null,
     baths: vcase.subject.baths ?? null,
     sqft: vcase.subject.sqft ?? null,
-    condition_target: vcase.subject.condition ?? null,
   };
 
-  // ── Phase 4A: ARV ───────────────────────────────────────────────────
-  let arvResult: ReturnType<typeof computeArvIntelligence> | null = null;
-  let arvError: string | null = null;
-  if (!process.env.RENTCAST_API_KEY) {
-    arvError = "RENTCAST_API_KEY not set — skipping Phase 4A leg";
-  } else {
-    try {
-      const comps = await getSaleComparables({
-        address: vcase.address,
-        city: vcase.city,
-        state: vcase.state,
-        zip: vcase.zip,
-        bedrooms: subject.beds,
-        bathrooms: subject.baths,
-        squareFootage: subject.sqft,
-      });
-      arvResult = computeArvIntelligence(comps, subject);
-    } catch (err) {
-      arvError = String(err);
-    }
-  }
-
-  // ── Phase 4B: Rehab ─────────────────────────────────────────────────
+  // ── Phase 4B: Rehab (runs first so 4A uplift has rehab_mid input)
   let rehabResult: Awaited<ReturnType<typeof callRehabVision>> | null = null;
   let rehabError: string | null = null;
-  if (skipPhotos) {
+  if (rehabOverride != null) {
+    rehabResult = {
+      zip: vcase.zip,
+      market: "override",
+      market_multiplier: 1,
+      condition_overall: "Fair",
+      rehab_low: rehabOverride,
+      rehab_mid: rehabOverride,
+      rehab_high: rehabOverride,
+      confidence: 70,
+      line_items: [],
+      red_flags: [],
+      photo_count: 0,
+      anchor_rate_per_sqft: 0,
+      vision_model: "override",
+      methodology_notes: [`rehab_mid override = $${rehabOverride}`],
+      computed_at: new Date().toISOString(),
+    };
+  } else if (skipPhotos) {
     rehabError = "skip_photos=1 — skipping Phase 4B leg";
   } else if (!process.env.ANTHROPIC_API_KEY) {
     rehabError = "ANTHROPIC_API_KEY not set — skipping Phase 4B leg";
@@ -113,6 +115,32 @@ export async function GET(req: Request) {
     }
   }
 
+  // ── Phase 4A: ARV (after rehab so Detroit-style uplift can fire)
+  let arvResult: ReturnType<typeof computeArvIntelligence> | null = null;
+  let arvError: string | null = null;
+  if (!process.env.RENTCAST_API_KEY) {
+    arvError = "RENTCAST_API_KEY not set — skipping Phase 4A leg";
+  } else {
+    try {
+      const comps = await getSaleComparables({
+        address: vcase.address,
+        city: vcase.city,
+        state: vcase.state,
+        zip: vcase.zip,
+        bedrooms: subject.beds,
+        bathrooms: subject.baths,
+        squareFootage: subject.sqft,
+      });
+      arvResult = computeArvIntelligence(comps, {
+        ...subject,
+        condition_target: "renovated",
+        rehab_mid: rehabResult?.rehab_mid ?? null,
+      });
+    } catch (err) {
+      arvError = String(err);
+    }
+  }
+
   // ── Grading ─────────────────────────────────────────────────────────
   const arvPass = arvResult
     ? withinRange(arvResult.arv_mid, exp.arv_low, exp.arv_high)
@@ -137,9 +165,20 @@ export async function GET(req: Request) {
         : overall === "fail"
           ? "confirmed_failure"
           : "uncertain",
-    inputSummary: { address: vcase.address, zip: vcase.zip, skip_photos: skipPhotos },
+    inputSummary: {
+      address: vcase.address,
+      zip: vcase.zip,
+      skip_photos: skipPhotos,
+      rehab_override: rehabOverride,
+    },
     outputSummary: {
       arv_mid: arvResult?.arv_mid ?? null,
+      arv_method: arvResult?.arv_method ?? null,
+      arv_as_is_mid: arvResult?.arv_as_is.mid ?? null,
+      arv_renovated_mid: arvResult?.arv_renovated.mid ?? null,
+      market: arvResult?.market ?? null,
+      data_state_default: arvResult?.data_state_default ?? null,
+      cross_method_disagreement: arvResult?.cross_method_disagreement.fired ?? null,
       rehab_mid: rehabResult?.rehab_mid ?? null,
       arv_pass: arvPass,
       rehab_pass: rehabPass,

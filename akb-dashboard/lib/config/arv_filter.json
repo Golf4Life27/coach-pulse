@@ -18,6 +18,22 @@
     "drop_above_fraction_of_zip_median": 1.80,
     "apply_only_if_zip_has_at_least_comps": 4
   },
+  "bimodal_detection": {
+    "_note": "When sorted $/sqft for surviving comps has a gap >= gap_threshold between adjacent values AND both sides have >= min_cluster_size, treat as bimodal. Upper cluster = renovated retail (kept when condition_target ∈ {good, renovated}); lower cluster = as-is wholesale flips (kept when condition_target ∈ {as_is, fair, poor}). Per-ZIP-prefix override; default applies elsewhere. SA threshold tighter because the bimodal gap there is smaller than Detroit/Memphis.",
+    "default_gap_threshold": 0.40,
+    "min_cluster_size": 2,
+    "by_zip_prefix": {
+      "48": { "gap_threshold": 0.40 },
+      "38": { "gap_threshold": 0.40 },
+      "78": { "gap_threshold": 0.35 },
+      "75": { "gap_threshold": 0.35 },
+      "77": { "gap_threshold": 0.35 }
+    }
+  },
+  "cross_method_disagreement": {
+    "_note": "When BOTH the bimodal upper-cluster method AND the uplift model produce a renovated-ARV value, flag if they disagree by more than this fraction. Audit-logged as uncertain; confidence downgraded one step.",
+    "threshold_pct": 0.15
+  },
   "outputs": {
     "_note": "Phase 4A returns both raw and filtered numbers so the Pricing Agent (and Alex) can see what was excluded.",
     "include_excluded_comps": true,

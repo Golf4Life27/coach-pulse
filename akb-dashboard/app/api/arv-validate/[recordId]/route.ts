@@ -75,11 +75,17 @@ export async function GET(
     );
   }
 
+  // condition_target=renovated is the agent default — ARV math always
+  // targets the after-rehab retail value for offer purposes. Pass
+  // estRehabMid so the uplift model can fire in Detroit/Memphis where
+  // the comp cluster represents as-is. See lib/arv-intelligence.ts.
   const arv = computeArvIntelligence(comps, {
     zip: listing.zip,
     beds: listing.bedrooms,
     baths: listing.bathrooms,
     sqft: listing.buildingSqFt,
+    condition_target: "renovated",
+    rehab_mid: listing.estRehabMid,
   });
 
   let investor_mao: number | null = null;
@@ -155,6 +161,11 @@ export async function GET(
     },
     outputSummary: {
       arv_mid: arv.arv_mid,
+      arv_method: arv.arv_method,
+      arv_as_is_mid: arv.arv_as_is.mid,
+      arv_renovated_mid: arv.arv_renovated.mid,
+      data_state_default: arv.data_state_default,
+      market: arv.market,
       comp_count_used: arv.comp_count_used,
       filter_quality: arv.filter_quality,
       investor_mao,
@@ -164,6 +175,24 @@ export async function GET(
     decision: spread_label,
     ms: Date.now() - t0,
   });
+
+  if (arv.cross_method_disagreement.fired) {
+    await audit({
+      agent: "phase4a-wrapper",
+      event: "arv_cross_method_disagreement",
+      status: "uncertain",
+      recordId,
+      inputSummary: { zip: listing.zip, market: arv.market },
+      outputSummary: {
+        cluster_mid: arv.cross_method_disagreement.cluster_mid,
+        uplift_mid: arv.cross_method_disagreement.uplift_mid,
+        delta_pct: arv.cross_method_disagreement.delta_pct,
+        threshold_pct: arv.cross_method_disagreement.threshold_pct,
+        consensus_mid: arv.arv_renovated.mid,
+      },
+      decision: "flag_for_review",
+    });
+  }
 
   cache[recordId] = { data: result, ts: Date.now() };
   return NextResponse.json(result);

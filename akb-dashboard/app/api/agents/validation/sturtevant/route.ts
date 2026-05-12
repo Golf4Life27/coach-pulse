@@ -35,6 +35,9 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const skipPhotos = url.searchParams.get("skip_photos") === "1";
   const rentOverride = parseNum(url.searchParams.get("rent_monthly"));
+  // rehab_mid override lets us run the 4A uplift path without burning
+  // Vision tokens — useful for repeated math validation on the same case.
+  const rehabOverride = parseNum(url.searchParams.get("rehab_mid"));
 
   const vcase = getValidationCase("sturtevant");
   if (!vcase) {
@@ -46,35 +49,32 @@ export async function GET(req: Request) {
     beds: vcase.subject.beds ?? null,
     baths: vcase.subject.baths ?? null,
     sqft: vcase.subject.sqft ?? null,
-    condition_target: vcase.subject.condition ?? null,
   };
 
-  // ── Phase 4A: ARV ───────────────────────────────────────────────────
-  let arvResult: ReturnType<typeof computeArvIntelligence> | null = null;
-  let arvError: string | null = null;
-  if (!process.env.RENTCAST_API_KEY) {
-    arvError = "RENTCAST_API_KEY not set — Phase 4A skipped";
-  } else {
-    try {
-      const comps = await getSaleComparables({
-        address: vcase.address,
-        city: vcase.city,
-        state: vcase.state,
-        zip: vcase.zip,
-        bedrooms: subject.beds,
-        bathrooms: subject.baths,
-        squareFootage: subject.sqft,
-      });
-      arvResult = computeArvIntelligence(comps, subject);
-    } catch (err) {
-      arvError = String(err);
-    }
-  }
-
-  // ── Phase 4B: Rehab ─────────────────────────────────────────────────
+  // ── Phase 4B: Rehab (runs BEFORE 4A so the uplift model has rehab_mid)
+  // Detroit's Phase 4A uplift path needs rehab as input to produce the
+  // renovated ARV. Order is now 4B → 4A → 4C. See lib/arv-intelligence.ts.
   let rehabResult: Awaited<ReturnType<typeof callRehabVision>> | null = null;
   let rehabError: string | null = null;
-  if (skipPhotos) {
+  if (rehabOverride != null) {
+    rehabResult = {
+      zip: vcase.zip,
+      market: "override",
+      market_multiplier: 1,
+      condition_overall: "Poor",
+      rehab_low: rehabOverride,
+      rehab_mid: rehabOverride,
+      rehab_high: rehabOverride,
+      confidence: 70,
+      line_items: [],
+      red_flags: [],
+      photo_count: 0,
+      anchor_rate_per_sqft: 0,
+      vision_model: "override",
+      methodology_notes: [`rehab_mid override = $${rehabOverride}`],
+      computed_at: new Date().toISOString(),
+    };
+  } else if (skipPhotos) {
     rehabError = "skip_photos=1 — Phase 4B skipped";
   } else if (!process.env.ANTHROPIC_API_KEY) {
     rehabError = "ANTHROPIC_API_KEY not set — Phase 4B skipped";
@@ -101,6 +101,32 @@ export async function GET(req: Request) {
       }
     } catch (err) {
       rehabError = String(err);
+    }
+  }
+
+  // ── Phase 4A: ARV (after rehab so uplift can fire)
+  let arvResult: ReturnType<typeof computeArvIntelligence> | null = null;
+  let arvError: string | null = null;
+  if (!process.env.RENTCAST_API_KEY) {
+    arvError = "RENTCAST_API_KEY not set — Phase 4A skipped";
+  } else {
+    try {
+      const comps = await getSaleComparables({
+        address: vcase.address,
+        city: vcase.city,
+        state: vcase.state,
+        zip: vcase.zip,
+        bedrooms: subject.beds,
+        bathrooms: subject.baths,
+        squareFootage: subject.sqft,
+      });
+      arvResult = computeArvIntelligence(comps, {
+        ...subject,
+        condition_target: "renovated", // agent default
+        rehab_mid: rehabResult?.rehab_mid ?? null,
+      });
+    } catch (err) {
+      arvError = String(err);
     }
   }
 
@@ -150,7 +176,24 @@ export async function GET(req: Request) {
   }
 
   // ── Grading ─────────────────────────────────────────────────────────
+  // arv_renovated_target_band added 5/12: Briyana's $145K street comp
+  // anchors the band. Working tolerance ±10% gives [130500, 159500].
+  const ARV_RENOVATED_TARGET_LOW = 130_500;
+  const ARV_RENOVATED_TARGET_HIGH = 159_500;
+
+  const arvRenovatedMid = arvResult?.arv_renovated.mid ?? null;
+  const arvMethodIsUplift =
+    arvResult?.arv_renovated.method === "uplift_model" ||
+    arvResult?.arv_renovated.method === "consensus";
+
   const checks = {
+    arv_renovated_lands_in_target_band:
+      arvRenovatedMid == null
+        ? null
+        : arvRenovatedMid >= ARV_RENOVATED_TARGET_LOW &&
+          arvRenovatedMid <= ARV_RENOVATED_TARGET_HIGH,
+    arv_uplift_path_fires_for_detroit:
+      arvResult == null ? null : arvMethodIsUplift,
     pricing_run_succeeds: pricingResult != null,
     both_tracks_compute_when_rent_available:
       rent_monthly == null || (pricingResult?.flipper != null && pricingResult?.landlord != null),
@@ -183,9 +226,14 @@ export async function GET(req: Request) {
       zip: vcase.zip,
       skip_photos: skipPhotos,
       rent_override: rentOverride,
+      rehab_override: rehabOverride,
     },
     outputSummary: {
       arv_mid: arvResult?.arv_mid ?? null,
+      arv_method: arvResult?.arv_method ?? null,
+      arv_as_is_mid: arvResult?.arv_as_is.mid ?? null,
+      arv_renovated_mid: arvResult?.arv_renovated.mid ?? null,
+      cross_method_disagreement: arvResult?.cross_method_disagreement.fired ?? null,
       rehab_mid: rehabResult?.rehab_mid ?? null,
       rent_monthly,
       your_mao_flipper: pricingResult?.your_mao_flipper ?? null,
