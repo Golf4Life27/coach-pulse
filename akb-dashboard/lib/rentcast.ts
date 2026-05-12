@@ -125,6 +125,52 @@ export async function getSaleComparables(input: AvmInput): Promise<RentCastSaleC
   }));
 }
 
+// RentCast rent AVM. Returns the monthly rent estimate + range. Used by
+// Phase 4C landlord-track math. Principle-compliant: throws on non-2xx
+// (callers must surface to audit + UI). Empty/null results are valid
+// signals — caller decides how to handle (e.g., flag deal as no-rent-data
+// rather than silently zero out the landlord track).
+export interface RentCastRentEstimate {
+  rent: number | null;
+  rentLow: number | null;
+  rentHigh: number | null;
+  raw: unknown;
+}
+
+export async function getRentEstimate(input: AvmInput): Promise<RentCastRentEstimate> {
+  if (!RENTCAST_API_KEY) {
+    throw new Error("RENTCAST_API_KEY not set");
+  }
+  const url = `${BASE}/avm/rent/long-term?${buildAvmParams(input).toString()}`;
+  const res = await fetch(url, {
+    headers: { "X-Api-Key": RENTCAST_API_KEY },
+    cache: "no-store",
+  });
+
+  const bodyText = await res.text();
+  let data: Record<string, unknown>;
+  try {
+    data = JSON.parse(bodyText) as Record<string, unknown>;
+  } catch {
+    throw new Error(
+      `RentCast avm/rent/long-term ${res.status}: non-JSON body (${bodyText.slice(0, 200)})`,
+    );
+  }
+
+  if (!res.ok) {
+    throw new Error(
+      `RentCast avm/rent/long-term ${res.status}: ${JSON.stringify(data)}`,
+    );
+  }
+
+  return {
+    rent: (data.rent as number) ?? null,
+    rentLow: (data.rentRangeLow as number) ?? null,
+    rentHigh: (data.rentRangeHigh as number) ?? null,
+    raw: data,
+  };
+}
+
 export function median(values: number[]): number | null {
   if (values.length === 0) return null;
   const sorted = [...values].sort((a, b) => a - b);

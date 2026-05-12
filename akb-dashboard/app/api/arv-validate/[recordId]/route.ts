@@ -1,18 +1,19 @@
-// Record-based ARV wrapper. The math layer moved to
-// /api/arv-intelligence/[zip] (stateless, source of truth for ARV).
+// Record-based ARV wrapper. Math comes from two stateless sources of
+// truth: /api/arv-intelligence/[zip] (Phase 4A) and lib/pricing-math.ts
+// (Phase 4C). This route reads the listing from Airtable, calls the
+// shared math, persists to the same Airtable fields the dashboard reads,
+// and returns the legacy ArvValidationResult shape.
 //
-// This route stays for dashboard backward-compat: it reads the listing
-// from Airtable, calls the stateless endpoint via internal logic, then
-// derives Investor_MAO + Your_MAO using existing constants and persists
-// to the same Airtable fields the dashboard reads. The buyer math
-// formula here is a placeholder until Phase 4C (Week 2) lands the dual-
-// track Pricing Agent — same constants as before so the dashboard
-// behavior doesn't shift on this refactor.
+// Phase 4C lands the flipper track here (single Your_MAO field on the
+// dashboard). The landlord track + recommended_track + creative_finance
+// flag are computed by /api/pricing-intelligence/[zip] but not written
+// to Airtable yet — that requires field-ID coordination with Alex.
 
 import { NextResponse } from "next/server";
 import { getListing, updateListingRecord } from "@/lib/airtable";
 import { getSaleComparables } from "@/lib/rentcast";
 import { computeArvIntelligence } from "@/lib/arv-intelligence";
+import { computeDualTrackPricing } from "@/lib/pricing-math";
 import { audit } from "@/lib/audit-log";
 import type { ArvValidationResult } from "@/types/jarvis";
 
@@ -21,13 +22,6 @@ export const maxDuration = 60;
 
 const CACHE_TTL_MS = 7 * 24 * 60 * 60_000;
 const cache: Record<string, { data: ArvValidationResult; ts: number }> = {};
-
-// Legacy buyer-math constants. Held here verbatim so the refactor is
-// purely additive — Phase 4C (Week 2) will replace this block with the
-// dual-track flipper + landlord math.
-const DEFAULT_BUYER_PROFIT = 30_000;
-const DEFAULT_WHOLESALE_FEE = 15_000;
-const CLOSING_COST_PCT = 0.13;
 
 export async function GET(
   _req: Request,
@@ -92,12 +86,20 @@ export async function GET(
   let your_mao: number | null = null;
   let your_mao_pct: number | null = null;
 
+  // Phase 4C flipper track (dashboard reads single Your_MAO). The
+  // landlord track is available via /api/pricing-intelligence/[zip] but
+  // is not written to Airtable yet — pending Alex's confirmation of
+  // landlord MAO + creative-finance-flag field IDs.
   if (arv.arv_mid != null && listing.estRehabMid != null) {
-    investor_mao = Math.round(
-      arv.arv_mid - listing.estRehabMid - arv.arv_mid * CLOSING_COST_PCT - DEFAULT_BUYER_PROFIT,
-    );
-    your_mao = investor_mao - DEFAULT_WHOLESALE_FEE;
-    if (listing.listPrice && listing.listPrice > 0) {
+    const pricing = computeDualTrackPricing({
+      zip: listing.zip,
+      arv_mid: arv.arv_mid,
+      rehab_mid: listing.estRehabMid,
+      rent_monthly: null, // wrapper runs flipper-only for dashboard contract
+    });
+    investor_mao = pricing.flipper?.investor_mao ?? null;
+    your_mao = pricing.flipper?.your_mao ?? null;
+    if (listing.listPrice && listing.listPrice > 0 && your_mao != null) {
       your_mao_pct = your_mao / listing.listPrice;
     }
   }

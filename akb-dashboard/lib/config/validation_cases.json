@@ -43,7 +43,13 @@
       },
       "expectations": {
         "dual_track_required": true,
-        "creative_finance_flag_expected_when_landlord_exceeds_flipper": true
+        "creative_finance_flag_expected_when_landlord_exceeds_flipper": true,
+        "harness_checks": {
+          "_note": "Bible v3 doesn't pin Sturtevant to specific MAO numbers — it's qualitative validation that dual-track math runs and the creative-finance flag fires when applicable. Add target MAO numbers here once the deal closes.",
+          "pricing_run_succeeds": true,
+          "both_tracks_compute_when_rent_available": true,
+          "creative_finance_flag_fires_when_delta_above_threshold": true
+        }
       }
     }
   ]
