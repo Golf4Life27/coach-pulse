@@ -41,4 +41,6 @@ yarn-error.log*
 next-env.d.ts
 
 # AKB docs (contain real API keys — keep local-only)
-/docs/
+# Exception: principles/architecture docs without secrets ARE tracked.
+/docs/*
+!/docs/Positive_Confirmation_Principle.md

@@ -85,6 +85,7 @@ export async function GET(
     await audit({
       agent: "phase4a",
       event: "rentcast_error",
+      status: "confirmed_failure",
       inputSummary: { zip, address, beds, baths, sqft },
       error: String(err),
       ms: Date.now() - t0,
@@ -103,9 +104,13 @@ export async function GET(
     condition_target,
   });
 
+  // RentCast returned, math ran. Confidence label is a separate quality
+  // signal — a LOW-confidence result is still a confirmed compute (we
+  // know we got 0/few comps, not that we silently dropped them).
   await audit({
     agent: "phase4a",
     event: "arv_computed",
+    status: "confirmed_success",
     inputSummary: { zip, address, beds, baths, sqft, condition_target },
     outputSummary: {
       arv_mid: result.arv_mid,

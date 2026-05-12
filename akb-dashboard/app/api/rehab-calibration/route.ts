@@ -78,6 +78,7 @@ export async function POST(req: Request) {
     await audit({
       agent: "phase4b",
       event: "rehab_computed",
+      status: "confirmed_success",
       inputSummary: { zip, sqft, photo_count: photos_urls.length },
       outputSummary: {
         condition_overall: result.condition_overall,
@@ -95,6 +96,7 @@ export async function POST(req: Request) {
     await audit({
       agent: "phase4b",
       event: "rehab_error",
+      status: "confirmed_failure",
       inputSummary: { zip, sqft, photo_count: photos_urls.length },
       error: String(err),
       ms: Date.now() - t0,

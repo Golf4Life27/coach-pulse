@@ -131,12 +131,20 @@ export async function GET(req: Request) {
   await audit({
     agent: "validation-highland",
     event: "harness_run",
+    status:
+      overall === "pass"
+        ? "confirmed_success"
+        : overall === "fail"
+          ? "confirmed_failure"
+          : "uncertain",
     inputSummary: { address: vcase.address, zip: vcase.zip, skip_photos: skipPhotos },
     outputSummary: {
       arv_mid: arvResult?.arv_mid ?? null,
       rehab_mid: rehabResult?.rehab_mid ?? null,
       arv_pass: arvPass,
       rehab_pass: rehabPass,
+      arv_error: arvError,
+      rehab_error: rehabError,
     },
     decision: overall,
     ms: Date.now() - t0,

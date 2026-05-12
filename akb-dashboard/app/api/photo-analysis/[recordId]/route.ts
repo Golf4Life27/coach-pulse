@@ -166,6 +166,7 @@ export async function GET(
   await audit({
     agent: "phase4b-wrapper",
     event: "photo_analyzed",
+    status: "confirmed_success",
     recordId,
     inputSummary: {
       address: listing.address,

@@ -1,18 +1,25 @@
-// Minimal agent audit log. Writes append-only entries with timestamp, agent
-// name, input hash, output summary, and decision label. Uses Vercel KV via
-// REST API when KV_REST_API_URL is configured; otherwise falls back to an
-// in-memory ring buffer (process-local, lost on restart — fine for dev).
+// Agent audit log. Append-only with three-state status per the Positive
+// Confirmation Principle (docs/Positive_Confirmation_Principle.md):
 //
-// Every agent call goes through here. Briefing §12.10 hard rule.
+//   confirmed_success — positive proof the operation completed
+//   confirmed_failure — explicit error / rejection
+//   uncertain         — 2xx/queued/accepted/no-response — NOT success
+//
+// Writes to Vercel KV when KV_REST_API_URL is configured; otherwise an
+// in-memory ring (process-local, dev only). Briefing §12.10 hard rule.
+
+export type AuditStatus = "confirmed_success" | "confirmed_failure" | "uncertain";
 
 export interface AuditEntry {
   ts: string;
   agent: string;
   event: string;
+  status: AuditStatus;
   inputSummary?: Record<string, unknown>;
   outputSummary?: Record<string, unknown>;
   decision?: string;
   recordId?: string;
+  externalId?: string; // e.g., Quo/OpenPhone message id, Gmail thread id
   ms?: number;
   error?: string;
 }
@@ -25,7 +32,6 @@ const KV_TOKEN = process.env.KV_REST_API_TOKEN;
 
 async function pushToKv(entry: AuditEntry): Promise<void> {
   if (!KV_URL || !KV_TOKEN) return;
-  // Use a single list key + LPUSH; readers can LRANGE / LTRIM.
   const url = `${KV_URL}/lpush/agent:audit/${encodeURIComponent(JSON.stringify(entry))}`;
   try {
     await fetch(url, {
@@ -33,7 +39,6 @@ async function pushToKv(entry: AuditEntry): Promise<void> {
       headers: { Authorization: `Bearer ${KV_TOKEN}` },
       cache: "no-store",
     });
-    // Cap list at ~5000 entries.
     await fetch(`${KV_URL}/ltrim/agent:audit/0/4999`, {
       method: "POST",
       headers: { Authorization: `Bearer ${KV_TOKEN}` },
@@ -53,4 +58,14 @@ export async function audit(entry: Omit<AuditEntry, "ts">): Promise<void> {
 
 export function readMemoryRing(limit = 100): AuditEntry[] {
   return ring.slice(-limit).reverse();
+}
+
+// Surfaces uncertain entries that have not transitioned to confirmed_*
+// within the staleness window. Used by the Orchestrator morning brief
+// per Principle §Rule 3.
+export function readUncertain(staleMs = 5 * 60_000): AuditEntry[] {
+  const cutoff = Date.now() - staleMs;
+  return ring.filter(
+    (e) => e.status === "uncertain" && new Date(e.ts).getTime() < cutoff,
+  );
 }

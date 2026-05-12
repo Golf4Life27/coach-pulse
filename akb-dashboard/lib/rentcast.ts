@@ -49,14 +49,15 @@ function buildAvmParams(input: AvmInput): URLSearchParams {
 }
 
 export async function getAvmValue(input: AvmInput): Promise<RentCastAvmValue | null> {
-  if (!RENTCAST_API_KEY) return null;
+  if (!RENTCAST_API_KEY) {
+    throw new Error("RENTCAST_API_KEY not set");
+  }
   const url = `${BASE}/avm/value?${buildAvmParams(input).toString()}`;
   const res = await fetch(url, {
     headers: { "X-Api-Key": RENTCAST_API_KEY },
     cache: "no-store",
   });
   if (!res.ok) {
-    if (res.status === 404 || res.status === 422) return null;
     const errText = await res.text().catch(() => "");
     throw new Error(`RentCast avm/value ${res.status}: ${errText}`);
   }
@@ -69,20 +70,44 @@ export async function getAvmValue(input: AvmInput): Promise<RentCastAvmValue | n
   };
 }
 
+// RentCast doesn't publish a standalone /avm/sale-comparables endpoint;
+// comparables are embedded in the /avm/value response. Earlier code hit
+// /avm/sale-comparables which 404'd, and silently coerced the 404 to []
+// — exactly the swallowed-error pattern the Positive Confirmation
+// Principle (Rule 5) forbids. Now we call /avm/value, throw on non-2xx
+// (caller surfaces to UI/audit), and let a zero-length comparables list
+// be visible as a yellow flag, not invisible success.
 export async function getSaleComparables(input: AvmInput): Promise<RentCastSaleComp[]> {
-  if (!RENTCAST_API_KEY) return [];
-  const url = `${BASE}/avm/sale-comparables?${buildAvmParams(input).toString()}`;
+  if (!RENTCAST_API_KEY) {
+    throw new Error("RENTCAST_API_KEY not set");
+  }
+  const url = `${BASE}/avm/value?${buildAvmParams(input).toString()}`;
   const res = await fetch(url, {
     headers: { "X-Api-Key": RENTCAST_API_KEY },
     cache: "no-store",
   });
-  if (!res.ok) {
-    if (res.status === 404 || res.status === 422) return [];
-    const errText = await res.text().catch(() => "");
-    throw new Error(`RentCast avm/sale-comparables ${res.status}: ${errText}`);
+
+  const bodyText = await res.text();
+  let data: Record<string, unknown>;
+  try {
+    data = JSON.parse(bodyText) as Record<string, unknown>;
+  } catch {
+    throw new Error(
+      `RentCast avm/value ${res.status}: non-JSON body (${bodyText.slice(0, 200)})`,
+    );
   }
-  const data = (await res.json()) as Record<string, unknown>;
-  const raw = (data.comparables as Array<Record<string, unknown>>) ?? [];
+
+  if (!res.ok) {
+    // 404 == "property not found in RentCast index" — a real signal, not
+    // success. Propagate so caller can surface it.
+    throw new Error(
+      `RentCast avm/value ${res.status}: ${JSON.stringify(data)}`,
+    );
+  }
+
+  const raw = Array.isArray(data.comparables)
+    ? (data.comparables as Array<Record<string, unknown>>)
+    : [];
   return raw.map((c) => ({
     price: (c.price as number) ?? null,
     squareFootage: (c.squareFootage as number) ?? null,
@@ -92,7 +117,11 @@ export async function getSaleComparables(input: AvmInput): Promise<RentCastSaleC
     distance: (c.distance as number) ?? null,
     daysOnMarket: (c.daysOnMarket as number) ?? null,
     removedDate: (c.removedDate as string) ?? null,
-    saleDate: (c.saleDate as string) ?? null,
+    saleDate:
+      (c.saleDate as string) ??
+      (c.lastSeenDate as string) ??
+      (c.removedDate as string) ??
+      null,
   }));
 }
 
