@@ -5,7 +5,7 @@
 // validation_cases.json expectations. Used in Week 1 sign-off and as a
 // regression smoke test going forward.
 //
-// GET /api/agents/_validation/highland?skip_photos=1 to skip the Vision
+// GET /api/agents/validation/highland?skip_photos=1 to skip the Vision
 // call when running locally without ANTHROPIC_API_KEY.
 //
 // NOTE: Highland is on the never-resurface list (walked 4/30/2026). This
