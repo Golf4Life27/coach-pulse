@@ -1,11 +1,17 @@
-// POST /api/admin/remove-singleselect-choice
+// GET /api/admin/remove-singleselect-choice?tableId=...&fieldId=...&choiceName=...
 //
 // One-shot cleanup for phantom singleSelect options that typecast
 // silently created. Used to remove DriftTest-PhantomOption-XYZZY from
 // Negotiation_Outcome after the deliberate-drift test on 5/13.
 //
-// Body:
-//   { tableId, fieldId, choiceName }
+// Query params:
+//   tableId    — Airtable table ID (e.g., tbldMjKBgPiq45Jjs)
+//   fieldId    — Airtable field ID (singleSelect type)
+//   choiceName — Name of the choice to remove
+//
+// GET semantics because Vercel MCP web_fetch_vercel_url is GET-only.
+// Side-effect-on-GET is intentional and scoped to the hardcoded
+// allowlist below.
 //
 // Behavior:
 //   1. Reads field schema via Meta API
@@ -44,15 +50,12 @@ interface AirtableFieldOptions {
   choices?: Array<{ id: string; name: string; color?: string }>;
 }
 
-export async function POST(req: Request) {
+export async function GET(req: Request) {
   const t0 = Date.now();
-  let body: { tableId?: string; fieldId?: string; choiceName?: string };
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
-  }
-  const { tableId, fieldId, choiceName } = body;
+  const url = new URL(req.url);
+  const tableId = url.searchParams.get("tableId");
+  const fieldId = url.searchParams.get("fieldId");
+  const choiceName = url.searchParams.get("choiceName");
   if (!tableId || !fieldId || !choiceName) {
     return NextResponse.json(
       { error: "Missing tableId, fieldId, or choiceName" },
