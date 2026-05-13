@@ -125,9 +125,10 @@ export async function GET(req: Request) {
   }
 
   // ── PATCH the field to drop the choice ────────────────────────────
-  // Airtable's Meta API expects choices as objects WITHOUT id when
-  // submitting — id is implicit on the existing ones we want to keep.
-  // Sending the existing { id, name } objects is also accepted.
+  // Airtable Meta API requires the FULL original choice shape (id + name
+  // + color) preserved for each choice we want to keep. First attempt
+  // sent { id, name } only and got 422 INVALID_REQUEST_UNKNOWN. Preserve
+  // color this time.
   const patchRes = await fetch(
     `https://api.airtable.com/v0/meta/bases/${BASE_ID}/tables/${tableId}/fields/${fieldId}`,
     {
@@ -137,7 +138,16 @@ export async function GET(req: Request) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        options: { choices: filtered.map((c) => ({ id: c.id, name: c.name })) },
+        options: {
+          choices: filtered.map((c) => {
+            const out: { id: string; name: string; color?: string } = {
+              id: c.id,
+              name: c.name,
+            };
+            if (c.color) out.color = c.color;
+            return out;
+          }),
+        },
       }),
     },
   );
