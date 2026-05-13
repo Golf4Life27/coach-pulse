@@ -69,46 +69,88 @@ function median(xs: number[]): number | null {
   return sorted.length % 2 ? sorted[m] : (sorted[m - 1] + sorted[m]) / 2;
 }
 
+// Escape a phrase for safe use inside a RegExp literal.
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Word-boundary phrase match. Bare substring matching caught "no" inside
+// "know", "kno[w]", "no problem"; "pass" inside "passport", "compass".
+// 5/13 fix per Sturtevant smoke. \b boundaries also handle phrases with
+// apostrophes ("we'll pass") and multi-word phrases ("no thanks").
+function phraseMatches(haystack: string, phrase: string): boolean {
+  const re = new RegExp(`\\b${escapeRegExp(phrase.toLowerCase())}\\b`, "i");
+  return re.test(haystack);
+}
+
 // Classify reply per spec §4 PN-10. Returns route + optional counter_price.
+//
+// Priority order matters: COUNTER (with dollar amount) beats REJECTION
+// because counters carry more decision-relevant info. A message like
+// "we'll pass at that — but I could do $26K" should classify as counter,
+// not rejection. Sturtevant 5/12 acceptance ("Or $25,000 after all
+// fees") is the test case.
 type ReplyRoute = "rejection" | "interest" | "counter" | "question" | "inbound_lead" | "no_reply";
 function classifyReply(
   bodies: string[],
   cfg: typeof PRE_NEGOTIATION_CONFIG,
 ): { route: ReplyRoute; counter_price: number | null; matched_text: string | null } {
   if (bodies.length === 0) return { route: "no_reply", counter_price: null, matched_text: null };
-  // Use the most recent inbound; assumed to be ordered most-recent-first
-  // by the caller (we sort defensively below).
   const lower = bodies.map((b) => b.toLowerCase().trim()).filter(Boolean);
   if (lower.length === 0) return { route: "no_reply", counter_price: null, matched_text: null };
   const latest = lower[0];
 
-  for (const r of cfg.rejection_phrases) {
-    if (latest.includes(r.toLowerCase())) {
-      return { route: "rejection", counter_price: null, matched_text: r };
-    }
-  }
-  // Counter: dollar-amount regex
+  // Counter FIRST — dollar amount in the latest inbound takes priority.
   const dollarRe = new RegExp(cfg.counter_classify_regex_dollar);
   const dollarMatch = latest.match(dollarRe);
   if (dollarMatch) {
     const raw = dollarMatch[1].replace(/,/g, "");
     const n = Number(raw);
     if (!isNaN(n) && n > 100) {
-      // Threshold $100 to avoid catching "$5" / dates / etc. False
-      // positives still possible (e.g. "I closed at $99 last week");
-      // PN-14's downstream sanity catches obviously wrong values.
+      // Threshold $100 to filter date/dollar noise. False positives
+      // still possible (e.g. "I closed at $99 last week"); PN-11/PN-14
+      // sanity catches obviously wrong values via spread + MAO checks.
       return { route: "counter", counter_price: n, matched_text: dollarMatch[0] };
     }
   }
+
+  // Rejection — word-boundary regex per phrase.
+  for (const r of cfg.rejection_phrases) {
+    if (phraseMatches(latest, r)) {
+      return { route: "rejection", counter_price: null, matched_text: r };
+    }
+  }
+
+  // Interest — word-boundary too.
   for (const i of cfg.interest_phrases) {
-    if (latest.includes(i.toLowerCase())) {
+    if (phraseMatches(latest, i)) {
       return { route: "interest", counter_price: null, matched_text: i };
     }
   }
+
+  // Question marker is a single literal char; substring match is fine.
   if (latest.includes(cfg.question_marker)) {
     return { route: "question", counter_price: null, matched_text: "?" };
   }
   return { route: "inbound_lead", counter_price: null, matched_text: null };
+}
+
+// PN-13/PN-14 dependency: pricing math is only trustworthy when the
+// inputs the formula computes from are actually present. Real_ARV_Median
+// + Est_Rehab are the two non-default inputs; if either is null the
+// formula falls back to defaults ($30K profit, $15K fee, $0 ARV → -$45K
+// Your_MAO from nothing). Surface that as data_missing instead of
+// passing a nonsense value through.
+function pricingInputsPresent(ctx: { listing?: { realArvMedian?: number | null; estRehab?: number | null } | null }): {
+  ok: boolean;
+  missing: string[];
+} {
+  const arv = ctx.listing?.realArvMedian;
+  const rehab = ctx.listing?.estRehab;
+  const missing: string[] = [];
+  if (arv == null || arv <= 0) missing.push("airtable_listing.Real_ARV_Median");
+  if (rehab == null || rehab <= 0) missing.push("airtable_listing.Est_Rehab");
+  return { ok: missing.length === 0, missing };
 }
 
 // Map ARV_Confidence singleSelect + Rehab_Confidence_Score number to
@@ -453,36 +495,63 @@ const PN_12_pricing_agent_refresh: CheckFn = (ctx, cfg) => {
 };
 
 const PN_13_your_mao_recomputed: CheckFn = (ctx, cfg) => {
-  // Cascade: passes when PN-12 passes. We re-derive the same condition
-  // here so each check is self-contained.
+  // Cascade: passes when PN-12 passes AND pricing inputs are present.
+  // Re-derive the upstream conditions so each check is self-contained.
   const c = cfg as typeof PRE_NEGOTIATION_CONFIG;
   const listingSqft = ctx.listing?.buildingSqFt;
   const compSqfts = (ctx.cma ?? [])
     .map((cp) => cp.squareFootage)
     .filter((s): s is number => s != null && s > 0);
-  if (listingSqft == null || compSqfts.length === 0) {
-    return pass("PN-13", "Upstream gaps prevent meaningful recompute check", {});
+
+  // PN-12 cascade — sqft refresh required
+  if (listingSqft != null && compSqfts.length > 0) {
+    const cmaMedian = median(compSqfts)!;
+    const variance = Math.abs(listingSqft - cmaMedian) / cmaMedian;
+    if (variance > c.sqft_variance_block_pct) {
+      return fail(
+        "PN-13",
+        "Cascade — PN-12 blocked on sqft refresh. Your_MAO recompute pending refresh.",
+        { upstream_blocker: "PN-12", waiting_on: "pricing_agent_rerun" },
+      );
+    }
   }
-  const cmaMedian = median(compSqfts)!;
-  const variance = Math.abs(listingSqft - cmaMedian) / cmaMedian;
-  if (variance > c.sqft_variance_block_pct) {
-    return fail(
+
+  // Input-validation gate — 5/13 fix per Sturtevant smoke. Your_MAO is a
+  // FORMULA computed from Real_ARV_Median + Est_Rehab + defaults. When
+  // either real input is null/zero, the formula falls back to defaults
+  // and produces nonsense (-$45K from zero ARV). A passing PN-13 on
+  // that nonsense was the principle violation Alex flagged.
+  const inputs = pricingInputsPresent(ctx);
+  if (!inputs.ok) {
+    return dataMissing(
       "PN-13",
-      "Cascade — PN-12 blocked on sqft refresh. Your_MAO recompute pending refresh.",
-      { upstream_blocker: "PN-12", waiting_on: "pricing_agent_rerun" },
+      `Pricing Agent inputs incomplete — Your_MAO computed from defaults, not real data. Missing: ${inputs.missing.join(", ")}`,
+      {
+        missing_data_source: inputs.missing,
+        recordId: ctx.recordId,
+        your_mao_formula_output: ctx.listing?.yourMao ?? null,
+        note: "Re-run Pricing Agent to populate Real_ARV_Median + Est_Rehab before trusting Your_MAO",
+      },
     );
   }
-  // Your_MAO present + computed from clean inputs (per PN-12 pass)
+
+  // All real inputs present + sqft aligned with CMA → trust the formula
   const your = ctx.listing?.yourMao;
   if (your == null) {
-    return dataMissing("PN-13", "Your_MAO formula returned null — likely missing Real_ARV_Median or Est_Rehab inputs", {
+    return dataMissing("PN-13", "Your_MAO formula returned null despite inputs being set", {
       missing_data_source: "airtable_listing.Your_MAO (formula)",
       recordId: ctx.recordId,
     });
   }
-  return pass("PN-13", `Your_MAO=$${your.toLocaleString()} (recomputed from current inputs)`, {
-    your_mao: your,
-  });
+  return pass(
+    "PN-13",
+    `Your_MAO=$${your.toLocaleString()} (recomputed from current inputs)`,
+    {
+      your_mao: your,
+      real_arv_median: ctx.listing?.realArvMedian,
+      est_rehab: ctx.listing?.estRehab,
+    },
+  );
 };
 
 const PN_14_your_mao_vs_counter: CheckFn = (ctx, cfg) => {
@@ -497,7 +566,7 @@ const PN_14_your_mao_vs_counter: CheckFn = (ctx, cfg) => {
       reply_classification: cls.route,
     });
   }
-  // Block downstream of PN-12 if sqft variance would invalidate Your_MAO.
+  // PN-12 cascade: if sqft variance would invalidate Your_MAO, block here too.
   const listingSqft = ctx.listing?.buildingSqFt;
   const compSqfts = (ctx.cma ?? [])
     .map((cp) => cp.squareFootage)
@@ -516,6 +585,23 @@ const PN_14_your_mao_vs_counter: CheckFn = (ctx, cfg) => {
         },
       );
     }
+  }
+  // PN-13 cascade — 5/13 fix per Sturtevant smoke. If pricing inputs
+  // aren't present, Your_MAO is default-only nonsense. Don't pretend to
+  // compare against it; propagate the data_missing upstream surfaced.
+  const inputs = pricingInputsPresent(ctx);
+  if (!inputs.ok) {
+    return dataMissing(
+      "PN-14",
+      `Counter detected at $${cls.counter_price.toLocaleString()} but cascade — PN-13 data_missing (Pricing Agent inputs incomplete). Refresh pricing before comparison.`,
+      {
+        counter_price: cls.counter_price,
+        upstream_blocker: "PN-13",
+        missing_data_source: inputs.missing,
+        recordId: ctx.recordId,
+        your_mao_formula_output: ctx.listing?.yourMao ?? null,
+      },
+    );
   }
   const your = ctx.listing?.yourMao;
   if (your == null) {

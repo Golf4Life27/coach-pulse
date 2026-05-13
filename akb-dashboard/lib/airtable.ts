@@ -54,6 +54,8 @@ const LISTING_FIELDS: Record<string, string> = {
   // ── Pre-Send Gate (orchestrator Gate 2) inputs
   fld3lxWDerPs3rSNM: "rehabConfidenceScore",
   fld0fWZGiFS73PPB7: "agentPriorOutreachCount",
+  // ── Pre-Negotiation Gate (orchestrator Gate 3) inputs
+  fldmup8SvMky9eyag: "estRehab",
 };
 
 // Reverse map: field name -> prop name (for single-record GET which returns field names)
@@ -99,6 +101,7 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "Pipeline_Stage": "pipelineStage",
   "Rehab_Confidence_Score": "rehabConfidenceScore",
   "Agent_Prior_Outreach_Count": "agentPriorOutreachCount",
+  "Est_Rehab": "estRehab",
   // ── Phase 3: photo analysis ──────────────────────────────────────────────
   "Est_Rehab_Low": "estRehabLow",
   "Est_Rehab_Mid": "estRehabMid",

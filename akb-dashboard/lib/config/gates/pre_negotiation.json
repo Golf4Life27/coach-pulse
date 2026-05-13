@@ -13,15 +13,23 @@
     "counter_classify_regex_dollar": "\\$\\s?([0-9]{1,3}(?:,?[0-9]{3})+|[0-9]{4,7})",
     "rejection_phrases": [
       "no thanks",
+      "no thank you",
       "not interested",
-      "pass",
+      "pass on this",
+      "pass on the deal",
       "we'll pass",
+      "we will pass",
+      "moving on",
       "decline",
+      "declined",
       "won't go that low",
       "not gonna work",
-      "no",
-      "stop texting"
+      "won't work",
+      "stop texting",
+      "remove me",
+      "unsubscribe"
     ],
+    "_rejection_phrases_note": "Whole-token match via word-boundary regex (\\b...\\b). Phrases checked case-insensitively against the latest inbound. Bare 'no' deliberately removed (5/13) — substring caught 'know', 'not', 'no problem', etc. Bare 'pass' deliberately removed in favor of multi-word forms — substring caught 'passport', 'compass', etc.",
     "interest_phrases": [
       "interested",
       "yes",

@@ -42,6 +42,11 @@ export interface Listing {
   // ── Pre-Send Gate inputs (added 5/13 for orchestrator Gate 2)
   rehabConfidenceScore?: number | null;
   agentPriorOutreachCount?: number | null;
+  // ── Pre-Negotiation Gate inputs (added 5/13 for orchestrator Gate 3)
+  // Est_Rehab (fldmup8SvMky9eyag) — referenced by Investor_MAO formula.
+  // PN-13/PN-14 read this directly to verify pricing math has clean
+  // inputs (not just relying on the formula output).
+  estRehab?: number | null;
   // Phase 3 — photo analysis
   estRehabLow?: number | null;
   estRehabMid?: number | null;
