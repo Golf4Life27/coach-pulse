@@ -1,0 +1,7 @@
+{
+  "$schema_note": "Addresses that must never be contacted (legal hold, family rule, previously-burned, etc.). Per orchestrator spec §7 PO-04 is an inviolable override-resistant rule. Matched case-insensitively after trimming whitespace and collapsing internal spaces. Add new entries as they accumulate.",
+  "last_updated": "2026-05-13",
+  "source": "User-maintained — see Override Protocol §7",
+  "version": 1,
+  "addresses": []
+}

@@ -44,6 +44,15 @@ const LISTING_FIELDS: Record<string, string> = {
   fldiNKFpIBUYgg7el: "actionCardState",
   fld3IhR1DXzcVuq6F: "lastInboundAt",
   fldaK4lR5UNvycg11: "lastOutboundAt",
+  // ── Pre-Outreach Gate (orchestrator Gate 1) inputs
+  fldif6WwcJeXZtJcX: "mlsStatus",
+  fldrlbePeS9glaFQu: "propertyType",
+  fldg1j5wHJzoGJB0I: "priceDropCount",
+  fld2eUkKaC4pMjIdd: "lastVerified",
+  // pipelineStage field ID is added once Alex creates Pipeline_Stage on
+  // Listings_V1 (5/13 — manual schema mutation in flight). Until then,
+  // single-record GETs pick it up via name in LISTING_NAME_MAP below;
+  // list endpoints (returnFieldsByFieldId=true) won't include it.
 };
 
 // Reverse map: field name -> prop name (for single-record GET which returns field names)
@@ -81,6 +90,12 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "Action_Card_State": "actionCardState",
   "Last_Inbound_At": "lastInboundAt",
   "Last_Outbound_At": "lastOutboundAt",
+  // ── Pre-Outreach Gate (orchestrator Gate 1)
+  "MLS_Status": "mlsStatus",
+  "Property_Type": "propertyType",
+  "Price_Drop_Count": "priceDropCount",
+  "Last_Verified": "lastVerified",
+  "Pipeline_Stage": "pipelineStage",
   // ── Phase 3: photo analysis ──────────────────────────────────────────────
   "Est_Rehab_Low": "estRehabLow",
   "Est_Rehab_Mid": "estRehabMid",

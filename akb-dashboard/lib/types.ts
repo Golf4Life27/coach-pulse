@@ -33,6 +33,12 @@ export interface Listing {
   actionCardState: "Open" | "Held" | "Cleared" | null;
   lastInboundAt: string | null;
   lastOutboundAt: string | null;
+  // ── Pre-Outreach Gate inputs (added 5/13 for orchestrator Gate 1)
+  mlsStatus?: string | null;
+  propertyType?: string | null;
+  priceDropCount?: number | null;
+  lastVerified?: string | null;
+  pipelineStage?: string | null;
   // Phase 3 — photo analysis
   estRehabLow?: number | null;
   estRehabMid?: number | null;
