@@ -1,24 +1,88 @@
 // Airtable write verification — post-write echo diffing per the
 // Positive Confirmation Principle (docs/Positive_Confirmation_Principle.md).
 //
-// Airtable's PATCH responses echo the post-write field values. We
-// compare what we sent against the echo and flag drift — most
-// commonly:
+// Two layers of verification:
 //
-//   (1) singleSelect typecast created a NEW choice option because
-//       we wrote a slightly-mistyped name ("Renegotiating" vs
-//       "Negotiating"). Airtable accepts silently; downstream code
-//       checking for "Negotiating" later silently breaks.
+//   (A) Echo-comparison — Airtable PATCH responses echo the post-write
+//       field values. We compare what we sent vs what Airtable stored
+//       with normalization (select object→name, number tolerance,
+//       datetime parsing, etc).
 //
-//   (2) Number coercion fell out (string→null) because the value
-//       was unparseable.
+//   (B) Schema-aware singleSelect/multipleSelects validation — fetched
+//       once and cached. Catches the phantom-option case: when
+//       typecast=true silently creates a NEW choice option because the
+//       value didn't pre-exist. This is the silent-downgrade scenario
+//       that motivated this whole migration — Airtable echoes
+//       {name: "Foo"} happily, but "Foo" is a brand-new option that
+//       downstream code checking for "Negotiating" / "Texted" / etc.
+//       will silently fail to match.
 //
-//   (3) DateTime coercion stored an invalid date as null.
-//
-// A 2xx PATCH is NOT proof that the field landed correctly. This
-// helper is the verification step that closes the loop.
+// Both layers feed into the same audit channel (status: uncertain,
+// decision: flag_for_review).
 
 import { audit } from "./audit-log";
+
+const AIRTABLE_PAT = process.env.AIRTABLE_PAT!;
+const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
+
+// Map of tableId → fieldId → { type, choices } cached for the lambda's
+// lifetime. Schema rarely changes; a cold-start refetch is fine.
+interface FieldSchema {
+  type: string;
+  choices?: Set<string>; // lowercased choice names for select fields
+}
+type TableFieldSchemas = Record<string /* fieldId */, FieldSchema>;
+const schemaCache: Record<string /* tableId */, TableFieldSchemas> = {};
+const schemaFetchedAt: Record<string, number> = {};
+const SCHEMA_TTL_MS = 60 * 60_000; // 1 hour
+
+async function loadTableSchema(tableId: string): Promise<TableFieldSchemas> {
+  const now = Date.now();
+  if (
+    schemaCache[tableId] &&
+    schemaFetchedAt[tableId] &&
+    now - schemaFetchedAt[tableId] < SCHEMA_TTL_MS
+  ) {
+    return schemaCache[tableId];
+  }
+
+  const url = `https://api.airtable.com/v0/meta/bases/${BASE_ID}/tables`;
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${AIRTABLE_PAT}` },
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    // Schema fetch is best-effort. If it fails (e.g., PAT lacks
+    // schema.bases:read scope), fall back to echo-only verification.
+    // No throw — write itself already succeeded.
+    console.warn(`[airtable-verify] schema fetch failed ${res.status} — phantom-option check disabled for ${tableId}`);
+    return {};
+  }
+  const body = (await res.json()) as {
+    tables?: Array<{
+      id: string;
+      fields: Array<{
+        id: string;
+        type: string;
+        options?: { choices?: Array<{ name: string }> };
+      }>;
+    }>;
+  };
+  const tables = body.tables ?? [];
+  for (const t of tables) {
+    const fieldSchemas: TableFieldSchemas = {};
+    for (const f of t.fields) {
+      const choices = f.options?.choices?.map((c) => c.name.toLowerCase());
+      fieldSchemas[f.id] = {
+        type: f.type,
+        choices: choices ? new Set(choices) : undefined,
+      };
+    }
+    schemaCache[t.id] = fieldSchemas;
+    schemaFetchedAt[t.id] = now;
+  }
+  return schemaCache[tableId] ?? {};
+}
 
 export interface FieldDrift {
   field: string;
@@ -135,11 +199,10 @@ function compareFieldValues(
 export function detectWriteDrift(
   written: Record<string, unknown>,
   echoed: Record<string, unknown>,
+  schema?: TableFieldSchemas,
 ): FieldDrift[] {
   const drift: FieldDrift[] = [];
   for (const [field, val] of Object.entries(written)) {
-    // Skip computed/formula echoes — Airtable sometimes includes them
-    // even if we didn't write. Our `written` keys are the source of truth.
     if (!(field in echoed)) {
       drift.push({
         field,
@@ -149,6 +212,30 @@ export function detectWriteDrift(
       });
       continue;
     }
+
+    // Layer B: schema-aware phantom-option check. Fires BEFORE the echo
+    // compare so the more specific reason wins. Only runs when schema
+    // was successfully loaded.
+    const fieldSchema = schema?.[field];
+    if (fieldSchema?.choices && val != null) {
+      const writtenNames: string[] = Array.isArray(val)
+        ? val.map((v) => String(v).toLowerCase().trim())
+        : [String(val).toLowerCase().trim()];
+      for (const name of writtenNames) {
+        if (name && !fieldSchema.choices.has(name)) {
+          drift.push({
+            field,
+            written: val,
+            stored: echoed[field],
+            reason: `phantom-option drift — wrote "${name}" but field "${field}" (${fieldSchema.type}) has no such choice in schema. Airtable likely created a new option silently.`,
+          });
+        }
+      }
+      // Don't double-flag with the echo compare for this field
+      continue;
+    }
+
+    // Layer A: echo compare
     const cmp = compareFieldValues(val, echoed[field]);
     if (!cmp.match) {
       drift.push({
@@ -168,11 +255,21 @@ export function detectWriteDrift(
 // so callers can decide whether to react.
 export async function auditWriteDrift(opts: {
   table: string;
+  tableId: string;
   recordId: string;
   written: Record<string, unknown>;
   echoed: Record<string, unknown>;
 }): Promise<FieldDrift[]> {
-  const drift = detectWriteDrift(opts.written, opts.echoed);
+  // Best-effort schema load. If it fails (missing scope, network),
+  // detectWriteDrift falls back to echo-only verification (Layer A).
+  let schema: TableFieldSchemas | undefined;
+  try {
+    schema = await loadTableSchema(opts.tableId);
+  } catch (err) {
+    console.warn(`[airtable-verify] schema load threw, falling back to echo-only:`, err);
+  }
+
+  const drift = detectWriteDrift(opts.written, opts.echoed, schema);
   if (drift.length > 0) {
     await audit({
       agent: "airtable-write",
