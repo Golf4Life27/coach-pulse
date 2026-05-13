@@ -30,7 +30,24 @@ const ring: AuditEntry[] = [];
 const KV_URL = process.env.KV_REST_API_URL;
 const KV_TOKEN = process.env.KV_REST_API_TOKEN;
 
+// Loud-warn once per cold start when KV isn't wired — without this the
+// audit-log silently falls back to the process-local in-memory ring,
+// which is exactly the kind of silent failure the Principle is meant to
+// surface. The ring is volatile across lambda restarts so production
+// has no durable audit trail in this state.
+let kvWarnLogged = false;
+function warnIfKvMissing() {
+  if (kvWarnLogged) return;
+  if (!KV_URL || !KV_TOKEN) {
+    console.warn(
+      "[audit-log] KV_REST_API_URL / KV_REST_API_TOKEN not configured — audit entries will only persist to the in-memory ring (lost on cold start). Wire Vercel KV to enable durable audit trail.",
+    );
+    kvWarnLogged = true;
+  }
+}
+
 async function pushToKv(entry: AuditEntry): Promise<void> {
+  warnIfKvMissing();
   if (!KV_URL || !KV_TOKEN) return;
   const url = `${KV_URL}/lpush/agent:audit/${encodeURIComponent(JSON.stringify(entry))}`;
   try {
