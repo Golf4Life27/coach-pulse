@@ -18,7 +18,7 @@
 //      morning brief can render "Gate X item Y blocked on missing data
 //      Z for record W" without trawling individual entries.
 
-import { getListing } from "@/lib/airtable";
+import { getListing, getBuyers } from "@/lib/airtable";
 import { audit, readRecentFromKv, type AuditEntry } from "@/lib/audit-log";
 import { getMessagesForParticipant } from "@/lib/quo";
 import { getThreadsForEmail } from "@/lib/gmail";
@@ -93,6 +93,8 @@ export async function runGate(opts: RunGateOpts): Promise<GateRunResult> {
     gmailThread: (fetched.gmail_thread as GateContext["gmailThread"] | undefined) ?? null,
     liveListing: (fetched.live_listing as LiveListingSnapshot | undefined) ?? null,
     cma: (fetched.cma as GateContext["cma"] | undefined) ?? null,
+    paDocument: (fetched.pa_document as GateContext["paDocument"] | undefined) ?? null,
+    buyerPipeline: (fetched.buyer_pipeline as GateContext["buyerPipeline"] | undefined) ?? null,
   };
 
   // ── 4. Run checks ──────────────────────────────────────────────────
@@ -289,11 +291,22 @@ async function fetchSource(
       };
       return snapshot;
     }
-    // Future sources for Gates 4-5:
-    case "airtable_deal":
     case "buyer_pipeline":
-    case "pricing_agent_run":
+      // Gate 4 PC-23 reads this. Returns all Buyers; PC-23 filters by
+      // listing.zip in preferred_zip_codes + active flag. Future
+      // optimization: scope the Airtable fetch to active-only.
+      return await getBuyers();
     case "pa_document":
+      // Gate 4 PC-01..PC-15 + PC-18..PC-22 depend on this. DocuSign
+      // MCP not yet loaded as deferred tools — throwing surfaces as
+      // data_missing per spec §6 (loud failure for Phase 1, clear
+      // wire-in target for Phase 2).
+      throw new Error(
+        "pa_document source requires DocuSign MCP — not yet wired (MCP server ID ab943441-29da-4bcb-8d3f-19efc0412d6c announced 5/13 but tool schemas not yet in the deferred-tools registry). Add fetcher when DocuSign MCP tools land.",
+      );
+    // Future sources for Gate 5:
+    case "airtable_deal":
+    case "pricing_agent_run":
     case "title_prelim":
       throw new Error(
         `Source "${src}" has no registered fetcher yet — add to gate-runner.ts fetchSource() when implementing the gate that needs it.`,

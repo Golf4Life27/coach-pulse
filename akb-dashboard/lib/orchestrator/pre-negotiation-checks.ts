@@ -153,6 +153,27 @@ function pricingInputsPresent(ctx: { listing?: { realArvMedian?: number | null; 
   return { ok: missing.length === 0, missing };
 }
 
+// Inbound bodies sorted most-recent-first across both Quo and Gmail.
+// 5/13 fix: PN-10 was the only check sorting by timestamp; PN-11 and
+// PN-14 used insertion-order Quo + Gmail concat, which meant the three
+// checks saw different "latest inbound" content. Single source of truth
+// here keeps the cascade consistent.
+function inboundBodiesMostRecentFirst(ctx: {
+  quoThread?: Array<{ direction: "incoming" | "outgoing"; createdAt: string; body: string }> | null;
+  gmailThread?: Array<{ date: string; body: string }> | null;
+}): string[] {
+  const quoInbound = (ctx.quoThread ?? [])
+    .filter((m) => m.direction === "incoming")
+    .map((m) => ({ ts: m.createdAt, body: m.body }));
+  const gmailInbound = (ctx.gmailThread ?? []).map((m) => ({
+    ts: m.date,
+    body: m.body,
+  }));
+  return [...quoInbound, ...gmailInbound]
+    .sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime())
+    .map((m) => m.body);
+}
+
 // Map ARV_Confidence singleSelect + Rehab_Confidence_Score number to
 // composite HIGH / MED / LOW. Conservative — takes the WORSE of the two.
 function compositeConfidence(
@@ -386,9 +407,8 @@ const PN_09_liens: CheckFn = (ctx) => {
 
 const PN_10_classify_reply: CheckFn = (ctx, cfg) => {
   const c = cfg as typeof PRE_NEGOTIATION_CONFIG;
-  // Build the inbound list, most recent first. Quo direction "incoming",
-  // Gmail we treat all messages as inbound for Phase 1 (the From-vs-To
-  // distinction lives one level up in the parser).
+  // Shared sorted-inbound helper — PN-11 + PN-14 use the same so the
+  // three checks see the same "latest inbound" payload.
   const quoInbound = (ctx.quoThread ?? [])
     .filter((m) => m.direction === "incoming")
     .map((m) => ({ ts: m.createdAt, body: m.body, source: "quo" as const }));
@@ -419,11 +439,9 @@ const PN_10_classify_reply: CheckFn = (ctx, cfg) => {
 const PN_11_counter_spread: CheckFn = (ctx, cfg) => {
   const c = cfg as typeof PRE_NEGOTIATION_CONFIG;
   // Re-run PN-10's classification (cheap; results already cached implicitly).
-  const quoInbound = (ctx.quoThread ?? [])
-    .filter((m) => m.direction === "incoming")
-    .map((m) => m.body);
-  const gmailInbound = (ctx.gmailThread ?? []).map((m) => m.body);
-  const cls = classifyReply([...quoInbound, ...gmailInbound], c);
+  // 5/13 fix: use the shared sorted-inbound helper so PN-10/PN-11/PN-14 all
+  // see the same latest-message payload.
+  const cls = classifyReply(inboundBodiesMostRecentFirst(ctx), c);
   if (cls.route !== "counter" || cls.counter_price == null) {
     return pass("PN-11", "No counter detected in latest inbound — spread check N/A", {
       reply_classification: cls.route,
@@ -556,11 +574,8 @@ const PN_13_your_mao_recomputed: CheckFn = (ctx, cfg) => {
 
 const PN_14_your_mao_vs_counter: CheckFn = (ctx, cfg) => {
   const c = cfg as typeof PRE_NEGOTIATION_CONFIG;
-  const quoInbound = (ctx.quoThread ?? [])
-    .filter((m) => m.direction === "incoming")
-    .map((m) => m.body);
-  const gmailInbound = (ctx.gmailThread ?? []).map((m) => m.body);
-  const cls = classifyReply([...quoInbound, ...gmailInbound], c);
+  // 5/13 fix: use the shared sorted-inbound helper (matches PN-10).
+  const cls = classifyReply(inboundBodiesMostRecentFirst(ctx), c);
   if (cls.route !== "counter" || cls.counter_price == null) {
     return pass("PN-14", "No counter detected — comparison N/A", {
       reply_classification: cls.route,

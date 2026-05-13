@@ -14,7 +14,7 @@
 //   data_missing → uncertain  (reasoning surfaces "data_missing" +
 //                              dependency for morning-brief routing)
 
-import type { Listing } from "@/lib/types";
+import type { Listing, Buyer } from "@/lib/types";
 import type { AuditEntry } from "@/lib/audit-log";
 import type { QuoMessage } from "@/lib/quo";
 import type { GmailMessage } from "@/lib/gmail";
@@ -134,6 +134,21 @@ export interface LiveListingSnapshot {
   photoUrls: string[];
 }
 
+// PA-document snapshot shape (Phase 2: DocuSign envelope contents).
+// Phase 1: null — DocuSign MCP not yet wired. Gate 4 checks that depend
+// on this source return data_missing.
+export interface PaDocumentSnapshot {
+  envelopeId: string;
+  status: string;
+  sentAt: string | null;
+  completedAt: string | null;
+  formFields: Record<string, unknown>;
+  attachments: Array<{ name: string; documentId: string }>;
+  // Phase 2 will add structured fields: sale_price, buyer_entity,
+  // emd_escrow_holder, inspection_period_days, closing_date, etc.
+  // Phase 1 leaves them as generic formFields/raw envelope.
+}
+
 export interface GateContext {
   recordId: string;
   listing: Listing | null;
@@ -143,8 +158,10 @@ export interface GateContext {
   gmailThread?: GmailMessage[] | null;
   liveListing?: LiveListingSnapshot | null;
   cma?: RentCastSaleComp[] | null;
-  // Future gates will add: deal, buyerPipeline, pricingAgentRun,
-  // paDocument, titlePrelim.
+  // Gate 4 (Pre-Contract) sources:
+  paDocument?: PaDocumentSnapshot | null;
+  buyerPipeline?: Buyer[] | null;
+  // Future gates will add: deal, pricingAgentRun, titlePrelim.
 }
 
 export type CheckFn = (ctx: GateContext, config: Record<string, unknown>) => CheckResult;

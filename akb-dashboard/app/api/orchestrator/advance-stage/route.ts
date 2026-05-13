@@ -33,6 +33,11 @@ import {
   PRE_NEGOTIATION_CONFIG,
 } from "@/lib/orchestrator/pre-negotiation-checks";
 import {
+  PRE_CONTRACT_GATE,
+  PRE_CONTRACT_CHECKS,
+  PRE_CONTRACT_CONFIG,
+} from "@/lib/orchestrator/pre-contract-checks";
+import {
   ALL_PIPELINE_STAGES,
   type PipelineStage,
 } from "@/lib/orchestrator/types";
@@ -40,14 +45,14 @@ import {
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-// Map target_stage → gate that gates that transition. Gates 4-5 added
-// as their check modules land. Gate 3 (pre_negotiation) is primarily a
+// Map target_stage → gate that gates that transition. Gate 5 added when
+// its check module lands. Gate 3 (pre_negotiation) is primarily a
 // diagnostic gate — runs every time a reply lands, gates every
 // negotiation move — but advancing to 'negotiating' on first reply is
 // the natural transition handler.
 const STAGE_GATE_MAP: Partial<Record<PipelineStage, {
-  gate: typeof PRE_OUTREACH_GATE | typeof PRE_SEND_GATE | typeof PRE_NEGOTIATION_GATE;
-  checks: typeof PRE_OUTREACH_CHECKS | typeof PRE_SEND_CHECKS | typeof PRE_NEGOTIATION_CHECKS;
+  gate: typeof PRE_OUTREACH_GATE | typeof PRE_SEND_GATE | typeof PRE_NEGOTIATION_GATE | typeof PRE_CONTRACT_GATE;
+  checks: typeof PRE_OUTREACH_CHECKS | typeof PRE_SEND_CHECKS | typeof PRE_NEGOTIATION_CHECKS | typeof PRE_CONTRACT_CHECKS;
   config: Record<string, unknown>;
 }>> = {
   outreach_ready: {
@@ -65,13 +70,20 @@ const STAGE_GATE_MAP: Partial<Record<PipelineStage, {
     checks: PRE_NEGOTIATION_CHECKS,
     config: PRE_NEGOTIATION_CONFIG as unknown as Record<string, unknown>,
   },
+  under_contract: {
+    gate: PRE_CONTRACT_GATE,
+    checks: PRE_CONTRACT_CHECKS,
+    config: PRE_CONTRACT_CONFIG as unknown as Record<string, unknown>,
+  },
 };
 
 // Inviolable item IDs — fail-block even when override_reason is supplied.
+// Per spec §7 Override Protocol — these rules CANNOT be bypassed.
 const INVIOLABLE_ITEM_IDS = new Set<string>([
-  "PO-04", // NEVER-list
-  "PO-05", // restricted state
-  // Future: PC-05 inspection contingency, PC-16 Memphis assignability
+  "PO-04", // NEVER-list match
+  "PO-05", // restricted state (IL/MO/SC/NC/OK/ND)
+  "PC-05", // inspection contingency present
+  "PC-16", // Memphis assignability (TN)
 ]);
 
 async function executeAdvance(opts: {

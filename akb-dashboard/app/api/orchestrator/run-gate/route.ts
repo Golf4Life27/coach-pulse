@@ -25,11 +25,16 @@ import {
   PRE_NEGOTIATION_CHECKS,
   PRE_NEGOTIATION_CONFIG,
 } from "@/lib/orchestrator/pre-negotiation-checks";
+import {
+  PRE_CONTRACT_GATE,
+  PRE_CONTRACT_CHECKS,
+  PRE_CONTRACT_CONFIG,
+} from "@/lib/orchestrator/pre-contract-checks";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-// Registry of known gates. Add Gates 4-5 here as their check modules land.
+// Registry of known gates. Add Gate 5 here when its check module lands.
 const GATES = {
   pre_outreach: {
     gate: PRE_OUTREACH_GATE,
@@ -45,6 +50,11 @@ const GATES = {
     gate: PRE_NEGOTIATION_GATE,
     checks: PRE_NEGOTIATION_CHECKS,
     config: PRE_NEGOTIATION_CONFIG as unknown as Record<string, unknown>,
+  },
+  pre_contract: {
+    gate: PRE_CONTRACT_GATE,
+    checks: PRE_CONTRACT_CHECKS,
+    config: PRE_CONTRACT_CONFIG as unknown as Record<string, unknown>,
   },
 } as const;
 
