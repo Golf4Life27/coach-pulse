@@ -43,6 +43,10 @@ export interface Listing {
   // current List_Price has fallen substantially since the Texted record
   // was created, the math we ran at that time is stale.
   prevListPrice?: number | null;
+  // Follow_Up_Count — number of follow-up texts already sent on this
+  // record. Drives D3 cadence position (0 = none yet, 1 = day-3 sent,
+  // 2 = day-7 sent, 3 = day-14 sent).
+  followUpCount?: number | null;
   // ── Pre-Send Gate inputs (added 5/13 for orchestrator Gate 2)
   rehabConfidenceScore?: number | null;
   agentPriorOutreachCount?: number | null;

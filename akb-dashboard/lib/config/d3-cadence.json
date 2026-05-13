@@ -1,0 +1,26 @@
+{
+  "_doc": "D3 follow-up cadence config. Drives routing decisions in lib/d3-cadence.ts based on Phase 0a scrub bucket + recency + reply state. Templates referenced here live in scripts/outreach/ as DRAFT until Alex approval.",
+  "_principles": [
+    "65_rule (Spine recmmidVrMyrLzjZp)",
+    "offer_discipline (Spine recxxNF0U59MxYUqu)"
+  ],
+  "config": {
+    "follow_up_schedule_days": [3, 7, 14],
+    "follow_up_schedule_days_note": "Standard cadence for active_eligible records that haven't replied. Day 3 = first follow-up, Day 7 = second, Day 14 = final. After Day 14 + no reply within auto_dead_no_followup_reply_days, record auto-deads.",
+    "drift_threshold_pct": 0.10,
+    "drift_threshold_pct_note": "List_Price change vs stored List_Price-at-send. Drift down >10% → follow_up_drift_down template. Drift up >10% → hold + Manual Review banner. Within ±10% → standard follow_up_3/7/14.",
+    "auto_dead_no_status_check_reply_days": 3,
+    "auto_dead_no_status_check_reply_days_note": "If status_check probe gets no reply within 3 days, record → Pipeline_Stage=dead, Outreach_Status=Dead.",
+    "auto_dead_no_followup_reply_days": 14,
+    "auto_dead_no_followup_reply_days_note": "If no reply within 14 days after follow_up_14 fires, record → Pipeline_Stage=dead, Outreach_Status=Dead.",
+    "manual_review_banner_drift_up": "PRICE DRIFT UP — seller got aggressive, review before sending",
+    "templates": {
+      "status_check": "scripts/outreach/status_check.md",
+      "follow_up_3": "scripts/outreach/follow_up_3.md",
+      "follow_up_7": "scripts/outreach/follow_up_7.md",
+      "follow_up_14": "scripts/outreach/follow_up_14.md",
+      "follow_up_drift_down": "scripts/outreach/follow_up_drift_down.md",
+      "follow_up_positive_reply": "scripts/outreach/follow_up_positive_reply.md"
+    }
+  }
+}

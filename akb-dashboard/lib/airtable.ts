@@ -64,6 +64,8 @@ const LISTING_FIELDS: Record<string, string> = {
   fldfE06eS402RcPCN: "yourMao",
   fldAvk2aIBU1Lh3Dz: "autoApproveV2",
   fldvHDqtftWehMJR7: "arvValidatedAt",
+  // ── D3 cadence inputs
+  fldzqlBceCXhQ9Vlq: "followUpCount",
 };
 
 // Reverse map: field name -> prop name (for single-record GET which returns field names)
@@ -111,6 +113,7 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "Agent_Prior_Outreach_Count": "agentPriorOutreachCount",
   "Est_Rehab": "estRehab",
   "Prev_List_Price": "prevListPrice",
+  "Follow_Up_Count": "followUpCount",
   // ── Phase 3: photo analysis ──────────────────────────────────────────────
   "Est_Rehab_Low": "estRehabLow",
   "Est_Rehab_Mid": "estRehabMid",
