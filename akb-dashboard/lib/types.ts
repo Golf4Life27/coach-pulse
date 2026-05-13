@@ -39,6 +39,9 @@ export interface Listing {
   priceDropCount?: number | null;
   lastVerified?: string | null;
   pipelineStage?: string | null;
+  // ── Pre-Send Gate inputs (added 5/13 for orchestrator Gate 2)
+  rehabConfidenceScore?: number | null;
+  agentPriorOutreachCount?: number | null;
   // Phase 3 — photo analysis
   estRehabLow?: number | null;
   estRehabMid?: number | null;

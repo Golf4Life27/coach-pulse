@@ -15,6 +15,7 @@
 //                              dependency for morning-brief routing)
 
 import type { Listing } from "@/lib/types";
+import type { AuditEntry } from "@/lib/audit-log";
 
 export type PipelineStage =
   | "intake"
@@ -121,6 +122,7 @@ export interface GateRunResult {
 export interface GateContext {
   recordId: string;
   listing: Listing | null;
+  auditLog?: AuditEntry[] | null;
   // Future gates will add: deal, quoThread, gmailThread, liveListing,
   // cma, buyerPipeline, pricingAgentRun, paDocument, titlePrelim.
 }

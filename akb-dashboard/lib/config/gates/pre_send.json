@@ -1,0 +1,119 @@
+{
+  "$schema_note": "Pre-Send Gate (Gate 2) per AKB_Deal_Flow_Orchestrator_Spec §4. 12 items. Transitions outreach_ready → outreach_sent. Replaces H2's Make-scenario filter logic once Acquisition Agent ships.",
+  "last_updated": "2026-05-13",
+  "source": "Orchestrator spec §4 Gate 2 + Bible v3 §3 send-window + Briefing §3",
+  "version": 1,
+  "gate_id": "pre_send",
+  "stage_from": "outreach_ready",
+  "stage_to": "outreach_sent",
+  "config": {
+    "pricing_agent_max_age_hours": 24,
+    "confidence_min": 60,
+    "spread_min_usd": 7000,
+    "send_window_start_hour": 8,
+    "send_window_end_hour": 21,
+    "send_window_timezone": "America/Chicago",
+    "agent_recontact_days": 14,
+    "outreach_status_empty_values": ["", "Not Contacted"],
+    "execution_path_auto_proceed_values": ["Auto Proceed"],
+    "quo_health_audit_max_age_minutes": 60
+  },
+  "items": [
+    {
+      "id": "PS-01",
+      "description": "Pricing Agent has run within last 24hr",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "ARV_Validated_At is set AND within pricing_agent_max_age_hours (Pricing Agent stamps this on success — used as proxy for 'has run')",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PS-02",
+      "description": "ARV present (Real_ARV_Median > 0)",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "Real_ARV_Median > 0",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PS-03",
+      "description": "Est_Rehab present",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "Est_Rehab_Mid > 0",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PS-04",
+      "description": "Your_MAO computed > $0",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "Your_MAO > 0",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PS-05",
+      "description": "Confidence_Score >= confidence_min (Rehab_Confidence_Score per working assumption — see check fn)",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "Rehab_Confidence_Score >= 60",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PS-06",
+      "description": "Spread (Investor_MAO - Your_MAO) >= spread_min_usd",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "(Investor_MAO - Your_MAO) >= 7000",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PS-07",
+      "description": "Current time within send_window in send_window_timezone",
+      "data_sources": [],
+      "pass_criteria": "now in America/Chicago is between 8:00 and 21:00 (8AM-9PM CT)",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PS-08",
+      "description": "Last SMS on this listing not within agent_recontact_days (cross-listing scan is future work — see check fn)",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "Last_Outbound_At is null OR older than 14 days",
+      "failure_action": "warn",
+      "blocking": false
+    },
+    {
+      "id": "PS-09",
+      "description": "Agent_Prior_Outreach_Count routes script (0 = first-touch, >0 = repeat-agent). Always informational pass.",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "Always pass; data_examined.script_route surfaces 'first_touch' | 'repeat_agent'",
+      "failure_action": "warn",
+      "blocking": false
+    },
+    {
+      "id": "PS-10",
+      "description": "Approved_For_Outreach = true OR Execution_Path in execution_path_auto_proceed_values",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "Approved_For_Outreach = true OR Execution_Path = 'Auto Proceed'",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PS-11",
+      "description": "Outreach_Status is empty (not yet contacted)",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "Outreach_Status is null OR in outreach_status_empty_values",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PS-12",
+      "description": "Quo API reachable + healthy (env present + recent successful quo audit, or warn)",
+      "data_sources": ["audit_log"],
+      "pass_criteria": "QUO_API_KEY env is set AND last quo:send_attempt within quo_health_audit_max_age_minutes was confirmed_success (if any in window)",
+      "failure_action": "block",
+      "blocking": true
+    }
+  ]
+}

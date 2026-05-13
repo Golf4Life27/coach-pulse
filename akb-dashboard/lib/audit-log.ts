@@ -73,6 +73,31 @@ export async function audit(entry: Omit<AuditEntry, "ts">): Promise<void> {
   await pushToKv(full);
 }
 
+// Pulls recent entries from KV (durable) when configured, else the
+// in-memory ring (volatile). Used by gate-runner for the audit_log
+// data source (e.g., PS-12 Quo health check reads recent quo:send_attempt).
+export async function readRecentFromKv(limit = 200): Promise<AuditEntry[]> {
+  if (!KV_URL || !KV_TOKEN) return readMemoryRing(limit);
+  try {
+    const res = await fetch(`${KV_URL}/lrange/agent:audit/0/${limit - 1}`, {
+      headers: { Authorization: `Bearer ${KV_TOKEN}` },
+      cache: "no-store",
+    });
+    if (!res.ok) return readMemoryRing(limit);
+    const data = (await res.json()) as { result?: string[] };
+    if (!Array.isArray(data.result)) return readMemoryRing(limit);
+    return data.result.flatMap<AuditEntry>((s) => {
+      try {
+        return [JSON.parse(s) as AuditEntry];
+      } catch {
+        return [];
+      }
+    });
+  } catch {
+    return readMemoryRing(limit);
+  }
+}
+
 export function readMemoryRing(limit = 100): AuditEntry[] {
   return ring.slice(-limit).reverse();
 }

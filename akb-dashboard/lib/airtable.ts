@@ -50,9 +50,9 @@ const LISTING_FIELDS: Record<string, string> = {
   fldg1j5wHJzoGJB0I: "priceDropCount",
   fld2eUkKaC4pMjIdd: "lastVerified",
   fldJt2pSCHiXqBxwj: "pipelineStage",
-  // pipelineStage field added 5/13 once Alex created Pipeline_Stage on
-  // Listings_V1 (12-option singleSelect, snake_case values matching
-  // PipelineStage union in lib/orchestrator/types.ts).
+  // ── Pre-Send Gate (orchestrator Gate 2) inputs
+  fld3lxWDerPs3rSNM: "rehabConfidenceScore",
+  fld0fWZGiFS73PPB7: "agentPriorOutreachCount",
 };
 
 // Reverse map: field name -> prop name (for single-record GET which returns field names)
@@ -96,6 +96,8 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "Price_Drop_Count": "priceDropCount",
   "Last_Verified": "lastVerified",
   "Pipeline_Stage": "pipelineStage",
+  "Rehab_Confidence_Score": "rehabConfidenceScore",
+  "Agent_Prior_Outreach_Count": "agentPriorOutreachCount",
   // ── Phase 3: photo analysis ──────────────────────────────────────────────
   "Est_Rehab_Low": "estRehabLow",
   "Est_Rehab_Mid": "estRehabMid",

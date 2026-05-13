@@ -19,7 +19,7 @@
 //      Z for record W" without trawling individual entries.
 
 import { getListing } from "@/lib/airtable";
-import { audit } from "@/lib/audit-log";
+import { audit, readRecentFromKv, type AuditEntry } from "@/lib/audit-log";
 import type {
   CheckFn,
   CheckResult,
@@ -70,9 +70,11 @@ export async function runGate(opts: RunGateOpts): Promise<GateRunResult> {
 
   // ── 3. Build context ───────────────────────────────────────────────
   const listing = (fetched.airtable_listing as Awaited<ReturnType<typeof getListing>> | undefined) ?? null;
+  const auditLog = (fetched.audit_log as AuditEntry[] | undefined) ?? null;
   const ctx: GateContext = {
     recordId,
     listing,
+    auditLog,
   };
 
   // ── 4. Run checks ──────────────────────────────────────────────────
@@ -210,7 +212,11 @@ async function fetchSource(src: DataSource, recordId: string): Promise<unknown> 
   switch (src) {
     case "airtable_listing":
       return await getListing(recordId);
-    // Future sources for Gates 2-5:
+    case "audit_log":
+      // Pulls last 200 entries from KV (durable when configured, else
+      // memory ring). Check functions filter by event/agent/window.
+      return await readRecentFromKv(200);
+    // Future sources for Gates 3-5:
     case "airtable_deal":
     case "quo_thread":
     case "gmail_thread":
@@ -218,7 +224,6 @@ async function fetchSource(src: DataSource, recordId: string): Promise<unknown> 
     case "cma":
     case "buyer_pipeline":
     case "pricing_agent_run":
-    case "audit_log":
     case "pa_document":
     case "title_prelim":
       throw new Error(
