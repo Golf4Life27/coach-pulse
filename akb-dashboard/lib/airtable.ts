@@ -1,4 +1,5 @@
 import { Listing, Deal, Buyer, ProspectiveBuyer } from "./types";
+import { auditWriteDrift, type FieldDrift } from "./airtable-verify";
 
 const AIRTABLE_PAT = process.env.AIRTABLE_PAT!;
 const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
@@ -421,18 +422,25 @@ export async function getProspectiveBuyers(): Promise<ProspectiveBuyer[]> {
   return buyers;
 }
 
-export async function updateProspectiveBuyerRecord(
-  recordId: string,
-  fields: Record<string, unknown>
-): Promise<void> {
-  const url = `https://api.airtable.com/v0/${BASE_ID}/${PROSPECTIVE_BUYERS_TABLE}/${recordId}`;
+// Common write path. PATCH with typecast, parse the echo, compare each
+// written field against what Airtable stored, audit drift as uncertain.
+// Returns drift so callers can decide to react (none currently do; this
+// is intentionally non-breaking — the audit-log + morning brief is the
+// surfacing channel).
+async function patchAndVerify(opts: {
+  tableId: string;
+  tableName: string;
+  recordId: string;
+  fields: Record<string, unknown>;
+}): Promise<FieldDrift[]> {
+  const url = `https://api.airtable.com/v0/${BASE_ID}/${opts.tableId}/${opts.recordId}`;
   const res = await fetch(url, {
     method: "PATCH",
     headers: {
       Authorization: `Bearer ${AIRTABLE_PAT}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ fields, typecast: true }),
+    body: JSON.stringify({ fields: opts.fields, typecast: true }),
   });
 
   if (!res.ok) {
@@ -441,52 +449,72 @@ export async function updateProspectiveBuyerRecord(
     throw new Error(`Airtable update error ${res.status}: ${errText}`);
   }
 
+  // Parse the post-write echo. If Airtable somehow returns non-JSON or
+  // a body without `fields`, treat that as a field-level data_missing —
+  // we can't verify, but we don't throw (the write succeeded at HTTP).
+  let echoed: Record<string, unknown> = {};
+  try {
+    const body = (await res.json()) as { fields?: Record<string, unknown> };
+    echoed = body.fields ?? {};
+  } catch (err) {
+    console.error(`[Airtable] PATCH ${url} echo parse failed:`, err);
+    // No echo to compare → log every written field as drift-unknown.
+    return await auditWriteDrift({
+      table: opts.tableName,
+      recordId: opts.recordId,
+      written: opts.fields,
+      echoed: {},
+    });
+  }
+
+  return await auditWriteDrift({
+    table: opts.tableName,
+    recordId: opts.recordId,
+    written: opts.fields,
+    echoed,
+  });
+}
+
+export async function updateProspectiveBuyerRecord(
+  recordId: string,
+  fields: Record<string, unknown>
+): Promise<FieldDrift[]> {
+  const drift = await patchAndVerify({
+    tableId: PROSPECTIVE_BUYERS_TABLE,
+    tableName: "Prospective_Buyers",
+    recordId,
+    fields,
+  });
   delete cache["prospectiveBuyers"];
+  return drift;
 }
 
 export async function updateListingRecord(
   recordId: string,
   fields: Record<string, unknown>
-): Promise<void> {
-  const url = `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}/${recordId}`;
-  const res = await fetch(url, {
-    method: "PATCH",
-    headers: {
-      Authorization: `Bearer ${AIRTABLE_PAT}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ fields, typecast: true }),
+): Promise<FieldDrift[]> {
+  const drift = await patchAndVerify({
+    tableId: LISTINGS_TABLE,
+    tableName: "Listings_V1",
+    recordId,
+    fields,
   });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    console.error(`[Airtable] PATCH ${url} failed: ${res.status} ${errText}`);
-    throw new Error(`Airtable update error ${res.status}: ${errText}`);
-  }
-
   delete cache["listings"];
   delete cache[`listing:${recordId}`];
+  return drift;
 }
 
 export async function updateDealRecord(
   recordId: string,
   fields: Record<string, unknown>
-): Promise<void> {
-  const url = `https://api.airtable.com/v0/${BASE_ID}/${DEALS_TABLE}/${recordId}`;
-  const res = await fetch(url, {
-    method: "PATCH",
-    headers: {
-      Authorization: `Bearer ${AIRTABLE_PAT}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ fields, typecast: true }),
+): Promise<FieldDrift[]> {
+  const drift = await patchAndVerify({
+    tableId: DEALS_TABLE,
+    tableName: "Deals",
+    recordId,
+    fields,
   });
 
-  if (!res.ok) {
-    const errText = await res.text();
-    console.error(`[Airtable] PATCH ${url} failed: ${res.status} ${errText}`);
-    throw new Error(`Airtable update error ${res.status}: ${errText}`);
-  }
-
   delete cache["deals"];
+  return drift;
 }
