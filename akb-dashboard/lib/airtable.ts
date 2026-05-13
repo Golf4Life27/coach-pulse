@@ -433,13 +433,12 @@ async function patchAndVerify(opts: {
   recordId: string;
   fields: Record<string, unknown>;
 }): Promise<FieldDrift[]> {
-  // returnFieldsByFieldId=true so the PATCH echo keys match the field
-  // IDs callers write (e.g. "fld5bKGJLlN7GmiE9"). Without this param,
-  // Airtable echoes by field NAME ("Building_SqFt"), and detectWriteDrift
-  // would flag every write as "field absent from response" — false
-  // positive across the board. The comment at L360 (getListing) notes
-  // single-record GET rejects this param; PATCH accepts it.
-  const url = `https://api.airtable.com/v0/${BASE_ID}/${opts.tableId}/${opts.recordId}?returnFieldsByFieldId=true`;
+  // Airtable's single-record PATCH silently ignores
+  // returnFieldsByFieldId=true (verified via drift-test 5/13 — the echo
+  // came back keyed by name "Outreach_Status" even with the param set).
+  // detectWriteDrift translates field-ID keys to names via the schema
+  // cache from lib/airtable-verify when looking up echoed values.
+  const url = `https://api.airtable.com/v0/${BASE_ID}/${opts.tableId}/${opts.recordId}`;
   const res = await fetch(url, {
     method: "PATCH",
     headers: {

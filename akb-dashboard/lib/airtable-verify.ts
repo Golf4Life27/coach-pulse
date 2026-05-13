@@ -29,6 +29,7 @@ const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
 // lifetime. Schema rarely changes; a cold-start refetch is fine.
 interface FieldSchema {
   type: string;
+  name: string; // human-readable Airtable field name (echo keys by this)
   choices?: Set<string>; // lowercased choice names for select fields
 }
 type TableFieldSchemas = Record<string /* fieldId */, FieldSchema>;
@@ -63,6 +64,7 @@ async function loadTableSchema(tableId: string): Promise<TableFieldSchemas> {
       id: string;
       fields: Array<{
         id: string;
+        name: string;
         type: string;
         options?: { choices?: Array<{ name: string }> };
       }>;
@@ -75,6 +77,7 @@ async function loadTableSchema(tableId: string): Promise<TableFieldSchemas> {
       const choices = f.options?.choices?.map((c) => c.name.toLowerCase());
       fieldSchemas[f.id] = {
         type: f.type,
+        name: f.name,
         choices: choices ? new Set(choices) : undefined,
       };
     }
@@ -196,14 +199,40 @@ function compareFieldValues(
   };
 }
 
+// Airtable PATCH echoes by field NAME (Airtable's single-record write
+// endpoints silently ignore returnFieldsByFieldId), but callers write by
+// field ID. Build a fieldId→fieldName map from the schema so we can look
+// up each written field ID in the name-keyed echo.
+function buildFieldIdToNameMap(schema?: TableFieldSchemas): Map<string, string> {
+  // Schema only stores field IDs as keys with metadata. The fetcher needs
+  // to additionally surface the name. Done via the extended loader below.
+  // For backwards compat (when fieldNames is empty), returns empty map.
+  const map = new Map<string, string>();
+  if (!schema) return map;
+  for (const [fieldId, meta] of Object.entries(schema)) {
+    if (meta.name) map.set(fieldId, meta.name);
+  }
+  return map;
+}
+
 export function detectWriteDrift(
   written: Record<string, unknown>,
   echoed: Record<string, unknown>,
   schema?: TableFieldSchemas,
 ): FieldDrift[] {
   const drift: FieldDrift[] = [];
+  const idToName = buildFieldIdToNameMap(schema);
   for (const [field, val] of Object.entries(written)) {
-    if (!(field in echoed)) {
+    // Look up by field ID first (in case Airtable did return by ID — some
+    // table types might), then fall back to the schema-resolved field name.
+    const echoedValue = field in echoed
+      ? echoed[field]
+      : idToName.has(field)
+        ? echoed[idToName.get(field)!]
+        : undefined;
+    const fieldFoundInEcho = field in echoed || (idToName.has(field) && idToName.get(field)! in echoed);
+
+    if (!fieldFoundInEcho) {
       drift.push({
         field,
         written: val,
@@ -221,27 +250,32 @@ export function detectWriteDrift(
       const writtenNames: string[] = Array.isArray(val)
         ? val.map((v) => String(v).toLowerCase().trim())
         : [String(val).toLowerCase().trim()];
+      let phantomFound = false;
       for (const name of writtenNames) {
         if (name && !fieldSchema.choices.has(name)) {
           drift.push({
             field,
             written: val,
-            stored: echoed[field],
+            stored: echoedValue,
             reason: `phantom-option drift — wrote "${name}" but field "${field}" (${fieldSchema.type}) has no such choice in schema. Airtable likely created a new option silently.`,
           });
+          phantomFound = true;
         }
       }
       // Don't double-flag with the echo compare for this field
+      if (phantomFound) continue;
+      // Choice was valid → no phantom. Skip echo compare; the select-name
+      // round-trip is the canonical signal here.
       continue;
     }
 
     // Layer A: echo compare
-    const cmp = compareFieldValues(val, echoed[field]);
+    const cmp = compareFieldValues(val, echoedValue);
     if (!cmp.match) {
       drift.push({
         field,
         written: val,
-        stored: echoed[field],
+        stored: echoedValue,
         reason: cmp.reason ?? "drift detected",
       });
     }
