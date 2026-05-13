@@ -49,10 +49,10 @@ const LISTING_FIELDS: Record<string, string> = {
   fldrlbePeS9glaFQu: "propertyType",
   fldg1j5wHJzoGJB0I: "priceDropCount",
   fld2eUkKaC4pMjIdd: "lastVerified",
-  // pipelineStage field ID is added once Alex creates Pipeline_Stage on
-  // Listings_V1 (5/13 — manual schema mutation in flight). Until then,
-  // single-record GETs pick it up via name in LISTING_NAME_MAP below;
-  // list endpoints (returnFieldsByFieldId=true) won't include it.
+  fldJt2pSCHiXqBxwj: "pipelineStage",
+  // pipelineStage field added 5/13 once Alex created Pipeline_Stage on
+  // Listings_V1 (12-option singleSelect, snake_case values matching
+  // PipelineStage union in lib/orchestrator/types.ts).
 };
 
 // Reverse map: field name -> prop name (for single-record GET which returns field names)
