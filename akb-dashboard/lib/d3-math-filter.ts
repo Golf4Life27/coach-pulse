@@ -55,11 +55,16 @@ function isFinitePositive(n: number | null | undefined): n is number {
 /**
  * Classify a single Texted record on cheap math signals.
  * Precedence:
- *   1. Null/missing math inputs → null_inputs (can't classify, needs Pricing Agent)
- *   2. Negative MAO outputs → negative (formula bug or trash inputs)
- *   3. List price drift >=10% since Texted-time → list_drift (math is stale)
- *   4. Spread below $10K → below_threshold (math says no even at current state)
- *   5. Stale Pricing Agent inputs (>30d) → needs_refresh (Phase 0b.5 candidate)
+ *   1. Real_ARV_Median null/0 → null_inputs. Pricing Agent never ran
+ *      (Investor_MAO formula returns a -$30K/-$45K default in that
+ *      state because Buyer_Profit/Wholesale_Fee defaults flow through).
+ *      Don't mistake the default for "math fails" — math hasn't been
+ *      computed at all.
+ *   2. Real_ARV_Median > 0 but Investor_MAO/Your_MAO negative → negative
+ *      (real math fail: comps exist but property can't pencil)
+ *   3. List price drift >=10% since Texted-time → list_drift (stale math)
+ *   4. Spread below $10K → below_threshold (math says no)
+ *   5. Stale Pricing Agent inputs (>30d) → needs_refresh (Phase 0b.5 cand)
  *   6. Spread $10-20K → pass_manual
  *   7. Spread >=$20K + Auto_Approve_v2=true → pass_auto
  */
@@ -67,6 +72,9 @@ export function classifyMath(listing: Listing): MathResult {
   const recordId = listing.id;
   const investor = listing.investorMao ?? null;
   const yours = listing.yourMao ?? null;
+  const realArvMedian = listing.realArvMedian ?? null;
+  const estRehabMid = listing.estRehabMid ?? null;
+  const estRehab = listing.estRehab ?? null;
   const autoApprove = listing.autoApproveV2 === true;
   const listPrice = listing.listPrice ?? null;
   const prevListPrice = listing.prevListPrice ?? null;
@@ -75,6 +83,9 @@ export function classifyMath(listing: Listing): MathResult {
   const baseExamined = {
     investor_mao: investor,
     your_mao: yours,
+    real_arv_median: realArvMedian,
+    est_rehab_mid: estRehabMid,
+    est_rehab: estRehab,
     auto_approve_v2: autoApprove,
     list_price: listPrice,
     prev_list_price: prevListPrice,
@@ -82,28 +93,43 @@ export function classifyMath(listing: Listing): MathResult {
     arv_age_hours: isFinite(arvAge) ? arvAge : null,
   };
 
-  // 1. Null/missing — formula returns null when its dependencies are null.
-  //    Can't classify cheaply. These are the records that need Pricing
-  //    Agent re-run (Phase 0b.5 candidates if quota allows) OR rejection
-  //    if too many.
-  if (!isFinitePositive(investor) || !isFinitePositive(yours)) {
+  // 1. Pricing Agent never ran. Real_ARV_Median is the input that gates
+  //    every downstream V2.1 formula. When it's null/0, Investor_MAO and
+  //    Your_MAO both come back as the formula's -$30K/-$45K default
+  //    (Buyer_Profit + Wholesale_Fee defaults flow through). That looks
+  //    like negative math but is actually "no math run." Distinguishing
+  //    these matters: null_inputs records are Phase 0b.5 candidates (run
+  //    Pricing Agent), negative records are exit-pipeline.
+  if (!isFinitePositive(realArvMedian)) {
     return {
       recordId,
       bucket: "math_fail_null_inputs",
-      reasoning: `Investor_MAO=${investor}, Your_MAO=${yours} — one or both missing/null/non-positive. V2.1 math can't run without comp-derived ARV inputs. Phase 0b.5 candidate IF Auto_Approve_v2 path is recoverable; otherwise exit.`,
+      reasoning: `Real_ARV_Median=${realArvMedian} — Pricing Agent never ran (or returned no ARV). Investor_MAO=$${investor}/Your_MAO=$${yours} are the formula's default-output state, not actual math. Phase 0b.5 candidate IF quota allows; otherwise exit pipeline.`,
       data_examined: baseExamined,
       pending_writes: null,
     };
   }
 
-  // 2. Negative — formula spit out a negative MAO. Means trash ARV/rehab
-  //    inputs (e.g. Investor_MAO = ARV - Rehab - Fees where ARV<costs).
-  //    Math says don't buy at any price.
+  // 2. ARV exists but formulas spat out null (rare — investor or yours
+  //    could be null even with positive ARV if rehab is null AND the
+  //    formula short-circuits). Treat as null_inputs for safety.
+  if (investor == null || yours == null) {
+    return {
+      recordId,
+      bucket: "math_fail_null_inputs",
+      reasoning: `Real_ARV_Median=$${realArvMedian} but Investor_MAO=${investor} / Your_MAO=${yours} — formula short-circuited (likely Est_Rehab null). Phase 0b.5 candidate to re-run pricing pipeline.`,
+      data_examined: baseExamined,
+      pending_writes: null,
+    };
+  }
+
+  // 3. Real ARV exists, math ran, came out negative. Property genuinely
+  //    can't pencil at any offer. Exit pipeline.
   if (investor < 0 || yours < 0) {
     return {
       recordId,
       bucket: "math_fail_negative",
-      reasoning: `Investor_MAO=$${investor}, Your_MAO=$${yours} — at least one negative. Math says this property cannot pencil at any offer. Exit pipeline.`,
+      reasoning: `Real_ARV_Median=$${realArvMedian}, Investor_MAO=$${investor}, Your_MAO=$${yours}. ARV exists but math doesn't pencil. Exit pipeline.`,
       data_examined: baseExamined,
       pending_writes: null,
     };
