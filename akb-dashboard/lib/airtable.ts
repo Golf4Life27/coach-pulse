@@ -483,11 +483,19 @@ async function patchAndVerify(opts: {
       /INVALID_VALUE_FOR_COLUMN/.test(errText) &&
       /computed/i.test(errText);
     if (isFormulaWriteBlocked) {
-      // Extract the offending field name(s) from the error message for
-      // morning-brief routing — Airtable surfaces ONE field at a time
-      // (the first formula field hit). Match: Field "X" cannot accept
-      const fieldMatch = errText.match(/Field "([^"]+)" cannot accept/);
-      const offendingField = fieldMatch ? fieldMatch[1] : "unknown";
+      // Extract offending field name from Airtable's JSON payload.
+      // Parse the body — direct regex on errText fails because the
+      // outer JSON keeps " as \" (verified in audit log 5/13:
+      // `offending_field: "unknown"`).
+      let offendingField = "unknown";
+      try {
+        const parsed = JSON.parse(errText) as { error?: { message?: string } };
+        const msg = parsed.error?.message ?? "";
+        const fieldMatch = msg.match(/Field "([^"]+)" cannot accept/);
+        if (fieldMatch) offendingField = fieldMatch[1];
+      } catch {
+        // Body wasn't JSON; leave as "unknown"
+      }
       await audit({
         agent: "airtable-write",
         event: "formula_field_write_blocked",
