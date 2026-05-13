@@ -20,6 +20,9 @@
 
 import { getListing } from "@/lib/airtable";
 import { audit, readRecentFromKv, type AuditEntry } from "@/lib/audit-log";
+import { getMessagesForParticipant } from "@/lib/quo";
+import { getThreadsForEmail } from "@/lib/gmail";
+import { getSaleComparables } from "@/lib/rentcast";
 import type {
   CheckFn,
   CheckResult,
@@ -27,6 +30,7 @@ import type {
   Gate,
   GateContext,
   GateRunResult,
+  LiveListingSnapshot,
   PipelineStage,
 } from "./types";
 
@@ -49,32 +53,46 @@ export async function runGate(opts: RunGateOpts): Promise<GateRunResult> {
     for (const src of item.data_sources) requiredSources.add(src);
   }
 
-  // ── 2. Parallel fetch ──────────────────────────────────────────────
-  // Each source has its own fetcher. Add to this switch as new gates
-  // declare new sources. Missing fetchers throw (the gate-runner is
-  // misconfigured) — that's loud failure, not silent.
-  const fetchPromises: Promise<unknown>[] = [];
-  const fetchKeys: DataSource[] = [];
-  for (const src of requiredSources) {
-    fetchKeys.push(src);
-    fetchPromises.push(fetchSource(src, recordId));
-  }
-  const fetchResults = await Promise.allSettled(fetchPromises);
+  // ── 2. Two-stage fetch (spec §10.2) ────────────────────────────────
+  // Stage 2a: listing first (almost every other source needs listing-
+  // derived inputs: agent_phone for Quo, agent_email for Gmail, address
+  // for CMA + live_listing).
+  // Stage 2b: parallel fan-out for the rest.
   const fetched: Partial<Record<DataSource, unknown>> = {};
   const fetchErrors: Partial<Record<DataSource, string>> = {};
-  fetchResults.forEach((res, i) => {
-    const key = fetchKeys[i];
+
+  let listing: Awaited<ReturnType<typeof getListing>> = null;
+  if (requiredSources.has("airtable_listing")) {
+    try {
+      listing = await getListing(recordId);
+      fetched.airtable_listing = listing;
+    } catch (err) {
+      fetchErrors.airtable_listing = String(err);
+    }
+  }
+
+  // Parallel fan-out — every source other than airtable_listing.
+  const fanoutSources = Array.from(requiredSources).filter((s) => s !== "airtable_listing");
+  const fanoutPromises: Promise<unknown>[] = fanoutSources.map((src) =>
+    fetchSource(src, recordId, listing),
+  );
+  const fanoutResults = await Promise.allSettled(fanoutPromises);
+  fanoutResults.forEach((res, i) => {
+    const key = fanoutSources[i];
     if (res.status === "fulfilled") fetched[key] = res.value;
     else fetchErrors[key] = String(res.reason);
   });
 
   // ── 3. Build context ───────────────────────────────────────────────
-  const listing = (fetched.airtable_listing as Awaited<ReturnType<typeof getListing>> | undefined) ?? null;
   const auditLog = (fetched.audit_log as AuditEntry[] | undefined) ?? null;
   const ctx: GateContext = {
     recordId,
     listing,
     auditLog,
+    quoThread: (fetched.quo_thread as GateContext["quoThread"] | undefined) ?? null,
+    gmailThread: (fetched.gmail_thread as GateContext["gmailThread"] | undefined) ?? null,
+    liveListing: (fetched.live_listing as LiveListingSnapshot | undefined) ?? null,
+    cma: (fetched.cma as GateContext["cma"] | undefined) ?? null,
   };
 
   // ── 4. Run checks ──────────────────────────────────────────────────
@@ -208,20 +226,71 @@ export async function runGate(opts: RunGateOpts): Promise<GateRunResult> {
 
 // Source fetcher dispatcher. Each gate's required sources resolve here.
 // Throws when a source has no registered fetcher (misconfig = loud).
-async function fetchSource(src: DataSource, recordId: string): Promise<unknown> {
+//
+// Sources that need listing-derived params (agent_phone for Quo,
+// agent_email for Gmail, address+specs for CMA + live_listing) receive
+// the pre-fetched listing. They throw with a clear message if the
+// listing is missing the input they need — caught by the Promise.allSettled
+// in runGate, surfaced as data_missing per spec §6.
+async function fetchSource(
+  src: DataSource,
+  recordId: string,
+  listing: Awaited<ReturnType<typeof getListing>>,
+): Promise<unknown> {
   switch (src) {
     case "airtable_listing":
-      return await getListing(recordId);
+      // Stage 2a fetch handled this; included for completeness.
+      return listing;
     case "audit_log":
-      // Pulls last 200 entries from KV (durable when configured, else
-      // memory ring). Check functions filter by event/agent/window.
       return await readRecentFromKv(200);
-    // Future sources for Gates 3-5:
+    case "quo_thread": {
+      const phone = listing?.agentPhone;
+      if (!phone) {
+        throw new Error("listing.agentPhone missing — can't fetch Quo thread");
+      }
+      const cleaned = cleanPhoneForQuo(phone);
+      return await getMessagesForParticipant(cleaned);
+    }
+    case "gmail_thread": {
+      const email = listing?.agentEmail;
+      if (!email) {
+        throw new Error("listing.agentEmail missing — can't fetch Gmail thread");
+      }
+      return await getThreadsForEmail(email);
+    }
+    case "cma": {
+      if (!listing?.address || !listing?.city || !listing?.state || !listing?.zip) {
+        throw new Error("listing missing address parts — can't fetch RentCast CMA");
+      }
+      return await getSaleComparables({
+        address: listing.address,
+        city: listing.city,
+        state: listing.state,
+        zip: listing.zip,
+        bedrooms: listing.bedrooms,
+        bathrooms: listing.bathrooms,
+        squareFootage: listing.buildingSqFt,
+      });
+    }
+    case "live_listing": {
+      // For Phase 1, derive a snapshot from Airtable-side fields the
+      // listing already carries. A real live-scrape via verify-listing
+      // can be wired in once Acquisition Agent owns the refresh
+      // cadence (Week 3+).
+      if (!listing) {
+        throw new Error("listing missing — can't derive live_listing snapshot");
+      }
+      const snapshot: LiveListingSnapshot = {
+        listingType: null,
+        listingStatus: listing.liveStatus ?? null,
+        lastSeenDate: listing.lastVerified ?? null,
+        listPrice: listing.listPrice,
+        photoUrls: [], // Phase 1 — populated by Phase 2 verify-listing rewire
+      };
+      return snapshot;
+    }
+    // Future sources for Gates 4-5:
     case "airtable_deal":
-    case "quo_thread":
-    case "gmail_thread":
-    case "live_listing":
-    case "cma":
     case "buyer_pipeline":
     case "pricing_agent_run":
     case "pa_document":
@@ -230,4 +299,14 @@ async function fetchSource(src: DataSource, recordId: string): Promise<unknown> 
         `Source "${src}" has no registered fetcher yet — add to gate-runner.ts fetchSource() when implementing the gate that needs it.`,
       );
   }
+}
+
+// Normalize Agent_Phone to E.164 for Quo lookup. Mirrors the existing
+// cleanPhone in app/api/deal-context/[id]/route.ts:16 — keeping a local
+// copy so the gate-runner doesn't pull a Next-route file as a dep.
+function cleanPhoneForQuo(phone: string): string {
+  const digits = phone.replace(/[^0-9]/g, "");
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  return `+${digits}`;
 }

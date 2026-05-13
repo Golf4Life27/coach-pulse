@@ -28,6 +28,11 @@ import {
   PRE_SEND_CONFIG,
 } from "@/lib/orchestrator/pre-send-checks";
 import {
+  PRE_NEGOTIATION_GATE,
+  PRE_NEGOTIATION_CHECKS,
+  PRE_NEGOTIATION_CONFIG,
+} from "@/lib/orchestrator/pre-negotiation-checks";
+import {
   ALL_PIPELINE_STAGES,
   type PipelineStage,
 } from "@/lib/orchestrator/types";
@@ -35,11 +40,14 @@ import {
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-// Map target_stage → gate that gates that transition. Gates 3-5 added
-// as their check modules land.
+// Map target_stage → gate that gates that transition. Gates 4-5 added
+// as their check modules land. Gate 3 (pre_negotiation) is primarily a
+// diagnostic gate — runs every time a reply lands, gates every
+// negotiation move — but advancing to 'negotiating' on first reply is
+// the natural transition handler.
 const STAGE_GATE_MAP: Partial<Record<PipelineStage, {
-  gate: typeof PRE_OUTREACH_GATE | typeof PRE_SEND_GATE;
-  checks: typeof PRE_OUTREACH_CHECKS | typeof PRE_SEND_CHECKS;
+  gate: typeof PRE_OUTREACH_GATE | typeof PRE_SEND_GATE | typeof PRE_NEGOTIATION_GATE;
+  checks: typeof PRE_OUTREACH_CHECKS | typeof PRE_SEND_CHECKS | typeof PRE_NEGOTIATION_CHECKS;
   config: Record<string, unknown>;
 }>> = {
   outreach_ready: {
@@ -51,6 +59,11 @@ const STAGE_GATE_MAP: Partial<Record<PipelineStage, {
     gate: PRE_SEND_GATE,
     checks: PRE_SEND_CHECKS,
     config: PRE_SEND_CONFIG as unknown as Record<string, unknown>,
+  },
+  negotiating: {
+    gate: PRE_NEGOTIATION_GATE,
+    checks: PRE_NEGOTIATION_CHECKS,
+    config: PRE_NEGOTIATION_CONFIG as unknown as Record<string, unknown>,
   },
 };
 

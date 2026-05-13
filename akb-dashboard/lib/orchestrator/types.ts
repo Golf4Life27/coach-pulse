@@ -16,6 +16,9 @@
 
 import type { Listing } from "@/lib/types";
 import type { AuditEntry } from "@/lib/audit-log";
+import type { QuoMessage } from "@/lib/quo";
+import type { GmailMessage } from "@/lib/gmail";
+import type { RentCastSaleComp } from "@/lib/rentcast";
 
 export type PipelineStage =
   | "intake"
@@ -119,12 +122,29 @@ export interface GateRunResult {
 // Pre-fetched data context — populated by gate-runner before running
 // any check. Each check function reads from this; no check makes its
 // own external calls. Spec §5 Data Source Mandate.
+// Live-listing snapshot shape (subset of /v1/listings/sale response we
+// actually consume). Source: RentCast listings API via the verify-listing
+// route's internal client; for gate purposes we surface the few fields
+// PN-03/PN-04/PN-05 read.
+export interface LiveListingSnapshot {
+  listingType: string | null;
+  listingStatus: string | null; // Active / Pending / etc.
+  lastSeenDate: string | null;
+  listPrice: number | null;
+  photoUrls: string[];
+}
+
 export interface GateContext {
   recordId: string;
   listing: Listing | null;
   auditLog?: AuditEntry[] | null;
-  // Future gates will add: deal, quoThread, gmailThread, liveListing,
-  // cma, buyerPipeline, pricingAgentRun, paDocument, titlePrelim.
+  // Gate 3 (Pre-Negotiation) sources:
+  quoThread?: QuoMessage[] | null;
+  gmailThread?: GmailMessage[] | null;
+  liveListing?: LiveListingSnapshot | null;
+  cma?: RentCastSaleComp[] | null;
+  // Future gates will add: deal, buyerPipeline, pricingAgentRun,
+  // paDocument, titlePrelim.
 }
 
 export type CheckFn = (ctx: GateContext, config: Record<string, unknown>) => CheckResult;

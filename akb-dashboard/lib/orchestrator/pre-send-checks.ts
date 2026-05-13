@@ -200,6 +200,18 @@ const PS_06_spread: CheckFn = (ctx, cfg) => {
       },
     );
   }
+  // Sanity: both inputs must be positive before the spread check is
+  // meaningful. Without this gate, negative inputs (e.g. Your_MAO=-45K,
+  // Investor_MAO=-30K → spread=$15K) pass the threshold despite both
+  // being nonsense values. PS-04 already catches negative Your_MAO; this
+  // belt-and-suspenders the spread check itself.
+  if (investor <= 0 || your <= 0) {
+    return fail(
+      "PS-06",
+      `Spread calc requires positive inputs — Investor_MAO=$${investor.toLocaleString()}, Your_MAO=$${your.toLocaleString()}`,
+      { investor_mao: investor, your_mao: your },
+    );
+  }
   const spread = investor - your;
   if (spread < c.spread_min_usd) {
     return fail(
