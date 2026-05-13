@@ -18,7 +18,11 @@
 // routing (Phase 1 cadence).
 
 import { NextResponse } from "next/server";
-import { getListings, updateListingRecord } from "@/lib/airtable";
+import {
+  getListings,
+  updateListingRecord,
+  createManualFixQueueRecord,
+} from "@/lib/airtable";
 import { audit } from "@/lib/audit-log";
 import { classifyTexted, summarize, type ScrubResult } from "@/lib/d3-scrub";
 
@@ -44,6 +48,10 @@ export async function GET(req: Request) {
   const results: ScrubResult[] = subset.map((l) => classifyTexted(l));
   const summary = summarize(results);
 
+  // Build a quick lookup of the source listing for invalid_phone records
+  // so we can populate denormalized fields on the manual-fix-queue rows.
+  const listingById = new Map(subset.map((l) => [l.id, l]));
+
   // Apply writes (only when apply=1 explicitly).
   const writeOutcomes: Array<{
     recordId: string;
@@ -51,8 +59,53 @@ export async function GET(req: Request) {
     drift_count: number;
     error: string | null;
   }> = [];
+  const manualFixQueueOutcomes: Array<{
+    recordId: string;
+    queue_record_id: string | null;
+    error: string | null;
+  }> = [];
   if (apply) {
+    const today = new Date().toISOString().slice(0, 10);
     for (const r of results) {
+      // Invalid-phone records get routed to D3_Manual_Fix_Queue instead
+      // of (or in addition to) Listings_V1 writes. Per Alex 5/13 Option B:
+      // reusable infrastructure, not a one-shot chat surface.
+      if (r.bucket === "skip_invalid_phone") {
+        const src = listingById.get(r.recordId);
+        if (!src) {
+          manualFixQueueOutcomes.push({
+            recordId: r.recordId,
+            queue_record_id: null,
+            error: "source listing not found in subset map",
+          });
+          continue;
+        }
+        try {
+          const out = await createManualFixQueueRecord({
+            Address: src.address || "(missing address)",
+            Source_Listing: [r.recordId],
+            Agent_First_Name: src.agentName,
+            Agent_Phone_Raw: src.agentPhone,
+            Issue_Category: "invalid_phone_format",
+            Detected_Date: today,
+            Detected_By: "D3 Phase 0a",
+            Resolution_Status: "pending",
+            Notes: r.reasoning,
+          });
+          manualFixQueueOutcomes.push({
+            recordId: r.recordId,
+            queue_record_id: out.recordId,
+            error: null,
+          });
+        } catch (err) {
+          manualFixQueueOutcomes.push({
+            recordId: r.recordId,
+            queue_record_id: null,
+            error: String(err),
+          });
+        }
+        continue;
+      }
       if (!r.pending_writes || Object.keys(r.pending_writes).length === 0) continue;
       try {
         const drift = await updateListingRecord(r.recordId, r.pending_writes);
@@ -76,12 +129,15 @@ export async function GET(req: Request) {
   // Composite audit per scrub run — surfaces bucket counts + apply mode.
   // Individual records that get writes also get audited via the
   // patchAndVerify chain (airtable-write events).
-  const auditStatus =
-    apply && writeOutcomes.some((w) => w.error != null)
-      ? "confirmed_failure"
-      : summary.never_list_warning
-        ? "uncertain"
-        : "confirmed_success";
+  const hasWriteErrors =
+    apply &&
+    (writeOutcomes.some((w) => w.error != null) ||
+      manualFixQueueOutcomes.some((m) => m.error != null));
+  const auditStatus = hasWriteErrors
+    ? "confirmed_failure"
+    : summary.never_list_warning
+      ? "uncertain"
+      : "confirmed_success";
   await audit({
     agent: "d3-scrub",
     event: "scrub_run",
@@ -96,6 +152,12 @@ export async function GET(req: Request) {
       summary,
       writes_applied: apply ? writeOutcomes.length : 0,
       write_errors: apply ? writeOutcomes.filter((w) => w.error != null).length : 0,
+      manual_fix_queue_rows_created: apply
+        ? manualFixQueueOutcomes.filter((m) => m.error == null).length
+        : 0,
+      manual_fix_queue_errors: apply
+        ? manualFixQueueOutcomes.filter((m) => m.error != null).length
+        : 0,
       never_list_warning: summary.never_list_warning,
     },
     decision: apply ? "writes_applied" : "dry_run",
@@ -109,6 +171,7 @@ export async function GET(req: Request) {
     examined: subset.length,
     summary,
     write_outcomes: apply ? writeOutcomes : "skipped (dry_run)",
+    manual_fix_queue_outcomes: apply ? manualFixQueueOutcomes : "skipped (dry_run)",
     // Per-record results capped at 200 in response to keep payload sane.
     // Full dataset lives in audit log; this is for at-a-glance inspection.
     results_sample: results.slice(0, 200).map((r) => ({

@@ -39,6 +39,10 @@ export interface Listing {
   priceDropCount?: number | null;
   lastVerified?: string | null;
   pipelineStage?: string | null;
+  // Prev_List_Price drives list-drift detection in D3 math filter — if
+  // current List_Price has fallen substantially since the Texted record
+  // was created, the math we ran at that time is stale.
+  prevListPrice?: number | null;
   // ── Pre-Send Gate inputs (added 5/13 for orchestrator Gate 2)
   rehabConfidenceScore?: number | null;
   agentPriorOutreachCount?: number | null;

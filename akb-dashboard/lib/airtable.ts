@@ -56,6 +56,14 @@ const LISTING_FIELDS: Record<string, string> = {
   fld0fWZGiFS73PPB7: "agentPriorOutreachCount",
   // ── Pre-Negotiation Gate (orchestrator Gate 3) inputs
   fldmup8SvMky9eyag: "estRehab",
+  // ── D3 Phase 0b math-filter inputs (formula fields read-only by design)
+  flduzFLSaFBfIl9Rn: "prevListPrice",
+  fldyDCVwvn9jfdiES: "estRehabMid",
+  fldoNZxSZqQsCLIW6: "realArvMedian",
+  fldHhSpaiNq1OPzfc: "investorMao",
+  fldfE06eS402RcPCN: "yourMao",
+  fldAvk2aIBU1Lh3Dz: "autoApproveV2",
+  fldvHDqtftWehMJR7: "arvValidatedAt",
 };
 
 // Reverse map: field name -> prop name (for single-record GET which returns field names)
@@ -102,6 +110,7 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "Rehab_Confidence_Score": "rehabConfidenceScore",
   "Agent_Prior_Outreach_Count": "agentPriorOutreachCount",
   "Est_Rehab": "estRehab",
+  "Prev_List_Price": "prevListPrice",
   // ── Phase 3: photo analysis ──────────────────────────────────────────────
   "Est_Rehab_Low": "estRehabLow",
   "Est_Rehab_Mid": "estRehabMid",
@@ -606,4 +615,76 @@ export async function updateDealRecord(
 
   delete cache["deals"];
   return drift;
+}
+
+const D3_MANUAL_FIX_QUEUE_TABLE = "tblV6OkNPDzOo6ubp";
+
+// Create a row in D3_Manual_Fix_Queue. Reusable across Scenario A/B,
+// D3 Phase 0a, L3, and manual triggers per Alex 5/13 directive.
+// Returns the created record ID so the caller can link back if needed.
+export async function createManualFixQueueRecord(fields: {
+  Address: string;
+  Source_Listing?: string[];
+  Agent_First_Name?: string | null;
+  Agent_Phone_Raw?: string | null;
+  Issue_Category:
+    | "invalid_phone_format"
+    | "wrong_number_per_status_check"
+    | "agent_changed"
+    | "property_changed"
+    | "other";
+  Detected_Date: string; // ISO date "YYYY-MM-DD"
+  Detected_By: "Scenario A" | "Scenario B" | "D3 Phase 0a" | "L3" | "manual";
+  Resolution_Status?: "pending" | "fixed" | "dead";
+  Notes?: string | null;
+}): Promise<{ recordId: string }> {
+  const url = `https://api.airtable.com/v0/${BASE_ID}/${D3_MANUAL_FIX_QUEUE_TABLE}`;
+  const payload = {
+    records: [
+      {
+        fields: {
+          Address: fields.Address,
+          ...(fields.Source_Listing ? { Source_Listing: fields.Source_Listing } : {}),
+          ...(fields.Agent_First_Name != null
+            ? { Agent_First_Name: fields.Agent_First_Name }
+            : {}),
+          ...(fields.Agent_Phone_Raw != null
+            ? { Agent_Phone_Raw: fields.Agent_Phone_Raw }
+            : {}),
+          Issue_Category: fields.Issue_Category,
+          Detected_Date: fields.Detected_Date,
+          Detected_By: fields.Detected_By,
+          Resolution_Status: fields.Resolution_Status ?? "pending",
+          ...(fields.Notes != null ? { Notes: fields.Notes } : {}),
+        },
+      },
+    ],
+  };
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${AIRTABLE_PAT}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    await audit({
+      agent: "airtable-write",
+      event: "manual_fix_queue_create_failed",
+      status: "confirmed_failure",
+      inputSummary: { address: fields.Address, issue: fields.Issue_Category },
+      outputSummary: { http: res.status },
+      error: errText,
+    });
+    throw new Error(`D3_Manual_Fix_Queue create error ${res.status}: ${errText}`);
+  }
+  const body = (await res.json()) as { records?: Array<{ id: string }> };
+  const recordId = body.records?.[0]?.id;
+  if (!recordId) {
+    throw new Error("D3_Manual_Fix_Queue create returned no record id");
+  }
+  return { recordId };
 }
