@@ -35,7 +35,10 @@ interface FieldSchema {
 type TableFieldSchemas = Record<string /* fieldId */, FieldSchema>;
 const schemaCache: Record<string /* tableId */, TableFieldSchemas> = {};
 const schemaFetchedAt: Record<string, number> = {};
-const SCHEMA_TTL_MS = 60 * 60_000; // 1 hour
+// 10-min TTL per Alex's design note (5/13): lazy-load + refresh on TTL,
+// not per-write. Cache hit rate should be ~99% in practice since schemas
+// rarely change. Adjust here if mutations to the base become more frequent.
+const SCHEMA_TTL_MS = 10 * 60_000;
 
 async function loadTableSchema(tableId: string): Promise<TableFieldSchemas> {
   const now = Date.now();
