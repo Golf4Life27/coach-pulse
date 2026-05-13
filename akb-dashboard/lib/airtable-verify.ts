@@ -236,6 +236,10 @@ export function detectWriteDrift(
     const fieldFoundInEcho = field in echoed || (idToName.has(field) && idToName.get(field)! in echoed);
 
     if (!fieldFoundInEcho) {
+      // Writing null to clear a field doesn't echo back — Airtable
+      // omits empty/null fields from the response by default. Not
+      // drift; the write succeeded as intended.
+      if (val == null) continue;
       drift.push({
         field,
         written: val,

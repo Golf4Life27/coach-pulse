@@ -237,10 +237,16 @@ export async function GET(
   // Field names match the existing arv-validate + photo-analysis writes
   // so the dashboard contract is preserved. The patchAndVerify layer
   // catches any select-field drift on the way out.
+  //
+  // PRINCIPLE: only write fields that have a real computed value. When
+  // a phase produced null (e.g., Phase 4A returned 0 usable comps), we
+  // do NOT overwrite the existing Airtable value with null — better to
+  // leave the stale value than corrupt it. The "ARV_Validated_At"
+  // stamp also only updates when we actually validated.
   const fieldsToWrite: Record<string, unknown> = {};
   const nowIso = new Date().toISOString();
 
-  if (phase4a.ok) {
+  if (phase4a.ok && phase4a.result.arv_mid != null) {
     fieldsToWrite.Real_ARV_Low = phase4a.result.arv_low;
     fieldsToWrite.Real_ARV_High = phase4a.result.arv_high;
     fieldsToWrite.Real_ARV_Median = phase4a.result.arv_mid;
@@ -248,7 +254,7 @@ export async function GET(
     fieldsToWrite.ARV_Validated_At = nowIso;
   }
 
-  if (phase4b.ok && rehabOverride == null) {
+  if (phase4b.ok && rehabOverride == null && phase4b.result.rehab_mid != null) {
     // Skip Airtable rehab fields when we used an override — the override
     // is a math input only, not a persistence-worthy value.
     fieldsToWrite.Est_Rehab_Low = phase4b.result.rehab_low;
@@ -259,7 +265,7 @@ export async function GET(
     fieldsToWrite.Rehab_Estimated_At = nowIso;
   }
 
-  if (phase4c.ok && phase4c.result.flipper) {
+  if (phase4c.ok && phase4c.result.flipper && phase4c.result.flipper.your_mao != null) {
     // Dashboard-contract flipper-track YourMAO + InvestorMAO. Landlord
     // track is in the response but not persisted (pending Alex's
     // confirmation of Landlord_MAO / Recommended_Track / Creative_Finance
