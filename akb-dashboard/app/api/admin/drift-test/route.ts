@@ -1,23 +1,20 @@
-// POST /api/admin/drift-test
+// GET /api/admin/drift-test?recordId=...&fieldId=...&value=...&valueType=string|number
 //
 // Deliberate-drift validator for the airtable read-back-after-write
 // migration. Sandboxed to writes on the dashboard's test record so
-// real production data can't be polluted. Used to verify three
-// distinct drift cases fire as expected:
+// real production data can't be polluted. Used to verify drift
+// detection layers fire as expected:
 //
-//   1. Positive control     — known-good value, no drift
-//   2. Phantom-option       — write a non-existent singleSelect choice
-//   3. Echo-mismatch        — write a value that Airtable normalizes
+//   Layer A: echo-comparison (number/datetime/string normalization)
+//   Layer B: schema-aware singleSelect/multipleSelects phantom-option
 //
-// Body:
-//   { recordId, fields }
+// Hardcoded allowlist: only writes to allowlisted test record(s).
+// Returns 403 for any other recordId so this endpoint can't be used
+// as a write proxy for real records.
 //
-// Response:
-//   { written, drift_count, drift, audit_event_will_fire }
-//
-// Hardcoded allowlist: only writes to the throwaway test record
-// rece38peGR67eqIyG. Returns 403 for any other recordId so this
-// endpoint can't be used as a write proxy for real records.
+// Why GET: this endpoint is invoked from outside the sandbox via the
+// Vercel MCP web_fetch_vercel_url tool, which is GET-only. Side-effect-
+// on-GET is intentional and explicitly scoped to test records.
 
 import { NextResponse } from "next/server";
 import { updateListingRecord } from "@/lib/airtable";
@@ -27,18 +24,16 @@ export const maxDuration = 30;
 
 const ALLOWED_TEST_RECORD_IDS = new Set(["rece38peGR67eqIyG"]);
 
-export async function POST(req: Request) {
-  let body: { recordId?: string; fields?: Record<string, unknown> };
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
-  }
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const recordId = url.searchParams.get("recordId");
+  const fieldId = url.searchParams.get("fieldId");
+  const rawValue = url.searchParams.get("value");
+  const valueType = url.searchParams.get("valueType") ?? "string";
 
-  const { recordId, fields } = body;
-  if (!recordId || !fields || typeof fields !== "object") {
+  if (!recordId || !fieldId || rawValue == null) {
     return NextResponse.json(
-      { error: "Missing recordId or fields" },
+      { error: "Missing recordId, fieldId, or value" },
       { status: 400 },
     );
   }
@@ -53,11 +48,25 @@ export async function POST(req: Request) {
     );
   }
 
+  let value: unknown = rawValue;
+  if (valueType === "number") {
+    const n = Number(rawValue);
+    if (isNaN(n)) {
+      return NextResponse.json(
+        { error: `Invalid number value: ${rawValue}` },
+        { status: 400 },
+      );
+    }
+    value = n;
+  } else if (valueType === "null") {
+    value = null;
+  }
+
   try {
-    const drift = await updateListingRecord(recordId, fields);
+    const drift = await updateListingRecord(recordId, { [fieldId]: value });
     return NextResponse.json({
       recordId,
-      written: fields,
+      written: { [fieldId]: value },
       drift_count: drift.length,
       drift,
       audit_event_will_fire: drift.length > 0,
