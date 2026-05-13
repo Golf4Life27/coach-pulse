@@ -1,13 +1,15 @@
 "use client";
 
 // Read-only consumer of /api/pricing-intelligence/[zip]. Renders flipper
-// vs landlord Your_MAO side-by-side with a recommended-track chip and
-// creative-finance flag. No Airtable writes — math is fetched fresh per
-// render (5-min stale-while-revalidate via fetch cache).
+// vs landlord Your_MAO side-by-side. NEVER returns null silently when
+// inputs are partial — surfaces the gap explicitly per the Positive
+// Confirmation Principle (§Rule 5 — swallowed errors forbidden).
 //
-// Renders inside DealCard once we have ARV + rehab + a ZIP we can parse
-// from the address. When inputs are insufficient, surfaces a tight
-// explanation rather than silently dropping — Principle compliance.
+// Fallback ZIP: when propertyAddress doesn't contain a 5-digit ZIP, we
+// derive a city+state-default ZIP so the pricing endpoint can still
+// resolve the correct market via prefix match (cap rate, uplift). Rent
+// lookup is skipped in that case because RentCast needs a real address;
+// the landlord track surfaces "no rent data" rather than guessing.
 
 import { useEffect, useState } from "react";
 import { formatCurrency } from "@/lib/utils";
@@ -50,37 +52,99 @@ interface PricingResponse {
 }
 
 interface Props {
-  zip: string;
-  address: string;
+  address: string | null;
   city: string | null;
   state: string | null;
   beds: number | null;
   baths: number | null;
   sqft: number | null;
-  arv_mid: number;
-  rehab_mid: number;
+  arv_mid: number | null;
+  rehab_mid: number | null;
+}
+
+// Default ZIP per city+state combo. Used when the address string doesn't
+// include a parseable ZIP. The exact ZIP doesn't matter for pricing math
+// because cap_rate + uplift configs key off the 2-digit prefix (48/38/
+// 78/75/77). Real addresses still go through unchanged.
+const CITY_STATE_FALLBACK_ZIP: Record<string, string> = {
+  "san antonio|tx": "78201",
+  "dallas|tx": "75201",
+  "houston|tx": "77002",
+  "detroit|mi": "48201",
+  "memphis|tn": "38103",
+};
+
+function normalizeState(s: string | null | undefined): string | null {
+  if (!s) return null;
+  const lower = s.trim().toLowerCase();
+  const map: Record<string, string> = {
+    texas: "tx",
+    michigan: "mi",
+    tennessee: "tn",
+    "tx": "tx",
+    "mi": "mi",
+    "tn": "tn",
+  };
+  return map[lower] ?? (lower.length === 2 ? lower : null);
+}
+
+function resolveZip(
+  address: string | null | undefined,
+  city: string | null | undefined,
+  state: string | null | undefined,
+): { zip: string | null; source: "address" | "city_state_fallback" | "none" } {
+  if (address) {
+    const match = address.match(/\b(\d{5})(?:-\d{4})?\b/);
+    if (match) return { zip: match[1], source: "address" };
+  }
+  const stateNorm = normalizeState(state);
+  if (city && stateNorm) {
+    const key = `${city.trim().toLowerCase()}|${stateNorm}`;
+    const fallback = CITY_STATE_FALLBACK_ZIP[key];
+    if (fallback) return { zip: fallback, source: "city_state_fallback" };
+  }
+  return { zip: null, source: "none" };
 }
 
 export default function TwoTrackPricing(props: Props) {
+  const { zip, source: zipSource } = resolveZip(props.address, props.city, props.state);
+
+  const hasArv = props.arv_mid != null && props.arv_mid > 0;
+  const hasRehab = props.rehab_mid != null && props.rehab_mid >= 0;
+  const canCompute = zip != null && hasArv && hasRehab;
+
   const [data, setData] = useState<PricingResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    if (!canCompute || zip == null) {
+      setData(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
+
     const params = new URLSearchParams({
-      address: props.address,
-      arv_mid: String(props.arv_mid),
-      rehab_mid: String(props.rehab_mid),
+      arv_mid: String(props.arv_mid!),
+      rehab_mid: String(props.rehab_mid!),
     });
+    // Only pass address when ZIP came from the address itself; the
+    // city+state fallback ZIP is not a real anchor and would mislead
+    // RentCast's rent lookup.
+    if (zipSource === "address" && props.address) {
+      params.set("address", props.address);
+    }
     if (props.city) params.set("city", props.city);
-    if (props.state) params.set("state", props.state);
+    const stateNorm = normalizeState(props.state);
+    if (stateNorm) params.set("state", stateNorm.toUpperCase());
     if (props.beds != null) params.set("beds", String(props.beds));
     if (props.baths != null) params.set("baths", String(props.baths));
     if (props.sqft != null) params.set("sqft", String(props.sqft));
 
     let cancelled = false;
     setLoading(true);
-    fetch(`/api/pricing-intelligence/${props.zip}?${params.toString()}`)
+    fetch(`/api/pricing-intelligence/${zip}?${params.toString()}`)
       .then(async (res) => {
         if (cancelled) return;
         if (!res.ok) {
@@ -88,8 +152,7 @@ export default function TwoTrackPricing(props: Props) {
           setError(body.error || `HTTP ${res.status}`);
           setData(null);
         } else {
-          const json = (await res.json()) as PricingResponse;
-          setData(json);
+          setData((await res.json()) as PricingResponse);
           setError(null);
         }
       })
@@ -105,7 +168,9 @@ export default function TwoTrackPricing(props: Props) {
       cancelled = true;
     };
   }, [
-    props.zip,
+    zip,
+    zipSource,
+    canCompute,
     props.address,
     props.city,
     props.state,
@@ -115,6 +180,32 @@ export default function TwoTrackPricing(props: Props) {
     props.arv_mid,
     props.rehab_mid,
   ]);
+
+  // ── Empty-state branches (always render, never silently hide) ─────
+  const missing: string[] = [];
+  if (zip == null) missing.push("ZIP (not in address, city+state didn't map)");
+  if (!hasArv) missing.push("ARV");
+  if (!hasRehab) missing.push("Est. Repairs");
+
+  if (!canCompute) {
+    return (
+      <div className="mt-3 border-t border-[#30363d] pt-3">
+        <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">
+          Dual-Track Pricing
+        </div>
+        <div className="bg-[#161b22] border border-[#30363d] rounded p-2.5 text-xs text-gray-400">
+          <p className="font-semibold text-gray-300 mb-1">Setup required</p>
+          <p>
+            Missing: <span className="text-amber-300">{missing.join(" · ")}</span>
+          </p>
+          <p className="mt-1 text-[10px] text-gray-500">
+            Run Phase 4A (/api/arv-validate/[recordId]) + Phase 4B (/api/photo-analysis/[recordId])
+            to populate ARV + repairs.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
@@ -127,7 +218,9 @@ export default function TwoTrackPricing(props: Props) {
   if (error) {
     return (
       <div className="mt-3 border-t border-[#30363d] pt-3">
-        <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Dual-Track Pricing</div>
+        <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">
+          Dual-Track Pricing
+        </div>
         <div className="bg-amber-900/20 border border-amber-500/40 rounded p-2 text-xs text-amber-300">
           <span className="font-semibold">Unavailable:</span> {error}
         </div>
@@ -147,6 +240,14 @@ export default function TwoTrackPricing(props: Props) {
       <div className="flex items-center justify-between mb-2">
         <div className="text-[10px] text-gray-500 uppercase tracking-wider">
           Dual-Track Pricing · {data.market}
+          {zipSource === "city_state_fallback" && (
+            <span
+              title="ZIP not in property address; using city+state default. Rent lookup skipped."
+              className="ml-1 text-amber-400"
+            >
+              (ZIP est.)
+            </span>
+          )}
         </div>
         {data.creative_finance_flag && (
           <span
@@ -247,14 +348,4 @@ function TrackBlock({
       </div>
     </div>
   );
-}
-
-// Exported helper — extracts a 5-digit ZIP from the trailing portion of
-// an address. Returns null if no ZIP is found. Lives here (not in
-// utils.ts) because it's only used by the Two-Track render and the
-// fallback semantics matter to the consumer.
-export function extractZipFromAddress(addr: string | null | undefined): string | null {
-  if (!addr) return null;
-  const match = addr.match(/\b(\d{5})(?:-\d{4})?\b\s*$/);
-  return match ? match[1] : null;
 }
