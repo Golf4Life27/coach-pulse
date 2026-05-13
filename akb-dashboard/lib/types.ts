@@ -65,6 +65,7 @@ export interface Deal {
   id: string;
   propertyAddress: string;
   city: string;
+  state: string | null;
   contractPrice: number | null;
   offerPrice: number | null;
   assignmentFee: number | null;

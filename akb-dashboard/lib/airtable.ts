@@ -111,6 +111,7 @@ const LISTING_NAME_MAP: Record<string, string> = {
 const DEAL_FIELDS: Record<string, string> = {
   fld2AaqbSahBMY62j: "propertyAddress",
   fldoVbMXZxZV08sqG: "city",
+  fldfGiKZL970cvftH: "state",
   fldGZO10DHc9evl0L: "contractPrice",
   fldnxxzcMRzL1j1hJ: "offerPrice",
   flddXvwvKdx47Xa9X: "assignmentFee",

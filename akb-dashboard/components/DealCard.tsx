@@ -1,5 +1,6 @@
 import { Deal } from "@/lib/types";
 import { formatCurrency } from "@/lib/utils";
+import TwoTrackPricing, { extractZipFromAddress } from "./TwoTrackPricing";
 
 interface DealCardProps {
   deal: Deal;
@@ -76,6 +77,36 @@ export default function DealCard({ deal }: DealCardProps) {
             DISPO READY
           </div>
         )}
+
+        {/* Two-Track buyer math — fetches /api/pricing-intelligence/[zip]
+            client-side. Renders only when ZIP can be parsed and we have
+            ARV + rehab inputs. The fetch surfaces its own loading/error
+            state per the Positive Confirmation Principle. */}
+        {(() => {
+          const zip = extractZipFromAddress(deal.propertyAddress);
+          if (
+            !zip ||
+            deal.arv == null ||
+            deal.arv <= 0 ||
+            deal.estimatedRepairs == null ||
+            deal.estimatedRepairs < 0
+          ) {
+            return null;
+          }
+          return (
+            <TwoTrackPricing
+              zip={zip}
+              address={deal.propertyAddress}
+              city={deal.city}
+              state={deal.state}
+              beds={deal.beds}
+              baths={deal.baths}
+              sqft={deal.sqft}
+              arv_mid={deal.arv}
+              rehab_mid={deal.estimatedRepairs}
+            />
+          );
+        })()}
       </div>
     </div>
   );
