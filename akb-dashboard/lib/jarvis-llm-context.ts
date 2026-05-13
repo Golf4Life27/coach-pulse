@@ -99,7 +99,20 @@ export function renderCompressedTimeline(c: CompressedDealContext): string {
   if (c.timeline.length === 0) return "(no recent timeline entries)";
   return c.timeline
     .map((e) => {
-      const ts = e.timestamp ? new Date(e.timestamp).toISOString().replace("T", " ").slice(0, 16) : "—";
+      // Notes-channel entries carry the raw timestamp string from
+      // lib/notes.ts (e.g. "5/13 10:30pm" without year) which new Date()
+      // cannot parse — falls through as Invalid Date and toISOString()
+      // throws RangeError. Fall back to the raw string when parsing
+      // fails so the brief doesn't 500 on records dominated by notes.
+      let ts = "—";
+      if (e.timestamp) {
+        const d = new Date(e.timestamp);
+        if (!isNaN(d.getTime())) {
+          ts = d.toISOString().replace("T", " ").slice(0, 16);
+        } else {
+          ts = e.timestamp.slice(0, 16);
+        }
+      }
       const dir = e.direction === "in" ? "AGENT" : "ALEX";
       return `[${ts}] ${dir} (${e.channel.toUpperCase()}): ${e.body}`;
     })
