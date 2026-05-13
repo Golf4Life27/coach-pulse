@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { findBuyerByEmail, createBuyerV2, updateBuyerV2, BUYER_V2_FIELDS } from "@/lib/buyers-v2";
-import { sendEmail } from "@/lib/gmail";
+import { sendEmail, type GmailSendResult } from "@/lib/gmail";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -75,22 +75,53 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Failed to save", detail: String(err) }, { status: 502 });
   }
 
-  // Confirmation email + Alex notification — both best-effort (don't fail the
-  // form submission if Gmail isn't configured).
-  void sendEmail({
+  // Confirmation email + Alex notification — both best-effort. The
+  // buyer record is what we're committing to in this endpoint; emails
+  // are a side effect. But "best-effort" doesn't mean "invisible" —
+  // sendEmail now audit-logs its own result with three-state status,
+  // and we surface email_status to the caller so Make.com / form
+  // backend can see what actually happened. Per the Positive
+  // Confirmation Principle: 2xx is not the whole truth.
+  //
+  // Pattern note (5/13): replaces void sendEmail(...).catch(() => {})
+  // which discarded the result entirely — exactly the swallow pattern
+  // the principle exists to catch. Side-effect failures stay
+  // non-fatal but become observable.
+  async function safeSend(opts: Parameters<typeof sendEmail>[0]): Promise<GmailSendResult> {
+    try {
+      return await sendEmail(opts);
+    } catch (err) {
+      return {
+        success: false,
+        audit_status: "confirmed_failure",
+        error: `sendEmail threw: ${String(err)}`,
+      };
+    }
+  }
+
+  const buyerEmailResult = await safeSend({
     to: input.email,
     subject: "Thanks — you're on the AKB buyer list",
     body: `Hi ${input.name.split(" ")[0] || "there"},\n\nThanks for filling out the AKB buyer form. We'll send deals matching your criteria as they come up.\n\n— Alex / AKB Solutions / (815) 556-9965`,
-  }).catch(() => {});
+  });
 
   const alexEmail = process.env.ALEX_NOTIFY_EMAIL;
-  if (alexEmail) {
-    void sendEmail({
-      to: alexEmail,
-      subject: `New buyer intake: ${input.name}`,
-      body: `Buyer: ${input.name} <${input.email}>\nEntity: ${input.entity ?? "—"}\nMarkets: ${(input.markets ?? []).join(", ") || "—"}\nMin/Max: $${input.minPrice ?? "?"} – $${input.maxPrice ?? "?"}\nBuyer type: ${input.buyerType ?? "?"}\nNotes: ${input.notes ?? "—"}\n\nReview: /buyers (id ${buyerId})`,
-    }).catch(() => {});
-  }
+  const alexEmailResult: GmailSendResult | null = alexEmail
+    ? await safeSend({
+        to: alexEmail,
+        subject: `New buyer intake: ${input.name}`,
+        body: `Buyer: ${input.name} <${input.email}>\nEntity: ${input.entity ?? "—"}\nMarkets: ${(input.markets ?? []).join(", ") || "—"}\nMin/Max: $${input.minPrice ?? "?"} – $${input.maxPrice ?? "?"}\nBuyer type: ${input.buyerType ?? "?"}\nNotes: ${input.notes ?? "—"}\n\nReview: /buyers (id ${buyerId})`,
+      })
+    : null;
 
-  return NextResponse.json({ success: true, buyerId });
+  return NextResponse.json({
+    success: true,
+    buyerId,
+    email_status: {
+      buyer_confirmation: buyerEmailResult.audit_status,
+      buyer_confirmation_error: buyerEmailResult.error ?? buyerEmailResult.verifyError ?? null,
+      alex_notification: alexEmailResult?.audit_status ?? "skipped",
+      alex_notification_error: alexEmailResult?.error ?? alexEmailResult?.verifyError ?? null,
+    },
+  });
 }
