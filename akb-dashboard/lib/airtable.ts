@@ -1,5 +1,6 @@
 import { Listing, Deal, Buyer, ProspectiveBuyer } from "./types";
 import { auditWriteDrift, type FieldDrift } from "./airtable-verify";
+import { audit } from "./audit-log";
 
 const AIRTABLE_PAT = process.env.AIRTABLE_PAT!;
 const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
@@ -468,6 +469,59 @@ async function patchAndVerify(opts: {
   if (!res.ok) {
     const errText = await res.text();
     console.error(`[Airtable] PATCH ${url} failed: ${res.status} ${errText}`);
+
+    // Detect formula-field write attempts. Airtable returns:
+    //   422 INVALID_VALUE_FOR_COLUMN
+    //   "Field \"X\" cannot accept a value because the field is computed"
+    // for any write to formula/rollup/lookup/count fields. PATCH is
+    // atomic, so a single formula field in the request kills the entire
+    // batch — including legitimate writes to other fields. Audit the
+    // failure mode explicitly so future occurrences are durable in KV
+    // (was silently swallowed by call-site try/catch pre-5/13).
+    const isFormulaWriteBlocked =
+      res.status === 422 &&
+      /INVALID_VALUE_FOR_COLUMN/.test(errText) &&
+      /computed/i.test(errText);
+    if (isFormulaWriteBlocked) {
+      // Extract the offending field name(s) from the error message for
+      // morning-brief routing — Airtable surfaces ONE field at a time
+      // (the first formula field hit). Match: Field "X" cannot accept
+      const fieldMatch = errText.match(/Field "([^"]+)" cannot accept/);
+      const offendingField = fieldMatch ? fieldMatch[1] : "unknown";
+      await audit({
+        agent: "airtable-write",
+        event: "formula_field_write_blocked",
+        status: "confirmed_failure",
+        recordId: opts.recordId,
+        inputSummary: {
+          table: opts.tableName,
+          fields_written: Object.keys(opts.fields),
+          offending_field: offendingField,
+        },
+        outputSummary: {
+          http: res.status,
+          error_type: "INVALID_VALUE_FOR_COLUMN",
+          all_fields_in_patch_lost: Object.keys(opts.fields),
+        },
+        decision: "atomic_patch_rejected",
+        error: errText,
+      });
+    } else {
+      // General PATCH failure — also durable so we don't lose visibility
+      // when call sites swallow the throw.
+      await audit({
+        agent: "airtable-write",
+        event: "patch_failed",
+        status: "confirmed_failure",
+        recordId: opts.recordId,
+        inputSummary: {
+          table: opts.tableName,
+          fields_written: Object.keys(opts.fields),
+        },
+        outputSummary: { http: res.status },
+        error: errText,
+      });
+    }
     throw new Error(`Airtable update error ${res.status}: ${errText}`);
   }
 

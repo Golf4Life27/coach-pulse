@@ -260,25 +260,28 @@ export async function GET(
     fieldsToWrite.Est_Rehab_Low = phase4b.result.rehab_low;
     fieldsToWrite.Est_Rehab_Mid = phase4b.result.rehab_mid;
     fieldsToWrite.Est_Rehab_High = phase4b.result.rehab_high;
+    // The Investor_MAO + Your_MAO Airtable formulas reference Est_Rehab
+    // (fldmup8SvMky9eyag), NOT Est_Rehab_Mid (fldyDCVwvn9jfdiES). Write
+    // BOTH — Est_Rehab so the formula computes correctly, Est_Rehab_Mid
+    // stays as the explicit Phase 4B audit-trail field. Discovered 5/13
+    // during formula-field investigation.
+    fieldsToWrite.Est_Rehab = phase4b.result.rehab_mid;
     fieldsToWrite.Rehab_Confidence_Score = phase4b.result.confidence;
     fieldsToWrite.Rehab_Red_Flags = phase4b.result.red_flags.join(", ") || "";
     fieldsToWrite.Rehab_Estimated_At = nowIso;
   }
 
-  if (phase4c.ok && phase4c.result.flipper && phase4c.result.flipper.your_mao != null) {
-    // Dashboard-contract flipper-track YourMAO + InvestorMAO. Landlord
-    // track is in the response but not persisted (pending Alex's
-    // confirmation of Landlord_MAO / Recommended_Track / Creative_Finance
-    // field IDs on Listings_V1).
-    fieldsToWrite.Investor_MAO = phase4c.result.flipper.investor_mao;
-    fieldsToWrite.Your_MAO = phase4c.result.flipper.your_mao;
-    // Auto_Approve_v2 mirrors the arv-validate behavior: positive when
-    // Your_MAO clears 65% of list price.
-    if (listing.listPrice && listing.listPrice > 0) {
-      const pct = phase4c.result.flipper.your_mao / listing.listPrice;
-      fieldsToWrite.Auto_Approve_v2 = pct >= 0.65 && phase4c.result.flipper.your_mao > 0;
-    }
-  }
+  // Investor_MAO / Your_MAO / Auto_Approve_v2 are FORMULA fields on
+  // Listings_V1 (verified 5/13 via Airtable schema). Writes return 422
+  // INVALID_VALUE_FOR_COLUMN and — because PATCH is atomic — kill every
+  // other field in the same request. The dashboard reads the formula
+  // output; the formula computes correctly once Real_ARV_Median +
+  // Est_Rehab + Buyer_Profit_Target + Wholesale_Fee_Target are set.
+  // Pricing Agent's flipper-track math is informational here (returned
+  // in the response) — Airtable formulas are the canonical persistence.
+  //
+  // Auto_Approve_v2 likewise — formula gates on Real_ARV_Median > 0 AND
+  // Your_MAO >= $20K. No agent write needed.
 
   let airtableDrift: FieldDrift[] = [];
   let airtableError: string | null = null;

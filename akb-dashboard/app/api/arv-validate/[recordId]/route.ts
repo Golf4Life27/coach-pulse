@@ -135,13 +135,17 @@ export async function GET(
   };
 
   try {
+    // Investor_MAO / Your_MAO / Auto_Approve_v2 are FORMULA fields on
+    // Listings_V1 (verified 5/13). Writes 422 and — because PATCH is
+    // atomic — would kill every other field in the same request. The
+    // dashboard reads the formula output, which computes from
+    // Real_ARV_Median + Est_Rehab + Buyer_Profit_Target + Wholesale_Fee_Target.
+    // Pricing Agent writes Est_Rehab (the formula's referenced field);
+    // this wrapper only writes ARV-side fields.
     await updateListingRecord(recordId, {
       Real_ARV_Low: arv.arv_low,
       Real_ARV_High: arv.arv_high,
       Real_ARV_Median: arv.arv_mid,
-      Investor_MAO: investor_mao,
-      Your_MAO: your_mao,
-      Auto_Approve_v2: result.auto_approve_v2,
       ARV_Validated_At: result.validated_at,
     });
   } catch (err) {
