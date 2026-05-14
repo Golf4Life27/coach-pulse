@@ -626,6 +626,106 @@ export async function updateDealRecord(
   return drift;
 }
 
+// Batched PATCH for Listings_V1. Airtable's batched-update endpoint
+// caps at 10 records per request — do NOT raise this. Returns the
+// Airtable PATCH response per record (which echoes the post-write
+// state, sufficient for verification — same model patchAndVerify
+// uses, without the wasted extra GET).
+//
+// All-or-nothing semantics from Airtable: if any record in the batch
+// fails validation (e.g. formula-field write attempt), Airtable
+// rejects the ENTIRE batch with 422 and no records get updated. The
+// caller is expected to scope batches narrowly enough that this is
+// rare; on batch failure we audit + throw so the caller can decide
+// whether to retry individually.
+//
+// Pattern is reusable for future bulk admin operations per Alex's
+// 5/14 scale punch-list directive.
+const AIRTABLE_BATCH_LIMIT = 10;
+
+export interface BatchUpdateRequest {
+  recordId: string;
+  fields: Record<string, unknown>;
+}
+
+export interface BatchUpdateOutcome {
+  recordId: string;
+  echoed: Record<string, unknown> | null;
+  error: string | null;
+}
+
+export async function patchListingsBatch(
+  records: BatchUpdateRequest[],
+): Promise<BatchUpdateOutcome[]> {
+  if (records.length === 0) return [];
+  if (records.length > AIRTABLE_BATCH_LIMIT) {
+    throw new Error(
+      `patchListingsBatch: ${records.length} exceeds Airtable's ${AIRTABLE_BATCH_LIMIT}-records-per-PATCH cap. Caller must chunk upstream.`,
+    );
+  }
+
+  const url = `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}`;
+  const body = {
+    records: records.map((r) => ({ id: r.recordId, fields: r.fields })),
+    typecast: true,
+  };
+
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${AIRTABLE_PAT}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    await audit({
+      agent: "airtable-write",
+      event: "batch_patch_failed",
+      status: "confirmed_failure",
+      inputSummary: {
+        table: "Listings_V1",
+        record_ids: records.map((r) => r.recordId),
+        fields_per_record: records.map((r) => Object.keys(r.fields)),
+      },
+      outputSummary: { http: res.status, batch_size: records.length },
+      error: errText,
+    });
+    throw new Error(
+      `Airtable batch PATCH error ${res.status}: ${errText}`,
+    );
+  }
+
+  const parsed = (await res.json().catch(() => null)) as
+    | { records?: Array<{ id: string; fields: Record<string, unknown> }> }
+    | null;
+
+  // Echo each record's post-write state. The success of the HTTP call
+  // is itself confirmation Airtable accepted the writes; the echo is
+  // the schema-level verification source.
+  const echoByRecordId = new Map<string, Record<string, unknown>>();
+  for (const rec of parsed?.records ?? []) {
+    if (rec && typeof rec.id === "string") {
+      echoByRecordId.set(rec.id, rec.fields ?? {});
+    }
+  }
+
+  // Invalidate the in-memory listings cache — any of these records
+  // could now have stale data in cache.
+  delete cache["listings"];
+  for (const r of records) delete cache[`listing:${r.recordId}`];
+
+  return records.map((r) => ({
+    recordId: r.recordId,
+    echoed: echoByRecordId.get(r.recordId) ?? null,
+    error: echoByRecordId.has(r.recordId)
+      ? null
+      : "absent from Airtable PATCH response",
+  }));
+}
+
 const D3_MANUAL_FIX_QUEUE_TABLE = "tblV6OkNPDzOo6ubp";
 
 // Create a row in D3_Manual_Fix_Queue. Reusable across Scenario A/B,
