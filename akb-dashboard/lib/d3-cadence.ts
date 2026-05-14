@@ -27,6 +27,7 @@
 import type { Listing } from "@/lib/types";
 import type { ScrubBucket } from "@/lib/d3-scrub";
 import cadenceConfig from "@/lib/config/d3-cadence.json";
+import { normalizePhone } from "@/lib/phone-normalize";
 
 const SCHEDULE = cadenceConfig.config.follow_up_schedule_days as number[];
 const DRIFT_PCT = cadenceConfig.config.drift_threshold_pct;
@@ -42,6 +43,12 @@ export type CadenceAction =
   | "send_follow_up_drift_down"
   | "draft_positive_reply"
   | "hold_manual_review_drift_up"
+  // Layer 1 depth-gate (5/14). Triggers when the listing's agent has
+  // prior outreach on OTHER Listings_V1 records (cross-listing match
+  // via normalized phone). Applies to ALL cadence-initiated outbound
+  // — status_check, follow_up_3/7/14, follow_up_drift_down. Preserves
+  // relationship warmth that cold templates would burn.
+  | "hold_warm_contact_manual_draft"
   | "auto_dead_status_check_timeout"
   | "auto_dead_followup_timeout"
   | "wait_in_cadence"
@@ -94,9 +101,26 @@ function terminalActionForBucket(bucket: ScrubBucket): CadenceAction | null {
   }
 }
 
+// Per-cadence-run input. Built once by the endpoint by grouping all
+// Texted+Negotiating Listings_V1 records by normalizedPhone(Agent_Phone).
+// For each phone the map stores the listingIds touched and the count.
+// Bypasses the stored Agent_Prior_Outreach_Count field (which the
+// upstream Make scan computes WITHOUT phone normalization and therefore
+// undercounts — 5/14 finding: "(713) 231-1129" and "713-231-1129" are
+// treated as two distinct phones today).
+export interface AgentInteraction {
+  count: number; // number of listings touching this phone in Texted/Negotiating
+  listingIds: string[];
+}
+export type AgentInteractionMap = Map<string, AgentInteraction>;
+
 export interface CadenceInputs {
   listing: Listing;
   bucket: ScrubBucket;
+  // Cross-listing agent interaction lookup. If omitted, the depth-gate
+  // is silently skipped (legacy behavior). Endpoint always populates
+  // post-5/14.
+  agentInteractionMap?: AgentInteractionMap;
   now?: Date; // injected for testing
 }
 
@@ -157,6 +181,44 @@ export function classifyCadence(opts: CadenceInputs): CadenceDecision {
       },
       pending_writes: null,
     };
+  }
+
+  // ── Layer 1 depth-gate (5/14, Spine recmmidVrMyrLzjZp + recxxNF0U59MxYUqu
+  //    follow-on). Prevents cold-template fires on warm agent contacts.
+  //
+  // Looks up normalized Agent_Phone in agentInteractionMap. If this
+  // agent appears on OTHER Listings_V1 records (count > 1, since this
+  // record itself contributes one), we've contacted this agent before
+  // on another listing. Cold copy on this listing would read as
+  // "Alex doesn't remember me" and burns the relationship.
+  //
+  // Gate applies BEFORE the bucket-specific send paths but AFTER
+  // terminal-bucket / dead / replied checks — those still take
+  // precedence because a warm-but-invalid-phone or warm-but-dead
+  // record can't be sent at all.
+  if (opts.agentInteractionMap) {
+    const normalized = normalizePhone(listing.agentPhone);
+    if (normalized) {
+      const interaction = opts.agentInteractionMap.get(normalized);
+      if (interaction && interaction.count > 1) {
+        const others = interaction.listingIds.filter((id) => id !== recordId);
+        return {
+          recordId,
+          action: "hold_warm_contact_manual_draft",
+          template_id: null,
+          banner: `Warm contact — agent has ${others.length} other Listings_V1 record(s). Manual draft required.`,
+          reasoning: `Agent_Phone "${listing.agentPhone}" normalized to ${normalized} matches ${others.length} OTHER record(s) in Texted/Negotiating. Cold cadence templates would burn the relationship; route to Action Queue for manual draft.`,
+          data_examined: {
+            agent_phone_raw: listing.agentPhone,
+            agent_phone_normalized: normalized,
+            interaction_count: interaction.count,
+            other_listing_ids_sample: others.slice(0, 5),
+            scrub_bucket: bucket,
+          },
+          pending_writes: null,
+        };
+      }
+    }
   }
 
   // Active eligible path — standard follow_up_3/7/14 cadence.
@@ -382,6 +444,7 @@ export function summarizeCadence(decisions: CadenceDecision[]): CadenceSummary {
     send_follow_up_drift_down: 0,
     draft_positive_reply: 0,
     hold_manual_review_drift_up: 0,
+    hold_warm_contact_manual_draft: 0,
     auto_dead_status_check_timeout: 0,
     auto_dead_followup_timeout: 0,
     wait_in_cadence: 0,

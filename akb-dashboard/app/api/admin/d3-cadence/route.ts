@@ -17,10 +17,42 @@ import { NextResponse } from "next/server";
 import { getListings } from "@/lib/airtable";
 import { audit } from "@/lib/audit-log";
 import { classifyTexted } from "@/lib/d3-scrub";
-import { classifyCadence, summarizeCadence, type CadenceDecision } from "@/lib/d3-cadence";
+import {
+  classifyCadence,
+  summarizeCadence,
+  type CadenceDecision,
+  type AgentInteractionMap,
+} from "@/lib/d3-cadence";
+import { normalizePhone } from "@/lib/phone-normalize";
+import type { Listing } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 90;
+
+// Build the cross-listing agent-interaction map from the full Listings_V1
+// universe (NOT just the Texted subset). Includes Texted + Negotiating
+// records because both represent active engagement — a Negotiating
+// record on Listing A means we ARE talking to the agent, so a cold
+// status_check on Listing B is the same relationship-burn risk.
+// Bypasses Agent_Prior_Outreach_Count (which the upstream Make scan
+// computes without phone normalization).
+function buildAgentInteractionMap(allListings: Listing[]): AgentInteractionMap {
+  const map: AgentInteractionMap = new Map();
+  for (const l of allListings) {
+    const status = (l.outreachStatus ?? "").toLowerCase();
+    if (status !== "texted" && status !== "negotiating") continue;
+    const normalized = normalizePhone(l.agentPhone);
+    if (!normalized) continue;
+    const existing = map.get(normalized);
+    if (existing) {
+      existing.count++;
+      existing.listingIds.push(l.id);
+    } else {
+      map.set(normalized, { count: 1, listingIds: [l.id] });
+    }
+  }
+  return map;
+}
 
 export async function GET(req: Request) {
   const t0 = Date.now();
@@ -34,12 +66,29 @@ export async function GET(req: Request) {
   );
   const subset = limit != null ? texted.slice(0, limit) : texted;
 
+  // Build the depth-gate lookup ONCE over the full Listings_V1 universe.
+  const agentInteractionMap = buildAgentInteractionMap(allListings);
+
   const now = new Date();
   const decisions: CadenceDecision[] = subset.map((l) => {
     const scrub = classifyTexted(l);
-    return classifyCadence({ listing: l, bucket: scrub.bucket, now });
+    return classifyCadence({
+      listing: l,
+      bucket: scrub.bucket,
+      agentInteractionMap,
+      now,
+    });
   });
   const summary = summarizeCadence(decisions);
+
+  // Surface map size for sanity-checking warm cohort against the
+  // expected ~48 from the 5/14 distribution scan.
+  const interactionMapStats = {
+    distinct_phones_in_texted_or_negotiating: agentInteractionMap.size,
+    phones_with_more_than_one_listing: [...agentInteractionMap.values()].filter(
+      (v) => v.count > 1,
+    ).length,
+  };
 
   await audit({
     agent: "d3-cadence",
@@ -52,6 +101,7 @@ export async function GET(req: Request) {
     },
     outputSummary: {
       summary,
+      interaction_map_stats: interactionMapStats,
     },
     decision: "report_only",
     ms: Date.now() - t0,
@@ -63,6 +113,7 @@ export async function GET(req: Request) {
     texted_total_in_airtable: texted.length,
     examined: subset.length,
     summary,
+    interaction_map_stats: interactionMapStats,
     // Per-record decisions capped at 200; full set lives in audit log.
     decisions_sample: decisions.slice(0, 200).map((d) => ({
       recordId: d.recordId,
