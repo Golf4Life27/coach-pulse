@@ -16,17 +16,13 @@
 //     Seller-side price drops are leverage for AKB's existing number,
 //     not justification to lower it. Stored OfferPrice is sticky.
 //
-// Schema gap acknowledged:
-//   The clean implementation of "stored List_Price-at-send" and
-//   "stored OfferPrice" needs two new Listings_V1 fields:
-//     - List_Price_At_Send (currency, captured at H2 outreach time)
-//     - Stored_Offer_Price (currency, captured at H2 outreach time)
-//   Until those exist, this module uses Prev_List_Price as the
-//   best-available proxy for List_Price-at-send (works correctly only
-//   when there has been at most one price change since outreach), and
-//   derives stored_offer_price = (Prev_List_Price ?? List_Price) × 0.65.
-//   Each decision surfaces `schema_gaps` so the audit log records when
-//   proxies were used.
+// Reads three real fields (added to Listings_V1 5/13):
+//   Stored_Offer_Price       — sticky offer, captured at H2 send.
+//   List_Price_At_Send       — list-price snapshot for drift detection.
+//   Last_Status_Check_Sent_At — drives 3-day status_check timeout-to-dead.
+// Existing pre-cadence records have these fields backfilled via the
+// /api/admin/d3-backfill-offer-fields proxy (audit-flagged
+// data_source=backfill_proxy).
 
 import type { Listing } from "@/lib/types";
 import type { ScrubBucket } from "@/lib/d3-scrub";
@@ -67,9 +63,6 @@ export interface CadenceDecision {
   // Optional writes that would land if the cadence ran in apply mode
   // (e.g. auto-dead actions write Pipeline_Stage=dead). null = no write.
   pending_writes: Record<string, unknown> | null;
-  // Schema-gap markers — each entry names a missing data source the
-  // engine had to proxy or guess.
-  schema_gaps: string[];
 }
 
 function daysBetween(a: Date, b: Date): number {
@@ -101,84 +94,6 @@ function terminalActionForBucket(bucket: ScrubBucket): CadenceAction | null {
   }
 }
 
-// Determine "stored OfferPrice" — what AKB texted the seller's agent
-// at outreach time. Sticky by design per Offer Discipline. Until
-// Stored_Offer_Price field exists on Listings_V1, the cleanest proxy
-// is 65% of the pre-drop List_Price (which we approximate with
-// Prev_List_Price if a drop has happened, else current List_Price).
-function deriveStoredOfferPrice(listing: Listing): {
-  value: number | null;
-  source: "list_price_at_send_field" | "prev_list_price_proxy" | "current_list_price_proxy" | "unavailable";
-  schemaGap: string | null;
-} {
-  // When Stored_Offer_Price field is added, this branch wins.
-  // const stored = listing.storedOfferPrice;
-  // if (typeof stored === "number" && stored > 0) {
-  //   return { value: stored, source: "list_price_at_send_field", schemaGap: null };
-  // }
-
-  const prev = listing.prevListPrice;
-  if (typeof prev === "number" && prev > 0) {
-    return {
-      value: Math.round(prev * 0.65),
-      source: "prev_list_price_proxy",
-      schemaGap:
-        "stored_offer_price_proxied_from_prev_list_price — accurate only if exactly one price drop has happened since outreach",
-    };
-  }
-
-  const current = listing.listPrice;
-  if (typeof current === "number" && current > 0) {
-    return {
-      value: Math.round(current * 0.65),
-      source: "current_list_price_proxy",
-      schemaGap:
-        "stored_offer_price_proxied_from_current_list_price — assumes no price drift since outreach (true when prev_list_price is null)",
-    };
-  }
-
-  return {
-    value: null,
-    source: "unavailable",
-    schemaGap: "stored_offer_price_unavailable — no list_price + no prev_list_price",
-  };
-}
-
-// "List_Price at the moment outreach went out" — needed for drift
-// detection. Same schema gap as above. Best proxy:
-//   - If Prev_List_Price exists: it WAS the price at send time (assumes
-//     exactly one drop since outreach).
-//   - If Prev_List_Price is null: no drop has happened since outreach,
-//     so current List_Price = price at send time → drift = 0.
-function deriveListPriceAtSend(listing: Listing): {
-  value: number | null;
-  drifted: boolean;
-  schemaGap: string | null;
-} {
-  const prev = listing.prevListPrice;
-  if (typeof prev === "number" && prev > 0) {
-    return {
-      value: prev,
-      drifted: true,
-      schemaGap:
-        "list_price_at_send_proxied_from_prev_list_price — accurate only if exactly one price drop since outreach",
-    };
-  }
-  const current = listing.listPrice;
-  if (typeof current === "number" && current > 0) {
-    return {
-      value: current,
-      drifted: false,
-      schemaGap: null, // unambiguous when no drop has happened
-    };
-  }
-  return {
-    value: null,
-    drifted: false,
-    schemaGap: "list_price_at_send_unavailable — no list_price + no prev_list_price",
-  };
-}
-
 export interface CadenceInputs {
   listing: Listing;
   bucket: ScrubBucket;
@@ -192,7 +107,6 @@ export function classifyCadence(opts: CadenceInputs): CadenceDecision {
   const { listing, bucket } = opts;
   const now = opts.now ?? new Date();
   const recordId = listing.id;
-  const schemaGaps: string[] = [];
 
   // Terminal scrub buckets — no cadence applies.
   const terminal = terminalActionForBucket(bucket);
@@ -205,7 +119,6 @@ export function classifyCadence(opts: CadenceInputs): CadenceDecision {
       reasoning: `Scrub bucket=${bucket} — record is already terminal for cadence. No follow-up will fire.`,
       data_examined: { scrub_bucket: bucket },
       pending_writes: null,
-      schema_gaps: [],
     };
   }
 
@@ -220,15 +133,15 @@ export function classifyCadence(opts: CadenceInputs): CadenceDecision {
       reasoning: `Outreach_Status=Dead — record already exited cadence.`,
       data_examined: { outreach_status: listing.outreachStatus },
       pending_writes: null,
-      schema_gaps: [],
     };
   }
 
-  // Agent replied since outreach. Cadence stops; orchestrator Gate 3
+  // Agent replied since last send. Cadence stops; orchestrator Gate 3
   // picks up. Compare Last_Inbound_At vs Last_Outreach_Date / Last_Outbound_At.
   const lastInbound = parseDate(listing.lastInboundAt);
   const lastOutbound = parseDate(listing.lastOutboundAt);
   const lastOutreach = parseDate(listing.lastOutreachDate);
+  const lastStatusCheck = parseDate(listing.lastStatusCheckSentAt);
   const lastSendAt = lastOutbound ?? lastOutreach;
   if (lastInbound && lastSendAt && lastInbound > lastSendAt) {
     return {
@@ -243,7 +156,6 @@ export function classifyCadence(opts: CadenceInputs): CadenceDecision {
         last_outreach_date: listing.lastOutreachDate,
       },
       pending_writes: null,
-      schema_gaps: [],
     };
   }
 
@@ -262,7 +174,6 @@ export function classifyCadence(opts: CadenceInputs): CadenceDecision {
           last_outbound_at: listing.lastOutboundAt,
         },
         pending_writes: null,
-        schema_gaps: ["last_send_timestamp_missing_for_active_eligible"],
       };
     }
 
@@ -287,7 +198,6 @@ export function classifyCadence(opts: CadenceInputs): CadenceDecision {
             Pipeline_Stage: "dead",
             Outreach_Status: "Dead",
           },
-          schema_gaps: [],
         };
       }
       return {
@@ -302,7 +212,6 @@ export function classifyCadence(opts: CadenceInputs): CadenceDecision {
           auto_dead_threshold_days: AUTO_DEAD_FOLLOWUP,
         },
         pending_writes: null,
-        schema_gaps: [],
       };
     }
 
@@ -320,29 +229,26 @@ export function classifyCadence(opts: CadenceInputs): CadenceDecision {
           next_followup_at_day: nextDay,
         },
         pending_writes: null,
-        schema_gaps: [],
       };
     }
 
-    // Time to send. Drift-check before picking template.
-    const atSend = deriveListPriceAtSend(listing);
-    if (atSend.schemaGap) schemaGaps.push(atSend.schemaGap);
-    const offer = deriveStoredOfferPrice(listing);
-    if (offer.schemaGap) schemaGaps.push(offer.schemaGap);
-
+    // Time to send. Drift-check before picking template. Uses real
+    // List_Price_At_Send + Stored_Offer_Price fields.
+    const atSend = listing.listPriceAtSend ?? null;
+    const storedOffer = listing.storedOfferPrice ?? null;
     const current = listing.listPrice ?? null;
+
     let drift_pct = 0;
-    if (atSend.value && current && current > 0) {
-      drift_pct = (current - atSend.value) / atSend.value;
+    if (typeof atSend === "number" && atSend > 0 && typeof current === "number" && current > 0) {
+      drift_pct = (current - atSend) / atSend;
     }
 
     const driftData = {
-      list_price_at_send: atSend.value,
+      list_price_at_send: atSend,
       list_price_current: current,
       drift_pct,
       drift_threshold: DRIFT_PCT,
-      stored_offer_price: offer.value,
-      stored_offer_price_source: offer.source,
+      stored_offer_price: storedOffer,
       follow_up_count: followUpCount,
       days_since_send: daysSinceSend,
     };
@@ -353,10 +259,9 @@ export function classifyCadence(opts: CadenceInputs): CadenceDecision {
         action: "hold_manual_review_drift_up",
         template_id: null,
         banner: DRIFT_UP_BANNER,
-        reasoning: `Drift up ${(drift_pct * 100).toFixed(1)}% (List_Price $${current} vs at-send $${atSend.value}). Seller got aggressive — possible new property-side info. Hold for Manual Review.`,
+        reasoning: `Drift up ${(drift_pct * 100).toFixed(1)}% (List_Price $${current} vs at-send $${atSend}). Seller got aggressive — possible new property-side info. Hold for Manual Review.`,
         data_examined: driftData,
         pending_writes: null,
-        schema_gaps: schemaGaps,
       };
     }
 
@@ -366,10 +271,9 @@ export function classifyCadence(opts: CadenceInputs): CadenceDecision {
         action: "send_follow_up_drift_down",
         template_id: "follow_up_drift_down",
         banner: null,
-        reasoning: `Drift down ${(drift_pct * 100).toFixed(1)}% (List_Price $${current} vs at-send $${atSend.value}). Per offer-discipline: stored OfferPrice $${offer.value} holds; switch to drift-down template.`,
+        reasoning: `Drift down ${(drift_pct * 100).toFixed(1)}% (List_Price $${current} vs at-send $${atSend}). Per offer-discipline: stored OfferPrice $${storedOffer} holds; switch to drift-down template.`,
         data_examined: driftData,
         pending_writes: null,
-        schema_gaps: schemaGaps,
       };
     }
 
@@ -388,36 +292,65 @@ export function classifyCadence(opts: CadenceInputs): CadenceDecision {
       action: actionId,
       template_id: templateId,
       banner: null,
-      reasoning: `active_eligible, follow_up_count=${followUpCount}, days_since_send=${daysSinceSend} >= ${nextDay}. Drift within ±${(DRIFT_PCT * 100).toFixed(0)}%. Send ${templateId} at stored OfferPrice $${offer.value}.`,
+      reasoning: `active_eligible, follow_up_count=${followUpCount}, days_since_send=${daysSinceSend} >= ${nextDay}. Drift within ±${(DRIFT_PCT * 100).toFixed(0)}%. Send ${templateId} at stored OfferPrice $${storedOffer}.`,
       data_examined: driftData,
       pending_writes: null,
-      schema_gaps: schemaGaps,
     };
   }
 
   // pending_reverification — needs status_check probe.
   //
-  // The clean implementation needs a Last_Status_Check_Sent_At field on
-  // Listings_V1 so we can detect timeout-to-dead. Without it, every
-  // pending_reverification record looks like "needs first status_check"
-  // and the 3-day timeout can't fire. Flagged in schema_gaps.
+  // If Last_Status_Check_Sent_At is set: check timeout-to-dead window.
+  // Else: send first status_check.
   if (bucket === "pending_reverification") {
-    schemaGaps.push(
-      "last_status_check_sent_at_field_missing — 3-day timeout-to-dead can't be detected without this field; every pending_reverification looks like a fresh first-time status_check.",
-    );
+    if (lastStatusCheck) {
+      const daysSinceProbe = daysBetween(now, lastStatusCheck);
+      if (daysSinceProbe >= AUTO_DEAD_STATUS_CHECK) {
+        return {
+          recordId,
+          action: "auto_dead_status_check_timeout",
+          template_id: null,
+          banner: null,
+          reasoning: `status_check sent ${daysSinceProbe} days ago (>=${AUTO_DEAD_STATUS_CHECK}), no agent reply. Auto-dead.`,
+          data_examined: {
+            scrub_bucket: bucket,
+            last_status_check_sent_at: listing.lastStatusCheckSentAt,
+            days_since_status_check: daysSinceProbe,
+            auto_dead_threshold_days: AUTO_DEAD_STATUS_CHECK,
+          },
+          pending_writes: {
+            Pipeline_Stage: "dead",
+            Outreach_Status: "Dead",
+          },
+        };
+      }
+      return {
+        recordId,
+        action: "wait_in_cadence",
+        template_id: null,
+        banner: null,
+        reasoning: `status_check sent ${daysSinceProbe} days ago, waiting for ${AUTO_DEAD_STATUS_CHECK}-day auto-dead window.`,
+        data_examined: {
+          scrub_bucket: bucket,
+          last_status_check_sent_at: listing.lastStatusCheckSentAt,
+          days_since_status_check: daysSinceProbe,
+          auto_dead_threshold_days: AUTO_DEAD_STATUS_CHECK,
+        },
+        pending_writes: null,
+      };
+    }
     return {
       recordId,
       action: "send_status_check",
       template_id: "status_check",
       banner: null,
-      reasoning: `pending_reverification — send status_check probe. Auto-dead window: ${AUTO_DEAD_STATUS_CHECK} days (requires Last_Status_Check_Sent_At field, not yet on Listings_V1).`,
+      reasoning: `pending_reverification, no prior status_check (Last_Status_Check_Sent_At null). Send first probe; ${AUTO_DEAD_STATUS_CHECK}-day window starts on send.`,
       data_examined: {
         scrub_bucket: bucket,
         last_verified: listing.lastVerified,
         live_status: listing.liveStatus,
       },
       pending_writes: null,
-      schema_gaps: schemaGaps,
     };
   }
 
@@ -431,7 +364,6 @@ export function classifyCadence(opts: CadenceInputs): CadenceDecision {
     reasoning: `Unhandled scrub bucket=${bucket}. Defensive fallthrough — surface as data issue.`,
     data_examined: { scrub_bucket: bucket },
     pending_writes: null,
-    schema_gaps: ["unhandled_scrub_bucket_in_cadence_classifier"],
   };
 }
 
@@ -439,7 +371,6 @@ export interface CadenceSummary {
   total_examined: number;
   by_action: Record<CadenceAction, number>;
   templates_pending_alex_approval: string[];
-  schema_gaps_summary: Record<string, number>;
 }
 
 export function summarizeCadence(decisions: CadenceDecision[]): CadenceSummary {
@@ -462,21 +393,16 @@ export function summarizeCadence(decisions: CadenceDecision[]): CadenceSummary {
     no_action_off_market: 0,
     no_action_never_list: 0,
   };
-  const schema_gaps_summary: Record<string, number> = {};
   const templatesTouched = new Set<string>();
 
   for (const d of decisions) {
     by_action[d.action]++;
     if (d.template_id) templatesTouched.add(d.template_id);
-    for (const gap of d.schema_gaps) {
-      schema_gaps_summary[gap] = (schema_gaps_summary[gap] ?? 0) + 1;
-    }
   }
 
   return {
     total_examined: decisions.length,
     by_action,
     templates_pending_alex_approval: [...templatesTouched].sort(),
-    schema_gaps_summary,
   };
 }

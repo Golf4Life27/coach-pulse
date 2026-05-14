@@ -70,7 +70,6 @@ export async function GET(req: Request) {
       template_id: d.template_id,
       banner: d.banner,
       reasoning: d.reasoning,
-      schema_gaps: d.schema_gaps,
     })),
   });
 }

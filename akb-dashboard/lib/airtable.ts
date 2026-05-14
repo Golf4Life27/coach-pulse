@@ -66,6 +66,9 @@ const LISTING_FIELDS: Record<string, string> = {
   fldvHDqtftWehMJR7: "arvValidatedAt",
   // ── D3 cadence inputs
   fldzqlBceCXhQ9Vlq: "followUpCount",
+  fldoG27mxF1FQSRr9: "lastStatusCheckSentAt",
+  fldBFnL0HQJWahRov: "storedOfferPrice",
+  fldusUTeJQ2ALX37U: "listPriceAtSend",
 };
 
 // Reverse map: field name -> prop name (for single-record GET which returns field names)
@@ -114,6 +117,9 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "Est_Rehab": "estRehab",
   "Prev_List_Price": "prevListPrice",
   "Follow_Up_Count": "followUpCount",
+  "Last_Status_Check_Sent_At": "lastStatusCheckSentAt",
+  "Stored_Offer_Price": "storedOfferPrice",
+  "List_Price_At_Send": "listPriceAtSend",
   // ── Phase 3: photo analysis ──────────────────────────────────────────────
   "Est_Rehab_Low": "estRehabLow",
   "Est_Rehab_Mid": "estRehabMid",

@@ -47,6 +47,18 @@ export interface Listing {
   // record. Drives D3 cadence position (0 = none yet, 1 = day-3 sent,
   // 2 = day-7 sent, 3 = day-14 sent).
   followUpCount?: number | null;
+  // D3 cadence — fields captured at H2 outreach time (or backfilled on
+  // existing records 5/13 via proxy).
+  //   lastStatusCheckSentAt: dateTime of most recent status_check probe.
+  //     Drives 3-day timeout-to-dead window.
+  //   storedOfferPrice: sticky OfferPrice from outreach time. Per the
+  //     Offer Discipline principle (Spine recxxNF0U59MxYUqu), never
+  //     recomputed at follow-up time.
+  //   listPriceAtSend: snapshot of List_Price at outreach time. Used
+  //     by cadence drift-detection (±10% threshold).
+  lastStatusCheckSentAt?: string | null;
+  storedOfferPrice?: number | null;
+  listPriceAtSend?: number | null;
   // ── Pre-Send Gate inputs (added 5/13 for orchestrator Gate 2)
   rehabConfidenceScore?: number | null;
   agentPriorOutreachCount?: number | null;
