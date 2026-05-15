@@ -18,6 +18,8 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "node:crypto";
 import { buildBriefing } from "@/lib/maverick/aggregator";
+import { writeState } from "@/lib/maverick/write-state";
+import { recall } from "@/lib/maverick/recall";
 import { audit } from "@/lib/audit-log";
 import {
   buildError,
@@ -71,6 +73,8 @@ export async function POST(req: Request) {
   try {
     result = await dispatch(rpcReq.method, rpcReq.params, id, {
       buildBriefing,
+      writeState,
+      recall,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

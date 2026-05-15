@@ -11,6 +11,8 @@ import {
   handleToolsList,
   handleToolsCall,
   runLoadState,
+  runWriteState,
+  runRecall,
   type HandlerDeps,
 } from "./handlers";
 import type { Briefing } from "../briefing";
@@ -117,6 +119,16 @@ function stubBriefing(over: Partial<Briefing> = {}): Briefing {
 function deps(briefing?: Briefing): HandlerDeps {
   return {
     buildBriefing: vi.fn().mockResolvedValue(briefing ?? stubBriefing()),
+    writeState: vi.fn().mockResolvedValue({
+      written: true as const,
+      spine_record_id: "recSTUB0000001",
+      audit_event_id: "2026-05-15T18:00:00.000Z",
+    }),
+    recall: vi.fn().mockResolvedValue({
+      results: [],
+      truncated_to_n: 0,
+      searched_sources: ["spine", "audit"],
+    }),
   };
 }
 
@@ -240,6 +252,8 @@ describe("runLoadState", () => {
   it("wraps buildBriefing errors in -32001 MCP_TOOL_EXECUTION_ERROR", async () => {
     const d: HandlerDeps = {
       buildBriefing: vi.fn().mockRejectedValue(new Error("airtable 503")),
+      writeState: vi.fn(),
+      recall: vi.fn(),
     };
     const r = await runLoadState(4, {}, d);
     expect("error" in r).toBe(true);
@@ -305,5 +319,206 @@ describe("dispatch — method routing", () => {
     const r = await dispatch("custom/unknown", {}, 9, deps());
     if (!r || !("error" in r)) throw new Error("expected error");
     expect(r.error.code).toBe(JSON_RPC_METHOD_NOT_FOUND);
+  });
+
+  it("routes tools/call → maverick_write_state via handleToolsCall", async () => {
+    const d = deps();
+    const r = await dispatch(
+      "tools/call",
+      {
+        name: "maverick_write_state",
+        arguments: { event_type: "decision", title: "T", description: "D" },
+      },
+      10,
+      d,
+    );
+    expect(r && "result" in r).toBe(true);
+    expect(d.writeState).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes tools/call → maverick_recall via handleToolsCall", async () => {
+    const d = deps();
+    const r = await dispatch("tools/call", { name: "maverick_recall", arguments: { query: "x" } }, 11, d);
+    expect(r && "result" in r).toBe(true);
+    expect(d.recall).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ──────────────── runWriteState ────────────────
+
+describe("runWriteState", () => {
+  it("returns text + structuredContent on successful write", async () => {
+    const d = deps();
+    const r = await runWriteState(
+      1,
+      { event_type: "decision", title: "Day 4 ships", description: "write_state + recall" },
+      d,
+    );
+    if (!("result" in r)) throw new Error("expected result");
+    const result = r.result as {
+      content: Array<{ type: string; text: string }>;
+      structuredContent: { spine_record_id: string; audit_event_id: string };
+    };
+    expect(result.content[0].type).toBe("text");
+    expect(result.content[0].text).toMatch(/Day 4 ships/);
+    expect(result.structuredContent.spine_record_id).toBe("recSTUB0000001");
+  });
+
+  it("rejects missing required args with -32602", async () => {
+    const r = await runWriteState(1, {}, deps());
+    expect("error" in r && r.error.code).toBe(JSON_RPC_INVALID_PARAMS);
+  });
+
+  it("rejects unknown event_type with -32602 + helpful message", async () => {
+    const r = await runWriteState(
+      1,
+      { event_type: "rollback", title: "x", description: "x" },
+      deps(),
+    );
+    if (!("error" in r)) throw new Error("expected error");
+    expect(r.error.code).toBe(JSON_RPC_INVALID_PARAMS);
+    expect(r.error.message).toMatch(/event_type must be one of/);
+  });
+
+  it("rejects malformed related_spine_decision", async () => {
+    const r = await runWriteState(
+      1,
+      {
+        event_type: "principle_amendment",
+        title: "x",
+        description: "x",
+        related_spine_decision: "not-a-rec-id",
+      },
+      deps(),
+    );
+    expect("error" in r && r.error.code).toBe(JSON_RPC_INVALID_PARAMS);
+  });
+
+  it("rejects attribution_agent outside the roster", async () => {
+    const r = await runWriteState(
+      1,
+      {
+        event_type: "decision",
+        title: "x",
+        description: "x",
+        attribution_agent: "rogue",
+      },
+      deps(),
+    );
+    expect("error" in r && r.error.code).toBe(JSON_RPC_INVALID_PARAMS);
+  });
+
+  it("wraps writeState errors in MCP_TOOL_EXECUTION_ERROR", async () => {
+    const d = deps();
+    d.writeState = vi.fn().mockRejectedValue(new Error("Airtable 503"));
+    const r = await runWriteState(
+      1,
+      { event_type: "decision", title: "x", description: "x" },
+      d,
+    );
+    if (!("error" in r)) throw new Error("expected error");
+    expect(r.error.code).toBe(-32001);
+    expect(r.error.message).toMatch(/Airtable 503/);
+  });
+
+  it("threads validated args through to writeState", async () => {
+    const d = deps();
+    await runWriteState(
+      1,
+      {
+        event_type: "build_event",
+        title: "Day 4 ships",
+        description: "write_state + recall live",
+        reasoning: "Spec v1.1 §5 Step 4",
+        attribution_agent: "maverick",
+      },
+      d,
+    );
+    expect(d.writeState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: "build_event",
+        title: "Day 4 ships",
+        description: "write_state + recall live",
+        reasoning: "Spec v1.1 §5 Step 4",
+        attribution_agent: "maverick",
+      }),
+    );
+  });
+});
+
+// ──────────────── runRecall ────────────────
+
+describe("runRecall", () => {
+  it("returns text summary + structuredContent on successful query", async () => {
+    const d = deps();
+    d.recall = vi.fn().mockResolvedValue({
+      results: [
+        { source: "spine", record_id: "recSPINE1", summary: "2026-05-15 — Test", full_data: {} },
+        { source: "audit", record_id: "2026-05-15T18:00:00Z", summary: "maverick/load_state", full_data: {} },
+      ],
+      truncated_to_n: 0,
+      searched_sources: ["spine", "audit"],
+    });
+    const r = await runRecall(1, { query: "test" }, d);
+    if (!("result" in r)) throw new Error("expected result");
+    const result = r.result as {
+      content: Array<{ type: string; text: string }>;
+      structuredContent: { results: unknown[] };
+    };
+    expect(result.content[0].text).toMatch(/Found 2 match\(es\)/);
+    expect(result.content[0].text).toMatch(/spine\/recSPINE1/);
+    expect(result.content[0].text).toMatch(/audit\/2026-05-15T18:00:00Z/);
+    expect(Array.isArray(result.structuredContent.results)).toBe(true);
+  });
+
+  it("surfaces truncation count in the text header", async () => {
+    const d = deps();
+    d.recall = vi.fn().mockResolvedValue({
+      results: [{ source: "spine", record_id: "r1", summary: "x", full_data: {} }],
+      truncated_to_n: 42,
+      searched_sources: ["spine", "audit"],
+    });
+    const r = await runRecall(1, { query: "x" }, d);
+    if (!("result" in r)) throw new Error("expected result");
+    const text = (r.result as { content: Array<{ text: string }> }).content[0].text;
+    expect(text).toMatch(/\+42 more truncated/);
+  });
+
+  it("rejects missing query with -32602", async () => {
+    const r = await runRecall(1, {}, deps());
+    expect("error" in r && r.error.code).toBe(JSON_RPC_INVALID_PARAMS);
+  });
+
+  it("rejects malformed since with -32602", async () => {
+    const r = await runRecall(1, { query: "x", since: "yesterday" }, deps());
+    expect("error" in r && r.error.code).toBe(JSON_RPC_INVALID_PARAMS);
+  });
+
+  it("rejects unknown sources entry with -32602", async () => {
+    const r = await runRecall(1, { query: "x", sources: ["spine", "rogue_source"] }, deps());
+    expect("error" in r && r.error.code).toBe(JSON_RPC_INVALID_PARAMS);
+  });
+
+  it("wraps recall errors in MCP_TOOL_EXECUTION_ERROR", async () => {
+    const d = deps();
+    d.recall = vi.fn().mockRejectedValue(new Error("KV down"));
+    const r = await runRecall(1, { query: "x" }, d);
+    if (!("error" in r)) throw new Error("expected error");
+    expect(r.error.code).toBe(-32001);
+  });
+
+  it("threads validated args through to recall", async () => {
+    const d = deps();
+    await runRecall(
+      1,
+      { query: "65% rule", since: "2026-05-01T00:00:00Z", sources: ["spine"] },
+      d,
+    );
+    expect(d.recall).toHaveBeenCalledWith({
+      query: "65% rule",
+      since: "2026-05-01T00:00:00Z",
+      until: undefined,
+      sources: ["spine"],
+    });
   });
 });

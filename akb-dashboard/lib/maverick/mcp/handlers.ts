@@ -17,6 +17,8 @@ import {
 } from "./protocol";
 import { findTool, MAVERICK_TOOLS } from "./tools";
 import type { Briefing } from "../briefing";
+import { validateWriteStateArgs, writeState, type WriteStateResult } from "../write-state";
+import { validateRecallArgs, recall, type RecallResponse } from "../recall";
 
 // Protocol version we advertise. Anthropic's MCP clients negotiate
 // the version on `initialize`; clients pick the highest version both
@@ -30,13 +32,16 @@ const SERVER_INFO = {
 
 /**
  * Tool-call dependency surface. Production wires this to the real
- * lib/maverick/aggregator.buildBriefing. Tests inject stubs.
+ * lib/maverick/{aggregator,write-state,recall} implementations.
+ * Tests inject stubs.
  */
 export interface HandlerDeps {
   buildBriefing: (opts: {
     since?: string | Date;
     skipCache?: boolean;
   }) => Promise<Briefing>;
+  writeState: (args: Parameters<typeof writeState>[0]) => Promise<WriteStateResult>;
+  recall: (args: Parameters<typeof recall>[0]) => Promise<RecallResponse>;
 }
 
 /**
@@ -136,6 +141,10 @@ export async function handleToolsCall(
   switch (p.name) {
     case "maverick_load_state":
       return runLoadState(id, args, deps);
+    case "maverick_write_state":
+      return runWriteState(id, args, deps);
+    case "maverick_recall":
+      return runRecall(id, args, deps);
     default:
       // Defensive — findTool returned non-null but the dispatch
       // doesn't know this tool. Indicates tools.ts ↔ handlers.ts
@@ -214,4 +223,80 @@ export async function runLoadState(
   }
 
   return buildResult(id, result);
+}
+
+/**
+ * maverick_write_state — validate + dispatch to lib/maverick/write-state.
+ * Per Spec v1.1 §5 Step 4 + amendment 6.4: append-only writes,
+ * corrections are themselves new writes referencing prior via
+ * related_spine_decision.
+ */
+export async function runWriteState(
+  id: JsonRpcId,
+  args: Record<string, unknown>,
+  deps: HandlerDeps,
+): Promise<JsonRpcResponse> {
+  const validated = validateWriteStateArgs(args);
+  if (!validated.ok) {
+    return buildError(id, JSON_RPC_INVALID_PARAMS, validated.error);
+  }
+
+  let result: WriteStateResult;
+  try {
+    result = await deps.writeState(validated.args);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return buildError(id, MCP_TOOL_EXECUTION_ERROR, `writeState failed: ${msg}`);
+  }
+
+  // MCP tools/call response: human-readable text content + the raw
+  // result as structuredContent so the calling Claude session can
+  // both read the confirmation AND reference the IDs programmatically.
+  const text = `Wrote ${validated.args.event_type} "${validated.args.title}" to Spine_Decision_Log as ${result.spine_record_id}. Audit event ts: ${result.audit_event_id}.`;
+  return buildResult(id, {
+    content: [{ type: "text", text }],
+    structuredContent: result,
+  });
+}
+
+/**
+ * maverick_recall — validate + dispatch to lib/maverick/recall.
+ * Returns a top-N truncated, source-interleaved result set so
+ * callers see a diverse mix rather than one source dominating.
+ */
+export async function runRecall(
+  id: JsonRpcId,
+  args: Record<string, unknown>,
+  deps: HandlerDeps,
+): Promise<JsonRpcResponse> {
+  const validated = validateRecallArgs(args);
+  if (!validated.ok) {
+    return buildError(id, JSON_RPC_INVALID_PARAMS, validated.error);
+  }
+
+  let result: RecallResponse;
+  try {
+    result = await deps.recall(validated.args);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return buildError(id, MCP_TOOL_EXECUTION_ERROR, `recall failed: ${msg}`);
+  }
+
+  // Render a compact one-line-per-result text block for the calling
+  // model's narrative consumption, plus structuredContent for
+  // programmatic access.
+  const lines: string[] = [];
+  lines.push(
+    `Found ${result.results.length} match(es) across [${result.searched_sources.join(", ")}]${
+      result.truncated_to_n > 0 ? ` (+${result.truncated_to_n} more truncated)` : ""
+    }:`,
+  );
+  for (const r of result.results) {
+    lines.push(`  [${r.source}/${r.record_id}] ${r.summary}`);
+  }
+
+  return buildResult(id, {
+    content: [{ type: "text", text: lines.join("\n") }],
+    structuredContent: result,
+  });
 }
