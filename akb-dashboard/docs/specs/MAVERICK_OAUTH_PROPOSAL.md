@@ -276,4 +276,60 @@ Before locking this proposal:
 
 ---
 
-*Drafted 5/15/26 in the Day 4 build session. Locks when Alex marks "Accepted." On lock, this file becomes the Day 4.5 implementation brief; on Day 4.5 ship, it's archived next to v1.2.*
+## 13.5. Answers locked (5/15 — Alex)
+
+1. **Path prefix:** `/api/maverick/oauth/*` (consistency over aesthetics). Discovery stays at standard `/.well-known/*` paths per RFC.
+2. **Consent UI:** **Auto-approve for v1.** Single-user, single scope, click-through is engineering theater. `/authorize` validates `client_id` + `redirect_uri` + `code_challenge` + `state` then 302s back with `?code=...&state=...` immediately, no HTML page rendered, no user interaction. Note in spec language that this is a v1-specific simplification — explicit-approve UI added if/when multi-user or per-tool scopes emerge.
+3. **Sequencing:** Day 4.5 OAuth ships immediately, before Days 6-7. Gate 3 closure is the actual blocker on Maverick being usable from any chat; OAuth context is hot in head right now; Days 6-7 audit work doesn't depend on OAuth. Revised sequence: Day 4.5 OAuth → Day 5 hardening → Days 6-7 specs reading + AKB current-state audit → Day 8+ dashboard rework.
+4. **In-doc amendments:** Approved as proposed with one carveout — bearer-token coexistence pattern needs cron-internal carveout for Vercel-cron callers (future Pulse routines). Resolved in §14 below.
+
+---
+
+## 14. Cron-internal authentication (amendment to §7 bearer coexistence)
+
+**Decision (5/15):** Vercel cron jobs that hit Maverick's own endpoints from within the same project authenticate via Vercel's built-in `CRON_SECRET` env var, NOT a new `MAVERICK_INTERNAL_TOKEN`.
+
+**Why Option A over Option B (skip auth on "same project"):** Vercel cron-invoked routes hit the same public HTTPS URLs as external callers — there is no private internal network at Vercel. "Same project" feels internal but is HTTP-addressable from anywhere. Header presence alone (`x-vercel-cron: 1`) is spoofable. Skipping auth based on those signals is illusory security.
+
+**Why `CRON_SECRET` over a new `MAVERICK_INTERNAL_TOKEN`:**
+
+1. Vercel auto-provisions + auto-rotates `CRON_SECRET`. Zero new secret to manage in `MAVERICK_OPS.md`'s rotation runbook.
+2. Vercel automatically sends `Authorization: Bearer ${CRON_SECRET}` on every cron-invoked request — symmetric with OAuth-bearer at the route level (same header parse, different validation branch).
+3. Identical security properties to a hand-rolled `MAVERICK_INTERNAL_TOKEN` but fewer moving parts.
+
+**Auth waterfall at `/api/maverick/mcp`:**
+
+```
+1. Authorization: Bearer <opaque>
+   → Try OAuth opaque-token: KV lookup at maverick:oauth:access:<token>.
+     Match + not expired → grant. (claude.ai sessions.)
+   → Try CRON_SECRET: constant-time compare against env var.
+     Match + x-vercel-cron: 1 header present → grant + audit `mcp_internal_auth`.
+   → Try MAVERICK_MCP_TOKEN: ONLY when NODE_ENV !== "production".
+     Match → grant. (dev / CI shell smoke.)
+   → No match → 401 with WWW-Authenticate: Bearer realm="maverick".
+2. No Authorization header → 401.
+```
+
+**Defense-in-depth on the cron path:** Require `x-vercel-cron: 1` header alongside `CRON_SECRET` match. Doesn't add real security on its own (header is spoofable from an attacker who already has the secret) but tightens the grant condition — a leaked `CRON_SECRET` used from an unexpected client without the header gets rejected. The audit event `mcp_internal_auth` fires every internal-token call → leakage is bounded by the cron schedule cadence + detectable in the briefing's `recent_failures` if external misuse drives the count anomalously high.
+
+**Use case fit:** Pulse routines per Spec v1.1 §5 Step 5 ("periodic introspection — scheduled queries against [Maverick's] own state") are exactly cron-pattern. `CRON_SECRET` fits cleanly. Non-cron internal callers (future Slack webhook, third-party agent automation, etc.) go through OAuth `client_credentials` grant in v1.3 — explicitly deferred.
+
+**Audit-event addition (extends §8):**
+
+| Event | When | inputSummary |
+|---|---|---|
+| `mcp_internal_auth` | CRON_SECRET-authenticated call to /mcp | `tool`, `x-vercel-id` |
+| `mcp_internal_auth_rejected` | CRON_SECRET match but `x-vercel-cron` header missing | `x-vercel-id`, `tool` |
+
+**Updated v1.2 spec language for §11 replacement (line 207 of v1.1):**
+
+> **Auth model (v1.2 amendment 6.5):** OAuth 2.0 Authorization Code with PKCE (RFC 7636), canonical for human-driven sessions (claude.ai). The MCP server is an OAuth Protected Resource per RFC 9728; same Vercel origin acts as both protected resource and authorization server. Endpoints exposed: `/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server` (RFC 8414), `/api/maverick/oauth/register` (RFC 7591 dynamic client registration with auto-approve in v1), `/api/maverick/oauth/authorize` (validates request + immediately issues code, no consent UI in v1), `/api/maverick/oauth/token` (auth_code + refresh_token grants), `/api/maverick/oauth/revoke`. Tokens are opaque random strings stored in Vercel KV: 1h access tokens, 30d refresh tokens with rolling rotation + family-id replay detection. Single scope `maverick:state` covers all tool calls in v1.2; per-tool scope refinement deferred until multi-agent attribution requires it.
+>
+> Internal callers (Vercel cron jobs: Path Y, buyer-warmup, scan-comms, future Pulse routines) authenticate via Vercel's built-in `CRON_SECRET` env var, with `x-vercel-cron: 1` header required as defense-in-depth. Bearer-token mode (`MAVERICK_MCP_TOKEN` env var, v1.1 design) is preserved as developer fallback for shell smoke + CI but gated to `NODE_ENV !== "production"`. Production accepts OAuth tokens + CRON_SECRET only.
+>
+> Auto-approve consent at `/authorize` is a v1-specific simplification predicated on single-user + single-scope + sole-trusted-client (claude.ai). When multi-user, per-tool scopes, or third-party clients become real, explicit-consent UI ships as a non-breaking addition.
+
+---
+
+*Drafted 5/15/26 in the Day 4 build session. Answers locked 5/15/26 by Alex. Day 4.5 build proceeds against this proposal. On Day 4.5 ship, this file is archived next to a promoted `Inevitable_Continuity_Layer_Spec_v1.2.md`.*
