@@ -26,7 +26,11 @@
 //   T18 pending_reverification, prior probe, no timeout → wait_in_cadence
 
 import { describe, it, expect } from "vitest";
-import { classifyCadence, type AgentInteractionMap } from "./d3-cadence";
+import {
+  classifyCadence,
+  type AgentInteractionMap,
+  type RecentlyTouchedAgentMap,
+} from "./d3-cadence";
 import type { Listing } from "./types";
 import type { ScrubBucket } from "./d3-scrub";
 
@@ -35,6 +39,15 @@ const NOW = new Date("2026-05-14T18:00:00Z");
 
 function daysAgo(n: number): string {
   return new Date(NOW.getTime() - n * 24 * 60 * 60_000).toISOString();
+}
+
+// 5/15 widening tests need ISO YYYY-MM-DD (Last_Outreach_Date format,
+// no time component).
+function dateDaysAgo(n: number): string {
+  const d = new Date(NOW.getTime() - n * 24 * 60 * 60_000);
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${d.getUTCFullYear()}-${m}-${day}`;
 }
 
 // Minimal Listing fixture. Tests override only what they exercise.
@@ -401,5 +414,141 @@ describe("classifyCadence — pending_reverification status_check paths", () => 
       now: NOW,
     });
     expect(d.action).toBe("wait_in_cadence");
+  });
+});
+
+describe("classifyCadence — Layer 1 widening (5/15) recently-touched gate", () => {
+  // The widening catches the Maribel-Frey case: agent texted within
+  // the last 30 days on a now-Dead listing should still route to
+  // hold_warm_contact_manual_draft because the human's memory of us
+  // hasn't decayed.
+
+  it("T19: agent texted 15d ago on now-Dead listing → hold_warm_contact_manual_draft on new Texted listing", () => {
+    const phone = "713-555-9001"; // normalizes to +17135559001
+    const recentMap: RecentlyTouchedAgentMap = new Map([
+      [
+        "+17135559001",
+        {
+          listingIds: ["recOLDdead"],
+          statuses: ["Dead"],
+          mostRecentTouchedDate: dateDaysAgo(15),
+        },
+      ],
+    ]);
+    const d = classifyCadence({
+      listing: listing({ agentPhone: phone }),
+      bucket: "pending_reverification",
+      recentlyTouchedAgentMap: recentMap,
+      now: NOW,
+    });
+    expect(d.action).toBe("hold_warm_contact_manual_draft");
+    expect(d.banner).toContain("now Dead");
+    expect(d.banner).toContain("within last 30 days");
+    expect(d.reasoning).toContain("+17135559001");
+  });
+
+  it("T20: agent texted 45d ago on now-Dead listing → does NOT route to warm (outside 30d window)", () => {
+    // Endpoint applies the window at map-build time. Outside-window
+    // contacts simply don't appear in the map. Test the classifier's
+    // behavior given an empty map for this phone.
+    const recentMap: RecentlyTouchedAgentMap = new Map();
+    const d = classifyCadence({
+      listing: listing({ agentPhone: "713-555-9002" }),
+      bucket: "pending_reverification",
+      recentlyTouchedAgentMap: recentMap,
+      now: NOW,
+    });
+    expect(d.action).toBe("send_status_check");
+  });
+
+  it("T21: agent texted 15d ago on still-Texted listing → routes via Layer 1 (precedence preserved)", () => {
+    // Both gates would hit. Layer 1 runs first and wins with its
+    // original banner ("agent has N other Listings_V1 record(s)").
+    const phone = "713-555-9003"; // +17135559003
+    const interactionMap: AgentInteractionMap = new Map([
+      ["+17135559003", { count: 2, listingIds: ["recTEST00000000001", "recOther"] }],
+    ]);
+    const recentMap: RecentlyTouchedAgentMap = new Map([
+      [
+        "+17135559003",
+        {
+          listingIds: ["recTEST00000000001", "recOther"],
+          statuses: ["Texted", "Texted"],
+          mostRecentTouchedDate: dateDaysAgo(15),
+        },
+      ],
+    ]);
+    const d = classifyCadence({
+      listing: listing({ agentPhone: phone }),
+      bucket: "pending_reverification",
+      agentInteractionMap: interactionMap,
+      recentlyTouchedAgentMap: recentMap,
+      now: NOW,
+    });
+    expect(d.action).toBe("hold_warm_contact_manual_draft");
+    // Layer 1's banner wins — does NOT contain "within last N days".
+    expect(d.banner).toContain("other Listings_V1 record(s)");
+    expect(d.banner).not.toContain("within last 30 days");
+  });
+
+  it("T22: agent never previously touched → cold cadence (send_status_check)", () => {
+    const recentMap: RecentlyTouchedAgentMap = new Map();
+    const interactionMap: AgentInteractionMap = new Map();
+    const d = classifyCadence({
+      listing: listing({ agentPhone: "713-555-9004" }),
+      bucket: "pending_reverification",
+      agentInteractionMap: interactionMap,
+      recentlyTouchedAgentMap: recentMap,
+      now: NOW,
+    });
+    expect(d.action).toBe("send_status_check");
+  });
+
+  it("T23: self-reference — a listing's own Last_Outreach_Date doesn't trigger its own warm flag", () => {
+    // Endpoint builds the map including the current record's own
+    // touch; classifier must filter self out. If the entry contains
+    // only the current record, no warm flag should fire.
+    const phone = "713-555-9005";
+    const recentMap: RecentlyTouchedAgentMap = new Map([
+      [
+        "+17135559005",
+        {
+          listingIds: ["recTEST00000000001"], // current record only
+          statuses: ["Texted"],
+          mostRecentTouchedDate: dateDaysAgo(10),
+        },
+      ],
+    ]);
+    const d = classifyCadence({
+      listing: listing({ agentPhone: phone }),
+      bucket: "pending_reverification",
+      recentlyTouchedAgentMap: recentMap,
+      now: NOW,
+    });
+    expect(d.action).toBe("send_status_check");
+  });
+
+  it("T23b: multiple OTHER recent touches with mixed statuses → banner lists unique statuses sorted", () => {
+    const phone = "713-555-9006";
+    const recentMap: RecentlyTouchedAgentMap = new Map([
+      [
+        "+17135559006",
+        {
+          listingIds: ["recOLD1", "recOLD2", "recOLD3"],
+          statuses: ["Dead", "Emailed", "Dead"],
+          mostRecentTouchedDate: dateDaysAgo(5),
+        },
+      ],
+    ]);
+    const d = classifyCadence({
+      listing: listing({ agentPhone: phone }),
+      bucket: "pending_reverification",
+      recentlyTouchedAgentMap: recentMap,
+      now: NOW,
+    });
+    expect(d.action).toBe("hold_warm_contact_manual_draft");
+    // Unique sorted: "Dead, Emailed"
+    expect(d.banner).toContain("(now Dead, Emailed)");
+    expect(d.banner).toContain("on 3 other listing(s)");
   });
 });

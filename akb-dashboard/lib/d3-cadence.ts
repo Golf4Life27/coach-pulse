@@ -34,6 +34,9 @@ const DRIFT_PCT = cadenceConfig.config.drift_threshold_pct;
 const AUTO_DEAD_STATUS_CHECK = cadenceConfig.config.auto_dead_no_status_check_reply_days;
 const AUTO_DEAD_FOLLOWUP = cadenceConfig.config.auto_dead_no_followup_reply_days;
 const DRIFT_UP_BANNER = cadenceConfig.config.manual_review_banner_drift_up;
+// Layer 1 depth-gate widening (5/15) — see config note. Tuned via
+// lib/config/d3-cadence.json; surfaced here as a const for ergonomics.
+const RECENT_TOUCHED_WINDOW_DAYS = cadenceConfig.config.recently_touched_window_days;
 
 export type CadenceAction =
   | "send_status_check"
@@ -114,6 +117,19 @@ export interface AgentInteraction {
 }
 export type AgentInteractionMap = Map<string, AgentInteraction>;
 
+// Layer 1 widening (5/15) — captures recent outreach to an agent
+// REGARDLESS of the touched record's current Outreach_Status. Catches
+// the case where a prior listing transitioned to Dead but the human
+// agent still remembers our outreach. listingIds + statuses are
+// parallel arrays so the classifier can name both the matched listing
+// and its current status in the warm-route banner.
+export interface RecentlyTouchedAgentEntry {
+  listingIds: string[];
+  statuses: string[]; // Outreach_Status values, parallel to listingIds
+  mostRecentTouchedDate: string; // ISO YYYY-MM-DD
+}
+export type RecentlyTouchedAgentMap = Map<string, RecentlyTouchedAgentEntry>;
+
 export interface CadenceInputs {
   listing: Listing;
   bucket: ScrubBucket;
@@ -121,6 +137,9 @@ export interface CadenceInputs {
   // is silently skipped (legacy behavior). Endpoint always populates
   // post-5/14.
   agentInteractionMap?: AgentInteractionMap;
+  // 5/15 widening — recent-touch lookup across ALL outreach statuses
+  // within RECENT_TOUCHED_WINDOW_DAYS. Endpoint always populates.
+  recentlyTouchedAgentMap?: RecentlyTouchedAgentMap;
   now?: Date; // injected for testing
 }
 
@@ -217,6 +236,59 @@ export function classifyCadence(opts: CadenceInputs): CadenceDecision {
           },
           pending_writes: null,
         };
+      }
+    }
+  }
+
+  // ── Layer 1 widening (5/15) — recent-touch warm gate.
+  //
+  // Catches the case Layer 1's status-scoped check misses: agent was
+  // texted recently on a DIFFERENT listing that has since transitioned
+  // to a non-active status (Dead, Off Market, etc). The human agent
+  // still remembers our outreach even though our system no longer
+  // tracks the listing as in-pipeline. Cold cadence on a new listing
+  // for the same agent would burn that residual relationship.
+  //
+  // Runs AFTER the same-status Layer 1 check so actively-active
+  // relationships keep the more informative original banner.
+  // Window: RECENT_TOUCHED_WINDOW_DAYS (default 30, configurable in
+  // lib/config/d3-cadence.json).
+  if (opts.recentlyTouchedAgentMap) {
+    const normalized = normalizePhone(listing.agentPhone);
+    if (normalized) {
+      const entry = opts.recentlyTouchedAgentMap.get(normalized);
+      if (entry) {
+        // Walk parallel arrays excluding self.
+        const others: Array<{ listingId: string; status: string }> = [];
+        for (let i = 0; i < entry.listingIds.length; i++) {
+          if (entry.listingIds[i] !== recordId) {
+            others.push({
+              listingId: entry.listingIds[i],
+              status: entry.statuses[i] ?? "(unknown)",
+            });
+          }
+        }
+        if (others.length > 0) {
+          const uniqueStatuses = [...new Set(others.map((o) => o.status))].sort();
+          const statusLabel = uniqueStatuses.join(", ");
+          return {
+            recordId,
+            action: "hold_warm_contact_manual_draft",
+            template_id: null,
+            banner: `Warm contact — agent was texted within last ${RECENT_TOUCHED_WINDOW_DAYS} days on ${others.length} other listing(s) (now ${statusLabel}). Manual draft required.`,
+            reasoning: `Agent_Phone "${listing.agentPhone}" normalized to ${normalized} appears on ${others.length} OTHER record(s) with Last_Outreach_Date within last ${RECENT_TOUCHED_WINDOW_DAYS} days. Status(es): ${statusLabel}. Memory of prior contact may still be active even though those listings have moved out of active outreach. Route to Action Queue for manual draft.`,
+            data_examined: {
+              agent_phone_raw: listing.agentPhone,
+              agent_phone_normalized: normalized,
+              other_recently_touched_listings: others.slice(0, 5),
+              other_statuses: uniqueStatuses,
+              window_days: RECENT_TOUCHED_WINDOW_DAYS,
+              most_recent_touched_date: entry.mostRecentTouchedDate,
+              scrub_bucket: bucket,
+            },
+            pending_writes: null,
+          };
+        }
       }
     }
   }

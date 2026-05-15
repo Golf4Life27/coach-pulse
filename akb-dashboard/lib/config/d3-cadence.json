@@ -14,6 +14,8 @@
     "auto_dead_no_followup_reply_days": 14,
     "auto_dead_no_followup_reply_days_note": "If no reply within 14 days after follow_up_14 fires, record → Pipeline_Stage=dead, Outreach_Status=Dead.",
     "manual_review_banner_drift_up": "PRICE DRIFT UP — seller got aggressive, review before sending",
+    "recently_touched_window_days": 30,
+    "recently_touched_window_days_note": "Layer 1 depth-gate widening (5/15 Alex directive): if an agent's phone was touched within this window on a DIFFERENT listing — regardless of that other listing's current Outreach_Status — treat the current listing as a warm contact. Catches the case where the prior listing went Dead but the human agent still remembers our outreach. Matches the 30-day stale-records threshold from the bulk-dead policy.",
     "templates": {
       "status_check": "scripts/outreach/status_check.md",
       "follow_up_3": "scripts/outreach/follow_up_3.md",

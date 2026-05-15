@@ -22,12 +22,16 @@ import {
   summarizeCadence,
   type CadenceDecision,
   type AgentInteractionMap,
+  type RecentlyTouchedAgentMap,
 } from "@/lib/d3-cadence";
 import { normalizePhone } from "@/lib/phone-normalize";
 import type { Listing } from "@/lib/types";
+import cadenceConfig from "@/lib/config/d3-cadence.json";
 
 export const runtime = "nodejs";
 export const maxDuration = 90;
+
+const RECENT_TOUCHED_WINDOW_DAYS = cadenceConfig.config.recently_touched_window_days;
 
 // Build the cross-listing agent-interaction map from the full Listings_V1
 // universe (NOT just the Texted subset). Includes Texted + Negotiating
@@ -54,6 +58,47 @@ function buildAgentInteractionMap(allListings: Listing[]): AgentInteractionMap {
   return map;
 }
 
+// 5/15 widening: build a phone-keyed map of records with Last_Outreach_Date
+// within RECENT_TOUCHED_WINDOW_DAYS days, regardless of current
+// Outreach_Status. Catches the dormant-but-recent contact case where the
+// previous listing has gone Dead but the human agent's memory of us is
+// still fresh.
+function buildRecentlyTouchedAgentMap(
+  allListings: Listing[],
+  now: Date,
+): RecentlyTouchedAgentMap {
+  const cutoffMs = now.getTime() - RECENT_TOUCHED_WINDOW_DAYS * 24 * 60 * 60_000;
+  const map: RecentlyTouchedAgentMap = new Map();
+  for (const l of allListings) {
+    const lod = l.lastOutreachDate;
+    if (!lod) continue;
+    // Last_Outreach_Date is YYYY-MM-DD. Compare as UTC midnight.
+    const m = lod.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) continue;
+    const ts = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    if (isNaN(ts) || ts < cutoffMs) continue;
+    const normalized = normalizePhone(l.agentPhone);
+    if (!normalized) continue;
+    const status = l.outreachStatus ?? "(unset)";
+    const existing = map.get(normalized);
+    if (existing) {
+      existing.listingIds.push(l.id);
+      existing.statuses.push(status);
+      // Track the most recent touch for diagnostics.
+      if (lod > existing.mostRecentTouchedDate) {
+        existing.mostRecentTouchedDate = lod;
+      }
+    } else {
+      map.set(normalized, {
+        listingIds: [l.id],
+        statuses: [status],
+        mostRecentTouchedDate: lod,
+      });
+    }
+  }
+  return map;
+}
+
 export async function GET(req: Request) {
   const t0 = Date.now();
   const url = new URL(req.url);
@@ -66,28 +111,36 @@ export async function GET(req: Request) {
   );
   const subset = limit != null ? texted.slice(0, limit) : texted;
 
-  // Build the depth-gate lookup ONCE over the full Listings_V1 universe.
-  const agentInteractionMap = buildAgentInteractionMap(allListings);
-
+  // Build the depth-gate lookups ONCE over the full Listings_V1 universe.
   const now = new Date();
+  const agentInteractionMap = buildAgentInteractionMap(allListings);
+  const recentlyTouchedAgentMap = buildRecentlyTouchedAgentMap(allListings, now);
+
   const decisions: CadenceDecision[] = subset.map((l) => {
     const scrub = classifyTexted(l);
     return classifyCadence({
       listing: l,
       bucket: scrub.bucket,
       agentInteractionMap,
+      recentlyTouchedAgentMap,
       now,
     });
   });
   const summary = summarizeCadence(decisions);
 
-  // Surface map size for sanity-checking warm cohort against the
-  // expected ~48 from the 5/14 distribution scan.
+  // Surface map sizes for sanity-checking warm cohort. Layer 1
+  // (same-status) was the original gate; recently_touched_* is the
+  // 5/15 widening.
   const interactionMapStats = {
     distinct_phones_in_texted_or_negotiating: agentInteractionMap.size,
     phones_with_more_than_one_listing: [...agentInteractionMap.values()].filter(
       (v) => v.count > 1,
     ).length,
+    distinct_phones_recently_touched: recentlyTouchedAgentMap.size,
+    phones_recently_touched_on_multiple_listings: [
+      ...recentlyTouchedAgentMap.values(),
+    ].filter((v) => v.listingIds.length > 1).length,
+    recent_touched_window_days: RECENT_TOUCHED_WINDOW_DAYS,
   };
 
   await audit({
