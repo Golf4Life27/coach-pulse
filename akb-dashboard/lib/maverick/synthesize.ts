@@ -18,7 +18,14 @@
 import type { StructuredBriefing } from "./briefing";
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const DEFAULT_TIMEOUT_MS = 12_000;
+// Bumped from 12s → 20s after Gate 2 first smoke (5/15): cold-cache
+// synthesis timed out at 12s with ~10K-token payload (41 active deals).
+// Prompt-cache-warm calls complete in ~5-8s; 20s headroom for cold
+// path. Aggregator overall budget (30s P95) still satisfied —
+// parallel fetch floor is ~3.5s, leaving 26.5s for synthesis.
+// v1.2 backlog: trim active_deals input to top 15 to reduce
+// Claude latency further.
+const DEFAULT_TIMEOUT_MS = 20_000;
 const MODEL = "claude-sonnet-4-6";
 const MAX_TOKENS = 1024;
 

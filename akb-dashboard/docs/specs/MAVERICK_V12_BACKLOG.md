@@ -32,7 +32,33 @@ amends and the trigger that surfaced it.
 
 ## From Day 2 review (5/15)
 
-*(none yet — to be populated as Day 2 surfaces findings)*
+### 3. Trim active_deals payload sent to Claude synthesizer
+
+**Spec section affected:** §5 Step 1, synthesis layer.
+
+**Finding:** First Gate 2 smoke (5/15) showed Claude synthesis timing out at 12s when the structured payload contained 41 active_deals records (~10K input tokens, cold prompt cache). Bumped timeout to 20s as the immediate fix.
+
+**v1.2 enhancement:** The aggregator can trim active_deals to top N (e.g., 15) before passing to the synthesizer. The template renderer continues to show all N entries (fast, deterministic). Only Claude sees the top slice. Reduces input tokens, cuts latency, lowers per-call API cost.
+
+**Implementation note:** Add a `synthesisInputTrim()` helper in lib/maverick/aggregator.ts that clones the structured briefing and replaces `active_deals` with `active_deals.slice(0, 15)` before handing to synthesize. The template still receives the full briefing. ~10 lines.
+
+### 4. Quo `/v1/messages` returning non-OK in production
+
+**Spec section affected:** §5 Step 1, external_quo source description.
+
+**Finding:** Production deploy shows `external_quo.api_responsive: false` despite `api_key_configured: true`. Quo's `/v1/messages?phoneNumberId=...&createdAfter=...&maxResults=50` returned non-2xx during Gate 2 smoke. Specific status code wasn't captured (fetcher swallows error and reports api_responsive:false per Day 1 graceful-degradation pattern).
+
+**v1.2 enhancement:** Capture the actual HTTP status + first 200 chars of error body in the QuoState shape so the briefing can surface the specific failure mode. Either auth-side (401 = key scope issue), validation-side (400 = query param mismatch), or upstream (5xx = Quo outage). Without it the briefing just says "down" and Alex has to dig manually.
+
+**Implementation note:** Add `api_last_status: number | null` and `api_last_error: string | null` to QuoState. Pure-summarizer change + one field-write update in the fetcher. ~5 lines.
+
+### 5. Vercel API token + GitHub PAT not configured in production env
+
+**Spec section affected:** §5 Step 1 + environment configuration.
+
+**Finding:** Production deploy shows `external_vercel.api_token_configured: false` and `git.github_pat_configured: false`. Briefing's "deploy state" and "git latest commit" sections are empty as a result.
+
+**v1.2 action item (env config, not code):** Alex provisions `VERCEL_API_TOKEN` and `GITHUB_PAT` in Vercel project env vars. Tokens scoped to: read-only deployments (Vercel), read-only repo + checks (GitHub). Once added, no code change required — the fetchers already handle the absence-vs-presence transition gracefully.
 
 ---
 
