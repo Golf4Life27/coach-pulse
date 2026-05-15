@@ -1,10 +1,12 @@
 # Inevitable Continuity Layer — Maverick
 
-**Spec version:** v1.1
-**Authored:** May 14, 2026 (v1.0); May 15, 2026 (v1.1 amendments)
+**Spec version:** v1.2
+**Authored:** May 14, 2026 (v1.0); May 15, 2026 (v1.1 amendments); May 15, 2026 (v1.2 amendments — Day 4.5 OAuth build)
 **Status:** TIER A — current build cycle's only build target
-**Supersedes:** v1.0 in full. v1.0 remains in repo history as the original spec; v1.1 is canonical going forward.
+**Supersedes:** v1.1 in full. v1.0 + v1.1 remain in git history; v1.2 is canonical going forward.
 
+> **v1.2 changelog:** Two amendments locked 5/15 alongside the OAuth/Day-4.5 build. See §14 for the v1.2 delta. Headlines: OAuth 2.0 Authorization Code + PKCE replaces bearer-only as canonical MCP auth (bearer relegated to dev/CI fallback, Vercel cron jobs authenticate via Vercel's built-in `CRON_SECRET`); model tier registry abstraction introduced with standing premium_frontier policy for Maverick the orchestrator.
+>
 > **v1.1 changelog:** Seven amendments approved 5/15 alongside Day 1 of the build. See §14 for the full delta against v1.0. Headlines: userMemories removed from queried-sources list (they trigger the call, not feed it); performance target rephrased as P95 ≤ 30s / P50 ≤ 15s; synthesis cost flagged; writes are append-only with amendment events; Pulse confidence model deferred; Ledger scope tightened to Inevitable-lane revenue only; branch naming `claude/maverick-*` for Maverick-specific work.
 
 ---
@@ -204,7 +206,11 @@ Build target: an MCP server exposed at a Vercel URL that any Claude product (cla
 
 **Deployment topology:** Vercel function in the existing `coach-pulse` repo at `app/api/maverick/mcp/route.ts`. Same Vercel project, same env vars, same deploy pipeline.
 
-**Auth model:** Single bearer token in `MAVERICK_MCP_TOKEN` env var for v1. Per-source tokens for attribution can ship in v1.1+ if/when audit-trail-per-session-type becomes load-bearing.
+**Auth model (v1.2 amendment §6.8):** OAuth 2.0 Authorization Code with PKCE (RFC 7636), canonical for human-driven sessions (claude.ai connector). The MCP server is an OAuth Protected Resource per RFC 9728; same Vercel origin acts as both protected resource and authorization server. Endpoints exposed: `/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server` (RFC 8414), `/api/maverick/oauth/register` (RFC 7591 dynamic client registration with auto-approve in v1), `/api/maverick/oauth/authorize` (validates request + immediately issues code, no consent UI in v1), `/api/maverick/oauth/token` (auth_code + refresh_token grants), `/api/maverick/oauth/revoke`. Tokens are opaque random strings stored in Vercel KV: 1h access tokens, 30d refresh tokens with rolling rotation + family-id replay detection. Single scope `maverick:state` covers all tool calls in v1.2; per-tool scope refinement deferred until multi-agent attribution requires it.
+
+Internal callers (Vercel cron jobs: Path Y, buyer-warmup, scan-comms, future Pulse routines) authenticate via Vercel's built-in `CRON_SECRET` env var, with `x-vercel-cron: 1` header required as defense-in-depth. Bearer-token mode (`MAVERICK_MCP_TOKEN` env var, v1.1 design) is preserved as developer fallback for shell smoke + CI but gated to `NODE_ENV !== "production"`. Production accepts OAuth tokens + CRON_SECRET only.
+
+Auto-approve consent at `/authorize` is a v1-specific simplification predicated on single-user + single-scope + sole-trusted-client (claude.ai). When multi-user, per-tool scopes, or third-party clients become real, explicit-consent UI ships as a non-breaking addition. Full implementation brief: `docs/specs/MAVERICK_OAUTH_PROPOSAL.md`.
 
 **Build effort:** 1-2 days. Total Step 1 + Step 2: roughly 1 week of focused build.
 
@@ -433,7 +439,16 @@ Until Maverick exists, every session that ends without him existing is a session
 
 ---
 
-## 14. v1.1 changelog (5/15)
+## 14. Changelog
+
+### v1.2 amendments (5/15, Day 4.5 OAuth build)
+
+| # | Section | Amendment |
+|---|---|---|
+| 6.8 | §5 Step 2 (replaces bearer-only auth model) | **OAuth 2.0 Authorization Code with PKCE** is canonical for human-driven MCP sessions. Maverick is both OAuth protected resource (RFC 9728) and authorization server (RFC 8414) on the same Vercel origin. Endpoints: `/.well-known/oauth-{protected-resource,authorization-server}` (RFC standard origin-root paths), `/api/maverick/oauth/{register,authorize,token,revoke}`. Dynamic client registration (RFC 7591) with auto-approve in v1; auto-approve consent at `/authorize` (no consent UI) for v1's single-user/single-scope/sole-trusted-client posture. Opaque tokens in Vercel KV: 1h access tokens, 30d refresh tokens with rolling rotation + family-id replay detection. Scope `maverick:state` covers all tools. Internal Vercel cron callers authenticate via built-in `CRON_SECRET` + `x-vercel-cron:1` header. `MAVERICK_MCP_TOKEN` bearer mode preserved as dev/CI fallback, gated to `NODE_ENV !== "production"`. Drove Day 4.5 build; closed (or pending closure of) Gate 3. Full implementation brief: `docs/specs/MAVERICK_OAUTH_PROPOSAL.md`. |
+| 6.9 | New §15 (added: model tier registry) | **Model tier registry** abstraction at `lib/maverick/model-registry.ts` (per proposal — implementation deferred to Day 8+) maps tier names (`premium_frontier` / `premium` / `cheap`) to current Anthropic model IDs. Standing policy: Maverick the orchestrator (synthesizer, Pulse, BroCard reasoning) ALWAYS occupies `premium_frontier`; cost/latency mitigations land before quality is compromised. Three-question re-evaluation protocol on every Anthropic model release (replacement / tier shift / definition revision); `MODEL_REGISTRY_LAST_REVIEWED` bumps on each commit. Phase-2 Pulse-driven monitoring with BroCard-proposed updates (never auto-applied) ships post-Pulse-GA. Full brief: `docs/specs/MAVERICK_MODEL_REGISTRY_PROPOSAL.md`. |
+
+### v1.1 amendments (5/15, Day 1 build)
 
 All seven amendments raised in the 5/15 spec audit, accepted by Alex, locked here.
 
@@ -449,4 +464,31 @@ All seven amendments raised in the 5/15 spec audit, accepted by Alex, locked her
 
 ---
 
-*Spec v1.1 — May 15, 2026. Amendments expected. Living Artifact. The next version of this document will be authored by a Claude session that loaded its predecessor via `maverick_load_state` on session open. That session's clarity will be the first proof Maverick exists.*
+## 15. Model tier registry (added v1.2 §6.9 — spec-only, build deferred to Day 8+)
+
+LLM call sites consolidate to a single source of truth at `lib/maverick/model-registry.ts`. Tier definitions name capability profile + canonical callers. Tier-to-model bindings update on every Anthropic release per the three-question re-evaluation protocol (replacement / shift / definition revision).
+
+**Three tiers:**
+
+| Tier | Profile | Canonical callers |
+|---|---|---|
+| `premium_frontier` | Opus-class flagship reasoning. Strategic synthesis, multi-source aggregation, BroCard generation, priority surfacing. Maverick himself speaks from here. | `maverick_synthesize`, `pulse_introspection`, `brocard_reasoning` |
+| `premium` | Sonnet-class. Domain analysis, complex math, contract parsing, document assembly. | `appraiser_arv_analysis`, `scribe_contract_parse`, `scout_buyer_matching`, `ledger_economic_analysis` |
+| `cheap` | Haiku-class fast inference. Pattern matching, classification, templated text drafting. | `sentinel_intake_classify`, `forge_template_draft`, `sentry_text_validation` |
+
+**Standing premium_frontier policy:** Maverick the orchestrator ALWAYS occupies `premium_frontier`. When Anthropic ships a new flagship Opus-class model, `TIER_CURRENT_MODEL.premium_frontier` updates to that model. Cost/latency get mitigated (budget bumps, payload trims, prompt-cache audits) before quality is compromised by downgrading to a non-frontier model.
+
+**Re-evaluation protocol on every new model release:**
+- Q1: Direct replacement in an existing tier?
+- Q2: Tier shift for any current caller given the new capability landscape?
+- Q3: Tier definition revision (new tier added / collapsed / requirements rewritten)?
+
+Answers documented in the commit that bumps `TIER_CURRENT_MODEL` + the `MODEL_REGISTRY_LAST_REVIEWED` date.
+
+**Phase 2 (post-Pulse-GA):** Pulse routine monitors Anthropic's model registry on the daily-cron cap, generates BroCard proposing tier update on each new release. Never auto-updates without approval.
+
+Full brief: `docs/specs/MAVERICK_MODEL_REGISTRY_PROPOSAL.md`.
+
+---
+
+*Spec v1.2 — May 15, 2026. Amendments expected. Living Artifact. The next version of this document will be authored by a Claude session that loaded its predecessor via `maverick_load_state` on session open. That session's clarity will be the first proof Maverick exists.*

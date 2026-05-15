@@ -1,8 +1,10 @@
-# Maverick — v1.2 backlog
+# Maverick — v1.3+ backlog
 
 Living list of enhancements + spec amendments queued for the next
-Living-Artifact revision. Each item names the section of v1.1 it
-amends and the trigger that surfaced it.
+Living-Artifact revision. Each item names the section of the current
+spec (v1.2) it amends and the trigger that surfaced it.
+
+> **Rename note (5/15):** This file was originally named the v1.2 backlog. v1.2 amendments (§6.8 OAuth, §6.9 model registry) shipped 5/15 in the Day 4.5 build. Items below carry forward to v1.3 unless explicitly closed. File rename + content cleanup deferred to next backlog-touch turn — keeping git history clean for the v1.2 cycle.
 
 ---
 

@@ -31,6 +31,13 @@ import {
   type JsonRpcResponse,
 } from "@/lib/maverick/mcp/protocol";
 import { dispatch } from "@/lib/maverick/mcp/handlers";
+import {
+  authenticate,
+  buildWwwAuthenticate,
+  readAuthEnv,
+  readAuthHeaders,
+} from "@/lib/maverick/oauth/auth-waterfall";
+import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 
 export const runtime = "nodejs";
 // Match the load-state endpoint's budget — when tools/call invokes
@@ -38,17 +45,54 @@ export const runtime = "nodejs";
 // headroom for the worst-case 30s briefing.
 export const maxDuration = 60;
 
-const MAVERICK_MCP_TOKEN = process.env.MAVERICK_MCP_TOKEN;
-
 export async function POST(req: Request) {
   const t0 = Date.now();
 
-  // Bearer-token auth. Optional when MAVERICK_MCP_TOKEN is unset
-  // (local dev); required when set (production).
-  if (MAVERICK_MCP_TOKEN) {
-    const authz = req.headers.get("authorization");
-    if (authz !== `Bearer ${MAVERICK_MCP_TOKEN}`) {
-      return jsonResponse(buildError(null, MCP_UNAUTHORIZED, "unauthorized"), 401);
+  // Three-stage auth waterfall per Spec v1.2 §6.5:
+  //   1. OAuth opaque access token (KV lookup) — claude.ai sessions
+  //   2. CRON_SECRET + x-vercel-cron:1 — Vercel cron jobs (future Pulse)
+  //   3. MAVERICK_MCP_TOKEN — ONLY when NODE_ENV !== "production" — dev/CI
+  // Skipped entirely when OAuth KV isn't configured AND no dev/cron token
+  // is set (local-dev convenience; matches the prior auth-optional path).
+  const env = readAuthEnv();
+  const headers = readAuthHeaders(req);
+  const authRequired =
+    kvConfigured() || env.cronSecret !== null || env.bearerDevToken !== null;
+  if (authRequired) {
+    const auth = await authenticate(headers, env, kvProd);
+    if (!auth.ok) {
+      const origin = resolveOrigin(req);
+      // Audit the CRON_SECRET-without-header case so leakage is detectable.
+      if (auth.reason === "cron_secret_match_without_x_vercel_cron") {
+        await audit({
+          agent: "maverick",
+          event: "mcp_internal_auth_rejected",
+          status: "confirmed_failure",
+          inputSummary: { reason: auth.reason },
+          outputSummary: { duration_ms: Date.now() - t0 },
+        });
+      }
+      return new NextResponse(
+        JSON.stringify(buildError(null, MCP_UNAUTHORIZED, auth.reason)),
+        {
+          status: 401,
+          headers: {
+            "content-type": "application/json",
+            "www-authenticate": buildWwwAuthenticate(origin, auth.reason),
+          },
+        },
+      );
+    }
+    if (auth.kind === "cron") {
+      // First-touch audit on every internal-token call. Bounded by daily
+      // cron cadence; anomalous volume = leaked CRON_SECRET being abused.
+      await audit({
+        agent: "maverick",
+        event: "mcp_internal_auth",
+        status: "confirmed_success",
+        inputSummary: { x_vercel_id: req.headers.get("x-vercel-id") },
+        outputSummary: { duration_ms: Date.now() - t0 },
+      });
     }
   }
 
@@ -162,6 +206,13 @@ export function GET() {
 }
 
 // ───────────────────── helpers ─────────────────────
+
+function resolveOrigin(req: Request): string {
+  const proto = req.headers.get("x-forwarded-proto") ?? "https";
+  const host =
+    req.headers.get("x-forwarded-host") ?? req.headers.get("host") ?? "localhost";
+  return `${proto}://${host}`;
+}
 
 function jsonResponse(body: JsonRpcResponse, status: number): NextResponse {
   // MCP spec recommends including an Mcp-Session-Id header on

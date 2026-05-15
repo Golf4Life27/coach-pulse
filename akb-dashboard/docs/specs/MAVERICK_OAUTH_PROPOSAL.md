@@ -333,3 +333,23 @@ Before locking this proposal:
 ---
 
 *Drafted 5/15/26 in the Day 4 build session. Answers locked 5/15/26 by Alex. Day 4.5 build proceeds against this proposal. On Day 4.5 ship, this file is archived next to a promoted `Inevitable_Continuity_Layer_Spec_v1.2.md`.*
+
+---
+
+## 15. Implementation amendments (5/15 — during Day 4.5 build)
+
+Small drift between proposal §2 endpoint paths and the implemented routes. Surfaced + corrected during build, captured here for forensic traceability rather than silent-fixed.
+
+**(a) Discovery endpoints relocated to origin root.** Proposal §2 placed them under `/api/maverick/.well-known/*`. Per RFC 9728 §3.1 + RFC 8414 §3, the canonical discovery location is the origin root (`/.well-known/*`). MCP clients (claude.ai) probe the origin root by convention. Implementation:
+- `/.well-known/oauth-protected-resource` (was: `/api/maverick/.well-known/oauth-protected-resource`)
+- `/.well-known/oauth-authorization-server` (was: `/api/maverick/.well-known/oauth-authorization-server`)
+
+The MCP route's `WWW-Authenticate` header on 401 responses points to the origin-root path via the `resource_metadata` parameter so discovery is also reachable via the 401-then-discover path per the MCP spec.
+
+**(b) Amendment numbering corrected.** Proposal §11 + §14 referenced v1.2 amendment "6.5" — but v1.1's existing amendments already occupy §6.1–§6.7. The actual v1.2 amendments are §6.8 (OAuth) and §6.9 (model registry). All references in the promoted spec (`Inevitable_Continuity_Layer_Spec_v1.2.md`) use the corrected numbering.
+
+**(c) PKCE method restriction.** Proposal §2 allowed both `S256` and `plain` for code_challenge_method. Implementation rejects `plain` at /authorize (per OAuth 2.0 Security BCP §2.1.1, S256 is mandatory for public clients). The verifier code (`lib/maverick/oauth/crypto.ts`) still supports `plain` semantically for future flexibility, but the /authorize route validator returns `invalid_request` if a caller requests it. Tightening, not loosening.
+
+**(d) `/revoke` implementation matches RFC 7009.** Proposal §2 listed `/revoke` as "optional in v1.2; nice for log-out path." Implemented as a thin wrapper that deletes the token from KV and returns 200 regardless of token existence (per RFC 7009 §2.2 — prevents token-existence enumeration). Audit event `oauth_token_revoked` fires on every call.
+
+These are corrections, not in-scope amendments — caught during implementation, surfaced for the record.

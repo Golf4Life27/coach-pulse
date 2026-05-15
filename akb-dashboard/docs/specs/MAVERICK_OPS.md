@@ -9,8 +9,10 @@ runbook. Updated as the live system evolves.
 
 | Concern | Where |
 |---|---|
-| Canonical spec | `docs/specs/Inevitable_Continuity_Layer_Spec_v1.1.md` |
-| v1.2 amendment backlog | `docs/specs/MAVERICK_V12_BACKLOG.md` |
+| Canonical spec | `docs/specs/Inevitable_Continuity_Layer_Spec_v1.2.md` |
+| OAuth implementation brief | `docs/specs/MAVERICK_OAUTH_PROPOSAL.md` |
+| Model tier registry brief | `docs/specs/MAVERICK_MODEL_REGISTRY_PROPOSAL.md` |
+| v1.3 amendment backlog | `docs/specs/MAVERICK_V12_BACKLOG.md` (rename pending) |
 | State aggregator endpoint | `app/api/maverick/load-state/route.ts` |
 | MCP server endpoint | `app/api/maverick/mcp/route.ts` |
 | Aggregator orchestration | `lib/maverick/aggregator.ts` |
@@ -19,6 +21,9 @@ runbook. Updated as the live system evolves.
 | MCP protocol primitives | `lib/maverick/mcp/protocol.ts` |
 | MCP tool catalog | `lib/maverick/mcp/tools.ts` |
 | MCP method dispatch | `lib/maverick/mcp/handlers.ts` |
+| OAuth modules | `lib/maverick/oauth/*.ts` |
+| OAuth discovery endpoints | `app/.well-known/oauth-{protected-resource,authorization-server}/route.ts` |
+| OAuth `/register` `/authorize` `/token` `/revoke` | `app/api/maverick/oauth/*/route.ts` |
 | 9 source fetchers | `lib/maverick/sources/*.ts` |
 | RentCast burn-rate synthesis | `lib/maverick/rentcast-burn-rate.ts` |
 | Prebuild test-count artifact | `scripts/gen-test-count.mjs` → `lib/maverick/data/test-counts.json` |
@@ -58,36 +63,74 @@ degradation (sources return their "not configured" empty state).
 | `VERCEL_API_TOKEN` | recommended | external-vercel | Read-only deployments scope. Without it: deploy state UNKNOWN |
 | `RENTCAST_API_KEY` | recommended | external-rentcast | Without it: `api_responsive: false`, `api_key_configured: false` |
 | `RENTCAST_MONTHLY_CAP` | optional | external-rentcast | Defaults to 1000 |
-| `MAVERICK_MCP_TOKEN` | recommended (prod) | MCP server route | Bearer token enforced when set; token-less mode is dev-only |
+| `MAVERICK_MCP_TOKEN` | dev/CI only | MCP server route | Bearer-token mode for shell smoke + CI. **Gated to `NODE_ENV !== "production"` per Spec v1.2 §6.8** — set value is ignored on the production lambda |
+| `CRON_SECRET` | auto-provisioned | MCP server route (internal callers) | Vercel auto-provisions + auto-rotates. Used by future Pulse cron routines authenticating to Maverick's own endpoints. Defense-in-depth: also requires `x-vercel-cron: 1` header |
 | `MAVERICK_ACTIVE_BRANCH` | optional | git, external-vercel | Overrides hardcoded branch name when Maverick-specific branches start (e.g., `claude/maverick-aggregator`) |
 
 ---
 
-## Registering the MCP server with claude.ai
+## Registering Maverick with claude.ai (OAuth — production)
 
-Per spec §5 Step 3, the canonical session opener is `maverick_load_state`. To get that wired:
+Per Spec v1.2 §6.8, the canonical session opener is `maverick_load_state` reached via OAuth-authenticated MCP. Five steps:
 
-1. **Generate the bearer token.** Pick a strong random string (32+ chars):
+1. **Confirm `KV_REST_API_URL` + `KV_REST_API_TOKEN` are set in Vercel.** OAuth tokens live in Vercel KV — without it the OAuth endpoints return 503. These vars already exist for the audit log; verify in Vercel project Settings → Environment Variables.
+
+2. **Deploy the OAuth code path.** Push to the active branch (Vercel auto-deploys). Confirm the four discovery + OAuth endpoints respond:
 
    ```bash
-   openssl rand -hex 32
+   ORIGIN="https://coach-pulse-git-claude-build-akb-i-8aa382-golf4life27s-projects.vercel.app"
+   curl -sS "$ORIGIN/.well-known/oauth-protected-resource"     # → 200 JSON
+   curl -sS "$ORIGIN/.well-known/oauth-authorization-server"   # → 200 JSON
    ```
-
-2. **Set `MAVERICK_MCP_TOKEN` in Vercel.** Project → Settings → Environment Variables → add `MAVERICK_MCP_TOKEN` scoped to Production + Preview. Paste the token from step 1. Save. Trigger a redeploy so the var loads into the lambda.
 
 3. **Register the MCP server in claude.ai project.** Open the Inevitable project → Settings → Connectors → Add custom connector / MCP server:
    - **Name:** `Maverick`
-   - **URL:** the `/api/maverick/mcp` endpoint from the table above
-   - **Authentication:** Bearer token
-   - **Token:** paste the token from step 1
+   - **URL:** `https://coach-pulse-git-claude-build-akb-i-8aa382-golf4life27s-projects.vercel.app/api/maverick/mcp`
+   - **Authentication:** OAuth 2.0
+   - **Client ID + Client Secret fields:** **Leave empty.** Maverick supports RFC 7591 Dynamic Client Registration — claude.ai negotiates client credentials via the discovery endpoints and `/register`. If claude.ai's UI rejects the empty fields and demands values, see "Troubleshooting → OAuth dialog requires Client ID" below.
 
-4. **Verify the handshake.** Open a fresh chat in the Inevitable project. The MCP server should appear in the available connectors list. Type:
+4. **Complete the OAuth dance.** claude.ai's connector flow handles registration → /authorize → /token automatically. With auto-approve enabled (Spec v1.2 §6.8), there is no consent screen — the dance completes invisibly and the connector turns green. Audit-log entries fire on each step: `oauth_register`, `oauth_authorize_consent`, `oauth_token_issued`. Verify by reading the audit log:
+
+   ```bash
+   # If KV is exposed via curl, otherwise check Vercel logs:
+   curl -sS -H "Authorization: Bearer $KV_REST_API_TOKEN" \
+     "$KV_REST_API_URL/lrange/agent:audit/0/9"
+   ```
+
+5. **Verify the handshake.** Open a fresh chat in the Inevitable project. Type:
 
    > Call `maverick_load_state` to load the briefing.
 
    The session should receive the Owner's-Rep narrative within ~20s on cold cache, sub-second on warm.
 
-5. **Update Master Context userMemory.** Per spec §11, the rewrite of any "Jarvis" references in userMemories to "Maverick" includes adding a directive: *"At session open in the Inevitable project, first call `maverick_load_state`. The MCP server holds operational state; the briefing is your re-grounding."* That's Alex's edit to make.
+6. **Update Master Context userMemory.** Per spec §11, the rewrite of any "Jarvis" references in userMemories to "Maverick" includes adding a directive: *"At session open in the Inevitable project, first call `maverick_load_state`. The MCP server holds operational state; the briefing is your re-grounding."* That's Alex's edit to make.
+
+---
+
+## Token rotation (OAuth)
+
+OAuth access tokens auto-rotate every refresh (1h TTL on access, 30d TTL on refresh with rolling rotation). No operator action required for normal operation.
+
+**Manual revocation of a specific token (e.g., suspected leak):**
+
+```bash
+# Revoke by direct KV delete. Access tokens: maverick:oauth:access:<token>;
+# refresh tokens: maverick:oauth:refresh:<token>. Family invalidation cascades
+# rotation, so revoking the family entry blocks future refreshes too.
+curl -sS -X POST -H "Authorization: Bearer $KV_REST_API_TOKEN" \
+  "$KV_REST_API_URL/del/maverick:oauth:access:mat_..."
+```
+
+**Revoke a client (full unregister):**
+
+```bash
+# Delete the client record + any in-flight access tokens issued to it.
+# claude.ai will need to re-register on next connect.
+curl -sS -X POST -H "Authorization: Bearer $KV_REST_API_TOKEN" \
+  "$KV_REST_API_URL/del/maverick:oauth:client:mc_..."
+```
+
+**Rotate CRON_SECRET (internal cron auth):** Vercel handles this automatically. To force-rotate, redeploy the project — Vercel re-issues `CRON_SECRET` on each deploy.
 
 ---
 
@@ -164,7 +207,39 @@ Per-source timeout budgets are set in each fetcher's `DEFAULT_TIMEOUT_MS`. Bump 
 
 ### MCP server returns 401
 
-`MAVERICK_MCP_TOKEN` is set in production but the calling client isn't sending `authorization: Bearer <token>`. Verify claude.ai connector config or smoke-curl headers.
+Three possible causes per the v1.2 §6.8 auth waterfall:
+
+1. **No `Authorization` header** — bare requests are rejected. Verify the caller is sending `Authorization: Bearer <token>`.
+2. **OAuth access token expired** (`error="invalid_token"` in WWW-Authenticate). claude.ai should auto-trigger `/oauth/token` refresh on this; if the connector is stuck, re-register from scratch.
+3. **`MAVERICK_MCP_TOKEN` set in production env** — bearer-dev mode is REFUSED in production (Spec v1.2 §6.8 gates it to `NODE_ENV !== "production"`). Remove the var from the prod environment, or smoke against a preview deploy.
+
+### OAuth dialog in claude.ai requires Client ID / Secret
+
+Modern claude.ai versions support RFC 7591 dynamic client registration and accept empty Client ID + Secret fields. Older versions may require values. Workaround: manually register a client via curl, then paste the returned IDs into the connector dialog:
+
+```bash
+ORIGIN="https://coach-pulse-..."
+curl -sS -X POST -H "content-type: application/json" \
+  "$ORIGIN/api/maverick/oauth/register" \
+  -d '{"redirect_uris":["https://claude.ai/api/oauth/callback"],"client_name":"Claude","token_endpoint_auth_method":"client_secret_post"}'
+```
+
+Response contains `client_id` + `client_secret`; paste those into claude.ai's Advanced settings.
+
+### OAuth dance fails — audit log shows `oauth_authorize_rejected`
+
+Most common: `redirect_uri does not match any registered redirect_uri`. claude.ai's actual callback URL must be exact-match registered. If unsure, check the audit-log `inputSummary.client_id`, look up the client's registered URIs via:
+
+```bash
+curl -sS -H "Authorization: Bearer $KV_REST_API_TOKEN" \
+  "$KV_REST_API_URL/get/maverick:oauth:client:mc_..."
+```
+
+Compare to the redirect_uri claude.ai actually sent (visible in `?redirect_uri=...` of the /authorize URL during the dance).
+
+### Briefing audit shows `oauth_replay_detected`
+
+A refresh token was presented after it had already been rotated, OR a client_id mismatch triggered family invalidation. Either: (a) legitimate re-use after network retry (rare), or (b) token leak with attacker replay (investigate). The token family is automatically revoked; claude.ai will need to re-authenticate.
 
 ### MCP server returns 502 from Cloudflare proxy
 
