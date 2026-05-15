@@ -44,3 +44,5 @@ next-env.d.ts
 # Exception: principles/architecture docs without secrets ARE tracked.
 /docs/*
 !/docs/Positive_Confirmation_Principle.md
+!/docs/specs/
+!/docs/specs/*.md
