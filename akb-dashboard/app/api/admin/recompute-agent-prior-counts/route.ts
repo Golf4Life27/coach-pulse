@@ -12,9 +12,14 @@
 // writing. The function is idempotent — repeated runs that find no
 // drift produce zero writes.
 //
-// Wired to Vercel cron in vercel.json (every 6 hours). Manual GET also
-// works for ad-hoc inspection. Audit-logs every run with the diagnostic
-// counters Alex asked for in the 5/14 spec.
+// Wired to Vercel cron in vercel.json (daily at 08:00 UTC = 3am CT).
+// Vercel Hobby plan caps crons at once-per-day — sub-daily granularity
+// requires Pro plan. Drift window post-PropStream-intake is therefore
+// up to 24hr (Alex acknowledged 5/14: intermittent intake volume
+// makes daily acceptable). Slot chosen to not collide with existing
+// crons at 9/10/11/13 UTC.
+// Manual GET also works for ad-hoc inspection. Audit-logs every run
+// with the diagnostic counters Alex asked for in the 5/14 spec.
 
 import { NextResponse } from "next/server";
 import { getListings, updateListingRecord } from "@/lib/airtable";

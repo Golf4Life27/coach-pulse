@@ -18,7 +18,7 @@
     },
     {
       "path": "/api/admin/recompute-agent-prior-counts",
-      "schedule": "0 */6 * * *"
+      "schedule": "0 8 * * *"
     }
   ]
 }
