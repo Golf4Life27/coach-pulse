@@ -4,9 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "prebuild": "node scripts/gen-test-count.mjs",
     "build": "next build",
     "start": "next start",
-    "test": "vitest run"
+    "test": "vitest run",
+    "gen:test-count": "node scripts/gen-test-count.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.90.0",

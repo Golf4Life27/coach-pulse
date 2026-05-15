@@ -38,4 +38,20 @@ describe("codebase-metadata composeMetadata", () => {
     const r = composeMetadata(null, null);
     expect(typeof r.github_pat_configured).toBe("boolean");
   });
+
+  it("reports test_count from the prebuild artifact when present", () => {
+    const r = composeMetadata(null, null, {
+      count: 101,
+      test_files: 13,
+      generated_at: "2026-05-15T05:00:00Z",
+    });
+    expect(r.test_count).toBe(101);
+    expect(r.test_count_source).toBe("prebuild_artifact");
+  });
+
+  it("reports test_count as null / 'unknown' when artifact is absent (graceful degrade)", () => {
+    const r = composeMetadata(null, null, null);
+    expect(r.test_count).toBeNull();
+    expect(r.test_count_source).toBe("unknown");
+  });
 });

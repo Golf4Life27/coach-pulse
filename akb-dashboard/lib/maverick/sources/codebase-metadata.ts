@@ -30,7 +30,7 @@ export interface CodebaseMetadataState {
   package_name: string | null;
   package_version: string | null;
   test_count: number | null;
-  test_count_source: "vitest_run" | "test_files_glob" | "unknown";
+  test_count_source: "prebuild_artifact" | "unknown";
   latest_ci_state: "passing" | "failing" | "in_progress" | "unknown";
   latest_ci_sha: string | null;
   github_pat_configured: boolean;
@@ -42,11 +42,12 @@ export async function fetchCodebaseMetadataState(
   return runWithTimeout(
     { source: "codebase_metadata", timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS },
     async (signal) => {
-      const [pkg, ci] = await Promise.all([
+      const [pkg, ci, testCount] = await Promise.all([
         readPackageInfo().catch(() => null),
         fetchLatestCiState(signal).catch(() => null),
+        readTestCountArtifact().catch(() => null),
       ]);
-      return composeMetadata(pkg, ci);
+      return composeMetadata(pkg, ci, testCount);
     },
   );
 }
@@ -54,6 +55,40 @@ export async function fetchCodebaseMetadataState(
 interface PackageInfo {
   name: string | null;
   version: string | null;
+}
+
+interface TestCountArtifact {
+  count: number;
+  test_files: number;
+  generated_at: string;
+}
+
+async function readTestCountArtifact(): Promise<TestCountArtifact | null> {
+  // Produced by scripts/gen-test-count.mjs at build time (prebuild
+  // npm script). Vercel bundles this file into the lambda. If the
+  // artifact is missing (e.g., dev mode where prebuild hasn't run),
+  // we return null and the metadata composer reports test_count as
+  // null / source: "unknown" — graceful degradation per Day 1 pattern.
+  const candidates = [
+    path.join(process.cwd(), "lib", "maverick", "data", "test-counts.json"),
+    path.join(process.cwd(), "akb-dashboard", "lib", "maverick", "data", "test-counts.json"),
+  ];
+  for (const p of candidates) {
+    try {
+      const text = await fs.readFile(p, "utf-8");
+      const parsed = JSON.parse(text) as Partial<TestCountArtifact>;
+      if (typeof parsed.count === "number" && typeof parsed.test_files === "number") {
+        return {
+          count: parsed.count,
+          test_files: parsed.test_files,
+          generated_at: parsed.generated_at ?? "",
+        };
+      }
+    } catch {
+      // try next
+    }
+  }
+  return null;
 }
 
 async function readPackageInfo(): Promise<PackageInfo> {
@@ -122,20 +157,20 @@ async function fetchLatestCiState(signal: AbortSignal): Promise<CiState | null> 
 
 /**
  * Pure composer — used by tests to assert the shape without I/O.
+ * testCount is optional; when null/absent we report test_count as
+ * null + source "unknown" (graceful degrade when prebuild artifact
+ * isn't present, e.g. dev mode before `npm run gen:test-count` runs).
  */
 export function composeMetadata(
   pkg: PackageInfo | null,
   ci: CiState | null,
+  testCount?: TestCountArtifact | null,
 ): CodebaseMetadataState {
   return {
     package_name: pkg?.name ?? null,
     package_version: pkg?.version ?? null,
-    // v1: test_count is reported as null + "unknown" source. Wired
-    // for a future build-time artifact that the aggregator can read
-    // (e.g., `vitest run --reporter=json` emits a count we cache to
-    // a file the lambda reads).
-    test_count: null,
-    test_count_source: "unknown",
+    test_count: testCount?.count ?? null,
+    test_count_source: testCount ? "prebuild_artifact" : "unknown",
     latest_ci_state: ci?.state ?? "unknown",
     latest_ci_sha: ci?.sha ?? null,
     github_pat_configured: Boolean(GITHUB_PAT),
