@@ -14,7 +14,12 @@ import type { Listing } from "@/lib/types";
 import { runWithTimeout } from "../timeout";
 import type { FetchOpts, SourceResult } from "../types";
 
-const DEFAULT_TIMEOUT_MS = 8_000;
+// Bumped from 8s → 15s after Gate 2 first-smoke (5/15) observed
+// concurrent Airtable fetches contending: when all 3 Airtable calls
+// (listings + spine + queue) race in parallel, the slowest can hit
+// 8s. 15s gives headroom; the aggregator's overall 30s P95 budget
+// absorbs it since other sources finish much faster.
+const DEFAULT_TIMEOUT_MS = 15_000;
 
 // Statuses that represent active engagement past first-touch. The
 // briefing surfaces these as "active deals" — listing them out

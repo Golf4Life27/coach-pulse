@@ -11,7 +11,8 @@
 import { runWithTimeout } from "../timeout";
 import type { FetchOpts, SourceResult } from "../types";
 
-const DEFAULT_TIMEOUT_MS = 4_000;
+// Bumped from 4s → 8s after Gate 2 first-smoke contention (5/15).
+const DEFAULT_TIMEOUT_MS = 8_000;
 
 const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
 const MANUAL_FIX_QUEUE_TABLE = "tblV6OkNPDzOo6ubp";
