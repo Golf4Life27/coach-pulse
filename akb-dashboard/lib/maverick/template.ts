@@ -123,11 +123,31 @@ export function renderTemplate(b: StructuredBriefing): string {
     .filter(([, count]) => count > 0)
     .sort((a, b2) => b2[1] - a[1])
     .slice(0, 10);
-  if (auditEntries.length > 0 || b.audit_summary.recent_failures.length > 0) {
+  const lat = b.audit_summary.mcp_call_latency;
+  if (
+    auditEntries.length > 0 ||
+    b.audit_summary.recent_failures.length > 0 ||
+    lat.samples > 0
+  ) {
     const lines = [`## AUDIT SUMMARY (${b.audit_summary.total_events_since} events)`];
     if (auditEntries.length > 0) {
       lines.push(`  By agent:`);
       for (const [a, c] of auditEntries) lines.push(`    ${a}: ${c}`);
+    }
+    if (lat.samples > 0) {
+      const overTarget =
+        lat.over_target_count > 0
+          ? ` — ${lat.over_target_count} above ${(lat.p95_target_ms / 1000).toFixed(0)}s target`
+          : "";
+      lines.push(
+        `  MCP latency (${lat.samples} calls): P50 ${fmtMs(lat.p50_ms)}, P95 ${fmtMs(lat.p95_ms)}, P99 ${fmtMs(lat.p99_ms)}${overTarget}`,
+      );
+      const toolEntries = Object.entries(lat.by_tool)
+        .filter(([, t]) => t.samples > 0)
+        .sort((x, y) => y[1].samples - x[1].samples);
+      for (const [tool, t] of toolEntries) {
+        lines.push(`    ${tool}: ${t.samples} calls, P50 ${fmtMs(t.p50_ms)}, P95 ${fmtMs(t.p95_ms)}`);
+      }
     }
     if (b.audit_summary.recent_failures.length > 0) {
       lines.push(`  Recent failures (${b.audit_summary.recent_failures.length}):`);
@@ -164,6 +184,12 @@ export function renderTemplate(b: StructuredBriefing): string {
   sections.push(`---\nGenerated in ${b.duration_ms}ms. What do you want to work on?`);
 
   return sections.join("\n\n");
+}
+
+function fmtMs(ms: number | null): string {
+  if (ms === null) return "—";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
 }
 
 function truncate(s: string, max: number): string {

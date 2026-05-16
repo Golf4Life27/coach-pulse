@@ -239,6 +239,7 @@ export async function rebuildBriefing(opts: BuildBriefingOpts): Promise<Briefing
     total_events_since: audit.total_events_since,
     by_agent: audit.recent_events_by_agent,
     recent_failures: audit.recent_failures,
+    mcp_call_latency: audit.mcp_call_latency,
   };
 
   const external_signals: ExternalSignalsSection = {

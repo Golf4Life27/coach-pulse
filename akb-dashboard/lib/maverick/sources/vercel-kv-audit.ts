@@ -8,6 +8,7 @@
 // Spec v1.1 §5 Step 1.
 
 import { readRecentFromKv, type AuditEntry } from "@/lib/audit-log";
+import { computeMcpLatency, type McpLatencyStats } from "../mcp-latency";
 import { runWithTimeout } from "../timeout";
 import { failResult, type FetchOpts, type SourceResult } from "../types";
 
@@ -26,6 +27,7 @@ export interface VercelKvAuditState {
   }>;
   oldest_event_ts: string | null;
   newest_event_ts: string | null;
+  mcp_call_latency: McpLatencyStats;
 }
 
 export async function fetchVercelKvAuditState(
@@ -76,6 +78,7 @@ export function summarizeEvents(
     recent_failures: failures.slice(0, 25),
     oldest_event_ts: filtered.length > 0 ? filtered[filtered.length - 1].ts : null,
     newest_event_ts: filtered.length > 0 ? filtered[0].ts : null,
+    mcp_call_latency: computeMcpLatency(filtered),
   };
 }
 

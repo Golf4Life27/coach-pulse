@@ -58,6 +58,13 @@ export interface AuditSummarySection {
   total_events_since: number;
   by_agent: Record<string, number>;
   recent_failures: VercelKvAuditState["recent_failures"];
+  /**
+   * MCP per-call latency stats over the audit window. Maverick's
+   * self-instrumentation per Spec v1.2 §6.2. Surfaces P50/P95/P99 from
+   * actual production traffic instead of synthetic benchmarks. Will be
+   * `samples: 0` on first cold-start or in environments without KV.
+   */
+  mcp_call_latency: VercelKvAuditState["mcp_call_latency"];
 }
 
 export interface ExternalSignalsSection {
@@ -151,6 +158,15 @@ export const EMPTY_AUDIT: VercelKvAuditState = {
   recent_failures: [],
   oldest_event_ts: null,
   newest_event_ts: null,
+  mcp_call_latency: {
+    samples: 0,
+    p50_ms: null,
+    p95_ms: null,
+    p99_ms: null,
+    by_tool: {},
+    over_target_count: 0,
+    p95_target_ms: 30_000,
+  },
 };
 
 export const EMPTY_CODEBASE: CodebaseMetadataState = {

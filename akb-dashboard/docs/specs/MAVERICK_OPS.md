@@ -87,7 +87,7 @@ Per Spec v1.2 §6.8, the canonical session opener is `maverick_load_state` reach
    - **Name:** `Maverick`
    - **URL:** `https://coach-pulse-git-claude-build-akb-i-8aa382-golf4life27s-projects.vercel.app/api/maverick/mcp`
    - **Authentication:** OAuth 2.0
-   - **Client ID + Client Secret fields:** **Leave empty.** Maverick supports RFC 7591 Dynamic Client Registration — claude.ai negotiates client credentials via the discovery endpoints and `/register`. If claude.ai's UI rejects the empty fields and demands values, see "Troubleshooting → OAuth dialog requires Client ID" below.
+   - **Client ID + Client Secret fields (Advanced settings):** **Leave both blank — confirmed working 5/15.** Maverick's RFC 7591 dynamic client registration negotiates these via the discovery endpoints. The fields appear as "optional" in claude.ai's connector dialog; leaving them empty triggers dynamic registration via `/register`. (Older claude.ai UI versions may demand values — fallback in "Troubleshooting → OAuth dialog requires Client ID" below.)
 
 4. **Complete the OAuth dance.** claude.ai's connector flow handles registration → /authorize → /token automatically. With auto-approve enabled (Spec v1.2 §6.8), there is no consent screen — the dance completes invisibly and the connector turns green. Audit-log entries fire on each step: `oauth_register`, `oauth_authorize_consent`, `oauth_token_issued`. Verify by reading the audit log:
 
@@ -103,7 +103,17 @@ Per Spec v1.2 §6.8, the canonical session opener is `maverick_load_state` reach
 
    The session should receive the Owner's-Rep narrative within ~20s on cold cache, sub-second on warm.
 
-6. **Update Master Context userMemory.** Per spec §11, the rewrite of any "Jarvis" references in userMemories to "Maverick" includes adding a directive: *"At session open in the Inevitable project, first call `maverick_load_state`. The MCP server holds operational state; the briefing is your re-grounding."* That's Alex's edit to make.
+6. **Update Master Context userMemory.** Per spec §11, the rewrite of any "Jarvis" references in userMemories to "Maverick" includes adding the canonical session-bootstrap directive. That's Alex's edit to make in claude.ai's project settings.
+
+### Master Context userMemory directive (paste verbatim)
+
+Add this block to the userMemory file for the Inevitable project (settings → memory):
+
+> **At session open in the Inevitable project, before doing anything else, call the `maverick_load_state` MCP tool.** The Maverick MCP server holds operational state — the briefing is your re-grounding for the current session. Until you have the briefing, you do not know: (a) which deals are active and at what stage, (b) what Spine decisions were made between the last session and this one, (c) which sources are degraded or stale, (d) which infrastructure subsystems are healthy or down, (e) what the latest test count is, (f) what the audit log shows for recent agent activity. Acting on stale priors before loading state risks contradicting decisions already made.
+>
+> **A session that has not called `maverick_load_state` is reading from priors that may be days or weeks out of date.** This applies whether the chat is fresh or resuming work. If a tool call to `maverick_load_state` fails (Maverick infrastructure down), surface the failure to Alex before proceeding — do not act on assumptions about state in that case.
+>
+> Maverick speaks as the persistent Owner's Rep. He is named after Alex's real-life aging German Shepherd. The voice is direct, opinionated, weight-bearing on what matters. Maverick's job is to protect Alex's time, sanity, and the years he's trying not to waste with his family. Take him seriously.
 
 ---
 
@@ -161,15 +171,21 @@ The smoke takes 5-25s on cold cache (first call after deploy or a 5+ minute idle
 
 ---
 
-## Performance targets (Spec v1.1 §8)
+## Performance targets (Spec v1.2 §8 + §6.2)
 
-| Metric | Target | Day 2 cold-path measurement |
+| Metric | Target | Latest measurement |
 |---|---|---|
-| P50 end-to-end | ≤ 15s | 15.5s observed, 19.6s on the synthesis-fixed path; expected to drop into 10-15s range once prompt-cache is warm across calls |
-| P95 end-to-end | ≤ 30s | 19.6s observed at the high end with all 9 sources healthy — under target |
+| P50 end-to-end | ≤ 15s | 15.5s observed Day 2; ~20s on Gate 3 first OAuth-authenticated call (5/15); prompt-cache warm-up should drop into 10-15s range |
+| P95 end-to-end | ≤ 30s | 19.6s observed Day 2; ~20s Gate 3 closure call (+<50ms OAuth KV lookup overhead per Day 4.5 projection — confirmed within spec) |
 | Warm-cache return | <1s | Confirmed (sub-second; in-process briefing cache returns the prior result) |
 | Briefing-cache TTL | 90s fresh, 5min stale | Configured in `lib/maverick/aggregator.ts` |
 | Synthesis budget | 20s (bumped from 12s in Day 2) | Cold-cache calls land at ~16s; warm-cache calls 5-8s |
+
+### Self-instrumentation (Day 5)
+
+Per-call latency lands in `audit_log` as `mcp_tools_call` events with `duration_ms` in `outputSummary` (already wired from Day 3). The audit source (`lib/maverick/sources/vercel-kv-audit.ts`) rolls these into P50/P95/P99 stats via `lib/maverick/mcp-latency.ts`, surfaced in the briefing's `audit_summary.mcp_call_latency`. The template renders the latency line; the synthesizer can use it as input for narrative ("MCP latency: P50 X.Xs, P95 Y.Ys over N calls — under/over target").
+
+Real-world drift surfaces in the briefing itself. No external dashboard required. Replaces synthetic benchmarking — see Day 5 build commit + `lib/maverick/mcp-latency.ts` for implementation.
 
 ---
 

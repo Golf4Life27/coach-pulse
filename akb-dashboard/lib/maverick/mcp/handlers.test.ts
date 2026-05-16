@@ -61,7 +61,12 @@ function stubBriefing(over: Partial<Briefing> = {}): Briefing {
       texted_universe_size: 0,
       open_decisions: [],
       recent_key_decisions: [],
-      audit_summary: { total_events_since: 0, by_agent: {}, recent_failures: [] },
+      audit_summary: {
+        total_events_since: 0,
+        by_agent: {},
+        recent_failures: [],
+        mcp_call_latency: { samples: 0, p50_ms: null, p95_ms: null, p99_ms: null, by_tool: {}, over_target_count: 0, p95_target_ms: 30_000 },
+      },
       external_signals: {
         rentcast: {
           api_responsive: true,

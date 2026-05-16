@@ -24,6 +24,15 @@ function audit(by: Record<string, number>): VercelKvAuditState {
     recent_failures: [],
     oldest_event_ts: null,
     newest_event_ts: null,
+    mcp_call_latency: {
+      samples: 0,
+      p50_ms: null,
+      p95_ms: null,
+      p99_ms: null,
+      by_tool: {},
+      over_target_count: 0,
+      p95_target_ms: 30_000,
+    },
   };
 }
 
