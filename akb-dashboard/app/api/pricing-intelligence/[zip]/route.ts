@@ -107,7 +107,7 @@ export async function GET(
   );
 
   await audit({
-    agent: "phase4c",
+    agent: "appraiser",
     event: "dual_track_computed",
     status: "confirmed_success",
     inputSummary: { zip, address, arv_mid, rehab_mid, rent_monthly, rent_source },

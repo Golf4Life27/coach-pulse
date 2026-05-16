@@ -1,5 +1,15 @@
 "use client";
 
+/**
+ * @deprecated Legacy depth-aware ACT NOW card greeting. Superseded
+ * by the Maverick Shepherd panel (Phase 9.1) which renders a
+ * persistent presence on every page with priority surface BroCards.
+ * Component retains the `Jarvis` file name for backwards compatibility
+ * with existing imports until 9.1 lands and Shepherd panel replaces
+ * this. No user-visible identity strings to update — the component
+ * renders BroCard data, not a "Jarvis" label.
+ */
+
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import type {

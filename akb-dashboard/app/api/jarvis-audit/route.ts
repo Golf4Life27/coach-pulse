@@ -1,3 +1,8 @@
+// @deprecated Legacy audit endpoint. Maverick's `audit_summary` field
+// in the load-state response now provides the same data with richer
+// grouping (by_agent + mcp_call_latency + recent_failures). Phase 9
+// deprecation tag; URL kept live until consumers migrate.
+
 import { NextResponse } from "next/server";
 import { getListings } from "@/lib/airtable";
 

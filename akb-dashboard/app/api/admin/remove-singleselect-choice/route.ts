@@ -86,7 +86,7 @@ export async function GET(req: Request) {
   if (!tablesRes.ok) {
     const errText = await tablesRes.text().catch(() => "");
     await audit({
-      agent: "admin-schema",
+      agent: "sentry",
       event: "remove_choice_attempt",
       status: "confirmed_failure",
       inputSummary: { tableId, fieldId, choiceName },
@@ -155,7 +155,7 @@ export async function GET(req: Request) {
   if (!patchRes.ok) {
     const errText = await patchRes.text().catch(() => "");
     await audit({
-      agent: "admin-schema",
+      agent: "sentry",
       event: "remove_choice_attempt",
       status: "confirmed_failure",
       inputSummary: { tableId, fieldId, choiceName },
@@ -170,7 +170,7 @@ export async function GET(req: Request) {
 
   const patchBody = await patchRes.json().catch(() => ({}));
   await audit({
-    agent: "admin-schema",
+    agent: "sentry",
     event: "remove_choice_attempt",
     status: "confirmed_success",
     inputSummary: { tableId, fieldId, choiceName },

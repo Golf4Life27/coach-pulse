@@ -88,7 +88,7 @@ export async function GET(
     });
   } catch (err) {
     await audit({
-      agent: "phase4a",
+      agent: "appraiser",
       event: "rentcast_error",
       status: "confirmed_failure",
       inputSummary: { zip, address, beds, baths, sqft },
@@ -114,7 +114,7 @@ export async function GET(
   // signal — a LOW-confidence result is still a confirmed compute (we
   // know we got 0/few comps, not that we silently dropped them).
   await audit({
-    agent: "phase4a",
+    agent: "appraiser",
     event: "arv_computed",
     status: "confirmed_success",
     inputSummary: { zip, address, beds, baths, sqft, condition_target, rehab_mid },
@@ -140,7 +140,7 @@ export async function GET(
   // arv_computed entry.
   if (result.cross_method_disagreement.fired) {
     await audit({
-      agent: "phase4a",
+      agent: "appraiser",
       event: "arv_cross_method_disagreement",
       status: "uncertain",
       inputSummary: { zip, address, condition_target, rehab_mid, market: result.market },

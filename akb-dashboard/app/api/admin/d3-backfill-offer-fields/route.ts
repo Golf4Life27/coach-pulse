@@ -128,7 +128,7 @@ export async function GET(req: Request) {
       // Per-record audit so future analysis can identify proxy-data
       // by data_source=backfill_proxy.
       await audit({
-        agent: "d3-backfill",
+        agent: "sentry",
         event: "offer_fields_backfilled",
         status: "confirmed_success",
         recordId: l.id,
@@ -172,7 +172,7 @@ export async function GET(req: Request) {
   }
 
   await audit({
-    agent: "d3-backfill",
+    agent: "sentry",
     event: "backfill_run",
     status:
       apply && write_errors > 0

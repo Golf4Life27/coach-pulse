@@ -139,7 +139,7 @@ export async function GET(req: Request) {
       ? "uncertain"
       : "confirmed_success";
   await audit({
-    agent: "d3-scrub",
+    agent: "sentry",
     event: "scrub_run",
     status: auditStatus,
     inputSummary: {

@@ -213,7 +213,7 @@ export async function GET(req: Request) {
     failedKnown > 0 ? "fail" : passedKnown > 0 ? "pass" : "incomplete";
 
   await audit({
-    agent: "validation-sturtevant",
+    agent: "appraiser",
     event: "harness_run",
     status:
       overall === "pass"

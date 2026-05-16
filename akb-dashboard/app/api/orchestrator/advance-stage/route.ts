@@ -132,7 +132,7 @@ async function executeAdvance(opts: {
   );
   if (inviolableFails.length > 0) {
     await audit({
-      agent: "orchestrator",
+      agent: "sentry",
       event: "advance_stage_refused",
       status: "confirmed_failure",
       recordId,
@@ -167,7 +167,7 @@ async function executeAdvance(opts: {
       Pipeline_Stage: stage,
     });
     await audit({
-      agent: "orchestrator",
+      agent: "sentry",
       event: "advance_stage_override",
       status: "uncertain", // override means we bypassed normal gate — flag for review
       recordId,
@@ -206,7 +206,7 @@ async function executeAdvance(opts: {
   }
   const drift = await updateListingRecord(recordId, { Pipeline_Stage: stage });
   await audit({
-    agent: "orchestrator",
+    agent: "sentry",
     event: "advance_stage",
     status: "confirmed_success",
     recordId,

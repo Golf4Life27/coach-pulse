@@ -336,7 +336,7 @@ export async function GET(
         : "uncertain";
 
   await audit({
-    agent: "pricing-agent",
+    agent: "appraiser",
     event: "agent_run",
     status: overallStatus,
     recordId,

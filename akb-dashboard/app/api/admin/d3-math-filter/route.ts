@@ -47,7 +47,7 @@ export async function GET(req: Request) {
   const summary = summarizeMath(results, { rentcastCallsAvailable: rentcastAvailable });
 
   await audit({
-    agent: "d3-math-filter",
+    agent: "sentry",
     event: "math_filter_run",
     status: "confirmed_success",
     inputSummary: {

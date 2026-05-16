@@ -1,3 +1,9 @@
+// @deprecated Legacy send endpoint. Audit attribution updated to
+// `crier` per Phase 9.3 (was `quo`). Phase 9.11 deprecation tag; URL
+// kept live since this is an active send path. Future renaming to
+// `/api/crier/send` deferred to a post-Phase-9 cleanup commit so the
+// rename doesn't ride the dashboard rework's UI risk surface.
+//
 // POST /api/jarvis-send
 //
 // Hands a message to OpenPhone and returns the queued message id. PER
@@ -66,7 +72,7 @@ export async function POST(req: Request) {
 
   if (!process.env.QUO_API_KEY) {
     await audit({
-      agent: "quo",
+      agent: "crier",
       event: "send_attempt",
       status: "confirmed_failure",
       recordId,
@@ -84,7 +90,7 @@ export async function POST(req: Request) {
   } catch (err) {
     console.error("[jarvis-send] Quo send failed:", err);
     await audit({
-      agent: "quo",
+      agent: "crier",
       event: "send_attempt",
       status: "confirmed_failure",
       recordId,
@@ -110,7 +116,7 @@ export async function POST(req: Request) {
       : "uncertain";
 
   await audit({
-    agent: "quo",
+    agent: "crier",
     event: "send_attempt",
     status: auditStatus,
     recordId,
@@ -162,7 +168,7 @@ export async function POST(req: Request) {
       console.error("[jarvis-send] proposal patch failed:", err);
       // Non-fatal: the send already happened (or queued). Surface in audit.
       await audit({
-        agent: "quo",
+        agent: "crier",
         event: "proposal_patch_failed",
         status: "confirmed_failure",
         recordId,

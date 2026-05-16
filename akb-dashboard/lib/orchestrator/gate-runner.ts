@@ -191,7 +191,7 @@ export async function runGate(opts: RunGateOpts): Promise<GateRunResult> {
   };
 
   await audit({
-    agent: "orchestrator",
+    agent: "sentry",
     event: "gate_run",
     status: auditStatus,
     recordId,

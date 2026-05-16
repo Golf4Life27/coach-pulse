@@ -153,7 +153,7 @@ export async function GET(
   }
 
   await audit({
-    agent: "phase4a-wrapper",
+    agent: "appraiser",
     event: "arv_validated",
     status: "confirmed_success",
     recordId,
@@ -182,7 +182,7 @@ export async function GET(
 
   if (arv.cross_method_disagreement.fired) {
     await audit({
-      agent: "phase4a-wrapper",
+      agent: "appraiser",
       event: "arv_cross_method_disagreement",
       status: "uncertain",
       recordId,

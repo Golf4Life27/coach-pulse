@@ -37,7 +37,7 @@ export async function GET(
     // already logged the uncertain state.
     if (result.isTerminal) {
       await audit({
-        agent: "quo",
+        agent: "crier",
         event: "message_status_resolved",
         status: result.isSuccess ? "confirmed_success" : "confirmed_failure",
         externalId: messageId,
@@ -50,7 +50,7 @@ export async function GET(
     return NextResponse.json(result);
   } catch (err) {
     await audit({
-      agent: "quo",
+      agent: "crier",
       event: "message_status_error",
       status: "confirmed_failure",
       externalId: messageId,

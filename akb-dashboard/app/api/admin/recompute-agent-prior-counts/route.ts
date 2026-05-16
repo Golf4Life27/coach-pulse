@@ -95,7 +95,7 @@ export async function GET(req: Request) {
   ).length;
 
   await audit({
-    agent: "agent-prior-counts",
+    agent: "pulse",
     event: "recompute_run",
     status: writeErrors > 0 ? "confirmed_failure" : "confirmed_success",
     inputSummary: {

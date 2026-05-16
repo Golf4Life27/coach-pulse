@@ -113,7 +113,7 @@ export async function GET(req: Request) {
   // Dry-run: report what would happen; no writes.
   if (dryRun) {
     await audit({
-      agent: "bulk-dead",
+      agent: "sentry",
       event: "bulk_dead_dry_run",
       status: "confirmed_success",
       inputSummary: { dryRun: true, limit, stale_cutoff: STALE_CUTOFF_ISO },
@@ -197,7 +197,7 @@ export async function GET(req: Request) {
   }
 
   await audit({
-    agent: "bulk-dead",
+    agent: "sentry",
     event: "bulk_dead_apply",
     status: recordsSkippedError > 0 ? "uncertain" : "confirmed_success",
     inputSummary: { dryRun: false, limit, stale_cutoff: STALE_CUTOFF_ISO },

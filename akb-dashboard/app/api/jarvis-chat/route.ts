@@ -1,3 +1,9 @@
+// @deprecated Legacy chat backend. Maverick MCP server
+// (`app/api/maverick/mcp/route.ts`) handles the same role with
+// OAuth-authenticated access + named-agent attribution. Phase 9.11
+// deprecation tag; URL kept live until the Shepherd panel's chat
+// surface (Phase 9.1) routes through MCP instead.
+
 import { getListings, getDeals } from "@/lib/airtable";
 import { buildActionQueue } from "@/lib/actionQueue";
 

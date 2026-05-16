@@ -157,7 +157,7 @@ export async function GET(req: Request) {
         : "incomplete";
 
   await audit({
-    agent: "validation-highland",
+    agent: "appraiser",
     event: "harness_run",
     status:
       overall === "pass"

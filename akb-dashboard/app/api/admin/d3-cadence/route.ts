@@ -144,7 +144,7 @@ export async function GET(req: Request) {
   };
 
   await audit({
-    agent: "d3-cadence",
+    agent: "crier",
     event: "cadence_report_run",
     status: "confirmed_success",
     inputSummary: {
