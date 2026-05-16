@@ -90,13 +90,18 @@ export default function ShepherdPanel() {
         // Mobile: stacks above the green CommandBar FAB (bottom-6 right-6,
         // lg:hidden). Desktop: bottom-right corner; FAB is hidden so no
         // collision.
-        className={`fixed bottom-20 right-4 lg:bottom-4 z-40 flex items-center gap-2 px-3 py-2 rounded-full shadow-lg bg-[#161b22] border ${visual.border} transition-colors hover:bg-[#1c2128]`}
+        className={`fixed bottom-20 right-4 lg:bottom-4 z-40 flex items-center gap-2 pl-1.5 pr-3 py-1.5 rounded-full shadow-lg bg-[#161b22] border ${visual.border} transition-colors hover:bg-[#1c2128]`}
         aria-label="Open Maverick Shepherd panel"
       >
-        <span className={`w-2 h-2 rounded-full ${visual.dot}`} />
-        <span aria-hidden="true" className="text-base leading-none">
-          🐕
-        </span>
+        <span className={`absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full ${visual.dot}`} />
+        <img
+          src="/maverick-avatar.webp"
+          srcSet="/maverick-avatar.webp 1x, /maverick-avatar@2x.webp 2x"
+          alt="Maverick"
+          width={24}
+          height={24}
+          className="rounded-full object-cover"
+        />
         <span className={`text-xs font-semibold ${visual.text} max-w-[160px] truncate`}>
           {visual.label === "Watching" ? "Maverick" : headline}
         </span>
@@ -113,10 +118,17 @@ export default function ShepherdPanel() {
     >
       <div className={`flex items-center justify-between px-3 py-2 border-b ${visual.border}`}>
         <div className="flex items-center gap-2 min-w-0">
-          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${visual.dot}`} />
-          <span aria-hidden="true" className="text-base leading-none">
-            🐕
-          </span>
+          <div className="relative flex-shrink-0">
+            <img
+              src="/maverick-avatar.webp"
+              srcSet="/maverick-avatar.webp 1x, /maverick-avatar@2x.webp 2x"
+              alt="Maverick"
+              width={28}
+              height={28}
+              className="rounded-full object-cover"
+            />
+            <span className={`absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full ${visual.dot}`} />
+          </div>
           <h2 className={`text-sm font-bold ${visual.text} truncate`}>
             Maverick — {visual.label}
           </h2>
