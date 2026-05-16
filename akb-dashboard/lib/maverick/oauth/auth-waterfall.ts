@@ -145,3 +145,36 @@ function reasonToDescription(reason: AuthFailureReason): string {
       return "No matching credential — register via /api/maverick/oauth/register";
   }
 }
+
+/**
+ * Same-origin dashboard session check. Returns true when the request
+ * carries an `akb-auth=authenticated` cookie — the session marker set
+ * by /api/auth after password entry. The cookie is httpOnly + secure
+ * (production) + sameSite=strict, so browsers only send it on
+ * same-origin requests; third-party sites can't trigger this path.
+ *
+ * This is a SEPARATE auth surface from the OAuth waterfall above.
+ * The waterfall handles external callers (claude.ai sessions, Vercel
+ * crons, shell smoke); this handles Alex's dashboard browser fetch.
+ * Routes that should accept dashboard browser callers check this
+ * helper alongside (or instead of) the waterfall.
+ *
+ * Per Phase 20.3 (5/16, Commit B.1): the Spec v1.2 §6.8 auth model
+ * spec'd three caller types — OAuth, CRON_SECRET, MAVERICK_MCP_TOKEN.
+ * The dashboard browser fetch is a fourth caller (same-origin, cookie-
+ * authenticated via the existing AuthGate). v1.3 spec should fold
+ * this into the canonical auth model; this helper is the bridge
+ * until then.
+ */
+export function hasDashboardSession(cookieHeader: string | null): boolean {
+  if (!cookieHeader) return false;
+  const pairs = cookieHeader.split(/;\s*/);
+  for (const pair of pairs) {
+    const eq = pair.indexOf("=");
+    if (eq === -1) continue;
+    const k = pair.slice(0, eq).trim();
+    const v = pair.slice(eq + 1).trim();
+    if (k === "akb-auth" && v === "authenticated") return true;
+  }
+  return false;
+}

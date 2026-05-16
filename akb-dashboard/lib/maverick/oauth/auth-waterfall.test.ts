@@ -4,6 +4,7 @@ import { describe, it, expect } from "vitest";
 import {
   authenticate,
   buildWwwAuthenticate,
+  hasDashboardSession,
   type AuthEnv,
   type AuthHeaders,
 } from "./auth-waterfall";
@@ -183,6 +184,40 @@ describe("authenticate — waterfall ordering", () => {
     );
     if (r.ok) throw new Error("expected fail");
     expect(r.reason).toBe("no_credential_matched");
+  });
+});
+
+describe("hasDashboardSession — same-origin cookie check", () => {
+  it("returns false on null cookie header", () => {
+    expect(hasDashboardSession(null)).toBe(false);
+  });
+  it("returns true when the session marker is the only cookie", () => {
+    expect(hasDashboardSession("akb-auth=authenticated")).toBe(true);
+  });
+  it("returns true when the session marker is one of multiple cookies", () => {
+    expect(
+      hasDashboardSession("other=xyz; akb-auth=authenticated; foo=bar"),
+    ).toBe(true);
+  });
+  it("returns true when there are extra spaces around the separator", () => {
+    expect(
+      hasDashboardSession("  other=xyz ;   akb-auth=authenticated  "),
+    ).toBe(true);
+  });
+  it("rejects partial-value matches (no substring-attack risk)", () => {
+    expect(
+      hasDashboardSession("akb-auth=authenticated-suffix"),
+    ).toBe(false);
+    expect(
+      hasDashboardSession("not-akb-auth=authenticated"),
+    ).toBe(false);
+  });
+  it("rejects wrong value", () => {
+    expect(hasDashboardSession("akb-auth=guest")).toBe(false);
+  });
+  it("returns false on malformed cookie pairs (no equals sign)", () => {
+    expect(hasDashboardSession("akb-auth")).toBe(false);
+    expect(hasDashboardSession(";;;")).toBe(false);
   });
 });
 

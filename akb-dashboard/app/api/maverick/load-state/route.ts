@@ -1,5 +1,5 @@
 // Maverick state aggregator endpoint — `/api/maverick/load-state`.
-// @agent: maverick (Day 2)
+// @agent: maverick (Day 2; auth updated 5/16 Commit B.1)
 //
 // Single Vercel function that any Claude session can call at session
 // open to load the entire operational state of the Inevitable
@@ -9,38 +9,65 @@
 // aggregator owns cache, parallel fetch, cross-source synthesis,
 // and Claude API synthesis with template fallback.
 //
-// Auth: bearer-token via MAVERICK_MCP_TOKEN. v1 uses one shared
-// token across all caller types (claude.ai web, Claude Code,
-// future products). Per-source tokens deferred to v1.1+.
+// Auth (Phase 20.3 — see Checklist Resolution Log):
+//   1. Dashboard session cookie (`akb-auth=authenticated`,
+//      sameSite=strict) — same-origin browser fetches from the
+//      AuthGate-authenticated dashboard. Set by /api/auth on
+//      successful password entry.
+//   2. OAuth waterfall (Spec v1.2 §6.8) — OAuth opaque access token
+//      OR CRON_SECRET + x-vercel-cron OR MAVERICK_MCP_TOKEN (dev-only).
+//      Same module as /api/maverick/mcp.
 //
 // Query params:
 //   - since=ISO         — override the 24h-ago default window
 //   - format=narrative|structured|both (default: both)
 //   - cache=skip        — bypass the 90s stale-while-revalidate cache
-//                         (diagnostic / manual force-refresh)
 //
 // Spec v1.1 §5 Step 1. Gate 2: P95 ≤ 30s on live data.
 
 import { NextResponse } from "next/server";
 import { buildBriefing } from "@/lib/maverick/aggregator";
 import { audit } from "@/lib/audit-log";
+import {
+  authenticate,
+  hasDashboardSession,
+  readAuthEnv,
+  readAuthHeaders,
+} from "@/lib/maverick/oauth/auth-waterfall";
+import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 
 export const runtime = "nodejs";
 export const maxDuration = 60; // Vercel Hobby ceiling per AGENTS.md
 
-const MAVERICK_MCP_TOKEN = process.env.MAVERICK_MCP_TOKEN;
-
 export async function GET(req: Request) {
   const t0 = Date.now();
 
-  // Auth — bearer-token if configured. v1 leaves token-less mode for
-  // local dev / first deploy; the MCP server (Day 3) tightens this.
-  if (MAVERICK_MCP_TOKEN) {
-    const authz = req.headers.get("authorization");
-    const expected = `Bearer ${MAVERICK_MCP_TOKEN}`;
-    if (authz !== expected) {
-      return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  // Auth resolution. Dashboard session checked first because it's the
+  // fastest path (no KV lookup) + most common caller (Alex's browser).
+  // External callers fall through to the OAuth waterfall, identical to
+  // the MCP route's auth model.
+  const cookieHeader = req.headers.get("cookie");
+  const isDashboard = hasDashboardSession(cookieHeader);
+  let authKind: "dashboard_session" | "oauth" | "cron" | "bearer_dev" | "none" = "none";
+
+  if (isDashboard) {
+    authKind = "dashboard_session";
+  } else {
+    const env = readAuthEnv();
+    const headers = readAuthHeaders(req);
+    const authRequired =
+      kvConfigured() || env.cronSecret !== null || env.bearerDevToken !== null;
+    if (authRequired) {
+      const auth = await authenticate(headers, env, kvProd);
+      if (!auth.ok) {
+        return NextResponse.json(
+          { error: "unauthorized", reason: auth.reason },
+          { status: 401 },
+        );
+      }
+      authKind = auth.kind;
     }
+    // else: no auth configured anywhere (local dev / first deploy) — allow.
   }
 
   const url = new URL(req.url);
@@ -65,6 +92,7 @@ export async function GET(req: Request) {
         since: briefing.structured.since,
         skip_cache: skipCache,
         format,
+        auth_kind: authKind,
       },
       outputSummary: {
         duration_ms: briefing.duration_ms,
