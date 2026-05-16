@@ -226,11 +226,20 @@ async function handleNewOutreach(
       await sendMessage(phone, message);
 
       const now = new Date().toISOString();
+      // Per Checklist Phase 11.4 (Finding #9 fix): capture
+      // Stored_Offer_Price + List_Price_At_Send at H2 send time. Door-
+      // opener semantics: Stored_Offer_Price = 65% List Price rounded
+      // to nearest $250. List_Price_At_Send = the list price at the
+      // moment of outreach (snapshot — survives subsequent price drops).
+      // These match the d3-backfill route's shape so live + backfilled
+      // data are queryable uniformly.
       await updateListingRecord(listing.id, {
         [F.outreachStatus]: "Texted",
         [F.lastOutboundAt]: now,
         [F.lastOutreachDate]: now.split("T")[0],
         [F.notes]: appendNote(listing.notes, `Sent initial offer to ${listing.agentName ?? "agent"} at ${phone}. Offer: ${offer}.`),
+        Stored_Offer_Price: offerNum,
+        List_Price_At_Send: listing.listPrice!,
       });
 
       contactedPhones.add(cleanedPhone);
@@ -298,11 +307,17 @@ async function handleMultiListing(
       await sendMessage(phone, message);
 
       const now = new Date().toISOString();
+      // Same Stored_Offer_Price + List_Price_At_Send capture as the
+      // new-outreach handler (Checklist Phase 11.4). Multi-listing
+      // queued records reach send via a separate path but share the
+      // door-opener pricing semantics.
       await updateListingRecord(listing.id, {
         [F.outreachStatus]: "Texted",
         [F.lastOutboundAt]: now,
         [F.lastOutreachDate]: now.split("T")[0],
         [F.notes]: appendNote(listing.notes, `Sent multi-listing follow-up to ${listing.agentName ?? "agent"} at ${phone}. Offer: ${offer}.`),
+        Stored_Offer_Price: offerNum,
+        List_Price_At_Send: listing.listPrice!,
       });
 
       results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer, status: "sent" });

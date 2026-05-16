@@ -340,4 +340,58 @@ describe("rebuildBriefing — stress under degraded sources", () => {
       "maverick_load_state",
     );
   });
+
+  it("serializes the 3 Airtable fetchers (Phase 12.6 contention mitigation)", async () => {
+    // Track invocation order. The aggregator chains
+    // listings → spine → queue; spine should not be called until
+    // listings resolves, and queue should not be called until spine
+    // resolves. Other (non-Airtable) sources start in parallel.
+    const callOrder: string[] = [];
+
+    function delayedOk<T>(name: string, data: T, delayMs: number) {
+      return new Promise((resolve) => {
+        setTimeout(() => {
+          callOrder.push(`${name}:complete`);
+          resolve(ok(name, data));
+        }, delayMs);
+      });
+    }
+
+    mocks.listings.mockImplementation(() => {
+      callOrder.push("airtable_listings:start");
+      return delayedOk(
+        "airtable_listings",
+        { active_deals: [], pipeline_counts: {}, texted_universe_size: 0 },
+        20,
+      );
+    });
+    mocks.spine.mockImplementation(() => {
+      callOrder.push("airtable_spine:start");
+      return delayedOk("airtable_spine", { recent_decisions: [] }, 10);
+    });
+    mocks.queue.mockImplementation(() => {
+      callOrder.push("action_queue:start");
+      return delayedOk(
+        "action_queue",
+        {
+          d3_manual_fix_queue_pending_count: 0,
+          d3_manual_fix_queue_pending_sample: [],
+          cadence_queue_present: false,
+        },
+        10,
+      );
+    });
+
+    await rebuildBriefing({ skipCache: true });
+
+    // Assert spine doesn't start until listings completes.
+    const listingsCompleteIdx = callOrder.indexOf("airtable_listings:complete");
+    const spineStartIdx = callOrder.indexOf("airtable_spine:start");
+    expect(spineStartIdx).toBeGreaterThan(listingsCompleteIdx);
+
+    // Assert queue doesn't start until spine completes.
+    const spineCompleteIdx = callOrder.indexOf("airtable_spine:complete");
+    const queueStartIdx = callOrder.indexOf("action_queue:start");
+    expect(queueStartIdx).toBeGreaterThan(spineCompleteIdx);
+  });
 });

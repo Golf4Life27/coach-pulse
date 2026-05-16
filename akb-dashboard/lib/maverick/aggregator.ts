@@ -141,15 +141,47 @@ export async function rebuildBriefing(opts: BuildBriefingOpts): Promise<Briefing
         : new Date(Date.now() - DEFAULT_SINCE_HOURS * 60 * 60_000);
   const fetcherTimeouts = opts.fetcherTimeoutsMs ?? {};
 
+  // Per Checklist Phase 12.6 (mitigation A — Code 5/16 audit). The
+  // three Airtable-backed sources (listings, spine, action_queue)
+  // share a single Airtable PAT + connection pool; firing them in
+  // parallel causes contention that pushed all three to hit their
+  // timeout ceilings during Gate 5's first telemetry sample (P95
+  // 31.7s, over the 30s target). Chain them sequentially so they
+  // stop competing with themselves for Airtable rate limit + pool
+  // slots. The other 6 sources continue to fan out in parallel —
+  // they hit different APIs (Quo, RentCast, Vercel, GitHub, KV,
+  // local codebase). Wall-clock impact in the happy case: serial
+  // adds ~3-4s vs parallel best-case; eliminates the contention
+  // pattern that drove the timeout cascade. If telemetry over the
+  // next ~5 sessions still shows P95 > 30s, layer in mitigation B
+  // (raise listings to 20s + spine/queue to 10s) per Alex's spec.
+  const listingsPromise = fetchAirtableListingsState({
+    since: sinceDate,
+    timeoutMs: fetcherTimeouts.airtable_listings,
+  });
+  const spinePromise = listingsPromise.then(() =>
+    fetchAirtableSpineState({
+      since: sinceDate,
+      timeoutMs: fetcherTimeouts.airtable_spine,
+    }),
+  );
+  const queuePromise = spinePromise.then(() =>
+    fetchActionQueueState({
+      since: sinceDate,
+      timeoutMs: fetcherTimeouts.action_queue,
+    }),
+  );
+
   // Parallel-fetch every source. Promise.allSettled guarantees one
-  // bad fetcher can't crash the briefing.
+  // bad fetcher can't crash the briefing. Order preserved so the
+  // destructuring below stays correct.
   const settled = await Promise.allSettled([
     fetchGitState({ since: sinceDate, timeoutMs: fetcherTimeouts.git }),
-    fetchAirtableListingsState({ since: sinceDate, timeoutMs: fetcherTimeouts.airtable_listings }),
-    fetchAirtableSpineState({ since: sinceDate, timeoutMs: fetcherTimeouts.airtable_spine }),
+    listingsPromise,
+    spinePromise,
     fetchVercelKvAuditState({ since: sinceDate, timeoutMs: fetcherTimeouts.vercel_kv_audit }),
     fetchCodebaseMetadataState({ since: sinceDate, timeoutMs: fetcherTimeouts.codebase_metadata }),
-    fetchActionQueueState({ since: sinceDate, timeoutMs: fetcherTimeouts.action_queue }),
+    queuePromise,
     fetchExternalRentCastState({ since: sinceDate, timeoutMs: fetcherTimeouts.external_rentcast }),
     fetchExternalQuoState({ since: sinceDate, timeoutMs: fetcherTimeouts.external_quo }),
     fetchExternalVercelState({ since: sinceDate, timeoutMs: fetcherTimeouts.external_vercel }),

@@ -212,10 +212,10 @@ Sequencing locked per Code's audit (5/16) — items ordered by dependency + leve
 
 | # | Item | Status | Severity | Notes |
 |---|------|--------|----------|-------|
-| 11.1 | Finding #6: `external_quo` quiet-vs-down conflation fix | NOT STARTED | MEDIUM | Probe `/v1/messages?limit=1` directly. (CODE 5/16: **confirmed reproducing tonight** — live briefing shows `quo.api_responsive: false` while `api_key_configured: true` and `messages_last_24h: 0`. This is exactly the false-negative pattern.) |
+| 11.1 | Finding #6: `external_quo` quiet-vs-down conflation fix | **DONE** | MEDIUM | (CODE 5/16: shipped in this sprint. `lib/maverick/sources/external-quo.ts` now runs probe + activity in parallel via Promise.allSettled. Probe (`/v1/messages?phoneNumberId=X&maxResults=1`) drives `api_responsive`; activity call drives stats. Probe success + activity failure → api_responsive stays true with zero stats; probe failure → api_responsive false. Schema drift on activity query no longer collapses to "Quo is dark.") |
 | 11.2 | Finding #7: `last_outreach_date` SMS-only — add `last_email_outreach_date` field | NOT STARTED | HIGH | Caused tonight's 23 Fields false-stale |
 | 11.3 | Finding #8: Scribe must read DocuSign API directly (not PDF exports) | NOT STARTED | MEDIUM (HIGH at Scribe ship) | (CODE 5/16: **UNBLOCKED** — DocuSign MCP now live, see 5.4 above.) |
-| 11.4 | Finding #9: `stored_offer_price` universally null — V2.1 pricing discipline broken | NOT STARTED | HIGH | (CODE 5/16: investigated. The field write path EXISTS in `app/api/admin/d3-backfill-offer-fields/route.ts` (admin one-shot route). It's NOT wired into the H2 outreach-fire path or the Phase 4 pricing-agent route. Fix: add Stored_Offer_Price persist to pricing-agent's final write step + ensure H2 outreach-fire captures at send time. ~30-line change.) |
+| 11.4 | Finding #9: `stored_offer_price` universally null — V2.1 pricing discipline broken | **DONE** | HIGH | (CODE 5/16: shipped in this sprint. Two write paths wired: (a) `app/api/agents/pricing/[recordId]/route.ts` persists `Stored_Offer_Price: your_mao_flipper` when phase4c succeeds + value > 0; (b) `app/api/outreach-fire/route.ts` (both new-outreach + multi-listing handlers) writes `Stored_Offer_Price: offerNum` + `List_Price_At_Send: listing.listPrice` on send success, mirroring d3-backfill semantics with data_source="live_send". Surfaces in next pricing-agent run + next H2 send. Open sub-question logged as Phase 20.2.) |
 | 11.5 | Make blueprint API: "right()" doesn't exist | DOCUMENTED | LOW | Use substring instead |
 
 ---
@@ -229,7 +229,7 @@ Sequencing locked per Code's audit (5/16) — items ordered by dependency + leve
 | 12.3 | Personal phone escalation channel (Stage 4 SMS path) | NOT STARTED | HIGH | Required for Daily UX Spec §8 |
 | 12.4 | Scenario J fix — manual Make UI edit (HTTP module empty body) | NOT STARTED | MEDIUM | Anthropic key for Make stored, fix is UI-only. (CODE 5/16: J retires per Phase 20.1 retirement plan when Negotiation Agent ships) |
 | 12.5 | Anthropic Console organization-level API spend monitoring | NOT STARTED | MEDIUM | Pulse routine eventually monitors this |
-| 12.6 | Airtable concurrent-source contention mitigation | **NEW INSERTION** | HIGH | (CODE 5/16: **INSERTED 5/16 BECAUSE** tonight's live briefing exhibits Day 1's 3-source-contention pattern (listings 15s, spine 8s, action_queue 8s all timed out). Mitigations to evaluate: (a) serialize Airtable calls within the aggregator instead of parallel-fire all 3, (b) raise listings to 20s + spine/queue to 10s, (c) move slowest source's read off the critical path via background revalidation. Directly causes 6.13 over-target.) |
+| 12.6 | Airtable concurrent-source contention mitigation | **DONE-PENDING-VALIDATION** | HIGH | (CODE 5/16: shipped in this sprint with mitigation (a) — serialize the 3 Airtable calls (listings → spine → queue) within the aggregator while keeping the other 6 sources parallel. `lib/maverick/aggregator.ts` chains via `.then()` so spine waits for listings to resolve before starting, queue waits for spine. Test `aggregator-stress.test.ts > serializes the 3 Airtable fetchers` locks the behavior. Validation pending: Gate 5 telemetry over next ~5 sessions should show P95 < 30s in `audit_summary.mcp_call_latency.p95_ms`. If telemetry stays over target, layer in mitigation (b): raise listings to 20s + spine/queue to 10s.) |
 
 ---
 
@@ -349,6 +349,7 @@ These are deals currently active. Status accurate as of 5/15 evening Maverick br
 | # | Question | Status | Blocks | Notes |
 |---|----------|--------|--------|-------|
 | 20.1 | **Make.com migration vs. retention.** | **RESOLVED 5/16** | (nothing — was blocking Phase 8 audit; now unblocked) | See Resolution Log below. |
+| 20.2 | **`Stored_Offer_Price` semantics — historical vs operative.** Is the field "the offer we made at outreach time" (point-in-time snapshot, never overwritten) or "the current operative offer ceiling" (mutable per pricing-agent runs)? The d3-backfill route's proxy semantics imply the former (65% List Price = "what we offered then"). Alex's Phase 11.4 directive implies the latter (pricing-agent overwrites with Your_MAO_flipper = "what we're now prepared to make"). v1.3 spec should pick one. Implementation 5/16 ships the latter reading; both backfilled records and live-sent records continue to populate Stored_Offer_Price, and pricing-agent overwrites once V2.1 pricing runs. | UNDECIDED — DEFERRED-UNTIL-v1.3-spec | Phase 11.4 implementation choice + briefing semantics | INSERTED 5/16 BECAUSE the field's semantic interpretation affects what Maverick's briefing reads back. Both readings are defensible; need Alex's pick before historical-deal analysis tooling assumes either. |
 
 ### Resolution log
 
@@ -392,6 +393,7 @@ These are deals currently active. Status accurate as of 5/15 evening Maverick br
 | 2026-05-16 | 9.3 | Named-agent vocabulary in code does not exist. Specs canonical, attribution mismatched. Must precede Phase 9.4 + Phase 13 to maintain coherence |
 | 2026-05-16 | 9.11 | Jarvis→Maverick rename of legacy components (JarvisChat/JarvisFeed/JarvisGreeting + 4 jarvis-* API routes). Pre-Maverick naming per Code Briefing §9 |
 | 2026-05-16 | 12.6 | Airtable concurrent-source contention causing live Gate 5 sample over-target (Day 1's pattern reproducing under load) |
+| 2026-05-16 | 20.2 | Stored_Offer_Price semantics ambiguity surfaced during Phase 11.4 implementation. Logged as v1.3 spec sub-question. |
 
 ---
 
