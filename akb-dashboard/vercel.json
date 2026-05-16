@@ -15,6 +15,10 @@
     {
       "path": "/api/buyers/warmup-sequence",
       "schedule": "0 13 * * *"
+    },
+    {
+      "path": "/api/admin/recompute-agent-prior-counts",
+      "schedule": "0 8 * * *"
     }
   ]
 }

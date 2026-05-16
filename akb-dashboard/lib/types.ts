@@ -33,6 +33,40 @@ export interface Listing {
   actionCardState: "Open" | "Held" | "Cleared" | null;
   lastInboundAt: string | null;
   lastOutboundAt: string | null;
+  // ── Pre-Outreach Gate inputs (added 5/13 for orchestrator Gate 1)
+  mlsStatus?: string | null;
+  propertyType?: string | null;
+  priceDropCount?: number | null;
+  lastVerified?: string | null;
+  pipelineStage?: string | null;
+  // Prev_List_Price drives list-drift detection in D3 math filter — if
+  // current List_Price has fallen substantially since the Texted record
+  // was created, the math we ran at that time is stale.
+  prevListPrice?: number | null;
+  // Follow_Up_Count — number of follow-up texts already sent on this
+  // record. Drives D3 cadence position (0 = none yet, 1 = day-3 sent,
+  // 2 = day-7 sent, 3 = day-14 sent).
+  followUpCount?: number | null;
+  // D3 cadence — fields captured at H2 outreach time (or backfilled on
+  // existing records 5/13 via proxy).
+  //   lastStatusCheckSentAt: dateTime of most recent status_check probe.
+  //     Drives 3-day timeout-to-dead window.
+  //   storedOfferPrice: sticky OfferPrice from outreach time. Per the
+  //     Offer Discipline principle (Spine recxxNF0U59MxYUqu), never
+  //     recomputed at follow-up time.
+  //   listPriceAtSend: snapshot of List_Price at outreach time. Used
+  //     by cadence drift-detection (±10% threshold).
+  lastStatusCheckSentAt?: string | null;
+  storedOfferPrice?: number | null;
+  listPriceAtSend?: number | null;
+  // ── Pre-Send Gate inputs (added 5/13 for orchestrator Gate 2)
+  rehabConfidenceScore?: number | null;
+  agentPriorOutreachCount?: number | null;
+  // ── Pre-Negotiation Gate inputs (added 5/13 for orchestrator Gate 3)
+  // Est_Rehab (fldmup8SvMky9eyag) — referenced by Investor_MAO formula.
+  // PN-13/PN-14 read this directly to verify pricing math has clean
+  // inputs (not just relying on the formula output).
+  estRehab?: number | null;
   // Phase 3 — photo analysis
   estRehabLow?: number | null;
   estRehabMid?: number | null;
@@ -65,6 +99,7 @@ export interface Deal {
   id: string;
   propertyAddress: string;
   city: string;
+  state: string | null;
   contractPrice: number | null;
   offerPrice: number | null;
   assignmentFee: number | null;

@@ -1,3 +1,15 @@
+/**
+ * @deprecated Legacy synthesis prompt module for the pre-Maverick
+ * brief layer. The canonical Maverick synthesizer lives at
+ * `lib/maverick/synthesize.ts` and uses Character Spec §7 anchoring
+ * (Phase 10 refactor target). This module remains until the legacy
+ * `/api/jarvis-brief` route is removed in a Phase 10+ cleanup.
+ *
+ * Internal LLM identity strings have been updated from "Jarvis" to
+ * "Maverick" per Phase 9.11 — the LLM no longer self-identifies as
+ * the old name — but the file path + exports retain the `jarvis`
+ * prefix for backwards compatibility with existing imports.
+ */
 const NEVER_RESURFACE = [
   "2715 Monterey St", "714 Hallie Ave", "4330 Pensacola Ct",
   "9618 Tamalpais Dr", "811 Manhattan Dr", "1635 Arbor Pl",
@@ -42,7 +54,7 @@ CANONICAL FIELD NAME: The status pipeline field is "Outreach_Status" (NOT "Pipel
 const TONE_RULES = `
 ## TONE & BEHAVIOR
 
-- You are Jarvis, Alex's AI operations chief. Not a sycophant.
+- You are Maverick, Alex's AI operations chief. Not a sycophant.
 - Recommend decisively but explain stakes.
 - When uncertain, surface the uncertainty rather than guess.
 - Never recommend manual work the system should automate.
@@ -84,16 +96,16 @@ export function buildJarvisSystemPrompt(opts: JarvisPromptOptions): string {
 
   switch (opts.context) {
     case "brief":
-      sections.push("You are Jarvis, the AI operations chief for AKB Solutions' wholesale real estate pipeline. You are generating a morning briefing with prioritized action cards for Alex.");
+      sections.push("You are Maverick, the AI operations chief for AKB Solutions' wholesale real estate pipeline. You are generating a morning briefing with prioritized action cards for Alex.");
       break;
     case "reply_draft":
-      sections.push("You are Jarvis, drafting a reply for Alex to send to a listing agent. The reply should be professional but casual — these are text messages, not formal letters.");
+      sections.push("You are Maverick, drafting a reply for Alex to send to a listing agent. The reply should be professional but casual — these are text messages, not formal letters.");
       break;
     case "analysis":
-      sections.push("You are Jarvis, analyzing a deal's full communication history to assess status, risks, and recommended next steps.");
+      sections.push("You are Maverick, analyzing a deal's full communication history to assess status, risks, and recommended next steps.");
       break;
     case "command":
-      sections.push("You are Jarvis, the command interpreter for AKB Solutions' pipeline dashboard. Parse the user's natural language command into a structured action.");
+      sections.push("You are Maverick, the command interpreter for AKB Solutions' pipeline dashboard. Parse the user's natural language command into a structured action.");
       break;
   }
 

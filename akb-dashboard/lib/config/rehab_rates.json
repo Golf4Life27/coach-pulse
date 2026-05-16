@@ -1,0 +1,30 @@
+{
+  "$schema_note": "Rehab cost anchors used by Phase 4B (Rehab Calibration). Per-sqft rate driven by overall property condition × per-market multiplier. Values reflect Bible v3 §4.2 (5/11/2026). Refine as real bids land. Truth hierarchy: validation cases > Alex override > this file.",
+  "last_updated": "2026-05-12",
+  "source": "INEVITABLE_Bible_v3.docx §4.2 (supersedes Crawler Roadmap 3-tier)",
+  "version": 1,
+  "rates_per_sqft": {
+    "Poor": 60,
+    "Disrepair": 60,
+    "Fair": 40,
+    "Average": 22,
+    "Good": 10
+  },
+  "market_multipliers": {
+    "_default": 1.0,
+    "by_zip_prefix": {
+      "48": { "multiplier": 0.85, "market": "Detroit" },
+      "38": { "multiplier": 0.90, "market": "Memphis" },
+      "78": { "multiplier": 1.00, "market": "San Antonio" },
+      "75": { "multiplier": 1.05, "market": "Dallas" },
+      "77": { "multiplier": 1.00, "market": "Houston" }
+    }
+  },
+  "scope_band_spread": {
+    "_note": "Width of the low/mid/high band as a fraction of mid. Tighter when condition is well-evidenced (more photos, higher Vision confidence).",
+    "default_low_pct": 0.80,
+    "default_high_pct": 1.30,
+    "high_confidence_low_pct": 0.90,
+    "high_confidence_high_pct": 1.15
+  }
+}

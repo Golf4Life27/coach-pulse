@@ -1,3 +1,9 @@
+// @deprecated Legacy morning-brief synthesis endpoint. Superseded by
+// `/api/maverick/load-state` which uses the Continuity Layer Spec v1.2
+// aggregator + synthesizer. Phase 9.11 deprecation tag; URL kept live
+// until the Shepherd panel (Phase 9.1) and priority surface (9.2) fully
+// replace `MorningBriefing.tsx`'s consumption.
+
 import { NextResponse } from "next/server";
 import { getActiveListingsForBrief, getRecentlyDeadCandidates } from "@/lib/airtable";
 import { buildJarvisSystemPrompt, computeJarvisScore } from "@/lib/jarvis-system-prompt";

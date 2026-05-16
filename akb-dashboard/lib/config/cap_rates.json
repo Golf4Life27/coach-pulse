@@ -1,0 +1,14 @@
+{
+  "$schema_note": "Per-market cap rates for the landlord track of Phase 4C dual-track buyer math. Used to convert NOI to a maximum offer price (NOI / cap_rate = MaxLandlordOffer). Working assumptions per Briefing §14 #5 defaults — Alex to confirm or override.",
+  "last_updated": "2026-05-12",
+  "source": "Briefing §14 #5 (proposed defaults, pending Alex confirmation)",
+  "version": 1,
+  "_default": 0.085,
+  "by_zip_prefix": {
+    "48": { "cap_rate": 0.09, "market": "Detroit" },
+    "38": { "cap_rate": 0.10, "market": "Memphis" },
+    "78": { "cap_rate": 0.08, "market": "San Antonio" },
+    "75": { "cap_rate": 0.08, "market": "Dallas" },
+    "77": { "cap_rate": 0.08, "market": "Houston" }
+  }
+}

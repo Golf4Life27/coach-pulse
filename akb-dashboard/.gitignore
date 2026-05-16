@@ -39,3 +39,13 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# maverick prebuild artifacts (regenerated each build)
+lib/maverick/data/test-counts.json
+
+# AKB docs (contain real API keys — keep local-only)
+# Exception: principles/architecture docs without secrets ARE tracked.
+/docs/*
+!/docs/Positive_Confirmation_Principle.md
+!/docs/specs/
+!/docs/specs/*.md

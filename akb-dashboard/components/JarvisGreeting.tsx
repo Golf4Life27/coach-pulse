@@ -1,5 +1,17 @@
 "use client";
 
+/**
+ * @deprecated Legacy depth-aware ACT NOW card greeting. Superseded
+ * by the Maverick Shepherd panel (Phase 9.1) which renders a
+ * persistent presence on every page with priority surface BroCards.
+ * Component retains the `Jarvis` file name for backwards compatibility
+ * with existing imports until 9.1 lands and Shepherd panel replaces
+ * this. Visible "Jarvis · Act Now" header updated to "Maverick · Act
+ * Now" per Phase 9.11 (corrected 5/16 Commit B.1 — was missed in the
+ * original 9.11 pass because the grep targeted only the three
+ * components' user-facing strings but not their headers).
+ */
+
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import type {
@@ -300,7 +312,7 @@ export default function JarvisGreeting() {
     <section className="bg-[#161b22] rounded-lg border border-[#30363d] p-4 space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-sm font-bold uppercase tracking-widest text-gray-400">Jarvis · Act Now</h2>
+          <h2 className="text-sm font-bold uppercase tracking-widest text-gray-400">Maverick · Act Now</h2>
           {brief?.metadata.generated_at && (
             <p className="text-[10px] text-gray-600">
               {brief.broCards.length} card{brief.broCards.length === 1 ? "" : "s"} · {brief.metadata.total_active_deals} active deals · generated {new Date(brief.metadata.generated_at).toLocaleTimeString()}

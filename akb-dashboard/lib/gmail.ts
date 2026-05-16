@@ -13,6 +13,8 @@
 // returning a mailto: URL so callers can still surface drafts.
 // getThreadsForEmail returns [] when not configured.
 
+import { audit } from "./audit-log";
+
 export interface GmailMessage {
   id: string;
   from: string;
@@ -168,11 +170,19 @@ interface SendOpts {
   asDraft?: boolean;
 }
 
+export type GmailAuditStatus = "confirmed_success" | "confirmed_failure" | "uncertain";
+
 export interface GmailSendResult {
   success: boolean;
+  audit_status: GmailAuditStatus;
   messageId?: string;
+  threadId?: string;
   draftId?: string;
   draftUrl?: string;
+  // Post-send verification surfaces:
+  labelsConfirmed?: string[]; // labels on the message in Gmail (expect "SENT")
+  headersConfirmed?: { to?: string; subject?: string };
+  verifyError?: string; // populated when POST succeeded but GET verification failed
   fallbackMailto?: string;
   error?: string;
 }
@@ -235,11 +245,97 @@ function mailtoFallback(opts: SendOpts): string {
   return `mailto:${opts.to}?subject=${encodeURIComponent(opts.subject)}&body=${encodeURIComponent(opts.body)}`;
 }
 
+// Verify a sent message by GETing it back from Gmail. The POST /send
+// response says "Gmail accepted the message"; the GET confirms it
+// actually landed in the Sent folder with the expected envelope. Per
+// the Positive Confirmation Principle: a 200 from /send is not proof
+// of state. We need a read-back.
+//
+// Returns:
+//   confirmed_success — message is in Sent, To header matches
+//   uncertain         — GET failed OR labels/headers don't match (Gmail
+//                       accepted the message but we can't verify its
+//                       final state — could be flagged, queued, etc.)
+async function verifySentMessage(
+  token: string,
+  messageId: string,
+  expectedTo: string,
+): Promise<{
+  audit_status: "confirmed_success" | "uncertain";
+  labels?: string[];
+  headers?: { to?: string; subject?: string };
+  error?: string;
+}> {
+  try {
+    const res = await fetch(
+      `${GMAIL_API}/messages/${encodeURIComponent(messageId)}?format=metadata&metadataHeaders=To&metadataHeaders=Subject`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: "no-store",
+      },
+    );
+    if (!res.ok) {
+      return {
+        audit_status: "uncertain",
+        error: `verify GET ${res.status}: ${await res.text().catch(() => "(no body)")}`,
+      };
+    }
+    const data = (await res.json()) as {
+      labelIds?: string[];
+      payload?: { headers?: Array<{ name: string; value: string }> };
+    };
+    const labels = data.labelIds ?? [];
+    const headers = (data.payload?.headers ?? []).reduce<
+      Record<string, string>
+    >((acc, h) => {
+      acc[h.name.toLowerCase()] = h.value;
+      return acc;
+    }, {});
+
+    const inSent = labels.includes("SENT");
+    const toMatches = (headers.to ?? "").toLowerCase().includes(expectedTo.toLowerCase());
+
+    if (!inSent || !toMatches) {
+      return {
+        audit_status: "uncertain",
+        labels,
+        headers: { to: headers.to, subject: headers.subject },
+        error: !inSent
+          ? "Gmail returned the message but it's NOT labeled SENT — may still be in queue or rejected"
+          : `To header mismatch — expected "${expectedTo}" not present in "${headers.to}"`,
+      };
+    }
+
+    return {
+      audit_status: "confirmed_success",
+      labels,
+      headers: { to: headers.to, subject: headers.subject },
+    };
+  } catch (err) {
+    return { audit_status: "uncertain", error: `verify threw: ${String(err)}` };
+  }
+}
+
 export async function sendEmail(opts: SendOpts): Promise<GmailSendResult> {
+  const t0 = Date.now();
   const fromAddress = process.env.GMAIL_FROM_ADDRESS;
   const token = await getAccessToken();
   if (!token || !fromAddress) {
-    return { success: false, fallbackMailto: mailtoFallback(opts), error: "Gmail OAuth not configured" };
+    const result: GmailSendResult = {
+      success: false,
+      audit_status: "confirmed_failure",
+      fallbackMailto: mailtoFallback(opts),
+      error: "Gmail OAuth not configured",
+    };
+    await audit({
+      agent: "gmail",
+      event: opts.asDraft ? "draft_attempt" : "send_attempt",
+      status: "confirmed_failure",
+      inputSummary: { to: maskEmail(opts.to), subject_len: opts.subject.length, asDraft: !!opts.asDraft },
+      error: result.error,
+      ms: Date.now() - t0,
+    });
+    return result;
   }
 
   const raw = base64Url(buildRfc822(opts, fromAddress));
@@ -255,17 +351,46 @@ export async function sendEmail(opts: SendOpts): Promise<GmailSendResult> {
     });
     if (!res.ok) {
       const errText = await res.text().catch(() => "");
-      return { success: false, error: `Gmail draft ${res.status}: ${errText}`, fallbackMailto: mailtoFallback(opts) };
+      const result: GmailSendResult = {
+        success: false,
+        audit_status: "confirmed_failure",
+        error: `Gmail draft ${res.status}: ${errText}`,
+        fallbackMailto: mailtoFallback(opts),
+      };
+      await audit({
+        agent: "gmail",
+        event: "draft_attempt",
+        status: "confirmed_failure",
+        inputSummary: { to: maskEmail(opts.to), subject_len: opts.subject.length },
+        error: result.error,
+        ms: Date.now() - t0,
+      });
+      return result;
     }
     const data = (await res.json()) as { id?: string; message?: { id?: string } };
-    return {
+    // Draft creation: success means Gmail accepted + stored. No verify
+    // GET needed — drafts don't have a "sent" terminal state.
+    const result: GmailSendResult = {
       success: true,
+      audit_status: "confirmed_success",
       draftId: data.id,
       messageId: data.message?.id,
       draftUrl: data.id ? `https://mail.google.com/mail/u/0/#drafts/${data.id}` : undefined,
     };
+    await audit({
+      agent: "gmail",
+      event: "draft_attempt",
+      status: "confirmed_success",
+      externalId: data.id,
+      inputSummary: { to: maskEmail(opts.to), subject_len: opts.subject.length },
+      outputSummary: { draft_id: data.id, message_id: data.message?.id },
+      decision: "drafted",
+      ms: Date.now() - t0,
+    });
+    return result;
   }
 
+  // ── Live send ──────────────────────────────────────────────────────
   const res = await fetch(`${GMAIL_API}/messages/send`, {
     method: "POST",
     headers: {
@@ -276,8 +401,79 @@ export async function sendEmail(opts: SendOpts): Promise<GmailSendResult> {
   });
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
-    return { success: false, error: `Gmail send ${res.status}: ${errText}`, fallbackMailto: mailtoFallback(opts) };
+    const result: GmailSendResult = {
+      success: false,
+      audit_status: "confirmed_failure",
+      error: `Gmail send ${res.status}: ${errText}`,
+      fallbackMailto: mailtoFallback(opts),
+    };
+    await audit({
+      agent: "gmail",
+      event: "send_attempt",
+      status: "confirmed_failure",
+      inputSummary: { to: maskEmail(opts.to), subject_len: opts.subject.length },
+      error: result.error,
+      ms: Date.now() - t0,
+    });
+    return result;
   }
-  const data = (await res.json()) as { id?: string };
-  return { success: true, messageId: data.id };
+  const data = (await res.json()) as { id?: string; threadId?: string };
+  if (!data.id) {
+    // POST returned 2xx but no message ID — Gmail accepted but we have
+    // nothing to verify against. Uncertain per the Principle.
+    const result: GmailSendResult = {
+      success: true,
+      audit_status: "uncertain",
+      threadId: data.threadId,
+      verifyError: "Gmail send returned 2xx with no message id — cannot verify",
+    };
+    await audit({
+      agent: "gmail",
+      event: "send_attempt",
+      status: "uncertain",
+      inputSummary: { to: maskEmail(opts.to), subject_len: opts.subject.length },
+      outputSummary: { thread_id: data.threadId },
+      error: result.verifyError,
+      decision: "no_message_id",
+      ms: Date.now() - t0,
+    });
+    return result;
+  }
+
+  // Verify via GET. Adds ~100-300ms per send + extra API quota; the
+  // principle requires it.
+  const verify = await verifySentMessage(token, data.id, opts.to);
+  const result: GmailSendResult = {
+    success: true,
+    audit_status: verify.audit_status,
+    messageId: data.id,
+    threadId: data.threadId,
+    labelsConfirmed: verify.labels,
+    headersConfirmed: verify.headers,
+    verifyError: verify.error,
+  };
+  await audit({
+    agent: "gmail",
+    event: "send_attempt",
+    status: verify.audit_status,
+    externalId: data.id,
+    inputSummary: { to: maskEmail(opts.to), subject_len: opts.subject.length },
+    outputSummary: {
+      message_id: data.id,
+      thread_id: data.threadId,
+      labels: verify.labels,
+      to_header: verify.headers?.to,
+      subject_header: verify.headers?.subject,
+    },
+    error: verify.error,
+    decision: verify.audit_status === "confirmed_success" ? "verified_sent" : "verification_failed",
+    ms: Date.now() - t0,
+  });
+  return result;
+}
+
+function maskEmail(addr: string): string {
+  const at = addr.indexOf("@");
+  if (at <= 1) return "***";
+  return `${addr[0]}***${addr.slice(at)}`;
 }

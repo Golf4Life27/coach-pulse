@@ -76,6 +76,10 @@ export async function POST(
           subject: d.subject ?? `Off-market deal — ${listing.address}`,
           body: d.body,
         });
+        // TODO: post-Gmail-migration this only catches confirmed_failure.
+        // 'uncertain' status (e.g. messages.get verify failed) currently falls through as success.
+        // Fix before Dispo Agent volume kicks in — extend audit_status to results array.
+        // Flagged 5/13/2026.
         if (!r.success) throw new Error(r.error ?? "Gmail send failed");
         results.push({ buyerId: d.buyerId, success: true });
       }

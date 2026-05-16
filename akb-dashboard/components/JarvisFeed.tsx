@@ -1,5 +1,14 @@
 "use client";
 
+/**
+ * @deprecated Legacy inbound-reply feed. Superseded by the Maverick
+ * priority surface (Phase 9.2) which subscribes to maverick_load_state
+ * and renders a confidence×urgency-sorted BroCard stack. Component
+ * retains the `Jarvis` file name + interface name for backwards
+ * compatibility with existing imports until 9.2 lands. Visible
+ * identity string updated to "Maverick" per Phase 9.11.
+ */
+
 import { useState, useEffect, useCallback } from "react";
 import { showToast } from "@/components/Toast";
 
@@ -136,7 +145,7 @@ export default function JarvisFeed() {
   return (
     <section className="space-y-3">
       <h2 className="text-sm font-bold text-purple-400 uppercase tracking-wider">
-        Jarvis — Inbound Replies ({proposals.length})
+        Maverick — Inbound Replies ({proposals.length})
       </h2>
       <div className="space-y-3">
         {proposals.map((p) => {
@@ -158,7 +167,7 @@ export default function JarvisFeed() {
                   </span>
                 </div>
                 <span className="text-[10px] text-gray-500 uppercase tracking-wider">
-                  Jarvis
+                  Maverick
                 </span>
               </div>
 
