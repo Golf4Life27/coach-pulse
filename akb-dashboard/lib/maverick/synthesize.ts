@@ -147,6 +147,18 @@ export async function synthesizeNarrative(opts: SynthesizeOpts): Promise<Synthes
  * markers, user-content shape) without making an API call.
  */
 export function buildRequestBody(structured: StructuredBriefing): Record<string, unknown> {
+  // Phase 9.4a: `audit_summary.recent_events` is a bulk client-side
+  // field for factory-floor agent rooms (~1.8K tokens at 50 entries).
+  // Synthesizer doesn't need it — `by_agent` counts + `recent_failures`
+  // give it enough signal. Strip before serializing to keep the prompt
+  // at its prior cost ceiling.
+  const synthesisStructured: StructuredBriefing = {
+    ...structured,
+    audit_summary: {
+      ...structured.audit_summary,
+      recent_events: [],
+    },
+  };
   return {
     model: MODEL,
     max_tokens: MAX_TOKENS,
@@ -161,7 +173,7 @@ export function buildRequestBody(structured: StructuredBriefing): Record<string,
       {
         role: "user",
         content: `Current operational state (structured JSON):\n\n\`\`\`json\n${JSON.stringify(
-          structured,
+          synthesisStructured,
           null,
           2,
         )}\n\`\`\`\n\nProduce the session-open briefing.`,

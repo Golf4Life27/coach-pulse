@@ -57,6 +57,11 @@ export interface BuildStateSection {
 export interface AuditSummarySection {
   total_events_since: number;
   by_agent: Record<string, number>;
+  /**
+   * Phase 9.4 factory-floor rooms read this; each room filters by
+   * `agent` to render its own recent activity. Capped at 50.
+   */
+  recent_events: VercelKvAuditState["recent_events"];
   recent_failures: VercelKvAuditState["recent_failures"];
   /**
    * MCP per-call latency stats over the audit window. Maverick's
@@ -155,6 +160,7 @@ export const EMPTY_SPINE: AirtableSpineState = {
 export const EMPTY_AUDIT: VercelKvAuditState = {
   total_events_since: 0,
   recent_events_by_agent: {},
+  recent_events: [],
   recent_failures: [],
   oldest_event_ts: null,
   newest_event_ts: null,

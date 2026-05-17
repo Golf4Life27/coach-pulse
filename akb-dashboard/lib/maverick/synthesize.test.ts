@@ -44,6 +44,7 @@ function structured(over: Partial<StructuredBriefing> = {}): StructuredBriefing 
     audit_summary: {
       total_events_since: 0,
       by_agent: {},
+      recent_events: [],
       recent_failures: [],
       mcp_call_latency: { samples: 0, p50_ms: null, p95_ms: null, p99_ms: null, by_tool: {}, over_target_count: 0, p95_target_ms: 30_000 },
     },
@@ -133,5 +134,32 @@ describe("buildRequestBody", () => {
     const body = buildRequestBody(structured()) as { max_tokens: number };
     expect(body.max_tokens).toBeLessThanOrEqual(2048);
     expect(body.max_tokens).toBeGreaterThanOrEqual(512);
+  });
+
+  it("strips audit_summary.recent_events from the synthesizer prompt (Phase 9.4a — client-only field)", () => {
+    const fixture = structured({
+      audit_summary: {
+        total_events_since: 3,
+        by_agent: { crier: 3 },
+        recent_events: [
+          { agent: "crier", event: "send", status: "confirmed_success", ts: "2026-05-17T00:00:00Z", recordId: "rec1" },
+          { agent: "crier", event: "send", status: "confirmed_success", ts: "2026-05-17T00:01:00Z", recordId: "rec2" },
+          { agent: "crier", event: "send", status: "confirmed_success", ts: "2026-05-17T00:02:00Z", recordId: "rec3" },
+        ],
+        recent_failures: [],
+        mcp_call_latency: { samples: 0, p50_ms: null, p95_ms: null, p99_ms: null, by_tool: {}, over_target_count: 0, p95_target_ms: 30_000 },
+      },
+    });
+    const body = buildRequestBody(fixture) as {
+      messages: Array<{ content: string }>;
+    };
+    const content = body.messages[0].content;
+    // The summary counts must still be present so synthesis can reason about volume.
+    expect(content).toContain('"total_events_since": 3');
+    expect(content).toContain('"crier": 3');
+    // The bulk events list must be empty in the prompt to avoid inflation.
+    expect(content).not.toContain('"recordId": "rec1"');
+    expect(content).not.toContain('"recordId": "rec2"');
+    expect(content).not.toContain('"recordId": "rec3"');
   });
 });

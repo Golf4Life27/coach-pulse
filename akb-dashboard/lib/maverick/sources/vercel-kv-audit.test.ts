@@ -72,4 +72,36 @@ describe("vercel-kv-audit summarizeEvents", () => {
     const r = summarizeEvents(events);
     expect(r.recent_failures).toHaveLength(25);
   });
+
+  it("captures recent_events across all statuses (Phase 9.4 agent-room feed)", () => {
+    const events: AuditEntry[] = [
+      evt({ ts: "2026-05-17T00:00:00Z", agent: "crier", event: "send", status: "confirmed_success", recordId: "rec1" }),
+      evt({ ts: "2026-05-17T00:01:00Z", agent: "sentry", event: "gate", status: "uncertain" }),
+      evt({ ts: "2026-05-17T00:02:00Z", agent: "appraiser", event: "price", status: "confirmed_failure" }),
+    ];
+    const r = summarizeEvents(events);
+    expect(r.recent_events).toHaveLength(3);
+    expect(r.recent_events[0]).toEqual({
+      agent: "crier",
+      event: "send",
+      status: "confirmed_success",
+      ts: "2026-05-17T00:00:00Z",
+      recordId: "rec1",
+    });
+    expect(r.recent_events[1].status).toBe("uncertain");
+    expect(r.recent_events[2].status).toBe("confirmed_failure");
+  });
+
+  it("caps recent_events at 50 with large volume", () => {
+    const events: AuditEntry[] = Array.from({ length: 200 }, (_, i) =>
+      evt({
+        ts: `2026-05-17T00:00:${String(i % 60).padStart(2, "0")}Z`,
+        agent: i % 2 === 0 ? "crier" : "sentry",
+        event: "tick",
+        status: "confirmed_success",
+      }),
+    );
+    const r = summarizeEvents(events);
+    expect(r.recent_events).toHaveLength(50);
+  });
 });

@@ -7,6 +7,7 @@ import ToastContainer from "@/components/Toast";
 import CommandBar from "@/components/CommandBar";
 import CommandBarFAB from "@/components/CommandBarFAB";
 import ShepherdPanel from "@/components/ShepherdPanel";
+import BriefingProvider from "@/components/BriefingProvider";
 
 export const metadata: Metadata = {
   title: "AKB Solutions — Pipeline Dashboard",
@@ -28,12 +29,14 @@ export default function RootLayout({
     <html lang="en" className="h-full antialiased dark">
       <body className="min-h-full bg-[#0d1117] text-gray-200" style={{ fontFamily: 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
         <AuthGate>
-          <QuotesBar />
-          <Navigation />
-          <main className="max-w-7xl mx-auto px-4 py-6">{children}</main>
-          <CommandBar />
-          <CommandBarFAB />
-          <ShepherdPanel />
+          <BriefingProvider>
+            <QuotesBar />
+            <Navigation />
+            <main className="max-w-7xl mx-auto px-4 py-6">{children}</main>
+            <CommandBar />
+            <CommandBarFAB />
+            <ShepherdPanel />
+          </BriefingProvider>
         </AuthGate>
         <ToastContainer />
       </body>

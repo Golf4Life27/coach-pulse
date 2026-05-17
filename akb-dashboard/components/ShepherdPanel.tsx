@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Shepherd panel (Phase 9.1).
+ * Shepherd panel (Phase 9.1; refactored Phase 9.4a).
  *
  * Persistent Maverick presence on every page per Daily UX Spec §3.1
  * + Character Spec §6. Fixed bottom-right (mobile-friendly; rail
@@ -11,73 +11,22 @@
  *     Click to expand. Tooltip on hover surfaces the lead headline.
  *
  *   Expanded — slide-up panel with priority surface (MaverickPriority)
- *     + refresh + close. Auto-refresh every 90s (matches briefing
- *     cache TTL). Manual refresh in header.
+ *     + manual refresh + close.
  *
- * Wires `/api/maverick/load-state` directly — same endpoint the MCP
- * server uses. Reads the structured briefing client-side and infers
- * severity tiers (Phase 9.5) deterministically.
- *
- * No avatar yet — placeholder dog emoji. Phase 9.9 swaps for the
- * canonical German Shepherd asset.
+ * Phase 9.4a: briefing fetch + polling moved to BriefingProvider so
+ * factory-floor agent rooms share the same state read. Visibility-gated
+ * polling (Phase 11.7) lives in the provider; this component is now a
+ * pure view of the shared briefing context.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import MaverickPriority from "./MaverickPriority";
-import {
-  inferPrioritySignals,
-  maxTier,
-  TIER_VISUAL,
-  type PrioritySignal,
-} from "@/lib/maverick/severity";
-import { startVisibilityGatedPolling } from "@/lib/maverick/visibility-polling";
-
-const REFRESH_INTERVAL_MS = 90_000; // briefing cache TTL
-
-interface BriefingResponse {
-  source_health: Record<
-    string,
-    { ok: boolean; error: string | null; staleness_seconds: number }
-  >;
-  structured: Parameters<typeof inferPrioritySignals>[0]["structured"];
-}
+import { maxTier, TIER_VISUAL } from "@/lib/maverick/severity";
+import { useBriefing } from "./BriefingProvider";
 
 export default function ShepherdPanel() {
   const [open, setOpen] = useState(false);
-  const [signals, setSignals] = useState<PrioritySignal[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [lastFetched, setLastFetched] = useState<Date | null>(null);
-
-  const fetchBriefing = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/maverick/load-state?format=structured");
-      if (!res.ok) {
-        throw new Error(`load-state ${res.status}`);
-      }
-      const body = (await res.json()) as BriefingResponse;
-      setSignals(inferPrioritySignals(body));
-      setLastFetched(new Date());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    // Initial fetch on mount fires regardless of visibility — when the
-    // dashboard loads, the panel should populate. The visibility guard
-    // protects the recurring poll, which is the burn-shape.
-    // Phase 11.7 convention: see lib/maverick/visibility-polling.ts.
-    fetchBriefing();
-    return startVisibilityGatedPolling({
-      intervalMs: REFRESH_INTERVAL_MS,
-      onTick: fetchBriefing,
-    });
-  }, [fetchBriefing]);
+  const { signals, loading, error, lastFetched, refetch } = useBriefing();
 
   const tier = maxTier(signals);
   const visual = TIER_VISUAL[tier];
@@ -143,7 +92,7 @@ export default function ShepherdPanel() {
         <div className="flex items-center gap-1 flex-shrink-0">
           <button
             type="button"
-            onClick={fetchBriefing}
+            onClick={refetch}
             disabled={loading}
             className="text-[11px] text-gray-400 hover:text-white px-2 py-1 rounded disabled:opacity-50"
             aria-label="Refresh briefing"
@@ -165,7 +114,7 @@ export default function ShepherdPanel() {
           signals={signals}
           loading={loading && signals.length === 0}
           error={error}
-          onRetry={fetchBriefing}
+          onRetry={refetch}
         />
       </div>
       {lastFetched && !loading && (

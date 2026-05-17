@@ -270,6 +270,7 @@ export async function rebuildBriefing(opts: BuildBriefingOpts): Promise<Briefing
   const audit_summary: AuditSummarySection = {
     total_events_since: audit.total_events_since,
     by_agent: audit.recent_events_by_agent,
+    recent_events: audit.recent_events,
     recent_failures: audit.recent_failures,
     mcp_call_latency: audit.mcp_call_latency,
   };

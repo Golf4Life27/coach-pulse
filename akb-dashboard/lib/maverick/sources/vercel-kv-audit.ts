@@ -15,9 +15,24 @@ import { failResult, type FetchOpts, type SourceResult } from "../types";
 const DEFAULT_TIMEOUT_MS = 2_000;
 const DEFAULT_LIMIT = 200;
 
+export interface RecentAuditEvent {
+  agent: string;
+  event: string;
+  status: "confirmed_success" | "confirmed_failure" | "uncertain";
+  ts: string;
+  recordId: string | null;
+}
+
 export interface VercelKvAuditState {
   total_events_since: number;
   recent_events_by_agent: Record<string, number>;
+  /**
+   * Slim recent-events list across all agents, newest first. Phase 9.4
+   * factory-floor rooms filter by `agent` client-side to render each
+   * agent's last-N activity. Capped at 50 to limit synthesizer prompt
+   * inflation; full audit log remains queryable via /api/admin/audit-summary.
+   */
+  recent_events: RecentAuditEvent[];
   recent_failures: Array<{
     agent: string;
     event: string;
@@ -59,6 +74,7 @@ export function summarizeEvents(
 
   const byAgent: Record<string, number> = {};
   const failures: VercelKvAuditState["recent_failures"] = [];
+  const recentEvents: RecentAuditEvent[] = [];
   for (const e of filtered) {
     byAgent[e.agent] = (byAgent[e.agent] ?? 0) + 1;
     if (e.status === "confirmed_failure") {
@@ -70,11 +86,21 @@ export function summarizeEvents(
         ts: e.ts,
       });
     }
+    if (recentEvents.length < 50) {
+      recentEvents.push({
+        agent: e.agent,
+        event: e.event,
+        status: e.status,
+        ts: e.ts,
+        recordId: e.recordId ?? null,
+      });
+    }
   }
 
   return {
     total_events_since: filtered.length,
     recent_events_by_agent: byAgent,
+    recent_events: recentEvents,
     recent_failures: failures.slice(0, 25),
     oldest_event_ts: filtered.length > 0 ? filtered[filtered.length - 1].ts : null,
     newest_event_ts: filtered.length > 0 ? filtered[0].ts : null,
