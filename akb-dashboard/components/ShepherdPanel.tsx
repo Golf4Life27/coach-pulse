@@ -30,6 +30,7 @@ import {
   TIER_VISUAL,
   type PrioritySignal,
 } from "@/lib/maverick/severity";
+import { startVisibilityGatedPolling } from "@/lib/maverick/visibility-polling";
 
 const REFRESH_INTERVAL_MS = 90_000; // briefing cache TTL
 
@@ -67,9 +68,15 @@ export default function ShepherdPanel() {
   }, []);
 
   useEffect(() => {
+    // Initial fetch on mount fires regardless of visibility — when the
+    // dashboard loads, the panel should populate. The visibility guard
+    // protects the recurring poll, which is the burn-shape.
+    // Phase 11.7 convention: see lib/maverick/visibility-polling.ts.
     fetchBriefing();
-    const id = setInterval(fetchBriefing, REFRESH_INTERVAL_MS);
-    return () => clearInterval(id);
+    return startVisibilityGatedPolling({
+      intervalMs: REFRESH_INTERVAL_MS,
+      onTick: fetchBriefing,
+    });
   }, [fetchBriefing]);
 
   const tier = maxTier(signals);

@@ -337,6 +337,33 @@ This list is illustrative, not prescriptive. The Code audit (Day 6-7) will produ
 
 ---
 
+## 10.5 Browser polling convention — visibility-state mandatory
+
+**INSERTED 5/17 BECAUSE a 48hr unattended dashboard tab burned ~4.8M Anthropic tokens (~$15-30) via browser-throttled background polling of `/api/maverick/load-state`. Backgrounded-tab `setInterval` does not pause — Chromium clamps it to a slow cadence (1/min then multi-minute) but keeps firing for the lifetime of the tab. Without a visibility guard, an idle tab continues hitting expensive server endpoints for nobody's benefit. See AKB_MASTER_CHECKLIST Phase 11.6.**
+
+Any `setInterval`, `setTimeout` loop, or other polling mechanism in any client component that triggers a server call **MUST** gate the actual call on `document.visibilityState === "visible"`. The interval timer itself may keep firing; the `fetch`/`mutate` it triggers must not.
+
+**Canonical reference:** `components/ShepherdPanel.tsx` + `lib/maverick/visibility-polling.ts`. The `startVisibilityGatedPolling` helper is the standard implementation — use it for any new polling client component. The helper:
+
+- Only invokes the callback when `document.visibilityState === "visible"`
+- Immediately invokes the callback on `visibilitychange` to "visible" so tab-return refresh feels instant
+- Cleans up both the interval and the listener on unmount
+- Is pure-function + unit-tested (no jsdom required)
+
+**Scope of this convention:**
+
+- Phase 9.4 — agent rooms (Crier, Sentry, Appraiser, Sentinel, Scout) MUST use the helper if they poll
+- Phase 9.6 — live motion (any timer-driven data refresh)
+- Phase 9.8 — deal-detail (any deal-state polling)
+- Phase 4 — existing `OutreachPanel` / `ActionQueue` / `JarvisFeed` / `QuotesBar` / `buyers` polling MAY adopt the helper opportunistically (lower-priority than blocking new code on it; existing polling hits cheaper endpoints than load-state but the same failure mode applies)
+- Any future client surface that polls
+
+**Enforcement:** code review for Phase 9.4+ rejects polling client components that don't gate on visibility.
+
+**Rationale (one-line):** the cost of an idle tab must be exactly zero, not "low."
+
+---
+
 ## 11. The closing principle
 
 Alex's brain renders systems by walking through them. The Command Center must be a place he walks through. Every surface must show, not tell. Every agent must be visible. Every decision must arrive with reasoning attached.
