@@ -8,6 +8,7 @@ import JarvisFeed from "@/components/JarvisFeed";
 import JarvisChat from "@/components/JarvisChat";
 import JarvisGreeting from "@/components/JarvisGreeting";
 import ActionQueue from "@/components/ActionQueue";
+import FactoryFloor from "@/components/factory-floor/FactoryFloor";
 import { showToast } from "@/components/Toast";
 
 const LAST_LOGIN_KEY = "akb_dashboard_last_login";
@@ -56,6 +57,9 @@ export default function CommandCenter() {
 
       {/* Jarvis Phase 1 — depth-aware ACT NOW cards */}
       <JarvisGreeting />
+
+      {/* Phase 9.4 — factory-floor agent rooms */}
+      <FactoryFloor />
 
       {/* Morning Briefing — auto-generated prioritized actions */}
       <MorningBriefing />
