@@ -84,6 +84,30 @@ export async function POST(req: Request) {
       );
     }
     if (auth.kind === "cron") {
+      // Phase 11.6 cron-burn safeguard — mirrors load-state route. Off
+      // by default. INSERTED 5/17 BECAUSE 48hr unattended burn (~4.8M
+      // tokens) of unknown origin. MCP tools/call dispatches into
+      // buildBriefing; gate here blocks the wrapper too.
+      if (process.env.MAVERICK_CRON_ENABLED !== "true") {
+        await audit({
+          agent: "maverick",
+          event: "mcp_cron_gated",
+          status: "confirmed_failure",
+          inputSummary: { x_vercel_id: req.headers.get("x-vercel-id") },
+          outputSummary: {
+            reason: "MAVERICK_CRON_ENABLED!=true",
+            duration_ms: Date.now() - t0,
+          },
+        });
+        return jsonResponse(
+          buildError(
+            null,
+            MCP_UNAUTHORIZED,
+            "cron_disabled: MAVERICK_CRON_ENABLED must be 'true'",
+          ),
+          503,
+        );
+      }
       // First-touch audit on every internal-token call. Bounded by daily
       // cron cadence; anomalous volume = leaked CRON_SECRET being abused.
       await audit({

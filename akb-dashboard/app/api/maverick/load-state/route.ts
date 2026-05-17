@@ -70,6 +70,31 @@ export async function GET(req: Request) {
     // else: no auth configured anywhere (local dev / first deploy) — allow.
   }
 
+  // Phase 11.6 cron-burn safeguard — off-by-default gate on
+  // cron-attributed callers. INSERTED 5/17 BECAUSE 48hr unattended burn
+  // (~4.8M tokens, ~$15-30) revealed unthrottled briefing-refresh from an
+  // unidentified non-user context. Cron path must opt in via
+  // MAVERICK_CRON_ENABLED=true with a documented cost model. Dashboard
+  // session + OAuth (claude.ai) paths are unaffected. See Checklist 11.6.
+  if (authKind === "cron" && process.env.MAVERICK_CRON_ENABLED !== "true") {
+    await audit({
+      agent: "maverick",
+      event: "load_state_cron_gated",
+      status: "confirmed_failure",
+      inputSummary: { auth_kind: authKind },
+      outputSummary: { reason: "MAVERICK_CRON_ENABLED!=true" },
+      ms: Date.now() - t0,
+    });
+    return NextResponse.json(
+      {
+        error: "cron_disabled",
+        reason:
+          "MAVERICK_CRON_ENABLED must be 'true' to invoke load-state from a cron context",
+      },
+      { status: 503 },
+    );
+  }
+
   const url = new URL(req.url);
   const sinceParam = url.searchParams.get("since");
   const format = url.searchParams.get("format") ?? "both";
@@ -80,6 +105,26 @@ export async function GET(req: Request) {
       since: sinceParam ?? undefined,
       skipCache,
     });
+
+    // Phase 14 breadcrumb — Pulse data trail. Single structured log line
+    // whenever the synthesizer (the ~8.2K-token Claude call) runs fresh
+    // from a non-user-triggered context. Cache-served briefings emit
+    // nothing. Future Pulse build harvests these to learn the
+    // human-activity baseline + flag burn anomalies.
+    const servedFromCache = Object.values(briefing.source_health).every(
+      (h) => h.served_from_cache === true,
+    );
+    if (!servedFromCache && authKind !== "dashboard_session") {
+      console.warn(
+        JSON.stringify({
+          pulse_event: "non_user_synthesis",
+          auth_kind: authKind,
+          duration_ms: briefing.duration_ms,
+          narrative_synthesized: briefing.narrative_synthesized,
+          timestamp: new Date().toISOString(),
+        }),
+      );
+    }
 
     // Audit per session-open. Maverick is the first agent to call
     // audit() under its own attribution from this codebase — seeding
