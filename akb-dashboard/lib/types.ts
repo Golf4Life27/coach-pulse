@@ -62,13 +62,26 @@ export interface Listing {
   // existing records 5/13 via proxy).
   //   lastStatusCheckSentAt: dateTime of most recent status_check probe.
   //     Drives 3-day timeout-to-dead window.
-  //   storedOfferPrice: sticky OfferPrice from outreach time. Per the
-  //     Offer Discipline principle (Spine recxxNF0U59MxYUqu), never
-  //     recomputed at follow-up time.
+  //   outreachOfferPrice: sticky 65%-of-List offer captured at outreach
+  //     time. Renamed 5/18 from storedOfferPrice per Phase 20.2 v1.3
+  //     amendment (two-field model — see contractOfferPrice below).
+  //     Never recomputed; never overwritten after first set.
+  //   contractOfferPrice: set at negotiation / DD stage. CAN BE ABOVE
+  //     OR BELOW outreachOfferPrice — DD reveals whether to drop (worse
+  //     rehab than expected) or push (clean deal, motivated seller).
+  //     Hard floor: V2.1 math (Investor_MAO − Wholesale_Fee). Soft
+  //     ceiling: none, but >75% of List triggers a Maverick caution
+  //     flag on the deal-detail page. Sticky during negotiation.
+  //   sellerMotivationScore: 1-5 coarse motivation rubric per the v1.3
+  //     amendment. Manually populated for now; Sentinel automates in
+  //     Phase 13. Drives the seller-motivation modifier on the Unified
+  //     Deal Math range endpoint (Phase 4 v1.3 amendment).
   //   listPriceAtSend: snapshot of List_Price at outreach time. Used
   //     by cadence drift-detection (±10% threshold).
   lastStatusCheckSentAt?: string | null;
-  storedOfferPrice?: number | null;
+  outreachOfferPrice?: number | null;
+  contractOfferPrice?: number | null;
+  sellerMotivationScore?: number | null;
   listPriceAtSend?: number | null;
   // ── Pre-Send Gate inputs (added 5/13 for orchestrator Gate 2)
   rehabConfidenceScore?: number | null;

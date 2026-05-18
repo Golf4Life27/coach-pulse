@@ -1,4 +1,4 @@
-// D3 — One-shot backfill for Stored_Offer_Price + List_Price_At_Send on
+// D3 — One-shot backfill for Outreach_Offer_Price + List_Price_At_Send on
 // existing Texted records.
 //
 // GET /api/admin/d3-backfill-offer-fields?apply=1[&limit=N]
@@ -7,11 +7,11 @@
 // patchAndVerify so the drift detector + audit log cover every change.
 //
 // Per Alex 5/13 decision: existing 800 Texted records won't have
-// captured Stored_Offer_Price / List_Price_At_Send at H2 send time
+// captured Outreach_Offer_Price / List_Price_At_Send at H2 send time
 // (the fields didn't exist yet). Forward records get the real
 // captured value at send. Existing records get the closest available
 // proxy:
-//   Stored_Offer_Price = (current List_Price) × 0.65
+//   Outreach_Offer_Price = (current List_Price) × 0.65
 //     "current_list_price × 0.65 is the closest available proxy. Better
 //     than null." Per 65% Rule (Spine recmmidVrMyrLzjZp).
 //   List_Price_At_Send = Prev_List_Price (if set) || current List_Price
@@ -65,7 +65,7 @@ export async function GET(req: Request) {
   for (const l of subset) {
     const currentList = l.listPrice ?? null;
     const prev = l.prevListPrice ?? null;
-    const existingStored = l.storedOfferPrice ?? null;
+    const existingStored = l.outreachOfferPrice ?? null;
     const existingAtSend = l.listPriceAtSend ?? null;
 
     // Don't stomp real H2-captured values. If either field is already
@@ -109,7 +109,7 @@ export async function GET(req: Request) {
     if (!apply) {
       outcomes.push({
         recordId: l.id,
-        fields_written: ["Stored_Offer_Price", "List_Price_At_Send"],
+        fields_written: ["Outreach_Offer_Price", "List_Price_At_Send"],
         stored_offer_price: storedOffer,
         list_price_at_send: atSendValue,
         list_price_at_send_source: atSendSource,
@@ -122,7 +122,7 @@ export async function GET(req: Request) {
 
     try {
       const drift = await updateListingRecord(l.id, {
-        Stored_Offer_Price: storedOffer,
+        Outreach_Offer_Price: storedOffer,
         List_Price_At_Send: atSendValue,
       });
       // Per-record audit so future analysis can identify proxy-data
@@ -147,7 +147,7 @@ export async function GET(req: Request) {
       });
       outcomes.push({
         recordId: l.id,
-        fields_written: ["Stored_Offer_Price", "List_Price_At_Send"],
+        fields_written: ["Outreach_Offer_Price", "List_Price_At_Send"],
         stored_offer_price: storedOffer,
         list_price_at_send: atSendValue,
         list_price_at_send_source: atSendSource,

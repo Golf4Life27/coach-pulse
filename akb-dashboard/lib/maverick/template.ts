@@ -64,7 +64,12 @@ export function renderTemplate(b: StructuredBriefing): string {
   } else {
     const lines = [`## ACTIVE DEALS (${b.active_deals.length})`];
     for (const d of b.active_deals.slice(0, 10)) {
-      const price = d.stored_offer_price != null ? `$${d.stored_offer_price.toLocaleString()}` : "(no offer)";
+      // Phase 20.2 v1.3 (5/18) — prefer Contract_Offer_Price (operative
+      // negotiation/DD-stage offer) over Outreach_Offer_Price (sticky
+      // 65% door-opener). Fall through to outreach if contract not yet
+      // set; "(no offer)" only when neither exists.
+      const operativePrice = d.contract_offer_price ?? d.outreach_offer_price ?? null;
+      const price = operativePrice != null ? `$${operativePrice.toLocaleString()}` : "(no offer)";
       const lastTouch =
         d.days_since_inbound != null
           ? `last inbound ${d.days_since_inbound}d ago`

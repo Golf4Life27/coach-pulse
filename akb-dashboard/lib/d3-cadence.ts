@@ -17,7 +17,9 @@
 //     not justification to lower it. Stored OfferPrice is sticky.
 //
 // Reads three real fields (added to Listings_V1 5/13):
-//   Stored_Offer_Price       — sticky offer, captured at H2 send.
+//   Outreach_Offer_Price     — sticky 65%-of-List offer captured at H2
+//                              send (renamed 5/18 from Stored_Offer_Price
+//                              per Phase 20.2 v1.3).
 //   List_Price_At_Send       — list-price snapshot for drift detection.
 //   Last_Status_Check_Sent_At — drives 3-day status_check timeout-to-dead.
 // Existing pre-cadence records have these fields backfilled via the
@@ -367,9 +369,10 @@ export function classifyCadence(opts: CadenceInputs): CadenceDecision {
     }
 
     // Time to send. Drift-check before picking template. Uses real
-    // List_Price_At_Send + Stored_Offer_Price fields.
+    // List_Price_At_Send + Outreach_Offer_Price fields (renamed from
+    // Stored_Offer_Price per Phase 20.2 v1.3, 5/18).
     const atSend = listing.listPriceAtSend ?? null;
-    const storedOffer = listing.storedOfferPrice ?? null;
+    const outreachOffer = listing.outreachOfferPrice ?? null;
     const current = listing.listPrice ?? null;
 
     let drift_pct = 0;
@@ -382,7 +385,7 @@ export function classifyCadence(opts: CadenceInputs): CadenceDecision {
       list_price_current: current,
       drift_pct,
       drift_threshold: DRIFT_PCT,
-      stored_offer_price: storedOffer,
+      outreach_offer_price: outreachOffer,
       follow_up_count: followUpCount,
       days_since_send: daysSinceSend,
     };
@@ -405,7 +408,7 @@ export function classifyCadence(opts: CadenceInputs): CadenceDecision {
         action: "send_follow_up_drift_down",
         template_id: "follow_up_drift_down",
         banner: null,
-        reasoning: `Drift down ${(drift_pct * 100).toFixed(1)}% (List_Price $${current} vs at-send $${atSend}). Per offer-discipline: stored OfferPrice $${storedOffer} holds; switch to drift-down template.`,
+        reasoning: `Drift down ${(drift_pct * 100).toFixed(1)}% (List_Price $${current} vs at-send $${atSend}). Per offer-discipline: stored OfferPrice $${outreachOffer} holds; switch to drift-down template.`,
         data_examined: driftData,
         pending_writes: null,
       };
@@ -426,7 +429,7 @@ export function classifyCadence(opts: CadenceInputs): CadenceDecision {
       action: actionId,
       template_id: templateId,
       banner: null,
-      reasoning: `active_eligible, follow_up_count=${followUpCount}, days_since_send=${daysSinceSend} >= ${nextDay}. Drift within ±${(DRIFT_PCT * 100).toFixed(0)}%. Send ${templateId} at stored OfferPrice $${storedOffer}.`,
+      reasoning: `active_eligible, follow_up_count=${followUpCount}, days_since_send=${daysSinceSend} >= ${nextDay}. Drift within ±${(DRIFT_PCT * 100).toFixed(0)}%. Send ${templateId} at stored OfferPrice $${outreachOffer}.`,
       data_examined: driftData,
       pending_writes: null,
     };

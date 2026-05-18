@@ -78,7 +78,14 @@ const LISTING_FIELDS: Record<string, string> = {
   // ── D3 cadence inputs
   fldzqlBceCXhQ9Vlq: "followUpCount",
   fldoG27mxF1FQSRr9: "lastStatusCheckSentAt",
-  fldBFnL0HQJWahRov: "storedOfferPrice",
+  // Phase 20.2 v1.3 amendment (5/18) — Stored_Offer_Price renamed to
+  // Outreach_Offer_Price. Field id preserved; existing data carried.
+  // Semantic split: outreachOfferPrice = sticky 65% set at outreach;
+  // contractOfferPrice = set at negotiation/DD; sellerMotivationScore
+  // = 1-5 rubric. See Listing type in lib/types.ts for full notes.
+  fldBFnL0HQJWahRov: "outreachOfferPrice",
+  fldfJWuEIHqaRuWq3: "contractOfferPrice",
+  fldfEVJijfPOBulpc: "sellerMotivationScore",
   fldusUTeJQ2ALX37U: "listPriceAtSend",
 };
 
@@ -131,7 +138,9 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "Prev_List_Price": "prevListPrice",
   "Follow_Up_Count": "followUpCount",
   "Last_Status_Check_Sent_At": "lastStatusCheckSentAt",
-  "Stored_Offer_Price": "storedOfferPrice",
+  "Outreach_Offer_Price": "outreachOfferPrice",
+  "Contract_Offer_Price": "contractOfferPrice",
+  "Seller_Motivation_Score": "sellerMotivationScore",
   "List_Price_At_Send": "listPriceAtSend",
   // ── Phase 3: photo analysis ──────────────────────────────────────────────
   "Est_Rehab_Low": "estRehabLow",

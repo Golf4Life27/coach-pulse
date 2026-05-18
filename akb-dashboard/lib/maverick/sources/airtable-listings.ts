@@ -38,7 +38,14 @@ export interface ListingsActiveDeal {
   city: string | null;
   status: string;
   list_price: number | null;
-  stored_offer_price: number | null;
+  // Phase 20.2 v1.3 (5/18) — Stored_Offer_Price replaced by the
+  // two-field model. outreach_offer_price = sticky 65% set at outreach;
+  // contract_offer_price = operative offer set later by Pricing Agent
+  // at negotiation/DD. The template renderer prefers contract over
+  // outreach when both exist.
+  outreach_offer_price: number | null;
+  contract_offer_price: number | null;
+  seller_motivation_score: number | null;
   last_outreach_date: string | null;
   last_inbound_at: string | null;
   last_outbound_at: string | null;
@@ -89,7 +96,9 @@ export function summarizeListings(
         city: l.city ?? null,
         status: statusRaw,
         list_price: l.listPrice ?? null,
-        stored_offer_price: l.storedOfferPrice ?? null,
+        outreach_offer_price: l.outreachOfferPrice ?? null,
+        contract_offer_price: l.contractOfferPrice ?? null,
+        seller_motivation_score: l.sellerMotivationScore ?? null,
         last_outreach_date: l.lastOutreachDate ?? null,
         last_inbound_at: l.lastInboundAt ?? null,
         last_outbound_at: l.lastOutboundAt ?? null,

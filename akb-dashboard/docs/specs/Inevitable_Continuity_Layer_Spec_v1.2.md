@@ -1,7 +1,7 @@
 # Inevitable Continuity Layer — Maverick
 
 **Spec version:** v1.2
-**Authored:** May 14, 2026 (v1.0); May 15, 2026 (v1.1 amendments); May 15, 2026 (v1.2 amendments — Day 4.5 OAuth build)
+**Authored:** May 14, 2026 (v1.0); May 15, 2026 (v1.1 amendments); May 15, 2026 (v1.2 amendments — Day 4.5 OAuth build); May 18, 2026 (v1.3 amendments — Phase 20.2 close-out, see §14)
 **Status:** TIER A — current build cycle's only build target
 **Supersedes:** v1.1 in full. v1.0 + v1.1 remain in git history; v1.2 is canonical going forward.
 
@@ -440,6 +440,17 @@ Until Maverick exists, every session that ends without him existing is a session
 ---
 
 ## 14. Changelog
+
+### v1.3 amendments (5/18, Phase 20.2 close-out)
+
+Pricing semantics resolved + a Phase 4 endpoint shape clarification. v1.2 itself is not broken by these; they extend it.
+
+| # | Section | Amendment |
+|---|---|---|
+| 6.10 | New §3.x — Stored offer pricing two-field split | The single `Stored_Offer_Price` field (Listings_V1) is replaced by a two-field model. **`Outreach_Offer_Price`** (always 65% × List, sticky — set at outreach time, never recalculated, never overwritten; door-opener semantics for funnel filtering). **`Contract_Offer_Price`** (set at negotiation/DD stage by the Appraiser or manually; CAN BE ABOVE OR BELOW outreach price because DD reveals whether to drop on worse rehab or push on a clean, motivated seller; sticky during negotiation once stated). Hard floor on Contract_Offer_Price: V2.1 math (Investor_MAO − Wholesale_Fee). Soft ceiling: none, but >75% of List triggers a Maverick caution flag on the deal-detail page. Implementation: Airtable rename of `Stored_Offer_Price` → `Outreach_Offer_Price` (field id `fldBFnL0HQJWahRov` preserved, all existing data carries), new `Contract_Offer_Price` (`fldfJWuEIHqaRuWq3`). Write paths: outreach-fire writes Outreach_Offer_Price sticky-gated (only if not already set); Pricing Agent writes Contract_Offer_Price. Resolves Phase 20.2 open question. |
+| 6.11 | New §3.x — Seller motivation as tracked field | New `Seller_Motivation_Score` (`fldfEVJijfPOBulpc`) on Listings_V1 — 1-5 coarse rubric: 5="when can you close" / unprompted urgency, 4=engaged + asking next steps, 3=neutral, 2="thanks for your offer" / polite distance, 1=explicit rejection or hostile. Manually populated for now (free-text triage); Sentinel automates the scoring loop in Phase 13. The field is the modifier input for §6.12's range endpoint. |
+| 6.12 | §5 Step 1 / new Phase 4D endpoint shape | Unified Deal Math endpoint (`/api/deal-math/[recordId]`, planned per Checklist 3.11a) **returns a range, not a single number**. Shape: `{ floor: number (V2.1 Your_MAO_flipper, never-go-below), target: number (motivation-adjusted), list_price: number, modifier_inputs: { motivation_score, rehab_confidence, ... } }`. Alex's framing: "65% opens the door to find motivated sellers, then DD reveals whether we drop to 61% (worse rehab than expected) or push to 71% (clean deal, motivated seller, want to lock it). V2.1 is the never-go-below floor; seller motivation is the modifier." Phase 4E BroCard rendering must surface the range, not collapse it to a single price. Endpoint itself is still NOT STARTED; this amendment locks the contract before build. |
+| — | §6 roster — Buyer_Tx_Median → Buyer_Median | Tx prefix in any system-wide formula token is a Texas-only launch artifact; the system is nationwide. The Vercel codebase had zero active references (the actual Investor_MAO formula on Listings_V1 uses `Real_ARV_Median`, not Buyer_Tx_Median); the one stale Checklist row corrected 5/18. INEVITABLE_Constitution_v3.docx and Make scenarios J/G/D flagged as Phase 12.8 for manual UI cleanup. |
 
 ### v1.2 amendments (5/15, Day 4.5 OAuth build)
 

@@ -283,29 +283,22 @@ export async function GET(
   // Auto_Approve_v2 likewise — formula gates on Real_ARV_Median > 0 AND
   // Your_MAO >= $20K. No agent write needed.
 
-  // Stored_Offer_Price IS a writable numeric field (distinct from the
-  // Your_MAO formula). Per Checklist Phase 11.4 (Finding #9 fix), the
-  // pricing agent persists the V2.1 flipper-track MAO ceiling here so
-  // the briefing + dashboard can surface "the operative offer we're
-  // prepared to make" without re-running the full pricing math on
-  // every read. Outreach-fire writes 65% List Price into this same
-  // field at H2 send (door-opener semantics); pricing-agent overwrites
-  // with Your_MAO_flipper once V2.1 negotiation pricing has run.
-  //
-  // Open sub-question (logged for v1.3 Phase 20 entry): is
-  // Stored_Offer_Price "historical offer made at outreach" (point-in-
-  // time snapshot, never overwritten) or "current operative offer
-  // ceiling" (mutable per pricing-agent runs)? This implementation
-  // takes the latter reading per Alex's 5/16 directive — the v1.2
-  // backlog's d3-backfill route uses the proxy semantics, which is
-  // compatible with both readings (a proxy fills the field when nothing
-  // better exists).
+  // Contract_Offer_Price — the operative offer at negotiation/DD stage
+  // per Phase 20.2 v1.3 amendment (5/18). RESOLVED the prior open sub-
+  // question: Stored_Offer_Price → split into two fields. The pricing
+  // agent now writes Contract_Offer_Price (the operative MAO ceiling
+  // derived from V2.1 math), and outreach-fire writes Outreach_Offer_Price
+  // (sticky 65% at door-opener time). The two can differ in either
+  // direction — DD may reveal worse rehab (drop contract below outreach)
+  // or a clean, motivated seller (push contract above outreach). V2.1
+  // math is the never-go-below floor; Contract_Offer_Price may exceed
+  // it when seller motivation justifies.
   if (
     phase4c.ok &&
     phase4c.result.your_mao_flipper != null &&
     phase4c.result.your_mao_flipper > 0
   ) {
-    fieldsToWrite.Stored_Offer_Price = phase4c.result.your_mao_flipper;
+    fieldsToWrite.Contract_Offer_Price = phase4c.result.your_mao_flipper;
   }
 
   let airtableDrift: FieldDrift[] = [];
@@ -361,9 +354,9 @@ export async function GET(
       your_mao_landlord: phase4c.ok ? phase4c.result.your_mao_landlord : null,
       recommended_track: phase4c.ok ? phase4c.result.recommended_track : null,
       creative_finance_flag: phase4c.ok ? phase4c.result.creative_finance_flag : null,
-      stored_offer_price_written:
-        "Stored_Offer_Price" in fieldsToWrite
-          ? fieldsToWrite.Stored_Offer_Price
+      contract_offer_price_written:
+        "Contract_Offer_Price" in fieldsToWrite
+          ? fieldsToWrite.Contract_Offer_Price
           : null,
     },
     decision: overallStatus,
