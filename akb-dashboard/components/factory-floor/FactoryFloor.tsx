@@ -26,6 +26,7 @@ import AppraiserRoom from "./AppraiserRoom";
 import SentinelRoom from "./SentinelRoom";
 import ScoutRoom from "./ScoutRoom";
 import ScribeRoom from "./ScribeRoom";
+import PulseRoom from "./PulseRoom";
 import StandingByRoom from "./StandingByRoom";
 
 export default function FactoryFloor() {
@@ -64,12 +65,7 @@ export default function FactoryFloor() {
           role="Economics"
           shipsIn="Phase 15 — revenue + retirement meter"
         />
-        <StandingByRoom
-          agent="pulse"
-          displayName="Pulse"
-          role="System monitoring"
-          shipsIn="Phase 14 — drift + quota burn detection"
-        />
+        <PulseRoom />
       </div>
     </section>
   );
