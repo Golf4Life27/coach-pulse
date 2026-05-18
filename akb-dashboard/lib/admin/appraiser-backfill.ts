@@ -143,3 +143,63 @@ export function totalBackfillCost(
     { scraperapi_calls: 0, anthropic_calls: 0, rentcast_calls: 0 },
   );
 }
+
+// ── M.2 — pacing + per-endpoint outcome tracking ────────────────────────
+
+/** Default conservative pace between records (ms). Overridable via
+ *  BACKFILL_PACE_MS env var per Alex's brief. */
+const DEFAULT_PACE_MS = 2000;
+/** Pace clamps: zero allows back-to-back firing (rarely safe; only for
+ *  isolated reruns). Hard upper bound keeps a lambda from waiting
+ *  forever inside the loop. */
+const MIN_PACE_MS = 0;
+const MAX_PACE_MS = 30_000;
+
+/** Pure: read pacing (ms between records) from env with defaults +
+ *  clamping. Invalid values fall through to default. */
+export function readBackfillPaceMs(
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): number {
+  const raw = env.BACKFILL_PACE_MS;
+  if (!raw) return DEFAULT_PACE_MS;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < MIN_PACE_MS) return DEFAULT_PACE_MS;
+  return Math.min(n, MAX_PACE_MS);
+}
+
+export type BackfillEndpointStatus = "ok" | "error";
+
+export interface BackfillEndpointOutcome {
+  status: BackfillEndpointStatus;
+  http_status: number | null;
+  elapsed_ms: number;
+  error: string | null;
+}
+
+export interface BackfillRecordApplyOutcome {
+  recordId: string;
+  /** Aggregate: "ok" only when all three endpoints succeeded; "partial"
+   *  when at least one failed but at least one succeeded; "error" when
+   *  all three failed. */
+  status: "ok" | "partial" | "error";
+  arv: BackfillEndpointOutcome;
+  rehab: BackfillEndpointOutcome;
+  buyer_intelligence: BackfillEndpointOutcome;
+  total_elapsed_ms: number;
+}
+
+/** Pure: roll the three per-endpoint statuses up into the record-level
+ *  aggregate. Used by the route to compute outcome.status. */
+export function aggregateBackfillStatus(
+  arv: BackfillEndpointStatus,
+  rehab: BackfillEndpointStatus,
+  buyerIntel: BackfillEndpointStatus,
+): "ok" | "partial" | "error" {
+  const okCount =
+    (arv === "ok" ? 1 : 0) +
+    (rehab === "ok" ? 1 : 0) +
+    (buyerIntel === "ok" ? 1 : 0);
+  if (okCount === 3) return "ok";
+  if (okCount === 0) return "error";
+  return "partial";
+}
