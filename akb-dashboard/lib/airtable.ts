@@ -51,6 +51,11 @@ const LISTING_FIELDS: Record<string, string> = {
   // no longer surface as false-stale. Written by lib/gmail.ts sendEmail
   // when a listing recordId is in scope.
   fld4Jzjs8etKact6g: "lastEmailOutreachDate",
+  // Phase 5.4 (5/18) — DocuSign envelope attribution. Single-line text
+  // (envelope GUID). Written by the "Track in Scribe" affordance on
+  // the deal-detail page; read by components/ScribeDealCommentary.tsx
+  // to surface envelope status from briefing.external_signals.docusign.
+  fldKPVG9qmbzxW5lK: "envelopeId",
   // ── Pre-Outreach Gate (orchestrator Gate 1) inputs
   fldif6WwcJeXZtJcX: "mlsStatus",
   fldrlbePeS9glaFQu: "propertyType",
@@ -113,6 +118,7 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "Last_Inbound_At": "lastInboundAt",
   "Last_Outbound_At": "lastOutboundAt",
   "Last_Email_Outreach_Date": "lastEmailOutreachDate",
+  "Envelope_ID": "envelopeId",
   // ── Pre-Outreach Gate (orchestrator Gate 1)
   "MLS_Status": "mlsStatus",
   "Property_Type": "propertyType",

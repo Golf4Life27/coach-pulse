@@ -302,7 +302,7 @@ async function fetchSource(
       // data_missing per spec §6 (loud failure for Phase 1, clear
       // wire-in target for Phase 2).
       throw new Error(
-        "pa_document source requires DocuSign MCP — not yet wired (MCP server ID ab943441-29da-4bcb-8d3f-19efc0412d6c announced 5/13 but tool schemas not yet in the deferred-tools registry). Add fetcher when DocuSign MCP tools land.",
+        "pa_document source requires DocuSign JWT integration (Phase 12.7). lib/docusign.ts JWT client + briefing source landed in Commit G; live calls fire once DOCUSIGN_INTEGRATION_KEY / DOCUSIGN_USER_ID / DOCUSIGN_PRIVATE_KEY env are provisioned. Note: ab943441-29da-4bcb-8d3f-19efc0412d6c is Alex's DocuSign account_id, NOT an MCP server UUID — that conflation came from the 5/13 announcement notes and was corrected 5/18. The actual production path is REST-over-JWT, not MCP. Add per-envelope pa_document fetcher here when env lands.",
       );
     // Future sources for Gate 5:
     case "airtable_deal":

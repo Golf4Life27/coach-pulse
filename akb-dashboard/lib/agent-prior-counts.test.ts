@@ -54,6 +54,7 @@ function listing(over: Partial<Listing> & { id: string }): Listing {
     lastInboundAt: null,
     lastOutboundAt: null,
     lastEmailOutreachDate: null,
+    envelopeId: null,
     agentPriorOutreachCount: null,
     ...over,
   };

@@ -298,6 +298,7 @@ describe("filterListings", () => {
       lastInboundAt: null,
       lastOutboundAt: null,
       lastEmailOutreachDate: null,
+      envelopeId: null,
       ...over,
     };
   }

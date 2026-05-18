@@ -40,6 +40,10 @@ export interface Listing {
   // scope; manual mailto: sends from outside the app cannot populate this
   // (see Checklist 11.2 gap notes).
   lastEmailOutreachDate: string | null;
+  // Phase 5.4 — DocuSign envelope attribution. Null until Alex clicks
+  // "Track in Scribe" on the deal-detail page. Drives the per-deal
+  // ScribeDealCommentary lookup against external_signals.docusign.envelopes.
+  envelopeId: string | null;
   // ── Pre-Outreach Gate inputs (added 5/13 for orchestrator Gate 1)
   mlsStatus?: string | null;
   propertyType?: string | null;

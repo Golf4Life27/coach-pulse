@@ -88,6 +88,7 @@ function listing(overrides: Partial<Listing> = {}): Listing {
     lastInboundAt: null,
     lastOutboundAt: null,
     lastEmailOutreachDate: null,
+    envelopeId: null,
     listPriceAtSend: 100000,
     storedOfferPrice: 65000,
     lastStatusCheckSentAt: null,

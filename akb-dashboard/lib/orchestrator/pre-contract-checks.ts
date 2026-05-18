@@ -76,7 +76,7 @@ function median(xs: number[]): number | null {
 function docuSignPending(item_id: string, what: string, failure_action: ChecklistItem["failure_action"] = "block"): CheckResult {
   return dataMissing(
     item_id,
-    `Phase 1: ${what} requires DocuSign envelope parse. DocuSign MCP not yet wired (server ab943441-29da-4bcb-8d3f-19efc0412d6c announced but tool schemas not in deferred-tools registry).`,
+    `Phase 1: ${what} requires DocuSign envelope parse via lib/docusign.ts (JWT client landed Commit G). Live calls gated on Phase 12.7 credential provisioning. ab943441-... is Alex's DocuSign account_id, not the MCP server UUID — production path is REST-over-JWT, not MCP.`,
     {
       missing_data_source: "pa_document",
       phase: 1,

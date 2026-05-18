@@ -9,6 +9,7 @@ import { ALL_DD_ITEMS } from "@/lib/actionQueue";
 import { showToast } from "@/components/Toast";
 import MaverickDealCommentary from "@/components/MaverickDealCommentary";
 import RelatedDealsRecall from "@/components/RelatedDealsRecall";
+import ScribeDealCommentary from "@/components/ScribeDealCommentary";
 import type { DealContext } from "@/types/jarvis";
 
 function cleanPhone(phone: string): string {
@@ -216,6 +217,12 @@ export default function DealWorkspace() {
           // Phase 11.2 — email-attributable contact timestamp.
           lastEmailOutreachDate: listing.lastEmailOutreachDate ?? null,
         }}
+      />
+
+      {/* Phase 5.3 — Scribe envelope panel */}
+      <ScribeDealCommentary
+        recordId={listing.id}
+        envelopeId={listing.envelopeId ?? null}
       />
 
       {/* Jarvis context strip — keystone deal-context surface */}
