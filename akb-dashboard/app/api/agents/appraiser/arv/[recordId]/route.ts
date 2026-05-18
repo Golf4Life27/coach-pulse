@@ -176,6 +176,11 @@ export async function GET(
     buyerProfit: listing.buyerProfitTarget ?? null,
     listPrice: listing.listPrice,
     sellerMotivationScore: listing.sellerMotivationScore ?? null,
+    // Phase 4C.1 / K.3 — pass rent + state so MAO range uses
+    // dual-track dominant_value as the floor when both are present.
+    // Falls back to flipper-only floor when rent is null.
+    monthlyRent: listing.estimatedMonthlyRent ?? null,
+    state: listing.state,
   });
 
   // ── Airtable write (skippable) ──────────────────────────────────
@@ -223,6 +228,9 @@ export async function GET(
       floor: range.floor,
       target: range.target,
       exceeds_soft_ceiling: range.exceeds_soft_ceiling,
+      dominant_track: range.dual_track?.dominant_track ?? "flipper",
+      flipper_mao: range.dual_track?.flipper_mao ?? null,
+      landlord_mao: range.dual_track?.landlord_mao ?? null,
       rehab_source: rehabPick.source,
       manual_review: manualReview,
       airtable_write: !skipWrite && arv.arv_mid != null,

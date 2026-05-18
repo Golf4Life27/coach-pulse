@@ -34,6 +34,8 @@
 // — but we expose modifier_inputs so callers can recompute under
 // different assumptions.
 
+import { computeDualTrack, type DualTrackResult } from "./buyer-intelligence";
+
 export type ArvConfidenceLabel = "HIGH" | "MED" | "LOW";
 
 const DEFAULT_WHOLESALE_FEE = 15000;
@@ -114,11 +116,22 @@ export interface MaoRangeInputs {
   listPrice: number | null;
   /** Listing.Seller_Motivation_Score (1-5, optional); reserved for Phase 13. */
   sellerMotivationScore: number | null;
+  /** Phase 4C.1 — Listing.Estimated_Monthly_Rent. When present alongside
+   *  state, computeMaoRange runs dual-track and uses dominant_value as
+   *  the floor (instead of flipper-only math). When null/missing,
+   *  falls back to flipper-only floor. */
+  monthlyRent?: number | null;
+  /** Phase 4C.1 — Listing.State, used to resolve per-market cap rate
+   *  for the landlord track. Ignored when monthlyRent is null. */
+  state?: string | null;
 }
 
 export interface MaoRange {
-  /** V2.1 never-go-below floor: MAX(arvMid − estRehab − wholesaleFee, 0).
-   *  Null when arvMid or estRehab is missing (cannot compute). */
+  /** V2.1 never-go-below floor. When dual-track ran (monthlyRent +
+   *  state both present), this equals dominant_value (higher of flipper
+   *  vs landlord MAO). When dual-track did NOT run, this equals the
+   *  flipper-only math: MAX(arvMid − estRehab − wholesaleFee, 0).
+   *  Null when inputs are missing (cannot compute either track). */
   floor: number | null;
   /** Seller-motivation-adjusted target. Equals floor when motivation
    *  score is null (Phase 13 enriches the modifier formula). */
@@ -130,6 +143,11 @@ export interface MaoRange {
   soft_ceiling: number | null;
   /** True when target exceeds soft_ceiling — caller surfaces caution flag. */
   exceeds_soft_ceiling: boolean;
+  /** Phase 4C.1 — dual-track sub-payload when monthlyRent + state were
+   *  both present at compute time. Surfaces both track values so the UI
+   *  can render the breakdown without re-running the math. Null when
+   *  computeMaoRange ran in flipper-only mode (no rent or no state). */
+  dual_track: DualTrackResult | null;
   /** All inputs that feed (or will feed) the modifier formula. Exposed so
    *  Phase 13 / future motivation logic can be applied client-side without
    *  a re-fetch. */
@@ -140,6 +158,8 @@ export interface MaoRange {
     buyer_profit: number;
     list_price: number | null;
     seller_motivation_score: number | null;
+    monthly_rent: number | null;
+    state: string | null | undefined;
   };
 }
 
@@ -156,13 +176,37 @@ export function computeMaoRange(opts: MaoRangeInputs): MaoRange {
       ? Math.round(opts.listPrice * SOFT_CEILING_FRACTION_OF_LIST)
       : null;
 
+  // Phase 4C.1 — run dual-track when monthlyRent + state both present.
+  // dominant_value (the higher of flipper vs landlord MAO) becomes the
+  // floor. When dual-track inputs are missing, fall back to flipper-only
+  // math as before — preserves backward compatibility for callers that
+  // don't yet pass rent/state.
+  const dualTrackEligible =
+    opts.monthlyRent != null && opts.monthlyRent > 0 && opts.state != null;
+  const dualTrack: DualTrackResult | null = dualTrackEligible
+    ? computeDualTrack({
+        arvMid: opts.arvMid,
+        estRehab: opts.estRehab,
+        wholesaleFee: opts.wholesaleFee,
+        monthlyRent: opts.monthlyRent ?? null,
+        state: opts.state,
+      })
+    : null;
+
   if (opts.arvMid == null || opts.estRehab == null) {
+    // When ARV or rehab missing, dual-track also returns
+    // dominant_value=null UNLESS only rent + arv present (landlord-only)
+    // — in that case dual_track has the landlord answer. Fall through
+    // to dual-track's dominant_value when available.
+    const fallbackFloor = dualTrack?.dominant_value ?? null;
+    const fallbackTarget = fallbackFloor;
     return {
-      floor: null,
-      target: null,
+      floor: fallbackFloor,
+      target: fallbackTarget,
       list_price: opts.listPrice,
       soft_ceiling: softCeiling,
       exceeds_soft_ceiling: false,
+      dual_track: dualTrack,
       modifier_inputs: {
         arv_mid: opts.arvMid,
         est_rehab: opts.estRehab,
@@ -170,11 +214,17 @@ export function computeMaoRange(opts: MaoRangeInputs): MaoRange {
         buyer_profit: buyerProfit,
         list_price: opts.listPrice,
         seller_motivation_score: opts.sellerMotivationScore,
+        monthly_rent: opts.monthlyRent ?? null,
+        state: opts.state ?? null,
       },
     };
   }
 
-  const floor = Math.max(opts.arvMid - opts.estRehab - wholesaleFee, 0);
+  // Floor = dual-track dominant when available; flipper-only fallback
+  // otherwise. Both paths produce non-negative values (computeDualTrack
+  // clamps individual track values to 0; flipper-only path uses MAX).
+  const flipperOnlyFloor = Math.max(opts.arvMid - opts.estRehab - wholesaleFee, 0);
+  const floor = dualTrack?.dominant_value ?? flipperOnlyFloor;
   // Phase 4A.1 ships target = floor (no motivation modifier yet).
   // Phase 13 will apply the seller-motivation-adjusted modifier on top.
   const target = floor;
@@ -187,6 +237,7 @@ export function computeMaoRange(opts: MaoRangeInputs): MaoRange {
     list_price: opts.listPrice,
     soft_ceiling: softCeiling,
     exceeds_soft_ceiling: exceedsSoftCeiling,
+    dual_track: dualTrack,
     modifier_inputs: {
       arv_mid: opts.arvMid,
       est_rehab: opts.estRehab,
@@ -194,6 +245,8 @@ export function computeMaoRange(opts: MaoRangeInputs): MaoRange {
       buyer_profit: buyerProfit,
       list_price: opts.listPrice,
       seller_motivation_score: opts.sellerMotivationScore,
+      monthly_rent: opts.monthlyRent ?? null,
+      state: opts.state ?? null,
     },
   };
 }

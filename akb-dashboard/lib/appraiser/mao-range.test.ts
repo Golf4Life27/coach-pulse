@@ -88,6 +88,102 @@ describe("pickCalibratedRehab (Phase 4B.1 / J.3)", () => {
   });
 });
 
+describe("computeMaoRange — Phase 4C.1 / K.3 dual-track integration", () => {
+  it("falls back to flipper-only floor when monthlyRent missing (backward compat)", () => {
+    const r = computeMaoRange({
+      arvMid: 165_000,
+      estRehab: 60_000,
+      wholesaleFee: 15_000,
+      listPrice: 140_000,
+      sellerMotivationScore: null,
+      // monthlyRent + state omitted
+    });
+    expect(r.floor).toBe(90_000); // flipper-only
+    expect(r.target).toBe(90_000);
+    expect(r.dual_track).toBeNull(); // dual-track did NOT run
+  });
+
+  it("falls back to flipper-only when state missing (rent without state can't resolve cap rate)", () => {
+    const r = computeMaoRange({
+      arvMid: 165_000,
+      estRehab: 60_000,
+      wholesaleFee: 15_000,
+      listPrice: 140_000,
+      sellerMotivationScore: null,
+      monthlyRent: 1500,
+      // state omitted
+    });
+    expect(r.floor).toBe(90_000);
+    expect(r.dual_track).toBeNull();
+  });
+
+  it("runs dual-track when monthlyRent + state both present; floor = dominant_value", () => {
+    // 1219 E Highland Blvd canonical: SA $165K ARV, $60K rehab, $15K
+    // wholesale, $1400 rent at 8% cap → landlord $135K beats flipper $90K
+    const r = computeMaoRange({
+      arvMid: 165_000,
+      estRehab: 60_000,
+      wholesaleFee: 15_000,
+      listPrice: 140_000,
+      sellerMotivationScore: null,
+      monthlyRent: 1400,
+      state: "TX",
+    });
+    expect(r.dual_track).not.toBeNull();
+    expect(r.dual_track!.flipper_mao).toBe(90_000);
+    expect(r.dual_track!.landlord_mao).toBe(135_000);
+    expect(r.dual_track!.dominant_track).toBe("landlord");
+    expect(r.floor).toBe(135_000); // dominant_value, not flipper-only $90K
+    expect(r.target).toBe(135_000);
+  });
+
+  it("flipper still wins when ARV high relative to rent — dual_track sub-payload present", () => {
+    // High-ARV TX-Metro deal: flipper $225K vs landlord $150K
+    const r = computeMaoRange({
+      arvMid: 300_000,
+      estRehab: 60_000,
+      wholesaleFee: 15_000,
+      listPrice: 280_000,
+      sellerMotivationScore: null,
+      monthlyRent: 1500,
+      state: "TX",
+    });
+    expect(r.dual_track!.dominant_track).toBe("flipper");
+    expect(r.floor).toBe(225_000);
+  });
+
+  it("modifier_inputs surfaces monthly_rent + state for downstream Phase 13 logic", () => {
+    const r = computeMaoRange({
+      arvMid: 165_000,
+      estRehab: 60_000,
+      wholesaleFee: 15_000,
+      listPrice: 140_000,
+      sellerMotivationScore: 4,
+      monthlyRent: 1400,
+      state: "TX",
+    });
+    expect(r.modifier_inputs.monthly_rent).toBe(1400);
+    expect(r.modifier_inputs.state).toBe("TX");
+    expect(r.modifier_inputs.seller_motivation_score).toBe(4);
+  });
+
+  it("ARV missing + rent present + state → landlord-only, floor = landlord_mao", () => {
+    const r = computeMaoRange({
+      arvMid: null,
+      estRehab: 60_000,
+      wholesaleFee: 15_000,
+      listPrice: 140_000,
+      sellerMotivationScore: null,
+      monthlyRent: 1500,
+      state: "TX",
+    });
+    expect(r.dual_track!.flipper_mao).toBeNull();
+    expect(r.dual_track!.landlord_mao).toBe(150_000);
+    expect(r.dual_track!.dominant_track).toBe("landlord");
+    expect(r.floor).toBe(150_000);
+  });
+});
+
 describe("computeMaoRange — V2.1 floor math", () => {
   it("computes floor as arv − rehab − wholesale_fee", () => {
     const r = computeMaoRange({
