@@ -93,6 +93,13 @@ function minimalBriefing(over: Partial<StructuredBriefing> = {}): StructuredBrie
         latest_deploy_created_at: "2026-05-15T02:37:00Z",
         active_branch_observed: "claude/maverick-aggregator",
       },
+      docusign: {
+        configured: false,
+        api_reachable: false,
+        rollup: { active_count: 0, awaiting_alex_count: 0, signed_this_week: 0, voided_or_expired: 0, max_awaiting_alex_hours: null },
+        envelopes: [],
+        fetched_at: "",
+      },
     },
     staleness_warnings: [],
     ...over,

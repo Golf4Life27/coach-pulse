@@ -22,6 +22,7 @@ import { fetchActionQueueState } from "./sources/action-queue";
 import { fetchExternalRentCastState } from "./sources/external-rentcast";
 import { fetchExternalQuoState } from "./sources/external-quo";
 import { fetchExternalVercelState } from "./sources/external-vercel";
+import { fetchDocusignState } from "./sources/external-docusign";
 import type { SourceResult, SourceName } from "./types";
 import {
   type Briefing,
@@ -39,6 +40,7 @@ import {
   EMPTY_RENTCAST,
   EMPTY_QUO,
   EMPTY_VERCEL,
+  EMPTY_DOCUSIGN,
   dataOrFallback,
   healthOf,
 } from "./briefing";
@@ -185,6 +187,7 @@ export async function rebuildBriefing(opts: BuildBriefingOpts): Promise<Briefing
     fetchExternalRentCastState({ since: sinceDate, timeoutMs: fetcherTimeouts.external_rentcast }),
     fetchExternalQuoState({ since: sinceDate, timeoutMs: fetcherTimeouts.external_quo }),
     fetchExternalVercelState({ since: sinceDate, timeoutMs: fetcherTimeouts.external_vercel }),
+    fetchDocusignState({ since: sinceDate, timeoutMs: fetcherTimeouts.external_docusign }),
   ]);
 
   // Promise.allSettled wraps each result in {status, value|reason}.
@@ -194,7 +197,7 @@ export async function rebuildBriefing(opts: BuildBriefingOpts): Promise<Briefing
   const results = settled.map(
     (s) => (s.status === "fulfilled" ? s.value : null) as SourceResult<unknown> | null,
   );
-  const [gitR, listingsR, spineR, auditR, codebaseR, queueR, rentcastR, quoR, vercelR] = results;
+  const [gitR, listingsR, spineR, auditR, codebaseR, queueR, rentcastR, quoR, vercelR, docusignR] = results;
 
   // Type-narrowed accessors. dataOrFallback's T is inferred from the
   // fallback argument; the typed value comes back even though the
@@ -208,6 +211,7 @@ export async function rebuildBriefing(opts: BuildBriefingOpts): Promise<Briefing
   const rentcast = dataOrFallback(rentcastR, EMPTY_RENTCAST);
   const quo = dataOrFallback(quoR, EMPTY_QUO);
   const vercel = dataOrFallback(vercelR, EMPTY_VERCEL);
+  const docusign = dataOrFallback(docusignR, EMPTY_DOCUSIGN);
 
   // source_health table from raw results (pre-cache markers).
   const source_health: Record<SourceName, SourceHealth> = {
@@ -220,6 +224,7 @@ export async function rebuildBriefing(opts: BuildBriefingOpts): Promise<Briefing
     external_rentcast: healthOf(asResult(rentcastR, "external_rentcast")),
     external_quo: healthOf(asResult(quoR, "external_quo")),
     external_vercel: healthOf(asResult(vercelR, "external_vercel")),
+    external_docusign: healthOf(asResult(docusignR, "external_docusign")),
   };
 
   // Cross-source synthesis: RentCast burn rate joins audit data with
@@ -279,6 +284,7 @@ export async function rebuildBriefing(opts: BuildBriefingOpts): Promise<Briefing
     rentcast: { ...rentcast, burn_rate: burnRate },
     quo,
     vercel,
+    docusign,
   };
 
   // Staleness warnings: surface any source where ok=false OR

@@ -16,6 +16,8 @@ import type { ActionQueueState, ManualFixQueueItem } from "./sources/action-queu
 import type { RentCastState } from "./sources/external-rentcast";
 import type { QuoState } from "./sources/external-quo";
 import type { VercelDeployState } from "./sources/external-vercel";
+import type { DocusignState } from "./sources/external-docusign";
+import { EMPTY_DOCUSIGN as _EMPTY_DOCUSIGN } from "./sources/external-docusign";
 import type { RentCastBurnRate } from "./rentcast-burn-rate";
 
 export interface SourceHealth {
@@ -78,7 +80,11 @@ export interface ExternalSignalsSection {
   };
   quo: QuoState;
   vercel: VercelDeployState;
+  /** Phase 5 Scribe — envelope state rollup + slim per-envelope list. */
+  docusign: DocusignState;
 }
+
+export const EMPTY_DOCUSIGN = _EMPTY_DOCUSIGN;
 
 export interface StructuredBriefing {
   generated_at: string;

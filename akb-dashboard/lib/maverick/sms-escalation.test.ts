@@ -38,6 +38,7 @@ function emptySourceHealth(): Record<SourceName, SourceHealth> {
     "external_rentcast",
     "external_quo",
     "external_vercel",
+    "external_docusign",
   ];
   const out = {} as Record<SourceName, SourceHealth>;
   for (const s of sources) {
@@ -105,6 +106,13 @@ function briefingFixture(
         latest_deploy_created_at: null,
         active_branch_observed: "",
       },
+      docusign: {
+        configured: false,
+        api_reachable: false,
+        rollup: { active_count: 0, awaiting_alex_count: 0, signed_this_week: 0, voided_or_expired: 0, max_awaiting_alex_hours: null },
+        envelopes: [],
+        fetched_at: "",
+      },
     },
     staleness_warnings: [],
     ...over,
@@ -159,6 +167,13 @@ function briefingWithRentcastBurn(): {
         latest_deploy_ready_at: null,
         latest_deploy_created_at: null,
         active_branch_observed: "",
+      },
+      docusign: {
+        configured: false,
+        api_reachable: false,
+        rollup: { active_count: 0, awaiting_alex_count: 0, signed_this_week: 0, voided_or_expired: 0, max_awaiting_alex_hours: null },
+        envelopes: [],
+        fetched_at: "",
       },
     },
   });

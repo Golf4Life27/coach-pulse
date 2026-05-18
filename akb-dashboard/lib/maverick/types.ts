@@ -25,7 +25,8 @@ export type SourceName =
   | "action_queue"
   | "external_rentcast"
   | "external_quo"
-  | "external_vercel";
+  | "external_vercel"
+  | "external_docusign";
 
 // Uniform result envelope. Aggregator builds source_health from these.
 // staleness_seconds: how old the underlying data is (when known —

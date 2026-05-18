@@ -104,6 +104,13 @@ function stubBriefing(over: Partial<Briefing> = {}): Briefing {
           latest_deploy_created_at: null,
           active_branch_observed: "test",
         },
+        docusign: {
+          configured: false,
+          api_reachable: false,
+          rollup: { active_count: 0, awaiting_alex_count: 0, signed_this_week: 0, voided_or_expired: 0, max_awaiting_alex_hours: null },
+          envelopes: [],
+          fetched_at: "",
+        },
       },
       staleness_warnings: [],
     },
@@ -117,6 +124,7 @@ function stubBriefing(over: Partial<Briefing> = {}): Briefing {
       external_rentcast: { source: "external_rentcast", ok: true, latency_ms: 200, staleness_seconds: 0, served_from_cache: false, error: null },
       external_quo: { source: "external_quo", ok: true, latency_ms: 100, staleness_seconds: 0, served_from_cache: false, error: null },
       external_vercel: { source: "external_vercel", ok: true, latency_ms: 50, staleness_seconds: 0, served_from_cache: false, error: null },
+      external_docusign: { source: "external_docusign", ok: true, latency_ms: 50, staleness_seconds: 0, served_from_cache: false, error: null },
     },
     ...over,
   };

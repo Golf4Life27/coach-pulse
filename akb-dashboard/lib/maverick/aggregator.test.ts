@@ -68,6 +68,7 @@ describe("buildStalenessWarnings", () => {
       external_rentcast: h({ source: "external_rentcast" }),
       external_quo: h({ source: "external_quo" }),
       external_vercel: h({ source: "external_vercel" }),
+      external_docusign: h({ source: "external_docusign" }),
     };
     expect(buildStalenessWarnings(sh)).toEqual([]);
   });
@@ -83,6 +84,7 @@ describe("buildStalenessWarnings", () => {
       external_rentcast: h({ source: "external_rentcast" }),
       external_quo: h({ source: "external_quo" }),
       external_vercel: h({ source: "external_vercel" }),
+      external_docusign: h({ source: "external_docusign" }),
     };
     const ws = buildStalenessWarnings(sh);
     expect(ws).toEqual([
@@ -102,6 +104,7 @@ describe("buildStalenessWarnings", () => {
       external_rentcast: h({ source: "external_rentcast" }),
       external_quo: h({ source: "external_quo" }),
       external_vercel: h({ source: "external_vercel" }),
+      external_docusign: h({ source: "external_docusign" }),
     };
     expect(buildStalenessWarnings(sh)).toEqual([
       "airtable_listings: data is 6min old",
@@ -119,6 +122,7 @@ describe("buildStalenessWarnings", () => {
       external_rentcast: h({ source: "external_rentcast" }),
       external_quo: h({ source: "external_quo" }),
       external_vercel: h({ source: "external_vercel" }),
+      external_docusign: h({ source: "external_docusign" }),
     };
     expect(buildStalenessWarnings(sh)).toEqual(["git: unreachable"]);
   });

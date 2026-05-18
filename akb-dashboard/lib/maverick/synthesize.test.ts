@@ -84,6 +84,13 @@ function structured(over: Partial<StructuredBriefing> = {}): StructuredBriefing 
         latest_deploy_created_at: null,
         active_branch_observed: "",
       },
+      docusign: {
+        configured: false,
+        api_reachable: false,
+        rollup: { active_count: 0, awaiting_alex_count: 0, signed_this_week: 0, voided_or_expired: 0, max_awaiting_alex_hours: null },
+        envelopes: [],
+        fetched_at: "",
+      },
     },
     staleness_warnings: [],
     ...over,
