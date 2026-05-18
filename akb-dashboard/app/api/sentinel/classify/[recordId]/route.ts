@@ -1,34 +1,36 @@
-// Phase 13 / N.1 — Sentinel inbound classifier endpoint.
+// Phase 13 — Sentinel inbound classifier endpoint.
 //
-// GET  /api/sentinel/classify/[recordId]           → classify the latest
-//                                                    inbound from the
-//                                                    listing's notes
-// POST /api/sentinel/classify/[recordId]           → body = { body?: string }
-//                                                    classify an explicitly-
-//                                                    supplied body (lets the
-//                                                    backfill / approval queue
-//                                                    re-classify older inbounds
-//                                                    without re-reading notes)
+// GET  /api/sentinel/classify/[recordId][?apply_motivation=1]
+// POST /api/sentinel/classify/[recordId]  body = { body?: string }
 //
-// **Approval-gated:** This endpoint produces a classification result
-// and writes an audit log entry. It does NOT mutate the listing
-// (Seller_Motivation_Score, Outreach_Status, etc.) and does NOT
-// auto-send any reply. N.2 layers the draft generator + Seller_
-// Motivation_Score wiring; N.3 ships the Sentinel-room approval
-// queue UI. Phase 13 charter: no outbound action without explicit
-// operator click.
+// N.1: classify the latest inbound from listing.notes (or an
+// explicitly POSTed body), audit the result.
+//
+// N.2: optional `?apply_motivation=1` auto-writes the motivation
+// score to Listings_V1.Seller_Motivation_Score per the v1.3 spec
+// (Phase 20.2 added the field; Phase 13.4 closes the loop). The
+// write is itself approval-gated by these conditions:
+//   - intent ∈ {motivated, lukewarm}
+//   - motivation_score_hint != null (1-5)
+//   - existing Seller_Motivation_Score IS null (never stomp an
+//     operator-set value — the operator's call always wins)
+// When any condition fails, the score isn't written and the audit
+// captures the skip reason.
+//
+// Phase 13 charter: no OUTBOUND action without explicit operator
+// click. Writing motivation-score metadata IS NOT outbound; the
+// reply-send path remains operator-only via /api/deal-action/[id].
 //
 // Read posture: pulls the latest inbound from the listing's notes
 // field via lib/notes.lastInboundLine — same source of truth the
-// jarvis-brief route uses for timeline context. This is the parsed-
-// notes path, not a direct Quo API call. Direct Quo can come later
-// if the operator needs scan-time fidelity beyond what Make scrapes.
+// jarvis-brief route uses for timeline context.
 
 import { NextResponse } from "next/server";
-import { getListing } from "@/lib/airtable";
+import { getListing, updateListingRecord } from "@/lib/airtable";
 import { audit } from "@/lib/audit-log";
 import { lastInboundLine, parseConversation } from "@/lib/notes";
 import { classifyInboundReply } from "@/lib/sentinel/classifier";
+import type { SentinelClassification } from "@/lib/sentinel/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -50,9 +52,45 @@ async function readBodyOverride(req: Request): Promise<string | null> {
   return null;
 }
 
+type MotivationApplyOutcome =
+  | { applied: false; reason: "not_requested" | "intent_not_motivated_or_lukewarm" | "no_hint" | "existing_score_set" | "write_error"; existing: number | null; hint: number | null; error?: string }
+  | { applied: true; written_score: number; previous: number | null };
+
+async function maybeApplyMotivation(
+  apply: boolean,
+  recordId: string,
+  classification: SentinelClassification,
+  existing: number | null,
+): Promise<MotivationApplyOutcome> {
+  if (!apply) return { applied: false, reason: "not_requested", existing, hint: classification.motivation_score_hint };
+  if (
+    classification.intent !== "motivated" &&
+    classification.intent !== "lukewarm"
+  ) {
+    return { applied: false, reason: "intent_not_motivated_or_lukewarm", existing, hint: classification.motivation_score_hint };
+  }
+  if (classification.motivation_score_hint == null) {
+    return { applied: false, reason: "no_hint", existing, hint: null };
+  }
+  // Never stomp an operator-set value.
+  if (existing != null) {
+    return { applied: false, reason: "existing_score_set", existing, hint: classification.motivation_score_hint };
+  }
+  try {
+    await updateListingRecord(recordId, {
+      Seller_Motivation_Score: classification.motivation_score_hint,
+    });
+    return { applied: true, written_score: classification.motivation_score_hint, previous: null };
+  } catch (err) {
+    return { applied: false, reason: "write_error", existing, hint: classification.motivation_score_hint, error: String(err).slice(0, 300) };
+  }
+}
+
 async function handle(req: Request, ctx: Ctx): Promise<Response> {
   const t0 = Date.now();
   const { recordId } = await ctx.params;
+  const url = new URL(req.url);
+  const applyMotivation = url.searchParams.get("apply_motivation") === "1";
 
   const listing = await getListing(recordId);
   if (!listing) {
@@ -101,6 +139,13 @@ async function handle(req: Request, ctx: Ctx): Promise<Response> {
       recent_timeline_snippets: recent,
     });
 
+    const motivation = await maybeApplyMotivation(
+      applyMotivation,
+      recordId,
+      classification,
+      listing.sellerMotivationScore ?? null,
+    );
+
     await audit({
       agent: "sentinel",
       event: "sentinel_classified",
@@ -111,6 +156,7 @@ async function handle(req: Request, ctx: Ctx): Promise<Response> {
         agent_name: listing.agentName,
         body_length: body.length,
         body_source: override ? "explicit_post" : "latest_inbound_from_notes",
+        apply_motivation: applyMotivation,
       },
       outputSummary: {
         intent: classification.intent,
@@ -119,16 +165,40 @@ async function handle(req: Request, ctx: Ctx): Promise<Response> {
         motivation_score_hint: classification.motivation_score_hint,
         reasoning: classification.reasoning,
         model: classification.model,
+        motivation_apply: motivation,
       },
       decision: classification.intent,
       ms: Date.now() - t0,
     });
+
+    // Separate audit row when motivation was successfully written —
+    // makes Pulse's "Sentinel auto-scored X of Y inbounds this week"
+    // baseline straightforward.
+    if (motivation.applied) {
+      await audit({
+        agent: "sentinel",
+        event: "sentinel_motivation_applied",
+        status: "confirmed_success",
+        recordId,
+        inputSummary: {
+          intent: classification.intent,
+          confidence: classification.confidence,
+        },
+        outputSummary: {
+          written_score: motivation.written_score,
+          previous: motivation.previous,
+        },
+        decision: `score_${motivation.written_score}`,
+        ms: Date.now() - t0,
+      });
+    }
 
     return NextResponse.json({
       recordId,
       body_source: override ? "explicit_post" : "latest_inbound_from_notes",
       classified_body: body,
       classification,
+      motivation_apply: motivation,
       elapsed_ms: Date.now() - t0,
     });
   } catch (err) {
