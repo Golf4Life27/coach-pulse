@@ -23,6 +23,7 @@ import type {
 } from "@/types/jarvis";
 import { CARD_TYPE_CONFIG, URGENCY_LABEL } from "@/types/jarvis";
 import { showToast } from "@/components/Toast";
+import PricingBlock from "@/components/brocard/PricingBlock";
 
 const DEPTH_LABEL: Record<DepthScore, string> = {
   0: "Cold",
@@ -199,6 +200,15 @@ function CardBlock({ card, onAfterSend }: { card: BroCard; onAfterSend: () => vo
           <p className="pointer-events-auto select-text text-xs text-gray-500 italic">{card.why_this_matters}</p>
         )}
       </div>
+
+      {/* Phase 4D / L.1 — pricing block. Renders v1.3 range envelope (phase4),
+          legacy single-track offers, or "no math yet" affordance based on
+          the discriminated pricing payload attached by the brief route. */}
+      {card.pricing && (
+        <div className="relative z-10">
+          <PricingBlock pricing={card.pricing} recordId={card.recordId} />
+        </div>
+      )}
 
       {/* Option tabs */}
       {card.options.length > 0 && (

@@ -20,6 +20,7 @@ import type {
   DealContext,
   JarvisBrief,
 } from "@/types/jarvis";
+import { classifyBroCardPricing } from "@/lib/brocard/pricing";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -40,6 +41,11 @@ const ANTHROPIC_MODEL = "claude-sonnet-4-5-20250929";
 
 interface RankedDeal {
   context: DealContext;
+  // The raw Listing row preserved through Pass 2 → Phase 4D L.1 attaches
+  // the BroCard pricing payload post-LLM by passing this through the
+  // classifier. Carried alongside `context` because DealContext is the
+  // LLM-facing prompt shape and doesn't expose the pricing fields.
+  listing: Listing;
   score: number;
   outreachStatus: string | null;
   agentContext: AgentContext | null;
@@ -123,6 +129,7 @@ function fallbackBroCard(deal: RankedDeal, rank: number): BroCard {
     recommendation_index: 0,
     agentContext: deal.agentContext ?? undefined,
     dealStage: ctx.dealStage,
+    pricing: classifyBroCardPricing(deal.listing),
     metadata: { fallback: true },
   };
 }
@@ -350,6 +357,7 @@ export async function GET(req: Request) {
         if (resurrected) score += 90;
         return {
           context: x.ctx,
+          listing: x.listing,
           score,
           outreachStatus: status,
           agentContext: null,
@@ -533,12 +541,14 @@ MULTIFAMILY COUNTER PRICING:
 
     // Ensure agentContext + dealStage are present on every card (LLM may
     // drop them — they live outside the JSON contract since the prompt
-    // doesn't ask for them explicitly).
+    // doesn't ask for them explicitly). Phase 4D / L.1 — also attach the
+    // pricing payload here, computed pure-locally from the ranked listing.
     cards = cards.map((c) => {
       const r = ranked.find((x) => x.context.recordId === c.recordId);
       const out: typeof c = { ...c };
       if (!out.agentContext && r?.agentContext) out.agentContext = r.agentContext;
       if (!out.dealStage && r?.context.dealStage) out.dealStage = r.context.dealStage;
+      if (r?.listing) out.pricing = classifyBroCardPricing(r.listing);
       return out;
     });
 
