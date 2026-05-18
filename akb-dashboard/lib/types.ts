@@ -95,6 +95,15 @@ export interface Listing {
   estRehabLow?: number | null;
   estRehabMid?: number | null;
   estRehabHigh?: number | null;
+  // Phase 4B.1 — Appraiser rehab endpoint writes these alongside
+  // estRehab/estRehabMid. Existing pricing-route 4B leg only wrote
+  // estRehabLow/Mid/High + rehabConfidenceScore + redFlags; the new
+  // /api/agents/appraiser/rehab/[recordId] adds the timestamp + the
+  // structured BBC-calibration JSON (bbc_tier + market_tier + anchor
+  // + multiplier + vision line items).
+  rehabEstimatedAt?: string | null;
+  rehabLineItemsJson?: string | null;
+  rehabRedFlags?: string | null;
   photoConfidence?: number | null;
   lineItemsJson?: string | null;
   redFlags?: string[] | string | null;

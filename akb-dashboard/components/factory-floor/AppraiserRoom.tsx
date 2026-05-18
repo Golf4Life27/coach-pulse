@@ -37,8 +37,8 @@ export default function AppraiserRoom() {
   const daysToExhaustion = rent?.burn_rate.days_until_exhaustion_estimate ?? null;
   const callsRemaining = rent?.burn_rate.estimated_calls_remaining ?? null;
 
-  // ARV coverage rollup across active deals. Computed inline from
-  // briefing.active_deals; no separate briefing field needed.
+  // ARV + Rehab coverage rollups across active deals. Computed inline
+  // from briefing.active_deals; no separate briefing field needed.
   const activeDeals = briefing?.structured.active_deals ?? [];
   const arvCoverage = {
     total: activeDeals.length,
@@ -47,11 +47,21 @@ export default function AppraiserRoom() {
     missing: activeDeals.filter((d) => d.arv_freshness === "missing").length,
     low_confidence: activeDeals.filter((d) => d.arv_confidence === "LOW").length,
   };
+  const rehabCoverage = {
+    total: activeDeals.length,
+    current: activeDeals.filter((d) => d.rehab_freshness === "current").length,
+    stale: activeDeals.filter((d) => d.rehab_freshness === "stale").length,
+    missing: activeDeals.filter((d) => d.rehab_freshness === "missing").length,
+    heavy_or_gut: activeDeals.filter(
+      (d) => d.bbc_tier === "Heavy" || d.bbc_tier === "Gut",
+    ).length,
+  };
 
   let tierOverride: SeverityTier | undefined;
   if (daysToExhaustion != null && daysToExhaustion <= 3) tierOverride = 2;
   else if (daysToExhaustion != null && daysToExhaustion <= 7) tierOverride = 1;
   else if (arvCoverage.low_confidence > 0) tierOverride = 1;
+  else if (rehabCoverage.heavy_or_gut > 0) tierOverride = 1;
 
   return (
     <AgentRoom
@@ -105,6 +115,39 @@ export default function AppraiserRoom() {
                 <div className="text-gray-500">LOW conf</div>
                 <div className={`font-semibold text-sm ${arvCoverage.low_confidence > 0 ? "text-orange-300" : "text-gray-200"}`}>
                   {arvCoverage.low_confidence}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        {rehabCoverage.total > 0 && (
+          <div className="border-t border-[#21262d] pt-2">
+            <div className="text-[10px] uppercase tracking-wide text-gray-500 mb-1">
+              Rehab across {rehabCoverage.total} active
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-[11px]">
+              <div className="bg-[#161b22] rounded px-2 py-1">
+                <div className="text-gray-500">Current</div>
+                <div className="text-emerald-300 font-semibold text-sm">
+                  {rehabCoverage.current}
+                </div>
+              </div>
+              <div className="bg-[#161b22] rounded px-2 py-1">
+                <div className="text-gray-500">Stale &gt;30d</div>
+                <div className={`font-semibold text-sm ${rehabCoverage.stale > 0 ? "text-amber-300" : "text-gray-200"}`}>
+                  {rehabCoverage.stale}
+                </div>
+              </div>
+              <div className="bg-[#161b22] rounded px-2 py-1">
+                <div className="text-gray-500">Missing</div>
+                <div className={`font-semibold text-sm ${rehabCoverage.missing > 0 ? "text-amber-300" : "text-gray-200"}`}>
+                  {rehabCoverage.missing}
+                </div>
+              </div>
+              <div className="bg-[#161b22] rounded px-2 py-1">
+                <div className="text-gray-500">Heavy/Gut</div>
+                <div className={`font-semibold text-sm ${rehabCoverage.heavy_or_gut > 0 ? "text-orange-300" : "text-gray-200"}`}>
+                  {rehabCoverage.heavy_or_gut}
                 </div>
               </div>
             </div>

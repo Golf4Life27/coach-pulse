@@ -9,6 +9,7 @@ import { ALL_DD_ITEMS } from "@/lib/actionQueue";
 import { showToast } from "@/components/Toast";
 import MaverickDealCommentary from "@/components/MaverickDealCommentary";
 import AppraiserArvPanel from "@/components/AppraiserArvPanel";
+import AppraiserRehabPanel from "@/components/AppraiserRehabPanel";
 import RelatedDealsRecall from "@/components/RelatedDealsRecall";
 import ScribeDealCommentary from "@/components/ScribeDealCommentary";
 import type { DealContext } from "@/types/jarvis";
@@ -241,6 +242,22 @@ export default function DealWorkspace() {
           estRehab: listing.estRehab ?? null,
           wholesaleFeeTarget: listing.wholesaleFeeTarget ?? null,
           listPrice: listing.listPrice,
+        }}
+      />
+
+      {/* Phase 4B.1 — Appraiser rehab panel */}
+      <AppraiserRehabPanel
+        recordId={listing.id}
+        listing={{
+          estRehab: listing.estRehab ?? null,
+          estRehabLow: listing.estRehabLow ?? null,
+          estRehabMid: listing.estRehabMid ?? null,
+          estRehabHigh: listing.estRehabHigh ?? null,
+          rehabConfidenceScore: listing.rehabConfidenceScore ?? null,
+          rehabEstimatedAt: listing.rehabEstimatedAt ?? null,
+          rehabLineItemsJson: listing.rehabLineItemsJson ?? null,
+          rehabRedFlags: listing.rehabRedFlags ?? null,
+          buildingSqFt: listing.buildingSqFt ?? null,
         }}
       />
 

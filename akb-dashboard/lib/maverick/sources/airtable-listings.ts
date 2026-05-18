@@ -13,6 +13,7 @@ import { getListings } from "@/lib/airtable";
 import type { Listing } from "@/lib/types";
 import { runWithTimeout } from "../timeout";
 import type { FetchOpts, SourceResult } from "../types";
+import { classifyBbcTierFromRate } from "@/lib/appraiser/rehab-calibration";
 
 // Bumped from 8s → 15s after Gate 2 first-smoke (5/15) observed
 // concurrent Airtable fetches contending: when all 3 Airtable calls
@@ -62,6 +63,19 @@ export interface ListingsActiveDeal {
   arv_freshness: "current" | "stale" | "missing";
   /** Days since last ARV validation; null when never validated. */
   arv_age_days: number | null;
+  // Phase 4B.1 (5/18) — Rehab state per active deal. Same pattern as
+  // ARV state above so the Appraiser room can roll up rehab coverage
+  // alongside ARV coverage.
+  est_rehab_mid: number | null;
+  rehab_confidence_score: number | null;
+  rehab_estimated_at: string | null;
+  /** BBC tier derived from est_rehab_mid / building_sqft via midpoint
+   *  thresholds. Null when rehab or sqft is missing. */
+  bbc_tier: "Cosmetic" | "Light" | "Medium" | "Heavy" | "Gut" | null;
+  /** "current" (estimated ≤30d), "stale" (>30d), "missing" (null). */
+  rehab_freshness: "current" | "stale" | "missing";
+  /** Days since last rehab estimate; null when never estimated. */
+  rehab_age_days: number | null;
 }
 
 export interface AirtableListingsState {
@@ -107,6 +121,22 @@ export function summarizeListings(
           : arvAgeDays != null && arvAgeDays > 30
             ? "stale"
             : "current";
+      const rehabAgeDays = daysBetween(now, l.rehabEstimatedAt ?? null);
+      const rehabFreshness: ListingsActiveDeal["rehab_freshness"] =
+        l.rehabEstimatedAt == null
+          ? "missing"
+          : rehabAgeDays != null && rehabAgeDays > 30
+            ? "stale"
+            : "current";
+      // BBC tier inferred from calibrated rate ($/sqft); null when
+      // rehab or sqft is missing. Falls back to estRehab when
+      // estRehabMid is null (Phase 4B endpoint writes both, but
+      // pre-Phase-4B records may only have estRehab from old pricing).
+      const rehabMid = l.estRehabMid ?? l.estRehab ?? null;
+      const bbcTier: ListingsActiveDeal["bbc_tier"] =
+        rehabMid != null && l.buildingSqFt != null && l.buildingSqFt > 0
+          ? classifyBbcTierFromRate(rehabMid / l.buildingSqFt)
+          : null;
       active.push({
         id: l.id,
         address: l.address ?? "(no address)",
@@ -127,6 +157,12 @@ export function summarizeListings(
         arv_validated_at: l.arvValidatedAt ?? null,
         arv_freshness: arvFreshness,
         arv_age_days: arvAgeDays,
+        est_rehab_mid: rehabMid,
+        rehab_confidence_score: l.rehabConfidenceScore ?? null,
+        rehab_estimated_at: l.rehabEstimatedAt ?? null,
+        bbc_tier: bbcTier,
+        rehab_freshness: rehabFreshness,
+        rehab_age_days: rehabAgeDays,
       });
     }
   }

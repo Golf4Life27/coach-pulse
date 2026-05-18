@@ -70,6 +70,10 @@ const LISTING_FIELDS: Record<string, string> = {
   // ── D3 Phase 0b math-filter inputs (formula fields read-only by design)
   flduzFLSaFBfIl9Rn: "prevListPrice",
   fldyDCVwvn9jfdiES: "estRehabMid",
+  // Phase 4B.1 — Appraiser rehab endpoint writes these:
+  fldRU4ITbMM4ZjaaK: "rehabEstimatedAt",
+  fldi3i6bnyzt2lKsu: "rehabLineItemsJson",
+  fldeLFgCV7jaf4Wn3: "rehabRedFlags",
   fldoNZxSZqQsCLIW6: "realArvMedian",
   // Phase 4A.1 — Appraiser ARV endpoint writes these fields (existing
   // pricing route writes Real_ARV_* but leaves comp count + avg + JSON
@@ -157,6 +161,9 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "Est_Rehab_Low": "estRehabLow",
   "Est_Rehab_Mid": "estRehabMid",
   "Est_Rehab_High": "estRehabHigh",
+  "Rehab_Estimated_At": "rehabEstimatedAt",
+  "Rehab_Line_Items_JSON": "rehabLineItemsJson",
+  "Rehab_Red_Flags": "rehabRedFlags",
   "Photo_Confidence": "photoConfidence",
   "Line_Items_JSON": "lineItemsJson",
   "Red_Flags": "redFlags",

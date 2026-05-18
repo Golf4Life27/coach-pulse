@@ -190,6 +190,12 @@ describe("renderTemplate — active deals section", () => {
             arv_validated_at: null,
             arv_freshness: "missing",
             arv_age_days: null,
+            est_rehab_mid: null,
+            rehab_confidence_score: null,
+            rehab_estimated_at: null,
+            bbc_tier: null,
+            rehab_freshness: "missing",
+            rehab_age_days: null,
           },
         ],
       }),
@@ -222,6 +228,12 @@ describe("renderTemplate — active deals section", () => {
       arv_validated_at: null,
       arv_freshness: "missing",
       arv_age_days: null,
+      est_rehab_mid: null,
+      rehab_confidence_score: null,
+      rehab_estimated_at: null,
+      bbc_tier: null,
+      rehab_freshness: "missing",
+      rehab_age_days: null,
     } as const;
     const out = renderTemplate(
       minimalBriefing({
