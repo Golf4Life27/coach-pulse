@@ -75,6 +75,8 @@ const LISTING_FIELDS: Record<string, string> = {
   fldi3i6bnyzt2lKsu: "rehabLineItemsJson",
   fldeLFgCV7jaf4Wn3: "rehabRedFlags",
   fldoNZxSZqQsCLIW6: "realArvMedian",
+  // Phase 4C.1 — RentCast AVM rent estimate, drives landlord-track MAO.
+  fldrFB0owY6BnQewr: "estimatedMonthlyRent",
   // Phase 4A.1 — Appraiser ARV endpoint writes these fields (existing
   // pricing route writes Real_ARV_* but leaves comp count + avg + JSON
   // unwritten). New /api/agents/appraiser/arv/[recordId] fills them.
@@ -174,6 +176,7 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "Real_ARV_Low": "realArvLow",
   "Real_ARV_High": "realArvHigh",
   "Real_ARV_Median": "realArvMedian",
+  "Estimated_Monthly_Rent": "estimatedMonthlyRent",
   "ARV_Confidence": "arvConfidence",
   "ARV_Comp_Count": "arvCompCount",
   "ARV_Comp_Avg_PrSqFt": "arvCompAvgPrSqFt",

@@ -110,6 +110,11 @@ export interface Listing {
   photoAnalyzedAt?: string | null;
   visualVerified?: boolean;
   visualSource?: string | null;
+  // Phase 4C.1 — RentCast AVM rent estimate (monthly USD). Drives
+  // the landlord-track MAO: (rent × 12) / cap_rate − rehab −
+  // wholesale_fee. Written by /api/agents/appraiser/buyer-intelligence/
+  // [recordId]. Null until first dual-track run pulls RentCast rent.
+  estimatedMonthlyRent?: number | null;
   // Phase 3 — ARV validation
   realArvLow?: number | null;
   realArvHigh?: number | null;
