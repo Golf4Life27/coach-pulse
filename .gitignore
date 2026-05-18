@@ -1,0 +1,8 @@
+# Outer repo wrapper — prevents `git add -A` from staging
+# node_modules / build artifacts inside akb-dashboard. The
+# akb-dashboard/.gitignore covers these relative to that subtree;
+# this file applies the same protection when staging from the
+# parent directory.
+**/node_modules/
+**/.next/
+**/.vercel/
