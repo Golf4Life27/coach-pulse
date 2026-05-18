@@ -45,6 +45,12 @@ const LISTING_FIELDS: Record<string, string> = {
   fldiNKFpIBUYgg7el: "actionCardState",
   fld3IhR1DXzcVuq6F: "lastInboundAt",
   fldaK4lR5UNvycg11: "lastOutboundAt",
+  // Phase 11.2 (5/18) — email-attributable outbound send timestamp.
+  // Crier staleness math takes max() across this + lastOutreachDate
+  // (SMS) + lastInboundAt + lastOutboundAt so active email negotiations
+  // no longer surface as false-stale. Written by lib/gmail.ts sendEmail
+  // when a listing recordId is in scope.
+  fld4Jzjs8etKact6g: "lastEmailOutreachDate",
   // ── Pre-Outreach Gate (orchestrator Gate 1) inputs
   fldif6WwcJeXZtJcX: "mlsStatus",
   fldrlbePeS9glaFQu: "propertyType",
@@ -106,6 +112,7 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "Action_Card_State": "actionCardState",
   "Last_Inbound_At": "lastInboundAt",
   "Last_Outbound_At": "lastOutboundAt",
+  "Last_Email_Outreach_Date": "lastEmailOutreachDate",
   // ── Pre-Outreach Gate (orchestrator Gate 1)
   "MLS_Status": "mlsStatus",
   "Property_Type": "propertyType",

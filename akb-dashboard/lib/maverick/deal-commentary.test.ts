@@ -4,6 +4,7 @@ import { describe, it, expect } from "vitest";
 import {
   inferDealCommentary,
   filterEventsForDeal,
+  latestContactIso,
   type DealCommentaryListing,
 } from "./deal-commentary";
 import type { StructuredBriefing } from "./briefing";
@@ -17,6 +18,7 @@ function listing(over: Partial<DealCommentaryListing> = {}): DealCommentaryListi
     lastOutreachDate: null,
     lastInboundAt: null,
     lastOutboundAt: null,
+    lastEmailOutreachDate: null,
     ...over,
   };
 }
@@ -48,6 +50,109 @@ function briefing(events: RecentAuditEvent[]): Pick<StructuredBriefing, "audit_s
     },
   };
 }
+
+describe("latestContactIso (Phase 11.2 staleness max)", () => {
+  it("returns lastOutreachDate when SMS is the only history", () => {
+    expect(
+      latestContactIso(listing({ lastOutreachDate: "2026-05-10T00:00:00Z" })),
+    ).toBe("2026-05-10T00:00:00Z");
+  });
+
+  it("returns lastEmailOutreachDate when email is the only history", () => {
+    expect(
+      latestContactIso(
+        listing({ lastEmailOutreachDate: "2026-05-15T18:00:00Z" }),
+      ),
+    ).toBe("2026-05-15T18:00:00Z");
+  });
+
+  it("returns SMS date when SMS is more recent than email", () => {
+    expect(
+      latestContactIso(
+        listing({
+          lastOutreachDate: "2026-05-17T12:00:00Z",
+          lastEmailOutreachDate: "2026-05-10T00:00:00Z",
+        }),
+      ),
+    ).toBe("2026-05-17T12:00:00Z");
+  });
+
+  it("returns email date when email is more recent than SMS (23 Fields case)", () => {
+    // Pre-fix: fallback chain `lastInboundAt ?? lastOutboundAt ?? lastOutreachDate`
+    // would pick lastOutreachDate even though email is more recent.
+    // Post-fix: max() across all four returns the email date correctly.
+    expect(
+      latestContactIso(
+        listing({
+          lastOutreachDate: "2026-05-04T00:00:00Z", // SMS sent 14d ago
+          lastEmailOutreachDate: "2026-05-17T15:30:00Z", // email sent today
+        }),
+      ),
+    ).toBe("2026-05-17T15:30:00Z");
+  });
+
+  it("returns inbound timestamp when it's the most recent contact", () => {
+    expect(
+      latestContactIso(
+        listing({
+          lastOutreachDate: "2026-05-04T00:00:00Z",
+          lastEmailOutreachDate: "2026-05-10T00:00:00Z",
+          lastInboundAt: "2026-05-17T08:00:00Z",
+        }),
+      ),
+    ).toBe("2026-05-17T08:00:00Z");
+  });
+
+  it("returns null when none of the four fields are populated", () => {
+    expect(latestContactIso(listing())).toBeNull();
+  });
+
+  it("ignores unparseable timestamps and uses the next-most-recent valid one", () => {
+    expect(
+      latestContactIso(
+        listing({
+          lastEmailOutreachDate: "not-a-date",
+          lastOutreachDate: "2026-05-10T00:00:00Z",
+        }),
+      ),
+    ).toBe("2026-05-10T00:00:00Z");
+  });
+});
+
+describe("inferDealCommentary — 23 Fields email-newer scenario (Phase 11.2)", () => {
+  it("does NOT surface stale-followup priority when only SMS_date is old but email is recent", () => {
+    // The exact failure mode from last week's 23 Fields negotiation:
+    // SMS sent 20 days ago (Last_Outreach_Date), email reply exchange
+    // happening today (Last_Email_Outreach_Date). Pre-fix this surfaced
+    // as tier-2 "20 days without contact"; post-fix returns nothing.
+    const r = inferDealCommentary(
+      null,
+      "recA",
+      listing({
+        outreachStatus: "Negotiating",
+        lastOutreachDate: "2026-04-28T00:00:00Z",       // 20d ago
+        lastEmailOutreachDate: "2026-05-17T15:30:00Z", // today
+      }),
+      new Date("2026-05-18T12:00:00Z"),
+    );
+    expect(r).toEqual([]);
+  });
+
+  it("still surfaces stale-followup when BOTH SMS and email are old", () => {
+    const r = inferDealCommentary(
+      null,
+      "recA",
+      listing({
+        outreachStatus: "Negotiating",
+        lastOutreachDate: "2026-04-28T00:00:00Z",       // 20d ago
+        lastEmailOutreachDate: "2026-04-30T00:00:00Z", // 18d ago
+      }),
+      new Date("2026-05-18T12:00:00Z"),
+    );
+    expect(r).toHaveLength(1);
+    expect(r[0].tier).toBe(2);
+  });
+});
 
 describe("filterEventsForDeal", () => {
   it("returns events matching the recordId", () => {

@@ -53,6 +53,7 @@ function listing(over: Partial<Listing> & { id: string }): Listing {
     actionCardState: null,
     lastInboundAt: null,
     lastOutboundAt: null,
+    lastEmailOutreachDate: null,
     agentPriorOutreachCount: null,
     ...over,
   };

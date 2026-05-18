@@ -297,6 +297,7 @@ describe("filterListings", () => {
       actionCardState: null,
       lastInboundAt: null,
       lastOutboundAt: null,
+      lastEmailOutreachDate: null,
       ...over,
     };
   }

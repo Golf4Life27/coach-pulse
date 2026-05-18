@@ -213,6 +213,8 @@ export default function DealWorkspace() {
           lastOutreachDate: listing.lastOutreachDate ?? null,
           lastInboundAt: listing.lastInboundAt ?? null,
           lastOutboundAt: listing.lastOutboundAt ?? null,
+          // Phase 11.2 — email-attributable contact timestamp.
+          lastEmailOutreachDate: listing.lastEmailOutreachDate ?? null,
         }}
       />
 

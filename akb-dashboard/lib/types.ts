@@ -33,6 +33,13 @@ export interface Listing {
   actionCardState: "Open" | "Held" | "Cleared" | null;
   lastInboundAt: string | null;
   lastOutboundAt: string | null;
+  // Phase 11.2 — email outbound timestamp. Crier staleness uses max()
+  // of all four contact timestamps to avoid false-stale on active email
+  // negotiations (the 23 Fields scenario). Null until first attributable
+  // gmail send. Written by lib/gmail.ts sendEmail when recordId is in
+  // scope; manual mailto: sends from outside the app cannot populate this
+  // (see Checklist 11.2 gap notes).
+  lastEmailOutreachDate: string | null;
   // ── Pre-Outreach Gate inputs (added 5/13 for orchestrator Gate 1)
   mlsStatus?: string | null;
   propertyType?: string | null;

@@ -14,6 +14,7 @@
 // getThreadsForEmail returns [] when not configured.
 
 import { audit } from "./audit-log";
+import { updateListingRecord } from "./airtable";
 
 export interface GmailMessage {
   id: string;
@@ -168,6 +169,14 @@ interface SendOpts {
   body: string;
   /** When true, create a Gmail draft instead of sending. */
   asDraft?: boolean;
+  /**
+   * Phase 11.2 — when set, a successful live send writes
+   * `Last_Email_Outreach_Date = <send ts>` to this Listings_V1 row.
+   * Drafts and failed sends do not write. Callers without a listing
+   * context (e.g., buyer-side warmup/intake/fire-blast) omit this
+   * and the write is skipped — matches the documented attribution gap.
+   */
+  listingRecordId?: string;
 }
 
 export type GmailAuditStatus = "confirmed_success" | "confirmed_failure" | "uncertain";
@@ -469,6 +478,37 @@ export async function sendEmail(opts: SendOpts): Promise<GmailSendResult> {
     decision: verify.audit_status === "confirmed_success" ? "verified_sent" : "verification_failed",
     ms: Date.now() - t0,
   });
+
+  // Phase 11.2 — listing-attributable send. Write Last_Email_Outreach_Date
+  // so Crier staleness math sees this as recent contact. Only fires for
+  // confirmed-success sends with a listing recordId in scope. Failures
+  // are audited but never bubble to the caller (the email already sent).
+  if (opts.listingRecordId && verify.audit_status === "confirmed_success") {
+    const sendIso = new Date().toISOString();
+    try {
+      await updateListingRecord(opts.listingRecordId, {
+        Last_Email_Outreach_Date: sendIso,
+      });
+      await audit({
+        agent: "crier",
+        event: "last_email_outreach_written",
+        status: "confirmed_success",
+        inputSummary: { listing_record_id: opts.listingRecordId },
+        outputSummary: { ts: sendIso, gmail_message_id: data.id },
+        externalId: data.id,
+      });
+    } catch (err) {
+      await audit({
+        agent: "crier",
+        event: "last_email_outreach_write_failed",
+        status: "confirmed_failure",
+        inputSummary: { listing_record_id: opts.listingRecordId },
+        outputSummary: { ts: sendIso, gmail_message_id: data.id },
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   return result;
 }
 

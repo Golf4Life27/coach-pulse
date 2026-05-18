@@ -33,9 +33,53 @@ export interface DealCommentarySignal {
 /** Minimal listing shape the inferrer needs — avoids tight coupling to lib/types. */
 export interface DealCommentaryListing {
   outreachStatus: string | null;
+  /** SMS-attributable outbound send timestamp (Last_Outreach_Date in Airtable). */
   lastOutreachDate: string | null;
+  /** Most recent inbound (any channel). */
   lastInboundAt: string | null;
+  /** Most recent outbound (any channel — SMS via Quo). */
   lastOutboundAt: string | null;
+  /**
+   * Phase 11.2 — email-attributable outbound timestamp
+   * (Last_Email_Outreach_Date in Airtable). Combined with the other
+   * three via max() to compute the actual last-contact instant.
+   */
+  lastEmailOutreachDate: string | null;
+}
+
+/**
+ * Phase 11.2 — true "last contact" instant across SMS + email + inbound.
+ * Replaces the prior fallback-chain semantics (`a ?? b ?? c`) which
+ * could pick an OLDER timestamp when a newer one existed on a different
+ * field. Returns the most recent parseable ISO across all four inputs,
+ * or null when none are parseable. Pure.
+ *
+ * Test cases that drove this fix:
+ *   - SMS-only history: returns lastOutreachDate (unchanged behavior)
+ *   - Email-only history: returns lastEmailOutreachDate (was null pre-fix)
+ *   - Mixed history, SMS newer: returns SMS date
+ *   - Mixed history, email newer (the 23 Fields case): returns email date
+ *   - All null: returns null (caller falls back to created-at elsewhere)
+ */
+export function latestContactIso(listing: DealCommentaryListing): string | null {
+  const candidates = [
+    listing.lastInboundAt,
+    listing.lastOutboundAt,
+    listing.lastOutreachDate,
+    listing.lastEmailOutreachDate,
+  ];
+  let bestIso: string | null = null;
+  let bestMs = -Infinity;
+  for (const iso of candidates) {
+    if (!iso) continue;
+    const t = new Date(iso).getTime();
+    if (isNaN(t)) continue;
+    if (t > bestMs) {
+      bestMs = t;
+      bestIso = iso;
+    }
+  }
+  return bestIso;
 }
 
 const CRIER_SILENCE_TIER_2_DAYS = 14;
@@ -60,8 +104,10 @@ export function inferDealCommentary(
     listing.outreachStatus === "Negotiating" ||
     listing.outreachStatus === "Response Received"
   ) {
-    const lastTouchIso =
-      listing.lastInboundAt ?? listing.lastOutboundAt ?? listing.lastOutreachDate;
+    // Phase 11.2 — true most-recent contact across SMS + email + inbound.
+    // The prior fallback-chain semantics surfaced false-stale on active
+    // email negotiations (23 Fields). max() across all four fixes it.
+    const lastTouchIso = latestContactIso(listing);
     const days = daysSince(lastTouchIso, now);
     if (days != null && days >= CRIER_SILENCE_TIER_2_DAYS) {
       signals.push({
