@@ -25,6 +25,7 @@ import SentryRoom from "./SentryRoom";
 import AppraiserRoom from "./AppraiserRoom";
 import SentinelRoom from "./SentinelRoom";
 import ScoutRoom from "./ScoutRoom";
+import ScribeRoom from "./ScribeRoom";
 import StandingByRoom from "./StandingByRoom";
 
 export default function FactoryFloor() {
@@ -56,12 +57,7 @@ export default function FactoryFloor() {
           role="Outreach drafting"
           shipsIn="Phase 13 — templates + voice library"
         />
-        <StandingByRoom
-          agent="scribe"
-          displayName="Scribe"
-          role="Contract handling"
-          shipsIn="Phase 5 — DocuSign MCP wiring"
-        />
+        <ScribeRoom />
         <StandingByRoom
           agent="ledger"
           displayName="Ledger"
