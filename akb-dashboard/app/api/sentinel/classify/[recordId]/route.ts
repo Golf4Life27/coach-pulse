@@ -30,6 +30,7 @@ import { getListing, updateListingRecord } from "@/lib/airtable";
 import { audit } from "@/lib/audit-log";
 import { lastInboundLine, parseConversation } from "@/lib/notes";
 import { classifyInboundReply } from "@/lib/sentinel/classifier";
+import { decideMotivationApply } from "@/lib/sentinel/motivation-gate";
 import type { SentinelClassification } from "@/lib/sentinel/types";
 
 export const runtime = "nodejs";
@@ -53,36 +54,51 @@ async function readBodyOverride(req: Request): Promise<string | null> {
 }
 
 type MotivationApplyOutcome =
-  | { applied: false; reason: "not_requested" | "intent_not_motivated_or_lukewarm" | "no_hint" | "existing_score_set" | "write_error"; existing: number | null; hint: number | null; error?: string }
+  | {
+      applied: false;
+      reason:
+        | "not_requested"
+        | "intent_not_motivated_or_lukewarm"
+        | "no_hint"
+        | "existing_score_set"
+        | "write_error";
+      existing: number | null;
+      hint: number | null;
+      error?: string;
+    }
   | { applied: true; written_score: number; previous: number | null };
 
+/** Wraps the pure decideMotivationApply gate with the actual write
+ *  side-effect when it resolves to "apply". Errors are captured
+ *  (never thrown) so the classify flow always returns. */
 async function maybeApplyMotivation(
   apply: boolean,
   recordId: string,
   classification: SentinelClassification,
   existing: number | null,
 ): Promise<MotivationApplyOutcome> {
-  if (!apply) return { applied: false, reason: "not_requested", existing, hint: classification.motivation_score_hint };
-  if (
-    classification.intent !== "motivated" &&
-    classification.intent !== "lukewarm"
-  ) {
-    return { applied: false, reason: "intent_not_motivated_or_lukewarm", existing, hint: classification.motivation_score_hint };
-  }
-  if (classification.motivation_score_hint == null) {
-    return { applied: false, reason: "no_hint", existing, hint: null };
-  }
-  // Never stomp an operator-set value.
-  if (existing != null) {
-    return { applied: false, reason: "existing_score_set", existing, hint: classification.motivation_score_hint };
+  const decision = decideMotivationApply({ apply, classification, existingScore: existing });
+  if (decision.decision === "skip") {
+    return {
+      applied: false,
+      reason: decision.reason,
+      existing: decision.existing_score,
+      hint: decision.hint,
+    };
   }
   try {
     await updateListingRecord(recordId, {
-      Seller_Motivation_Score: classification.motivation_score_hint,
+      Seller_Motivation_Score: decision.score,
     });
-    return { applied: true, written_score: classification.motivation_score_hint, previous: null };
+    return { applied: true, written_score: decision.score, previous: null };
   } catch (err) {
-    return { applied: false, reason: "write_error", existing, hint: classification.motivation_score_hint, error: String(err).slice(0, 300) };
+    return {
+      applied: false,
+      reason: "write_error",
+      existing,
+      hint: decision.score,
+      error: String(err).slice(0, 300),
+    };
   }
 }
 
