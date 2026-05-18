@@ -71,6 +71,17 @@ const LISTING_FIELDS: Record<string, string> = {
   flduzFLSaFBfIl9Rn: "prevListPrice",
   fldyDCVwvn9jfdiES: "estRehabMid",
   fldoNZxSZqQsCLIW6: "realArvMedian",
+  // Phase 4A.1 — Appraiser ARV endpoint writes these fields (existing
+  // pricing route writes Real_ARV_* but leaves comp count + avg + JSON
+  // unwritten). New /api/agents/appraiser/arv/[recordId] fills them.
+  fldDcIiUajkvi8Wz3: "arvConfidence",
+  fldyukQHGzGdxoDGf: "arvCompCount",
+  fld9uJ3xRjkHGYruM: "arvCompAvgPrSqFt",
+  fldIrL7bFboOEr9vj: "arvCompDetailsJson",
+  // V2.1 floor inputs the new endpoint reads (defaults Bible v3 §9):
+  //   wholesaleFeeTarget default 15000, buyerProfitTarget default 30000
+  fldSPxo0LRdGDBxcv: "wholesaleFeeTarget",
+  fldpmMwfqbXx6d58N: "buyerProfitTarget",
   fldHhSpaiNq1OPzfc: "investorMao",
   fldfE06eS402RcPCN: "yourMao",
   fldAvk2aIBU1Lh3Dz: "autoApproveV2",
@@ -156,6 +167,12 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "Real_ARV_Low": "realArvLow",
   "Real_ARV_High": "realArvHigh",
   "Real_ARV_Median": "realArvMedian",
+  "ARV_Confidence": "arvConfidence",
+  "ARV_Comp_Count": "arvCompCount",
+  "ARV_Comp_Avg_PrSqFt": "arvCompAvgPrSqFt",
+  "ARV_Comp_Details_JSON": "arvCompDetailsJson",
+  "Wholesale_Fee_Target": "wholesaleFeeTarget",
+  "Buyer_Profit_Target": "buyerProfitTarget",
   "Investor_MAO": "investorMao",
   "Your_MAO": "yourMao",
   "Auto_Approve_v2": "autoApproveV2",

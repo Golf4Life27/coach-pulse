@@ -105,6 +105,19 @@ export interface Listing {
   realArvLow?: number | null;
   realArvHigh?: number | null;
   realArvMedian?: number | null;
+  // Phase 4A.1 — Appraiser ARV endpoint writes these alongside Real_ARV_*
+  // (the existing Pricing Agent leaves them unwritten today; the new
+  // standalone /api/agents/appraiser/arv/[recordId] route fills them
+  // per the Crawler Roadmap spec).
+  arvConfidence?: "HIGH" | "MED" | "LOW" | null;
+  arvCompCount?: number | null;
+  arvCompAvgPrSqFt?: number | null;
+  arvCompDetailsJson?: string | null;
+  // Phase 4A.1 — read for the V2.1 MAO floor calc:
+  //   floor = MAX(realArvMedian - estRehab - wholesaleFeeTarget, 0)
+  // Defaults: wholesaleFeeTarget 15000, buyerProfitTarget 30000 (Bible v3).
+  wholesaleFeeTarget?: number | null;
+  buyerProfitTarget?: number | null;
   investorMao?: number | null;
   yourMao?: number | null;
   autoApproveV2?: boolean;
