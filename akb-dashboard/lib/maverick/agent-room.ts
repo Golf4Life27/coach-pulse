@@ -76,6 +76,32 @@ export function summarizeAgentActivity(
 }
 
 /**
+ * Pure diff (Phase 9.6) — given two briefing snapshots' `by_agent`
+ * counts, return the set of agent names whose activity count went UP.
+ * Drives the factory-floor pulse animation: an agent's room briefly
+ * highlights when that agent's audit count increases between polls.
+ *
+ * Decreases are ignored — they only happen when the audit-window
+ * scrolls forward and old events drop out, which is not a real
+ * "the agent just did something" signal.
+ *
+ * Returns an empty set when prev is null (first fetch — no diff
+ * available yet) or when no agent's count increased.
+ */
+export function diffAgentActivity(
+  prev: Record<string, number> | null,
+  curr: Record<string, number>,
+): Set<string> {
+  const out = new Set<string>();
+  if (!prev) return out;
+  for (const [agent, count] of Object.entries(curr)) {
+    const before = prev[agent] ?? 0;
+    if (count > before) out.add(agent);
+  }
+  return out;
+}
+
+/**
  * Pre-fetch idle state — used by factory-floor rooms to render a
  * structurally identical card before the first briefing lands. Avoids
  * a separate "loading" branch in every room component.

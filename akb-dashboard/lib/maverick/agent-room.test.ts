@@ -1,7 +1,11 @@
 // @agent: maverick — factory-floor agent-room data shaping tests.
 
 import { describe, it, expect } from "vitest";
-import { summarizeAgentActivity, formatRelativeTs } from "./agent-room";
+import {
+  summarizeAgentActivity,
+  formatRelativeTs,
+  diffAgentActivity,
+} from "./agent-room";
 import type { StructuredBriefing } from "./briefing";
 import type { RecentAuditEvent } from "./sources/vercel-kv-audit";
 
@@ -155,5 +159,34 @@ describe("formatRelativeTs", () => {
 
   it("returns the raw string when the timestamp is unparseable", () => {
     expect(formatRelativeTs("not-a-date", now)).toBe("not-a-date");
+  });
+});
+
+describe("diffAgentActivity (Phase 9.6 pulse trigger)", () => {
+  it("returns an empty set when prev is null (first fetch)", () => {
+    expect(diffAgentActivity(null, { crier: 5 })).toEqual(new Set());
+  });
+
+  it("returns the set of agents whose counts increased", () => {
+    const r = diffAgentActivity(
+      { crier: 5, sentry: 10, appraiser: 2 },
+      { crier: 7, sentry: 10, appraiser: 3 },
+    );
+    expect(r).toEqual(new Set(["crier", "appraiser"]));
+  });
+
+  it("treats absent prev keys as 0 (new agent appearing)", () => {
+    const r = diffAgentActivity({ crier: 5 }, { crier: 5, sentinel: 1 });
+    expect(r).toEqual(new Set(["sentinel"]));
+  });
+
+  it("ignores decreases — those are window-rollover artifacts, not new work", () => {
+    const r = diffAgentActivity({ crier: 10 }, { crier: 8 });
+    expect(r).toEqual(new Set());
+  });
+
+  it("returns empty when nothing changed", () => {
+    const r = diffAgentActivity({ crier: 5, sentry: 3 }, { crier: 5, sentry: 3 });
+    expect(r).toEqual(new Set());
   });
 });

@@ -21,6 +21,7 @@ function audit(by: Record<string, number>): VercelKvAuditState {
   return {
     total_events_since: Object.values(by).reduce((a, b) => a + b, 0),
     recent_events_by_agent: by,
+    recent_events: [],
     recent_failures: [],
     oldest_event_ts: null,
     newest_event_ts: null,

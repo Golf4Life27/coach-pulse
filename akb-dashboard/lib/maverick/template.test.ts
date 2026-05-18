@@ -53,6 +53,7 @@ function minimalBriefing(over: Partial<StructuredBriefing> = {}): StructuredBrie
     audit_summary: {
       total_events_since: 0,
       by_agent: {},
+      recent_events: [],
       recent_failures: [],
       mcp_call_latency: { samples: 0, p50_ms: null, p95_ms: null, p99_ms: null, by_tool: {}, over_target_count: 0, p95_target_ms: 30_000 },
     },

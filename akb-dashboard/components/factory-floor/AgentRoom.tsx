@@ -16,8 +16,14 @@
  */
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { TIER_VISUAL, type SeverityTier } from "@/lib/maverick/severity";
 import { formatRelativeTs, type AgentActivity } from "@/lib/maverick/agent-room";
+import { useBriefing } from "../BriefingProvider";
+
+// Matches PULSE_CLEAR_MS in BriefingProvider; the class is auto-removed
+// on this timer so re-renders during animation don't restart it.
+const PULSE_DURATION_MS = 1_600;
 
 export interface AgentRoomProps {
   /** Roster name (lowercase) — used for aria-label + analytics. */
@@ -51,6 +57,18 @@ export default function AgentRoom({
       : activity.tier;
   const visual = TIER_VISUAL[tier];
 
+  // Phase 9.6 — pulse when this agent's audit count increased on the
+  // most recent briefing. The class is removed on a local timer so a
+  // re-render mid-animation doesn't reset the keyframe.
+  const { pulsedAgents } = useBriefing();
+  const [pulsing, setPulsing] = useState(false);
+  useEffect(() => {
+    if (!pulsedAgents.has(agent)) return;
+    setPulsing(true);
+    const t = setTimeout(() => setPulsing(false), PULSE_DURATION_MS);
+    return () => clearTimeout(t);
+  }, [pulsedAgents, agent]);
+
   const header = (
     <div className={`flex items-center justify-between px-3 py-2 border-b ${visual.border}`}>
       <div className="min-w-0">
@@ -81,7 +99,7 @@ export default function AgentRoom({
 
   const card = (
     <div
-      className={`bg-[#0d1117] border ${visual.border} rounded-lg flex flex-col h-full ${visual.bg} transition-colors hover:bg-[#161b22]`}
+      className={`bg-[#0d1117] border ${visual.border} rounded-lg flex flex-col h-full ${visual.bg} transition-colors hover:bg-[#161b22] ${pulsing ? "maverick-agent-pulse" : ""}`}
       role="region"
       aria-label={`${displayName} agent room`}
     >
