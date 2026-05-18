@@ -7,6 +7,8 @@ import { Listing } from "@/lib/types";
 import { formatCurrency } from "@/lib/utils";
 import { ALL_DD_ITEMS } from "@/lib/actionQueue";
 import { showToast } from "@/components/Toast";
+import MaverickDealCommentary from "@/components/MaverickDealCommentary";
+import RelatedDealsRecall from "@/components/RelatedDealsRecall";
 import type { DealContext } from "@/types/jarvis";
 
 function cleanPhone(phone: string): string {
@@ -203,6 +205,17 @@ export default function DealWorkspace() {
         </span>
       </div>
 
+      {/* Phase 9.8 — Maverick deal commentary */}
+      <MaverickDealCommentary
+        recordId={listing.id}
+        listing={{
+          outreachStatus: listing.outreachStatus,
+          lastOutreachDate: listing.lastOutreachDate ?? null,
+          lastInboundAt: listing.lastInboundAt ?? null,
+          lastOutboundAt: listing.lastOutboundAt ?? null,
+        }}
+      />
+
       {/* Jarvis context strip — keystone deal-context surface */}
       {dealContext && (
         <div className="space-y-2">
@@ -324,6 +337,13 @@ export default function DealWorkspace() {
               <button type="button" onClick={handleSaveNote} disabled={savingNote || !newNote.trim()} className="bg-emerald-700 hover:bg-emerald-600 text-white text-xs px-3 py-1.5 rounded disabled:opacity-50">Save</button>
             </div>
           </div>
+
+          {/* Phase 9.8 — Related-deal recall (user-triggered) */}
+          <RelatedDealsRecall
+            agentName={listing.agentName ?? null}
+            address={listing.address}
+            excludeRecordId={listing.id}
+          />
         </div>
 
         {/* RIGHT */}
