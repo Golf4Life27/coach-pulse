@@ -52,6 +52,16 @@ export interface ListingsActiveDeal {
   agent_name: string | null;
   days_since_send: number | null;
   days_since_inbound: number | null;
+  // Phase 4A.1 (5/18) — ARV state per active deal so the Appraiser
+  // room can roll up coverage / staleness / low-confidence counts
+  // without re-fetching Airtable.
+  real_arv_median: number | null;
+  arv_confidence: "HIGH" | "MED" | "LOW" | null;
+  arv_validated_at: string | null;
+  /** "current" (validated ≤30d), "stale" (>30d), "missing" (null). */
+  arv_freshness: "current" | "stale" | "missing";
+  /** Days since last ARV validation; null when never validated. */
+  arv_age_days: number | null;
 }
 
 export interface AirtableListingsState {
@@ -90,6 +100,13 @@ export function summarizeListings(
 
     const statusLower = statusRaw.toLowerCase();
     if (ACTIVE_DEAL_STATUSES.has(statusLower)) {
+      const arvAgeDays = daysBetween(now, l.arvValidatedAt ?? null);
+      const arvFreshness: ListingsActiveDeal["arv_freshness"] =
+        l.arvValidatedAt == null
+          ? "missing"
+          : arvAgeDays != null && arvAgeDays > 30
+            ? "stale"
+            : "current";
       active.push({
         id: l.id,
         address: l.address ?? "(no address)",
@@ -105,6 +122,11 @@ export function summarizeListings(
         agent_name: l.agentName ?? null,
         days_since_send: daysBetween(now, l.lastOutboundAt ?? l.lastOutreachDate),
         days_since_inbound: daysBetween(now, l.lastInboundAt),
+        real_arv_median: l.realArvMedian ?? null,
+        arv_confidence: l.arvConfidence ?? null,
+        arv_validated_at: l.arvValidatedAt ?? null,
+        arv_freshness: arvFreshness,
+        arv_age_days: arvAgeDays,
       });
     }
   }

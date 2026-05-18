@@ -185,6 +185,11 @@ describe("renderTemplate — active deals section", () => {
             agent_name: "Candice Hardaway",
             days_since_send: 1,
             days_since_inbound: 1,
+            real_arv_median: null,
+            arv_confidence: null,
+            arv_validated_at: null,
+            arv_freshness: "missing",
+            arv_age_days: null,
           },
         ],
       }),
@@ -212,6 +217,11 @@ describe("renderTemplate — active deals section", () => {
       agent_name: null,
       days_since_send: null,
       days_since_inbound: null,
+      real_arv_median: null,
+      arv_confidence: null,
+      arv_validated_at: null,
+      arv_freshness: "missing",
+      arv_age_days: null,
     } as const;
     const out = renderTemplate(
       minimalBriefing({

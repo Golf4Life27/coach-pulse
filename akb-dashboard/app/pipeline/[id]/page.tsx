@@ -8,6 +8,7 @@ import { formatCurrency } from "@/lib/utils";
 import { ALL_DD_ITEMS } from "@/lib/actionQueue";
 import { showToast } from "@/components/Toast";
 import MaverickDealCommentary from "@/components/MaverickDealCommentary";
+import AppraiserArvPanel from "@/components/AppraiserArvPanel";
 import RelatedDealsRecall from "@/components/RelatedDealsRecall";
 import ScribeDealCommentary from "@/components/ScribeDealCommentary";
 import type { DealContext } from "@/types/jarvis";
@@ -223,6 +224,24 @@ export default function DealWorkspace() {
       <ScribeDealCommentary
         recordId={listing.id}
         envelopeId={listing.envelopeId ?? null}
+      />
+
+      {/* Phase 4A.1 — Appraiser ARV panel */}
+      <AppraiserArvPanel
+        recordId={listing.id}
+        listing={{
+          realArvMedian: listing.realArvMedian ?? null,
+          realArvLow: listing.realArvLow ?? null,
+          realArvHigh: listing.realArvHigh ?? null,
+          arvConfidence: listing.arvConfidence ?? null,
+          arvCompCount: listing.arvCompCount ?? null,
+          arvCompAvgPrSqFt: listing.arvCompAvgPrSqFt ?? null,
+          arvCompDetailsJson: listing.arvCompDetailsJson ?? null,
+          arvValidatedAt: listing.arvValidatedAt ?? null,
+          estRehab: listing.estRehab ?? null,
+          wholesaleFeeTarget: listing.wholesaleFeeTarget ?? null,
+          listPrice: listing.listPrice,
+        }}
       />
 
       {/* Jarvis context strip — keystone deal-context surface */}
