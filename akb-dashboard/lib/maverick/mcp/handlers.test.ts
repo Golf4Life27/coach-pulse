@@ -15,7 +15,7 @@ import {
   runRecall,
   type HandlerDeps,
 } from "./handlers";
-import type { Briefing } from "../briefing";
+import { EMPTY_PULSE, type Briefing } from "../briefing";
 import {
   JSON_RPC_METHOD_NOT_FOUND,
   JSON_RPC_INVALID_PARAMS,
@@ -112,6 +112,7 @@ function stubBriefing(over: Partial<Briefing> = {}): Briefing {
           fetched_at: "",
         },
       },
+      pulse: EMPTY_PULSE,
       staleness_warnings: [],
     },
     source_health: {

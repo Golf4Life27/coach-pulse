@@ -45,6 +45,8 @@ import {
   healthOf,
 } from "./briefing";
 import { computeBurnRate } from "./rentcast-burn-rate";
+import { readPulseState } from "@/lib/pulse/active-store";
+import type { PulseSection } from "./briefing";
 import { renderTemplate } from "./template";
 import { synthesizeNarrative } from "./synthesize";
 
@@ -174,6 +176,12 @@ export async function rebuildBriefing(opts: BuildBriefingOpts): Promise<Briefing
     }),
   );
 
+  // Pulse state is a single KV read; runs in parallel with the
+  // SourceResult fetchers but doesn't follow that contract since it
+  // has no per-source health surface. Failures fall back to empty
+  // state (no Pulse signals).
+  const pulsePromise = readPulseState().catch(() => null);
+
   // Parallel-fetch every source. Promise.allSettled guarantees one
   // bad fetcher can't crash the briefing. Order preserved so the
   // destructuring below stays correct.
@@ -287,6 +295,36 @@ export async function rebuildBriefing(opts: BuildBriefingOpts): Promise<Briefing
     docusign,
   };
 
+  // Compose Pulse section from active-store. Sort by severity desc
+  // so the priority surface sees critical first; ties broken by
+  // first_seen_at desc (newer first — operator's attention probably
+  // belongs there).
+  const pulseStateResolved = await pulsePromise;
+  const pulseEntries = pulseStateResolved
+    ? Object.values(pulseStateResolved.active)
+    : [];
+  const severityRank: Record<string, number> = { critical: 3, warning: 2, info: 1 };
+  pulseEntries.sort((a, b) => {
+    const sa = severityRank[a.detection.severity] ?? 0;
+    const sb = severityRank[b.detection.severity] ?? 0;
+    if (sa !== sb) return sb - sa;
+    return new Date(b.first_seen_at).getTime() - new Date(a.first_seen_at).getTime();
+  });
+  const pulse: PulseSection = {
+    active_detections: pulseEntries.map((e) => ({
+      id: e.detection.id,
+      detector_id: e.detection.detector_id,
+      severity: e.detection.severity,
+      title: e.detection.title,
+      description: e.detection.description,
+      suggested_action: e.detection.suggested_action,
+      first_seen_at: e.first_seen_at,
+      detected_at: e.detection.detected_at,
+    })),
+    last_scan_at: pulseStateResolved?.last_scan_at ?? null,
+    test_count_anchor: pulseStateResolved?.test_count_anchor ?? null,
+  };
+
   // Staleness warnings: surface any source where ok=false OR
   // staleness exceeds a per-source threshold.
   const staleness_warnings = buildStalenessWarnings(source_health);
@@ -304,6 +342,7 @@ export async function rebuildBriefing(opts: BuildBriefingOpts): Promise<Briefing
     recent_key_decisions: spine.recent_decisions,
     audit_summary,
     external_signals,
+    pulse,
     staleness_warnings,
   };
 

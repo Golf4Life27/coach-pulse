@@ -6,7 +6,7 @@
 
 import { describe, it, expect } from "vitest";
 import { renderTemplate } from "./template";
-import type { StructuredBriefing } from "./briefing";
+import { EMPTY_PULSE, type StructuredBriefing } from "./briefing";
 
 function minimalBriefing(over: Partial<StructuredBriefing> = {}): StructuredBriefing {
   return {
@@ -101,6 +101,7 @@ function minimalBriefing(over: Partial<StructuredBriefing> = {}): StructuredBrie
         fetched_at: "",
       },
     },
+    pulse: EMPTY_PULSE,
     staleness_warnings: [],
     ...over,
   };

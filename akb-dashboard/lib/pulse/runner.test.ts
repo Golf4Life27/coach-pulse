@@ -20,9 +20,15 @@ function mkDetection(id: string, severity: "info" | "warning" | "critical" = "wa
   };
 }
 
+function activeMap(ids: string[]): Record<string, { detection: PulseDetection; first_seen_at: string }> {
+  return Object.fromEntries(
+    ids.map((id) => [id, { detection: mkDetection(id), first_seen_at: "2026-05-18T00:00:00Z" }]),
+  );
+}
+
 describe("diffActiveSet", () => {
   it("classifies new + resolved + steady correctly", () => {
-    const previous = { keep: "2026-05-18T00:00:00Z", gone: "2026-05-18T00:00:00Z" };
+    const previous = activeMap(["keep", "gone"]);
     const current = [mkDetection("keep"), mkDetection("fresh")];
     const d = diffActiveSet(current, previous);
     expect(d.new_ids).toEqual(["fresh"]);
@@ -39,7 +45,7 @@ describe("diffActiveSet", () => {
   });
 
   it("handles empty current (everything resolves)", () => {
-    const previous = { a: "x", b: "y" };
+    const previous = activeMap(["a", "b"]);
     const d = diffActiveSet([], previous);
     expect(d.new_ids).toEqual([]);
     expect(d.resolved_ids).toEqual(["a", "b"]);
@@ -53,7 +59,7 @@ describe("diffActiveSet", () => {
   });
 
   it("no-op when previous == current", () => {
-    const previous = { a: "x", b: "y" };
+    const previous = activeMap(["a", "b"]);
     const current = [mkDetection("a"), mkDetection("b")];
     const d = diffActiveSet(current, previous);
     expect(d.new_ids).toEqual([]);
@@ -153,7 +159,12 @@ describe("runPulseScan", () => {
     });
     const auditFn = vi.fn().mockResolvedValue(undefined);
     const readState = vi.fn().mockResolvedValue({
-      active: { token_burn_24h: "2026-05-18T00:00:00Z" },
+      active: {
+        token_burn_24h: {
+          detection: mkDetection("token_burn_24h"),
+          first_seen_at: "2026-05-18T00:00:00Z",
+        },
+      },
       test_count_anchor: 700,
       last_scan_at: "2026-05-18T00:00:00Z",
     } as PulseActiveState);
@@ -209,7 +220,12 @@ describe("runPulseScan", () => {
       writeStateFn,
       auditFn: async () => {},
       readState: async () => ({
-        active: { token_burn_24h: firstSeen },
+        active: {
+          token_burn_24h: {
+            detection: mkDetection("token_burn_24h"),
+            first_seen_at: firstSeen,
+          },
+        },
         test_count_anchor: null,
         last_scan_at: firstSeen,
       }),
@@ -219,7 +235,12 @@ describe("runPulseScan", () => {
     // Token-burn was active before AND still firing → steady state.
     expect(result.steady_ids).toContain("token_burn_24h");
     expect(result.new_ids).not.toContain("token_burn_24h");
-    expect(result.state.active.token_burn_24h).toBe(firstSeen); // first-seen preserved
+    // first-seen preserved across steady-state; detection payload
+    // refreshed to the latest (so source_data tracks current value).
+    expect(result.state.active.token_burn_24h.first_seen_at).toBe(firstSeen);
+    expect(result.state.active.token_burn_24h.detection.detector_id).toBe(
+      "token_burn_24h",
+    );
     // No Spine writes for steady-state → keeps the decision log clean.
     expect(writeStateFn).not.toHaveBeenCalled();
   });

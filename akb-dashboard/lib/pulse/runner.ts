@@ -12,6 +12,7 @@
 import type { PulseDetection } from "./types";
 import type { PulseDetectorInput } from "./detector-input";
 import {
+  type PulseActiveEntry,
   type PulseActiveState,
   readPulseState,
   writePulseState,
@@ -59,7 +60,7 @@ export function runAllDetectors(input: PulseDetectorInput): PulseDetection[] {
  *  into the three transition buckets the runner writes Spine for. */
 export function diffActiveSet(
   current: PulseDetection[],
-  previousActive: Record<string, string>,
+  previousActive: Record<string, PulseActiveEntry>,
 ): { new_ids: string[]; resolved_ids: string[]; steady_ids: string[] } {
   const currentIds = new Set(current.map((d) => d.id));
   const previousIds = new Set(Object.keys(previousActive));
@@ -153,7 +154,7 @@ export async function runPulseScan(
 
   // Write Spine + audit for resolutions.
   for (const id of resolved_ids) {
-    const firstSeen = previousState.active[id] ?? null;
+    const firstSeen = previousState.active[id]?.first_seen_at ?? null;
     try {
       const res = await writeStateFn(
         {
@@ -180,13 +181,22 @@ export async function runPulseScan(
   }
 
   // Build next active map. New detections take now's timestamp as
-  // first-seen; steady detections keep their previous first-seen.
-  const nextActive: Record<string, string> = {};
+  // first-seen; steady detections keep their previous first-seen
+  // but pick up the latest detection payload (so source_data + title
+  // stay fresh when the underlying metric shifts).
+  const nextActive: Record<string, PulseActiveEntry> = {};
   for (const id of new_ids) {
-    nextActive[id] = FIRST_SEEN_FALLBACK(now);
+    const det = detectionsById.get(id);
+    if (!det) continue;
+    nextActive[id] = { detection: det, first_seen_at: FIRST_SEEN_FALLBACK(now) };
   }
   for (const id of steady_ids) {
-    nextActive[id] = previousState.active[id] ?? FIRST_SEEN_FALLBACK(now);
+    const det = detectionsById.get(id);
+    if (!det) continue;
+    nextActive[id] = {
+      detection: det,
+      first_seen_at: previousState.active[id]?.first_seen_at ?? FIRST_SEEN_FALLBACK(now),
+    };
   }
 
   const nextState: PulseActiveState = {

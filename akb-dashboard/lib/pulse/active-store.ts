@@ -16,11 +16,21 @@
 // test-count-regression detector (single KV key holds the whole
 // Pulse state to keep I/O cheap).
 
+import type { PulseDetection } from "./types";
+
+export interface PulseActiveEntry {
+  detection: PulseDetection;
+  /** ISO timestamp when the detection first transitioned off→on.
+   *  Preserved across steady-state scans so the UI can render
+   *  "active for 6h" age strings. */
+  first_seen_at: string;
+}
+
 export interface PulseActiveState {
-  /** Map of active detection_id → first-seen ISO timestamp. The
-   *  timestamp lets the UI / load-state surface "active for 6h"
-   *  style age strings. */
-  active: Record<string, string>;
+  /** Map of detection.id → { latest detection object, first_seen_at }.
+   *  Storing the full detection object lets the briefing aggregator +
+   *  Pulse room render without re-running detectors on read. */
+  active: Record<string, PulseActiveEntry>;
   /** Most-recent test_count Pulse anchored. Null on first scan. */
   test_count_anchor: number | null;
   /** ISO of the last scan that wrote this state. Surfaced in
@@ -53,8 +63,26 @@ export async function readPulseState(): Promise<PulseActiveState> {
     const data = (await res.json()) as { result?: string | null };
     if (!data.result || typeof data.result !== "string") return { ...EMPTY_STATE };
     const parsed = JSON.parse(data.result) as Partial<PulseActiveState>;
+    // Defensive: parsed.active may be a legacy shape (string values)
+    // from before the entry-object refactor. Tolerate it by dropping
+    // entries that don't have a detection — they'll re-fire on the
+    // next scan and migrate naturally.
+    const active: Record<string, PulseActiveEntry> = {};
+    if (parsed.active && typeof parsed.active === "object") {
+      for (const [k, v] of Object.entries(parsed.active)) {
+        if (
+          v &&
+          typeof v === "object" &&
+          "detection" in v &&
+          "first_seen_at" in v &&
+          typeof (v as PulseActiveEntry).first_seen_at === "string"
+        ) {
+          active[k] = v as PulseActiveEntry;
+        }
+      }
+    }
     return {
-      active: parsed.active && typeof parsed.active === "object" ? parsed.active : {},
+      active,
       test_count_anchor:
         typeof parsed.test_count_anchor === "number" ? parsed.test_count_anchor : null,
       last_scan_at: typeof parsed.last_scan_at === "string" ? parsed.last_scan_at : null,

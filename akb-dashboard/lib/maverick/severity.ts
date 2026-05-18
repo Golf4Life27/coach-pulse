@@ -110,7 +110,26 @@ interface MinimalBriefingShape {
         burn_rate: { days_until_exhaustion_estimate: number | null };
       };
     };
+    /** Phase 14 / O.2 — Pulse self-monitoring signals. Optional so
+     *  pre-O.2 callers that haven't migrated their briefing shape
+     *  still typecheck (defaults to no signals). */
+    pulse?: {
+      active_detections: Array<{
+        id: string;
+        detector_id: string;
+        severity: "info" | "warning" | "critical";
+        title: string;
+        description?: string;
+      }>;
+    };
   };
+}
+
+/** Map Pulse severity to the existing Phase 9.5 severity tier. */
+function pulseSeverityToTier(severity: "info" | "warning" | "critical"): SeverityTier {
+  if (severity === "critical") return 3;
+  if (severity === "warning") return 2;
+  return 1;
 }
 
 /**
@@ -236,6 +255,28 @@ export function inferPrioritySignals(b: MinimalBriefingShape): PrioritySignal[] 
       agent: "appraiser",
       href: "/pipeline",
     });
+  }
+
+  // Phase 14 / O.2 — Pulse self-monitoring. Each active detection
+  // surfaces as a priority signal with severity → tier mapping.
+  // Title carries the Pulse-room headline; reason carries the
+  // description snippet (truncated for the priority surface, which
+  // is tighter than the full Pulse room).
+  const pulse = b.structured.pulse;
+  if (pulse && pulse.active_detections.length > 0) {
+    for (const det of pulse.active_detections) {
+      const reasonRaw = det.description ?? null;
+      const reason =
+        reasonRaw && reasonRaw.length > 160 ? `${reasonRaw.slice(0, 157)}…` : reasonRaw;
+      signals.push({
+        id: `pulse:${det.id}`,
+        tier: pulseSeverityToTier(det.severity),
+        title: det.title,
+        reason,
+        agent: "pulse",
+        href: "/pulse",
+      });
+    }
   }
 
   // Sort by tier descending so highest urgency renders first.

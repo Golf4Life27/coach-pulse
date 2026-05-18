@@ -19,6 +19,7 @@ import type { VercelDeployState } from "./sources/external-vercel";
 import type { DocusignState } from "./sources/external-docusign";
 import { EMPTY_DOCUSIGN as _EMPTY_DOCUSIGN } from "./sources/external-docusign";
 import type { RentCastBurnRate } from "./rentcast-burn-rate";
+import type { PulseDetectorId, PulseSeverity } from "@/lib/pulse/types";
 
 export interface SourceHealth {
   source: SourceName;
@@ -86,6 +87,39 @@ export interface ExternalSignalsSection {
 
 export const EMPTY_DOCUSIGN = _EMPTY_DOCUSIGN;
 
+/** Empty Pulse section — the happy path (Pulse hasn't scanned or all
+ *  clear). Exported so test fixtures can drop it into StructuredBriefing
+ *  without duplicating shape literals. */
+export const EMPTY_PULSE: PulseSection = {
+  active_detections: [],
+  last_scan_at: null,
+  test_count_anchor: null,
+};
+
+/**
+ * Phase 14 / O.2 — Pulse self-monitoring section.
+ *
+ * Surfaces the active detections Pulse is watching, plus the
+ * last-scan metadata. The briefing aggregator reads from
+ * lib/pulse/active-store; the synthesizer / template renderer /
+ * inferPrioritySignals all consume this shape. Empty active_detections
+ * + null last_scan_at is the happy path ("nothing to see here").
+ */
+export interface PulseSection {
+  active_detections: Array<{
+    id: string;
+    detector_id: PulseDetectorId;
+    severity: PulseSeverity;
+    title: string;
+    description: string;
+    suggested_action?: string;
+    first_seen_at: string;
+    detected_at: string;
+  }>;
+  last_scan_at: string | null;
+  test_count_anchor: number | null;
+}
+
 export interface StructuredBriefing {
   generated_at: string;
   duration_ms: number;
@@ -98,6 +132,9 @@ export interface StructuredBriefing {
   recent_key_decisions: SpineEntry[];
   audit_summary: AuditSummarySection;
   external_signals: ExternalSignalsSection;
+  /** Phase 14 / O.2. Always present (empty active_detections when
+   *  Pulse has never scanned or all clear). */
+  pulse: PulseSection;
   staleness_warnings: string[];
 }
 

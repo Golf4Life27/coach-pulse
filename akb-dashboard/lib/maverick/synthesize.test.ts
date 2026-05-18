@@ -8,7 +8,7 @@
 
 import { describe, it, expect } from "vitest";
 import { buildRequestBody } from "./synthesize";
-import type { StructuredBriefing } from "./briefing";
+import { EMPTY_PULSE, type StructuredBriefing } from "./briefing";
 
 function structured(over: Partial<StructuredBriefing> = {}): StructuredBriefing {
   return {
@@ -92,6 +92,7 @@ function structured(over: Partial<StructuredBriefing> = {}): StructuredBriefing 
         fetched_at: "",
       },
     },
+    pulse: EMPTY_PULSE,
     staleness_warnings: [],
     ...over,
   };

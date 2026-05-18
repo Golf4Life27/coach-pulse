@@ -281,3 +281,104 @@ describe("TIER_VISUAL coverage", () => {
     }
   });
 });
+
+describe("inferPrioritySignals — Pulse signals (Phase 14 / O.2)", () => {
+  it("surfaces an active critical detection as tier 3 priority signal", () => {
+    const signals = inferPrioritySignals(
+      brief({
+        pulse: {
+          active_detections: [
+            {
+              id: "token_burn_24h",
+              detector_id: "token_burn_24h",
+              severity: "critical",
+              title: "Token burn $25 in 24h (critical ≥ $20)",
+              description: "Sentinel drafter is hot — 200 calls in 24h.",
+            },
+          ],
+        },
+      }),
+    );
+    const pulseSignal = signals.find((s) => s.id === "pulse:token_burn_24h");
+    expect(pulseSignal).toBeDefined();
+    expect(pulseSignal?.tier).toBe(3);
+    expect(pulseSignal?.agent).toBe("pulse");
+    expect(pulseSignal?.href).toBe("/pulse");
+    expect(pulseSignal?.title).toContain("Token burn");
+  });
+
+  it("maps severity to tier (info=1, warning=2, critical=3)", () => {
+    const signals = inferPrioritySignals(
+      brief({
+        pulse: {
+          active_detections: [
+            { id: "a", detector_id: "stale_data_drift", severity: "info", title: "A" },
+            { id: "b", detector_id: "token_burn_24h", severity: "warning", title: "B" },
+            { id: "c", detector_id: "spine_write_rate_low", severity: "critical", title: "C" },
+          ],
+        },
+      }),
+    );
+    expect(signals.find((s) => s.id === "pulse:a")?.tier).toBe(1);
+    expect(signals.find((s) => s.id === "pulse:b")?.tier).toBe(2);
+    expect(signals.find((s) => s.id === "pulse:c")?.tier).toBe(3);
+  });
+
+  it("truncates long descriptions in reason (≤160 chars + ellipsis)", () => {
+    const longDesc = "x".repeat(500);
+    const signals = inferPrioritySignals(
+      brief({
+        pulse: {
+          active_detections: [
+            {
+              id: "stale",
+              detector_id: "stale_data_drift",
+              severity: "warning",
+              title: "Stale drift",
+              description: longDesc,
+            },
+          ],
+        },
+      }),
+    );
+    const reason = signals.find((s) => s.id === "pulse:stale")?.reason ?? "";
+    expect(reason.length).toBeLessThanOrEqual(160);
+    expect(reason.endsWith("…")).toBe(true);
+  });
+
+  it("ranks critical Pulse signal above tier-2 source-down infrastructure", () => {
+    // A single source down would normally claim the top spot at tier 2;
+    // a critical Pulse detection should beat it.
+    const signals = inferPrioritySignals(
+      brief(
+        {
+          pulse: {
+            active_detections: [
+              {
+                id: "spine_write_rate_low",
+                detector_id: "spine_write_rate_low",
+                severity: "critical",
+                title: "Zero Spine writes in 48h",
+              },
+            ],
+          },
+        },
+        { external_quo: { ok: false, error: "timeout", staleness_seconds: 9999 } },
+      ),
+    );
+    expect(signals[0].id).toBe("pulse:spine_write_rate_low");
+    expect(signals[0].tier).toBe(3);
+  });
+
+  it("no Pulse signals when active_detections is empty", () => {
+    const signals = inferPrioritySignals(
+      brief({ pulse: { active_detections: [] } }),
+    );
+    expect(signals.filter((s) => s.id.startsWith("pulse:"))).toEqual([]);
+  });
+
+  it("no Pulse signals when pulse field omitted entirely (backward-compat)", () => {
+    const signals = inferPrioritySignals(brief({}));
+    expect(signals.filter((s) => s.id.startsWith("pulse:"))).toEqual([]);
+  });
+});
