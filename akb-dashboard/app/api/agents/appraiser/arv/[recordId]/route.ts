@@ -29,6 +29,7 @@ import {
   classifyArvConfidenceByCount,
   requiresManualReview,
   computeMaoRange,
+  pickCalibratedRehab,
 } from "@/lib/appraiser/mao-range";
 import { audit } from "@/lib/audit-log";
 import {
@@ -161,9 +162,16 @@ export async function GET(
   const manualReview = requiresManualReview(confidence);
 
   // ── v1.3 MAO range envelope ─────────────────────────────────────
+  // Phase 4B.1 / J.3 — prefer Phase 4B.1 calibrated rehab
+  // (estRehabMid) over legacy estRehab. Source surfaced in audit so
+  // future Pulse can detect MAO floors still computed from legacy data.
+  const rehabPick = pickCalibratedRehab({
+    estRehabMid: listing.estRehabMid,
+    estRehab: listing.estRehab,
+  });
   const range = computeMaoRange({
     arvMid: arv.arv_mid,
-    estRehab: listing.estRehab ?? listing.estRehabMid ?? null,
+    estRehab: rehabPick.value,
     wholesaleFee: listing.wholesaleFeeTarget ?? null,
     buyerProfit: listing.buyerProfitTarget ?? null,
     listPrice: listing.listPrice,
@@ -215,6 +223,7 @@ export async function GET(
       floor: range.floor,
       target: range.target,
       exceeds_soft_ceiling: range.exceeds_soft_ceiling,
+      rehab_source: rehabPick.source,
       manual_review: manualReview,
       airtable_write: !skipWrite && arv.arv_mid != null,
       airtable_error: airtableError,

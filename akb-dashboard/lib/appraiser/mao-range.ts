@@ -62,6 +62,44 @@ export function requiresManualReview(confidence: ArvConfidenceLabel): boolean {
   return confidence === "LOW";
 }
 
+export interface RehabSource {
+  /** Phase 4B.1 calibrated mid (Bible v3 §4.2 BBC × market multiplier). */
+  estRehabMid?: number | null;
+  /** Legacy Phase 4 estRehab field. Used as fallback when estRehabMid
+   *  is missing (records last touched before Phase 4B.1 shipped). */
+  estRehab?: number | null;
+}
+
+export interface CalibratedRehabPick {
+  /** The chosen rehab value the MAO floor formula uses. Null when
+   *  neither field is populated. */
+  value: number | null;
+  /** Which field the value came from — surfaced in audit so future
+   *  Pulse can detect when MAO floors are still being computed from
+   *  legacy estRehab (signals records that haven't been re-calibrated
+   *  by Phase 4B.1). */
+  source: "phase_4b_calibrated" | "legacy_est_rehab" | "none";
+}
+
+/**
+ * Phase 4B.1 / J.3 — pick the most trustworthy rehab value for the
+ * V2.1 MAO floor formula. Prefers Phase 4B.1 calibrated output
+ * (estRehabMid) over legacy estRehab. Pure.
+ *
+ * The two fields can both be present (Phase 4B endpoint writes both).
+ * They can also differ when only the legacy field was set by an old
+ * Pricing Agent run. The pick rule is: estRehabMid > estRehab > null.
+ */
+export function pickCalibratedRehab(source: RehabSource): CalibratedRehabPick {
+  if (source.estRehabMid != null && source.estRehabMid > 0) {
+    return { value: source.estRehabMid, source: "phase_4b_calibrated" };
+  }
+  if (source.estRehab != null && source.estRehab > 0) {
+    return { value: source.estRehab, source: "legacy_est_rehab" };
+  }
+  return { value: null, source: "none" };
+}
+
 export interface MaoRangeInputs {
   /** Real_ARV_Median computed by lib/arv-intelligence.ts.computeArvIntelligence. */
   arvMid: number | null;

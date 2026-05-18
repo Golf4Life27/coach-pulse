@@ -5,6 +5,7 @@ import {
   classifyArvConfidenceByCount,
   requiresManualReview,
   computeMaoRange,
+  pickCalibratedRehab,
 } from "./mao-range";
 
 describe("classifyArvConfidenceByCount", () => {
@@ -39,6 +40,51 @@ describe("requiresManualReview", () => {
     expect(requiresManualReview("LOW")).toBe(true);
     expect(requiresManualReview("MED")).toBe(false);
     expect(requiresManualReview("HIGH")).toBe(false);
+  });
+});
+
+describe("pickCalibratedRehab (Phase 4B.1 / J.3)", () => {
+  it("prefers Phase 4B.1 calibrated estRehabMid over legacy estRehab", () => {
+    const r = pickCalibratedRehab({ estRehabMid: 45_000, estRehab: 60_000 });
+    expect(r.value).toBe(45_000);
+    expect(r.source).toBe("phase_4b_calibrated");
+  });
+
+  it("falls back to legacy estRehab when estRehabMid is null", () => {
+    const r = pickCalibratedRehab({ estRehabMid: null, estRehab: 60_000 });
+    expect(r.value).toBe(60_000);
+    expect(r.source).toBe("legacy_est_rehab");
+  });
+
+  it("falls back to legacy estRehab when estRehabMid is undefined", () => {
+    const r = pickCalibratedRehab({ estRehab: 60_000 });
+    expect(r.value).toBe(60_000);
+    expect(r.source).toBe("legacy_est_rehab");
+  });
+
+  it("falls back to legacy estRehab when estRehabMid is zero", () => {
+    // Zero is treated as 'not really populated' — same as null
+    const r = pickCalibratedRehab({ estRehabMid: 0, estRehab: 60_000 });
+    expect(r.value).toBe(60_000);
+    expect(r.source).toBe("legacy_est_rehab");
+  });
+
+  it("returns none when both fields are missing", () => {
+    const r = pickCalibratedRehab({});
+    expect(r.value).toBeNull();
+    expect(r.source).toBe("none");
+  });
+
+  it("returns none when both fields are null/zero", () => {
+    const r = pickCalibratedRehab({ estRehabMid: null, estRehab: 0 });
+    expect(r.value).toBeNull();
+    expect(r.source).toBe("none");
+  });
+
+  it("uses calibrated when only estRehabMid is populated (no legacy)", () => {
+    const r = pickCalibratedRehab({ estRehabMid: 45_000 });
+    expect(r.value).toBe(45_000);
+    expect(r.source).toBe("phase_4b_calibrated");
   });
 });
 
