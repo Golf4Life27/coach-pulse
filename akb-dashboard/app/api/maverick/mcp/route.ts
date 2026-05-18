@@ -38,6 +38,10 @@ import {
   readAuthHeaders,
 } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
+import {
+  evaluateStage4Escalation,
+  readStage4Env,
+} from "@/lib/maverick/sms-escalation";
 
 export const runtime = "nodejs";
 // Match the load-state endpoint's budget — when tools/call invokes
@@ -58,6 +62,10 @@ export async function POST(req: Request) {
   const headers = readAuthHeaders(req);
   const authRequired =
     kvConfigured() || env.cronSecret !== null || env.bearerDevToken !== null;
+  // Phase 9.7 — capture authKind so the Stage 4 escalation hook can
+  // gate on it (only "oauth" callers trigger SMS from this surface;
+  // dashboard sessions don't reach the MCP route).
+  let mcpAuthKind: "oauth" | "cron" | "bearer_dev" | "none" = "none";
   if (authRequired) {
     const auth = await authenticate(headers, env, kvProd);
     if (!auth.ok) {
@@ -118,6 +126,7 @@ export async function POST(req: Request) {
         outputSummary: { duration_ms: Date.now() - t0 },
       });
     }
+    mcpAuthKind = auth.kind;
   }
 
   // Parse body.
@@ -143,6 +152,17 @@ export async function POST(req: Request) {
       buildBriefing,
       writeState,
       recall,
+      onLoadStateBriefing: kvConfigured()
+        ? async (briefing) => {
+            await evaluateStage4Escalation({
+              briefing: briefing.structured,
+              source_health: briefing.source_health,
+              authKind: mcpAuthKind,
+              kv: kvProd,
+              env: readStage4Env(),
+            });
+          }
+        : undefined,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

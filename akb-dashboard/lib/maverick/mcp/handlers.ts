@@ -42,6 +42,15 @@ export interface HandlerDeps {
   }) => Promise<Briefing>;
   writeState: (args: Parameters<typeof writeState>[0]) => Promise<WriteStateResult>;
   recall: (args: Parameters<typeof recall>[0]) => Promise<RecallResponse>;
+  /**
+   * Phase 9.7 Stage 4 SMS escalation hook. Called after `buildBriefing`
+   * succeeds inside `runLoadState`. The MCP route handler wires this
+   * to `evaluateStage4Escalation` with the current authKind so OAuth-
+   * authenticated load_state tool calls trigger the same Tier 3 alert
+   * path as the dashboard HTTP endpoint. Optional so unit tests can
+   * dispatch without the side effect.
+   */
+  onLoadStateBriefing?: (briefing: Briefing) => Promise<void>;
 }
 
 /**
@@ -185,6 +194,17 @@ export async function runLoadState(
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return buildError(id, MCP_TOOL_EXECUTION_ERROR, `buildBriefing failed: ${msg}`);
+  }
+
+  // Phase 9.7 — Stage 4 SMS escalation hook. Failures are absorbed by
+  // the hook itself (audited internally) so the tool call still
+  // returns the briefing cleanly.
+  if (deps.onLoadStateBriefing) {
+    try {
+      await deps.onLoadStateBriefing(briefing);
+    } catch {
+      // Defensive — the hook owns its own failure handling.
+    }
   }
 
   // MCP tools/call response shape: content is an array of content

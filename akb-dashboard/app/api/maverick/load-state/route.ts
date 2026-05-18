@@ -35,6 +35,10 @@ import {
   readAuthHeaders,
 } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
+import {
+  evaluateStage4Escalation,
+  readStage4Env,
+} from "@/lib/maverick/sms-escalation";
 
 export const runtime = "nodejs";
 export const maxDuration = 60; // Vercel Hobby ceiling per AGENTS.md
@@ -124,6 +128,27 @@ export async function GET(req: Request) {
           timestamp: new Date().toISOString(),
         }),
       );
+    }
+
+    // Phase 9.7 Stage 4 SMS escalation — synchronous side effect after
+    // briefing builds. Only authorized callers (dashboard_session +
+    // oauth) can trigger; cron + bearer_dev + none are no-ops inside
+    // the evaluator. Quo API failures are caught + audited; never
+    // bubble to the response. Skipped entirely when KV isn't wired.
+    if (kvConfigured()) {
+      try {
+        await evaluateStage4Escalation({
+          briefing: briefing.structured,
+          source_health: briefing.source_health,
+          authKind,
+          kv: kvProd,
+          env: readStage4Env(),
+        });
+      } catch {
+        // Defensive: evaluator already swallows expected failures.
+        // Outer try here protects against any unexpected throw so the
+        // briefing response is never blocked by escalation.
+      }
     }
 
     // Audit per session-open. Maverick is the first agent to call
