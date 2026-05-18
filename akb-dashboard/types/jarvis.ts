@@ -111,6 +111,15 @@ export type BroCardPricingMode = "phase4" | "legacy" | "no_math";
 // without importing from the math layer at the type level.
 export type BroCardDominantTrack = "flipper" | "landlord" | "tie" | "neither";
 
+// Mirrors lib/appraiser/rehab-calibration.MarketTier — the env-overridable
+// market tier the cap rate + rehab multiplier are keyed on. Inlined for
+// the same reason as BroCardDominantTrack.
+export type BroCardMarketTier =
+  | "TX-Metro"
+  | "TN-Distressed"
+  | "MI-Distressed"
+  | "Conservative-Default";
+
 export interface BroCardPricingPhase4 {
   mode: "phase4";
   // The full v1.3 range envelope. Field shape mirrors lib/appraiser/
@@ -126,6 +135,12 @@ export interface BroCardPricingPhase4 {
       landlord_mao: number | null;
       dominant_track: BroCardDominantTrack;
       dominant_value: number | null;
+      // Phase 4D / L.2 — bubble cap_rate + cap_rate_tier up onto the
+      // BroCard's dual_track shape so the modifier-inputs tooltip can
+      // surface them without re-running computeDualTrack on the client.
+      // Source: lib/appraiser/buyer-intelligence.DualTrackResult.modifier_inputs.
+      cap_rate: number;
+      cap_rate_tier: BroCardMarketTier;
     } | null;
     modifier_inputs: {
       arv_mid: number | null;

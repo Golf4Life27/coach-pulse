@@ -77,6 +77,8 @@ export function classifyBroCardPricing(
               landlord_mao: range.dual_track.landlord_mao,
               dominant_track: range.dual_track.dominant_track,
               dominant_value: range.dual_track.dominant_value,
+              cap_rate: range.dual_track.modifier_inputs.cap_rate,
+              cap_rate_tier: range.dual_track.modifier_inputs.cap_rate_tier,
             }
           : null,
         modifier_inputs: {
