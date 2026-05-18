@@ -10,6 +10,7 @@ import { showToast } from "@/components/Toast";
 import MaverickDealCommentary from "@/components/MaverickDealCommentary";
 import AppraiserArvPanel from "@/components/AppraiserArvPanel";
 import AppraiserRehabPanel from "@/components/AppraiserRehabPanel";
+import AppraiserBuyerIntelligencePanel from "@/components/AppraiserBuyerIntelligencePanel";
 import RelatedDealsRecall from "@/components/RelatedDealsRecall";
 import ScribeDealCommentary from "@/components/ScribeDealCommentary";
 import type { DealContext } from "@/types/jarvis";
@@ -258,6 +259,19 @@ export default function DealWorkspace() {
           rehabLineItemsJson: listing.rehabLineItemsJson ?? null,
           rehabRedFlags: listing.rehabRedFlags ?? null,
           buildingSqFt: listing.buildingSqFt ?? null,
+        }}
+      />
+
+      {/* Phase 4C.1 — Appraiser buyer intelligence (dual-track) panel */}
+      <AppraiserBuyerIntelligencePanel
+        recordId={listing.id}
+        listing={{
+          realArvMedian: listing.realArvMedian ?? null,
+          estRehab: listing.estRehab ?? null,
+          estRehabMid: listing.estRehabMid ?? null,
+          wholesaleFeeTarget: listing.wholesaleFeeTarget ?? null,
+          estimatedMonthlyRent: listing.estimatedMonthlyRent ?? null,
+          state: listing.state,
         }}
       />
 

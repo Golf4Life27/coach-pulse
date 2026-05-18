@@ -14,6 +14,7 @@ import type { Listing } from "@/lib/types";
 import { runWithTimeout } from "../timeout";
 import type { FetchOpts, SourceResult } from "../types";
 import { classifyBbcTierFromRate } from "@/lib/appraiser/rehab-calibration";
+import { computeDualTrack, type DominantTrack } from "@/lib/appraiser/buyer-intelligence";
 
 // Bumped from 8s → 15s after Gate 2 first-smoke (5/15) observed
 // concurrent Airtable fetches contending: when all 3 Airtable calls
@@ -76,6 +77,17 @@ export interface ListingsActiveDeal {
   rehab_freshness: "current" | "stale" | "missing";
   /** Days since last rehab estimate; null when never estimated. */
   rehab_age_days: number | null;
+  // Phase 4C.1 (5/18) — Dual-track buyer intelligence per active deal.
+  // Computed inline from listing inputs + per-state cap rate. The
+  // Appraiser room rolls up track-mix counters; the deal-detail panel
+  // surfaces flipper vs landlord side-by-side with dominant highlighted.
+  estimated_monthly_rent: number | null;
+  flipper_mao: number | null;
+  landlord_mao: number | null;
+  dominant_track: DominantTrack;
+  /** The higher of flipper_mao / landlord_mao — the buyer-facing MAO
+   *  ceiling. Null when both tracks return null. */
+  dominant_value: number | null;
 }
 
 export interface AirtableListingsState {
@@ -137,6 +149,17 @@ export function summarizeListings(
         rehabMid != null && l.buildingSqFt != null && l.buildingSqFt > 0
           ? classifyBbcTierFromRate(rehabMid / l.buildingSqFt)
           : null;
+      // Phase 4C.1 — dual-track buyer intelligence inline. Same
+      // pattern as bbc_tier above: compute per active deal so the
+      // Appraiser room rollup + deal-detail panel both read from the
+      // briefing without re-fetching Airtable.
+      const dualTrack = computeDualTrack({
+        arvMid: l.realArvMedian ?? null,
+        estRehab: rehabMid,
+        wholesaleFee: l.wholesaleFeeTarget ?? null,
+        monthlyRent: l.estimatedMonthlyRent ?? null,
+        state: l.state,
+      });
       active.push({
         id: l.id,
         address: l.address ?? "(no address)",
@@ -163,6 +186,11 @@ export function summarizeListings(
         bbc_tier: bbcTier,
         rehab_freshness: rehabFreshness,
         rehab_age_days: rehabAgeDays,
+        estimated_monthly_rent: l.estimatedMonthlyRent ?? null,
+        flipper_mao: dualTrack.flipper_mao,
+        landlord_mao: dualTrack.landlord_mao,
+        dominant_track: dualTrack.dominant_track,
+        dominant_value: dualTrack.dominant_value,
       });
     }
   }

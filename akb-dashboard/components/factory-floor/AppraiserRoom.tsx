@@ -56,12 +56,27 @@ export default function AppraiserRoom() {
       (d) => d.bbc_tier === "Heavy" || d.bbc_tier === "Gut",
     ).length,
   };
+  // Phase 4C.1 — Track mix across active deals. landlord_dominant
+  // signals "money on the table if priced as flipper-only" — the
+  // single most valuable signal from dual-track. flipper_dominant is
+  // the conventional path. tie is rare; neither = no inputs available
+  // (no ARV + no rent).
+  const trackMix = {
+    total: activeDeals.length,
+    flipper_dominant: activeDeals.filter((d) => d.dominant_track === "flipper").length,
+    landlord_dominant: activeDeals.filter((d) => d.dominant_track === "landlord").length,
+    tie: activeDeals.filter((d) => d.dominant_track === "tie").length,
+    neither: activeDeals.filter((d) => d.dominant_track === "neither").length,
+  };
 
   let tierOverride: SeverityTier | undefined;
   if (daysToExhaustion != null && daysToExhaustion <= 3) tierOverride = 2;
   else if (daysToExhaustion != null && daysToExhaustion <= 7) tierOverride = 1;
   else if (arvCoverage.low_confidence > 0) tierOverride = 1;
   else if (rehabCoverage.heavy_or_gut > 0) tierOverride = 1;
+  // landlord-dominant signals are the "money on the table" case —
+  // surface them as tier 1 so Alex sees the dual-track value.
+  else if (trackMix.landlord_dominant > 0) tierOverride = 1;
 
   return (
     <AgentRoom
@@ -115,6 +130,37 @@ export default function AppraiserRoom() {
                 <div className="text-gray-500">LOW conf</div>
                 <div className={`font-semibold text-sm ${arvCoverage.low_confidence > 0 ? "text-orange-300" : "text-gray-200"}`}>
                   {arvCoverage.low_confidence}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        {trackMix.total > 0 && (trackMix.flipper_dominant + trackMix.landlord_dominant + trackMix.tie) > 0 && (
+          <div className="border-t border-[#21262d] pt-2">
+            <div className="text-[10px] uppercase tracking-wide text-gray-500 mb-1">
+              Track mix across {trackMix.total} active
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-[11px]">
+              <div className="bg-[#161b22] rounded px-2 py-1">
+                <div className="text-gray-500">Flipper</div>
+                <div className="text-gray-200 font-semibold text-sm">
+                  {trackMix.flipper_dominant}
+                </div>
+              </div>
+              <div className="bg-[#161b22] rounded px-2 py-1">
+                <div className="text-gray-500">Landlord</div>
+                <div className={`font-semibold text-sm ${trackMix.landlord_dominant > 0 ? "text-emerald-300" : "text-gray-200"}`}>
+                  {trackMix.landlord_dominant}
+                </div>
+              </div>
+              <div className="bg-[#161b22] rounded px-2 py-1">
+                <div className="text-gray-500">Tie</div>
+                <div className="text-gray-200 font-semibold text-sm">{trackMix.tie}</div>
+              </div>
+              <div className="bg-[#161b22] rounded px-2 py-1">
+                <div className="text-gray-500">No inputs</div>
+                <div className={`font-semibold text-sm ${trackMix.neither > 0 ? "text-amber-300" : "text-gray-200"}`}>
+                  {trackMix.neither}
                 </div>
               </div>
             </div>

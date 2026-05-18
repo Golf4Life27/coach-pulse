@@ -196,6 +196,11 @@ describe("renderTemplate — active deals section", () => {
             bbc_tier: null,
             rehab_freshness: "missing",
             rehab_age_days: null,
+            estimated_monthly_rent: null,
+            flipper_mao: null,
+            landlord_mao: null,
+            dominant_track: "neither",
+            dominant_value: null,
           },
         ],
       }),
@@ -234,6 +239,11 @@ describe("renderTemplate — active deals section", () => {
       bbc_tier: null,
       rehab_freshness: "missing",
       rehab_age_days: null,
+      estimated_monthly_rent: null,
+      flipper_mao: null,
+      landlord_mao: null,
+      dominant_track: "neither",
+      dominant_value: null,
     } as const;
     const out = renderTemplate(
       minimalBriefing({
