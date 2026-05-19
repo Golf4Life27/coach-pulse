@@ -6,6 +6,7 @@
 
 import { getListings, getDeals } from "@/lib/airtable";
 import { buildActionQueue } from "@/lib/actionQueue";
+import { synthesize, type SynthesizeMessage } from "@/lib/maverick/synthesizer";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -208,35 +209,26 @@ export async function POST(req: Request) {
       return m;
     });
 
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 1000,
+    // Phase 10 / P.2 migration — multi-turn via synthesizer.
+    try {
+      const result = await synthesize({
+        agent: "maverick",
         system: SYSTEM_PROMPT,
-        messages,
-      }),
-    });
-
-    if (!res.ok) {
-      const errText = await res.text();
+        messages: messages as SynthesizeMessage[],
+        max_tokens: 1000,
+        event_label: "maverick_chat_synthesized",
+      });
+      const answer = result.text || "[No response generated]";
+      return Response.json({ answer });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const statusMatch = msg.match(/^Anthropic (\d+):/);
+      const status = statusMatch ? parseInt(statusMatch[1], 10) : 502;
       return Response.json(
-        { error: `Anthropic error: ${res.status}`, detail: errText },
+        { error: `Anthropic error: ${status}`, detail: msg },
         { status: 502 }
       );
     }
-
-    const data = await res.json();
-    const blocks = data.content as Array<{ type: string; text?: string }>;
-    const textBlock = blocks?.find((b) => b.type === "text");
-    const answer = textBlock?.text ?? "[No response generated]";
-
-    return Response.json({ answer });
   } catch (err) {
     console.error("[jarvis-chat] error:", err);
     return Response.json(

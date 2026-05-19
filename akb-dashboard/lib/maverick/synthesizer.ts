@@ -33,18 +33,33 @@ export type AnthropicContent =
   | string
   | Array<{ type: string; text?: string; source?: unknown }>;
 
+/** A single conversational turn. Used by jarvis-chat (multi-turn) and
+ *  by callers that need to thread an assistant reply back into the
+ *  next turn. Single-turn callers should use `user` instead. */
+export interface SynthesizeMessage {
+  role: "user" | "assistant";
+  content: AnthropicContent;
+}
+
 export interface SynthesizeArgs {
   /** Roster name. Resolves to a model + voice via voice-registry. */
   agent: VoiceAgent;
   /** Caller-supplied system prompt. Passed through verbatim — the
    *  registry does NOT modify or prepend (refactor charter). */
   system: string;
-  /** User message content. String or Anthropic content-block array
-   *  (the latter for vision calls). */
-  user: AnthropicContent;
-  /** Override the registry's default max_tokens (must be at least the
-   *  registry default for the call to proceed; the registry default
-   *  is the floor). */
+  /** User message content (single-turn shortcut). When provided, the
+   *  synthesizer wraps it in [{role:"user", content:user}] before
+   *  calling Anthropic. Mutually exclusive with `messages`. */
+  user?: AnthropicContent;
+  /** Full multi-turn message array (jarvis-chat pattern). When
+   *  provided, passed through verbatim. Mutually exclusive with
+   *  `user`. */
+  messages?: SynthesizeMessage[];
+  /** Override the registry's default max_tokens. Caller's value wins
+   *  when provided — refactor charter requires preserving existing
+   *  behavior (some callers cap tightly, e.g. agent_context's
+   *  one-word classifier uses 16). Registry value is the default
+   *  when caller omits. */
   max_tokens?: number;
   /** Override the registry's temperature. */
   temperature?: number;
@@ -54,6 +69,17 @@ export interface SynthesizeArgs {
   recordId?: string;
   /** Anthropic API key (defaults to process.env.ANTHROPIC_API_KEY). */
   apiKey?: string;
+  /** Optional fetch-timeout in ms (AbortController). When the timeout
+   *  elapses, the underlying fetch is aborted and the synthesizer
+   *  throws. Callers like the briefing narrative-synthesizer wrap
+   *  this in a try/catch + fallback narrative. */
+  timeoutMs?: number;
+  /** When true, wrap the system prompt in
+   *  `[{ type: "text", text, cache_control: { type: "ephemeral" } }]`
+   *  so Anthropic's prompt-cache picks it up. Used by the briefing
+   *  narrative-synthesizer where the system prompt is large and
+   *  stable across session-opens. */
+  cache_system?: boolean;
 }
 
 export interface SynthesizeResult {
@@ -83,38 +109,41 @@ interface AnthropicResponse {
   };
 }
 
+export interface FetcherArgs {
+  apiKey: string;
+  model: string;
+  system: string;
+  /** Always passed as a messages array — synthesize() normalizes
+   *  caller's `user` shortcut into a single-turn array before
+   *  invoking the fetcher. */
+  messages: SynthesizeMessage[];
+  max_tokens: number;
+  temperature?: number;
+  signal?: AbortSignal;
+  cache_system?: boolean;
+}
+
 export interface SynthesizerDeps {
   /** Injectable fetcher for tests. Defaults to the live Anthropic call. */
-  callAnthropic?: (args: {
-    apiKey: string;
-    model: string;
-    system: string;
-    user: AnthropicContent;
-    max_tokens: number;
-    temperature?: number;
-  }) => Promise<AnthropicResponse>;
+  callAnthropic?: (args: FetcherArgs) => Promise<AnthropicResponse>;
   /** Injectable audit fn for tests. Defaults to lib/audit-log.audit. */
   writeAudit?: typeof audit;
 }
 
-async function callAnthropicDefault(args: {
-  apiKey: string;
-  model: string;
-  system: string;
-  user: AnthropicContent;
-  max_tokens: number;
-  temperature?: number;
-}): Promise<AnthropicResponse> {
+async function callAnthropicDefault(args: FetcherArgs): Promise<AnthropicResponse> {
+  // System prompt: stringify by default. When cache_system is set,
+  // wrap in the Anthropic content-block shape with cache_control
+  // ephemeral so the prompt-cache pricing kicks in for stable system
+  // prompts (briefing narrative pattern).
+  const systemPayload = args.cache_system
+    ? [{ type: "text", text: args.system, cache_control: { type: "ephemeral" } }]
+    : args.system;
+
   const body: Record<string, unknown> = {
     model: args.model,
     max_tokens: args.max_tokens,
-    system: args.system,
-    messages: [
-      {
-        role: "user",
-        content: args.user,
-      },
-    ],
+    system: systemPayload,
+    messages: args.messages,
   };
   if (args.temperature !== undefined) body.temperature = args.temperature;
 
@@ -126,6 +155,7 @@ async function callAnthropicDefault(args: {
       "anthropic-version": ANTHROPIC_API_VERSION,
     },
     body: JSON.stringify(body),
+    signal: args.signal,
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -173,8 +203,30 @@ export async function synthesize(
   const fetcher = deps.callAnthropic ?? callAnthropicDefault;
   const writeAudit = deps.writeAudit ?? audit;
 
-  const maxTokens = Math.max(args.max_tokens ?? entry.max_tokens, entry.max_tokens);
+  const maxTokens = args.max_tokens ?? entry.max_tokens;
   const temperature = args.temperature ?? entry.temperature;
+
+  // Normalize `user` shortcut into the messages array. Reject when
+  // caller provides both or neither — defensive against migration
+  // mistakes.
+  let messages: SynthesizeMessage[];
+  if (args.messages && args.user !== undefined) {
+    throw new Error(`synthesizer: cannot pass both "user" and "messages" for agent "${args.agent}"`);
+  }
+  if (args.messages) {
+    messages = args.messages;
+  } else if (args.user !== undefined) {
+    messages = [{ role: "user", content: args.user }];
+  } else {
+    throw new Error(`synthesizer: must pass either "user" or "messages" for agent "${args.agent}"`);
+  }
+
+  // AbortController for caller-supplied timeout. The default fetcher
+  // passes the signal through; tests can ignore it.
+  const controller = args.timeoutMs ? new AbortController() : null;
+  const timer = controller && args.timeoutMs
+    ? setTimeout(() => controller.abort(), args.timeoutMs)
+    : null;
 
   let response: AnthropicResponse;
   let error: string | null = null;
@@ -183,11 +235,14 @@ export async function synthesize(
       apiKey,
       model: entry.model,
       system: args.system,
-      user: args.user,
+      messages,
       max_tokens: maxTokens,
       temperature,
+      signal: controller?.signal,
+      cache_system: args.cache_system,
     });
   } catch (err) {
+    if (timer) clearTimeout(timer);
     error = String(err).slice(0, 500);
     // Audit the failure before re-throwing so token-burn / endpoint-
     // error-rate detectors see it.
@@ -207,6 +262,7 @@ export async function synthesize(
     });
     throw err;
   }
+  if (timer) clearTimeout(timer);
 
   const text = extractText(response);
   const elapsed_ms = Date.now() - t0;

@@ -202,13 +202,20 @@ describe("synthesize", () => {
     expect(auditCall.outputSummary.actual_model).toBe("claude-something-else-fallback");
   });
 
-  it("enforces registry max_tokens as the floor", async () => {
+  it("caller's max_tokens wins, registry default applies when caller omits", async () => {
+    // Caller-specified value passes through verbatim — refactor charter
+    // says don't change behavior, and some callers intentionally cap
+    // tight (agent_context's 16-token one-word classifier).
     const fetcher = vi.fn().mockResolvedValue({ content: [] });
     await synthesize(
-      { ...baseArgs, max_tokens: 100 }, // below maverick default 2048
+      { ...baseArgs, max_tokens: 100 },
       { callAnthropic: fetcher, writeAudit: async () => {} },
     );
-    // Floor enforced — actual max_tokens passed to fetcher is the registry default.
-    expect(fetcher.mock.calls[0][0].max_tokens).toBe(VOICE_REGISTRY.maverick.max_tokens);
+    expect(fetcher.mock.calls[0][0].max_tokens).toBe(100);
+
+    // No caller value → registry default applies.
+    const fetcher2 = vi.fn().mockResolvedValue({ content: [] });
+    await synthesize(baseArgs, { callAnthropic: fetcher2, writeAudit: async () => {} });
+    expect(fetcher2.mock.calls[0][0].max_tokens).toBe(VOICE_REGISTRY.maverick.max_tokens);
   });
 });

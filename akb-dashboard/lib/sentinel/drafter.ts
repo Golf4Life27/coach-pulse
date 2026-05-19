@@ -24,6 +24,7 @@
 // exported so N.4 tests can lock the shape without a live Anthropic
 // call.
 
+import { synthesize } from "@/lib/maverick/synthesizer";
 import type { SentinelClassification, SentinelClassifierInput } from "./types";
 import { SENTINEL_MODEL } from "./classifier";
 
@@ -244,26 +245,18 @@ interface CallAnthropicArgs {
 }
 
 async function callAnthropicDefault(args: CallAnthropicArgs): Promise<string> {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": args.apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: args.model,
-      max_tokens: args.maxTokens ?? 1024,
-      system: args.systemPrompt,
-      messages: [{ role: "user", content: args.userPrompt }],
-    }),
+  // Phase 10 / P.2 migration — routed through the unified synthesizer.
+  // The `model` arg is now ignored (resolved via voice-registry);
+  // kept for backward-compat with the injection seam in tests.
+  const result = await synthesize({
+    agent: "sentinel",
+    system: args.systemPrompt,
+    user: args.userPrompt,
+    max_tokens: args.maxTokens ?? 1024,
+    apiKey: args.apiKey,
+    event_label: "sentinel_drafted",
   });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`Anthropic ${res.status}: ${body.slice(0, 300)}`);
-  }
-  const data = (await res.json()) as { content?: Array<{ type: string; text?: string }> };
-  return data.content?.find((b) => b.type === "text")?.text ?? "";
+  return result.text;
 }
 
 function stripJsonFences(raw: string): string {

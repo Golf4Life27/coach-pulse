@@ -10,6 +10,8 @@
 // does NOT auto-reply, does NOT change Outreach_Status. The N.2/N.3
 // layers wire the result into the approval queue + draft generator.
 
+import { synthesize } from "@/lib/maverick/synthesizer";
+import { VOICE_REGISTRY } from "@/lib/maverick/voice-registry";
 import type {
   SentinelClassification,
   SentinelClassifierInput,
@@ -17,7 +19,11 @@ import type {
   SentinelRedFlag,
 } from "./types";
 
-export const SENTINEL_MODEL = "claude-sonnet-4-5-20250929";
+/** @deprecated Phase 10 / P.2 — model now resolved via
+ *  voice-registry.VOICE_REGISTRY.sentinel.model. This constant
+ *  re-exports the registry value so existing imports keep working
+ *  during migration. Drop once external callers migrate. */
+export const SENTINEL_MODEL = VOICE_REGISTRY.sentinel.model;
 
 const ALLOWED_INTENTS: ReadonlyArray<SentinelIntent> = [
   "motivated",
@@ -168,31 +174,21 @@ interface CallAnthropicArgs {
   maxTokens?: number;
 }
 
-/** Internal: thin wrapper over fetch to the Anthropic Messages API.
- *  Returns the raw response text (the model's content). Injectable
- *  via the classifyInboundReply fetcher arg so tests can mock. */
+/** Internal: routes through lib/maverick/synthesizer for unified
+ *  model resolution + audit-log tagging. Phase 10 / P.2 migration.
+ *  The `model` arg on CallAnthropicArgs is now ignored (registry
+ *  resolves) but kept for backward-compat with the existing
+ *  callAnthropic injection seam. */
 async function callAnthropicDefault(args: CallAnthropicArgs): Promise<string> {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": args.apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: args.model,
-      max_tokens: args.maxTokens ?? 512,
-      system: args.systemPrompt,
-      messages: [{ role: "user", content: args.userPrompt }],
-    }),
+  const result = await synthesize({
+    agent: "sentinel",
+    system: args.systemPrompt,
+    user: args.userPrompt,
+    max_tokens: args.maxTokens ?? 512,
+    apiKey: args.apiKey,
+    event_label: "sentinel_classified",
   });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`Anthropic ${res.status}: ${body.slice(0, 300)}`);
-  }
-  const data = (await res.json()) as { content?: Array<{ type: string; text?: string }> };
-  const text = data.content?.find((b) => b.type === "text")?.text ?? "";
-  return text;
+  return result.text;
 }
 
 /** Pure: build the user prompt for a single inbound reply. Exported

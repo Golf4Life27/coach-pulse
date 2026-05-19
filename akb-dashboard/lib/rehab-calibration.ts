@@ -6,6 +6,8 @@
 // rehab band, per-category line items, red flags, market multiplier.
 
 import { rehabRates, marketMultiplierForZip } from "./config";
+import { synthesize } from "./maverick/synthesizer";
+import { VOICE_REGISTRY } from "./maverick/voice-registry";
 
 export type RehabCondition = "Good" | "Average" | "Fair" | "Poor" | "Disrepair";
 export type RehabLineConfidence = "HIGH" | "MED" | "LOW";
@@ -99,7 +101,10 @@ export interface RehabCalibrationResult {
   computed_at: string;
 }
 
-const ANTHROPIC_MODEL = "claude-sonnet-4-6";
+/** @deprecated Phase 10 / P.2 — vision model now resolved via
+ *  voice-registry.VOICE_REGISTRY.appraiser.model. Constant retained
+ *  for backward-compat with output.vision_model field. */
+const ANTHROPIC_MODEL = VOICE_REGISTRY.appraiser.model;
 const ANTHROPIC_VISION_MAX_TOKENS = 2048;
 
 function safeNum(v: unknown, fallback = 0): number {
@@ -245,30 +250,20 @@ export async function callRehabVision(
     })),
   ];
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: ANTHROPIC_MODEL,
-      max_tokens: ANTHROPIC_VISION_MAX_TOKENS,
-      system:
-        "You are a property condition analyst for a wholesale real estate firm. Output STRICT JSON only — no markdown, no commentary.",
-      messages: [{ role: "user", content: userContent }],
-    }),
+  // Phase 10 / P.2 migration — routed through the unified synthesizer.
+  // Vision content blocks (text + image URLs) pass through as the user
+  // payload; the synthesizer's AnthropicContent type accepts the
+  // existing array shape unchanged.
+  const result = await synthesize({
+    agent: "appraiser",
+    system:
+      "You are a property condition analyst for a wholesale real estate firm. Output STRICT JSON only — no markdown, no commentary.",
+    user: userContent,
+    max_tokens: ANTHROPIC_VISION_MAX_TOKENS,
+    apiKey,
+    event_label: "rehab_calibrated",
   });
-
-  if (!res.ok) {
-    const errText = await res.text().catch(() => "");
-    throw new Error(`Anthropic vision ${res.status}: ${errText}`);
-  }
-
-  const data = (await res.json()) as { content?: Array<{ type: string; text?: string }> };
-  const text = data.content?.find((b) => b.type === "text")?.text ?? "";
-  const parsed = parseVisionJson(text);
+  const parsed = parseVisionJson(result.text);
 
   // Apply market multiplier on totals and on each line item.
   const rehab_low = Math.round(parsed.total_low * multiplier);

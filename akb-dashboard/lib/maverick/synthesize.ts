@@ -16,6 +16,8 @@
 // cheaper cached-input pricing.
 
 import type { StructuredBriefing } from "./briefing";
+import { synthesize } from "./synthesizer";
+import { VOICE_REGISTRY } from "./voice-registry";
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 // Bumped from 12s → 20s after Gate 2 first smoke (5/15): cold-cache
@@ -26,7 +28,9 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 // v1.2 backlog: trim active_deals input to top 15 to reduce
 // Claude latency further.
 const DEFAULT_TIMEOUT_MS = 20_000;
-const MODEL = "claude-sonnet-4-6";
+/** @deprecated Phase 10 / P.2 — model + max_tokens resolved via
+ *  voice-registry.briefing. Constants retained for test access. */
+const MODEL = VOICE_REGISTRY.briefing.model;
 const MAX_TOKENS = 1024;
 
 // Voice guidance + roster + non-hallucination guardrail. Marked for
@@ -84,35 +88,24 @@ export async function synthesizeNarrative(opts: SynthesizeOpts): Promise<Synthes
     };
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
+  // Phase 10 / P.2 migration — route through unified synthesizer.
+  // Returns fallback narrative on ANY error (timeout, API error,
+  // empty response) so the aggregator's response shape stays
+  // consistent. Cache-control on system prompt preserved via
+  // cache_system flag.
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      signal: controller.signal,
-      body: JSON.stringify(buildRequestBody(opts.structured)),
+    const requestBody = buildRequestBody(opts.structured);
+    const userContent = requestBody.messages as Array<{ content: string }>;
+    const result = await synthesize({
+      agent: "briefing",
+      system: SYSTEM_PROMPT,
+      user: userContent[0].content,
+      max_tokens: MAX_TOKENS,
+      timeoutMs,
+      cache_system: true,
+      event_label: "jarvis_brief_synthesized",
     });
-
-    if (!res.ok) {
-      const text = await res.text();
-      return {
-        narrative: opts.fallbackNarrative,
-        synthesized: false,
-        error: `Anthropic API ${res.status}: ${text.slice(0, 200)}`,
-        latency_ms: Date.now() - t0,
-      };
-    }
-
-    const body = (await res.json()) as {
-      content?: Array<{ type: string; text?: string }>;
-    };
-    const text = body.content?.find((c) => c.type === "text")?.text?.trim();
+    const text = result.text.trim();
     if (!text) {
       return {
         narrative: opts.fallbackNarrative,
@@ -121,7 +114,6 @@ export async function synthesizeNarrative(opts: SynthesizeOpts): Promise<Synthes
         latency_ms: Date.now() - t0,
       };
     }
-
     return {
       narrative: text,
       synthesized: true,
@@ -136,8 +128,6 @@ export async function synthesizeNarrative(opts: SynthesizeOpts): Promise<Synthes
       error: /aborted/i.test(msg) ? `synthesis timeout after ${timeoutMs}ms` : msg,
       latency_ms: Date.now() - t0,
     };
-  } finally {
-    clearTimeout(timer);
   }
 }
 

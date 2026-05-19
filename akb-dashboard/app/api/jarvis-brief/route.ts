@@ -21,6 +21,8 @@ import type {
   JarvisBrief,
 } from "@/types/jarvis";
 import { classifyBroCardPricing } from "@/lib/brocard/pricing";
+import { synthesize } from "@/lib/maverick/synthesizer";
+import { VOICE_REGISTRY } from "@/lib/maverick/voice-registry";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -37,7 +39,10 @@ const MAX_HYDRATE_CANDIDATES = 5;
 const ACCEPT_NOTE_RE = /accept|seller (?:agreed|said yes)|will move forward/i;
 const COUNTER_NOTE_RE = /counter|come up|come down/i;
 
-const ANTHROPIC_MODEL = "claude-sonnet-4-5-20250929";
+/** @deprecated Phase 10 / P.2 — model resolved via voice-registry.
+ *  maverick. Constant retained so the metadata-return field on the
+ *  response (`metadata.model`) keeps reporting the model name. */
+const ANTHROPIC_MODEL = VOICE_REGISTRY.maverick.model;
 
 interface RankedDeal {
   context: DealContext;
@@ -513,29 +518,21 @@ MULTIFAMILY COUNTER PRICING:
 - Show the math in the BroCard summary: "8 units × $700/mo × 12 = $67,200 gross → buyer max ~$745K at 9% cap → counter $445K (yields $15K wholesale fee at $460K assignment)".`;
 
     const tLLM = Date.now();
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: ANTHROPIC_MODEL,
-        max_tokens: 4096,
-        system,
-        messages: [{ role: "user", content: userPrompt }],
-      }),
-    });
-
+    // Phase 10 / P.2 migration — routed through unified synthesizer.
     let cards: BroCard[];
-    if (!res.ok) {
-      console.error(`[jarvis-brief] Anthropic ${res.status}:`, await res.text().catch(() => ""));
+    try {
+      const result = await synthesize({
+        agent: "maverick",
+        system,
+        user: userPrompt,
+        max_tokens: 4096,
+        apiKey,
+        event_label: "jarvis_brief_synthesized",
+      });
+      cards = parseLLMCards(result.text, ranked);
+    } catch (err) {
+      console.error(`[jarvis-brief] synthesize failed:`, err);
       cards = ranked.slice(0, MAX_BROCARDS).map((d, i) => fallbackBroCard(d, i + 1));
-    } else {
-      const data = (await res.json()) as { content?: Array<{ type: string; text?: string }> };
-      const text = data.content?.find((b) => b.type === "text")?.text ?? "";
-      cards = parseLLMCards(text, ranked);
     }
     const llmMs = Date.now() - tLLM;
 

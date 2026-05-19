@@ -1,5 +1,6 @@
 import { getListings, updateListingRecord } from "@/lib/airtable";
 import { getMessagesForParticipant } from "@/lib/quo";
+import { synthesize } from "@/lib/maverick/synthesizer";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -68,33 +69,18 @@ New inbound message from agent:
 Draft a text message response for Alex to review.`;
 
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 300,
-        system: systemPrompt,
-        messages: [{ role: "user", content: userPrompt }],
-      }),
+    // Phase 10 / P.2 migration — routed through unified synthesizer.
+    const result = await synthesize({
+      agent: "crier",
+      system: systemPrompt,
+      user: userPrompt,
+      max_tokens: 300,
+      apiKey: ANTHROPIC_API_KEY,
+      event_label: "crier_reply_drafted",
     });
-
-    if (!res.ok) {
-      const errText = await res.text();
-      console.error("[Jarvis] Anthropic error:", res.status, errText);
-      return "[Draft generation failed]";
-    }
-
-    const data = await res.json();
-    const blocks = data.content as Array<{ type: string; text?: string }>;
-    const textBlock = blocks?.find((b) => b.type === "text");
-    return textBlock?.text || "[Draft generation failed]";
+    return result.text || "[Draft generation failed]";
   } catch (err) {
-    console.error("[Jarvis] AI draft error:", err);
+    console.error("[Crier] AI draft error:", err);
     return "[Draft generation failed]";
   }
 }
