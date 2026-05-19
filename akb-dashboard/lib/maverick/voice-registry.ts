@@ -170,7 +170,10 @@ export const VOICE_REGISTRY: Record<VoiceAgent, VoiceEntry> = {
   agent_context: {
     agent: "agent_context",
     model: MODEL_HAIKU_4_5,
-    max_tokens: 512,
+    // Tone classifier task is intentionally tiny — one-word output.
+    // Callers pass max_tokens: 16 explicitly; this default is the
+    // safe fallback when a caller forgets.
+    max_tokens: 64,
     voice_fragment:
       "Tone-classifier voice. Compact, deterministic output. No prose. Reads recent inbound/outbound bodies and emits depth_score + inferred_tone + isPrincipal flag. Haiku-tier because the task is small and the volume is high.",
     description: "Agent-context tone classifier (api/agent-context).",
