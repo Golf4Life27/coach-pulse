@@ -26,7 +26,9 @@ export type PulseDetectorId =
   | "test_count_regression"
   | "endpoint_error_rate_high"
   | "stale_data_drift"
-  | "voice_drift";
+  | "voice_drift"
+  | "outreach_volume_drop"
+  | "quo_quota_burn";
 
 export interface PulseDetection {
   /** Unique per-detection-fire ID; for steady-state detections this
@@ -35,6 +37,12 @@ export interface PulseDetection {
   id: string;
   detector_id: PulseDetectorId;
   severity: PulseSeverity;
+  /** Phase 14.1 — confidence in the detection, 0-1. Deterministic
+   *  threshold detectors return 1.0 (always confident in their
+   *  binary fire). LLM-based or pattern-matching detectors return
+   *  lower confidence to drive proactive-surfacing gates. Defaults
+   *  to 1.0 when omitted — preserves existing detector behavior. */
+  confidence?: number;
   /** Single-line headline. Rendered in Pulse room + Maverick load-
    *  state briefing. */
   title: string;

@@ -25,6 +25,8 @@ import { detectTestCountRegression } from "./detectors/test-count-regression";
 import { detectEndpointErrorRate } from "./detectors/endpoint-error-rate";
 import { detectStaleDataDrift } from "./detectors/stale-data-drift";
 import { detectVoiceDrift } from "./detectors/voice-drift";
+import { detectOutreachVolumeDrop } from "./detectors/outreach-volume-drop";
+import { detectQuoQuotaBurn } from "./detectors/quo-quota-burn";
 
 import { audit } from "@/lib/audit-log";
 import { writeState, type WriteStateDeps } from "@/lib/maverick/write-state";
@@ -55,6 +57,8 @@ export function runAllDetectors(input: PulseDetectorInput): PulseDetection[] {
     ...detectEndpointErrorRate(input),
     ...detectStaleDataDrift(input),
     ...detectVoiceDrift(input),
+    ...detectOutreachVolumeDrop(input),
+    ...detectQuoQuotaBurn(input),
   ];
 }
 
