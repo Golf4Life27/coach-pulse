@@ -10,6 +10,10 @@ runbook. Updated as the live system evolves.
 | Concern | Where |
 |---|---|
 | Canonical spec | `docs/specs/Inevitable_Continuity_Layer_Spec_v1.2.md` |
+| Character spec (voice + agent roster) | `docs/specs/Maverick_Character_Spec_v1.md` |
+| Daily UX spec (Shepherd panel, severity tiers, factory floor) | `docs/specs/Maverick_Daily_UX_Spec_v1.md` |
+| Capability Absorption reference (Anthropic-native migration map) | `docs/specs/Maverick_Capability_Absorption_Reference_v1.md` |
+| EMD wire procedure (Phase 5.5) | `docs/specs/EMD_WIRE_PROCEDURE.md` |
 | OAuth implementation brief | `docs/specs/MAVERICK_OAUTH_PROPOSAL.md` |
 | Model tier registry brief | `docs/specs/MAVERICK_MODEL_REGISTRY_PROPOSAL.md` |
 | v1.3 amendment backlog | `docs/specs/MAVERICK_V12_BACKLOG.md` (rename pending) |
