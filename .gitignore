@@ -6,3 +6,9 @@
 **/node_modules/
 **/.next/
 **/.vercel/
+
+# Python build artifacts — Sprint R's scripts/dedupe_export.py
+# creates these when imported / smoke-tested. Build-time only;
+# never source.
+**/__pycache__/
+*.py[cod]
