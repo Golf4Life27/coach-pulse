@@ -25,7 +25,8 @@ export type PulseDetectorId =
   | "spine_write_rate_low"
   | "test_count_regression"
   | "endpoint_error_rate_high"
-  | "stale_data_drift";
+  | "stale_data_drift"
+  | "voice_drift";
 
 export interface PulseDetection {
   /** Unique per-detection-fire ID; for steady-state detections this

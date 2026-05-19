@@ -24,6 +24,7 @@ import { detectSpineWriteRate } from "./detectors/spine-write-rate";
 import { detectTestCountRegression } from "./detectors/test-count-regression";
 import { detectEndpointErrorRate } from "./detectors/endpoint-error-rate";
 import { detectStaleDataDrift } from "./detectors/stale-data-drift";
+import { detectVoiceDrift } from "./detectors/voice-drift";
 
 import { audit } from "@/lib/audit-log";
 import { writeState, type WriteStateDeps } from "@/lib/maverick/write-state";
@@ -53,6 +54,7 @@ export function runAllDetectors(input: PulseDetectorInput): PulseDetection[] {
     ...detectTestCountRegression(input),
     ...detectEndpointErrorRate(input),
     ...detectStaleDataDrift(input),
+    ...detectVoiceDrift(input),
   ];
 }
 
