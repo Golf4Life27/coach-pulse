@@ -27,11 +27,19 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 // parallel fetch floor is ~3.5s, leaving 26.5s for synthesis.
 // v1.2 backlog: trim active_deals input to top 15 to reduce
 // Claude latency further.
-const DEFAULT_TIMEOUT_MS = 20_000;
-/** @deprecated Phase 10 / P.2 — model + max_tokens resolved via
- *  voice-registry.briefing. Constants retained for test access. */
+// Synthesis budget — Phase 10.4: bumped from 20s → 30s after Phase
+// 10.5 trim landed (active_deals capped at 15). v1.2 §6.2 P95 ≤ 30s
+// ceiling — we sit right at it, aggregator's parallel-fetch floor
+// gives ~3.5s headroom from the request edge.
+const DEFAULT_TIMEOUT_MS = 30_000;
 const MODEL = VOICE_REGISTRY.briefing.model;
 const MAX_TOKENS = 1024;
+// Phase 10.5 — cap active_deals input at this many entries before
+// serializing to the synthesizer prompt. Older entries are dropped;
+// the aggregator's source-side sorting already surfaces the most
+// recent / highest-tier rows first. Cuts prompt tokens by ~60% on
+// pipelines with 40+ active deals.
+const ACTIVE_DEALS_PROMPT_CAP = 15;
 
 // Voice guidance + roster + non-hallucination guardrail. Marked for
 // prompt caching since this is the largest stable chunk of input.
@@ -142,8 +150,13 @@ export function buildRequestBody(structured: StructuredBriefing): Record<string,
   // Synthesizer doesn't need it — `by_agent` counts + `recent_failures`
   // give it enough signal. Strip before serializing to keep the prompt
   // at its prior cost ceiling.
+  // Phase 10.5: also cap active_deals at ACTIVE_DEALS_PROMPT_CAP.
+  // The aggregator's source-side sorting puts most-recent / highest-
+  // tier deals first; tail-end trimming preserves what matters to
+  // the synthesizer and drops what doesn't.
   const synthesisStructured: StructuredBriefing = {
     ...structured,
+    active_deals: structured.active_deals.slice(0, ACTIVE_DEALS_PROMPT_CAP),
     audit_summary: {
       ...structured.audit_summary,
       recent_events: [],

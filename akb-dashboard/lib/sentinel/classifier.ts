@@ -180,6 +180,10 @@ interface CallAnthropicArgs {
  *  resolves) but kept for backward-compat with the existing
  *  callAnthropic injection seam. */
 async function callAnthropicDefault(args: CallAnthropicArgs): Promise<string> {
+  // Phase 10.6 — SENTINEL_SYSTEM_PROMPT is large + stable across
+  // every classification call. cache_system: true unlocks Anthropic's
+  // prompt-cache pricing tier (~10% cost of full prompt tokens) on
+  // repeat invocations within the cache TTL window.
   const result = await synthesize({
     agent: "sentinel",
     system: args.systemPrompt,
@@ -187,6 +191,7 @@ async function callAnthropicDefault(args: CallAnthropicArgs): Promise<string> {
     max_tokens: args.maxTokens ?? 512,
     apiKey: args.apiKey,
     event_label: "sentinel_classified",
+    cache_system: true,
   });
   return result.text;
 }

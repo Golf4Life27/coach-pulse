@@ -246,8 +246,9 @@ interface CallAnthropicArgs {
 
 async function callAnthropicDefault(args: CallAnthropicArgs): Promise<string> {
   // Phase 10 / P.2 migration — routed through the unified synthesizer.
-  // The `model` arg is now ignored (resolved via voice-registry);
-  // kept for backward-compat with the injection seam in tests.
+  // Phase 10.6 cache audit — drafter system prompt is stable across
+  // invocations; cache_system: true unlocks Anthropic's prompt-cache
+  // pricing on repeat draft calls.
   const result = await synthesize({
     agent: "sentinel",
     system: args.systemPrompt,
@@ -255,6 +256,7 @@ async function callAnthropicDefault(args: CallAnthropicArgs): Promise<string> {
     max_tokens: args.maxTokens ?? 1024,
     apiKey: args.apiKey,
     event_label: "sentinel_drafted",
+    cache_system: true,
   });
   return result.text;
 }

@@ -528,6 +528,9 @@ MULTIFAMILY COUNTER PRICING:
         max_tokens: 4096,
         apiKey,
         event_label: "jarvis_brief_synthesized",
+        // Phase 10.6 — buildJarvisSystemPrompt output is stable per
+        // context flag; cache the system fragment.
+        cache_system: true,
       });
       cards = parseLLMCards(result.text, ranked);
     } catch (err) {
