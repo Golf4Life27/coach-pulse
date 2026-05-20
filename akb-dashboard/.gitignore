@@ -51,3 +51,5 @@ lib/maverick/data/test-counts.json
 !/docs/specs/*.md
 !/docs/handoffs/
 !/docs/handoffs/*.md
+!/docs/investigations/
+!/docs/investigations/*.md
