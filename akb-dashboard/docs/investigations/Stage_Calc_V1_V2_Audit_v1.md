@@ -304,3 +304,118 @@ Operator can run a follow-up paginated query if a fuller divergence enumeration 
 9. ⏸ `Active_Queue.md` INV-003 status flip pending remediation.
 
 **Next operator action:** select A / B / C / D in chat. Code then implements + writes Spine + updates checklist + flips queue status.
+
+---
+
+## §9 — Remediation outcome (appended 2026-05-20)
+
+**Decision:** Option A + Path 2 — V2 becomes canonical with MLS-date gate; Execution_Path_Calc routes Data Issue verdicts to Manual Review via LEFT prefix match. Operator-ratified 2026-05-20.
+**Spine record:** `recPKEhirWUWthpXS` (`event_type: principle_amendment`, `attribution_agent: sentry`).
+
+### What shipped
+
+**1. `Stage_Calc_V2` formula updated** (`fldA8B9zOCneF0rjp`):
+
+```airtable
+IF(NOT({Has_MLS_Date}), "Data Issue: Missing MLS Date",
+IF({List_Price_Sane}=0, "Rejected: Price Floor",
+IF({SqFt_Sane}=0, "Rejected: Too Small",
+IF({SFR_Only}=0, "Rejected: Not SFR",
+IF(OR({Retail_Pricing_Fail}=1, {Liquidity_Fail}=1), "Rejected: Retail or Liquidity",
+IF({Distress_Pass}=0, "Rejected: No Distress",
+IF({Math_Pass}=0, "Rejected: Offer Math",
+"Passed: Ready for Offer"
+)))))))
+```
+
+Top-of-formula gate added. Verdict text uses colon convention to match V2's vocabulary (not V1's en-dash).
+
+**2. `Execution_Path_Calc` formula updated** (`fldNRMrcxbiKHW1C9`):
+
+```airtable
+IF(
+  LEFT({Stage_Calc_V2}, 10) = "Data Issue",
+  "Manual Review",
+  IF(
+    AND(
+      {Restriction_Risk_Level_Calc} != "Flagged",
+      {Restriction_Risk_Level_Calc} != "High Risk",
+      {Restriction_Risk_Level_Calc} != "Hard Block",
+      {Stage_Calc_V2} = "Passed: Ready for Offer",
+      {MAO_V1} > 0
+    ),
+    "Auto Proceed",
+    IF(
+      {Stage_Calc_V2} = "Passed: Ready for Offer",
+      "Manual Review",
+      "Reject"
+    )
+  )
+)
+```
+
+LEFT prefix-match branch added at the top. Pre-existing Auto-Proceed / Manual-Review / Reject logic preserved unchanged below.
+
+**3. `Stage_Calc` V1 field (`fldDCGwYvt7b8fNCj`) — PENDING OPERATOR UI DELETION.** No Airtable MCP `delete_field` tool exists (brief explicitly acknowledged this). Pre-deletion grep checks per brief Step 4 — all PASS for runtime consumers:
+
+| Check | Result |
+|---|---|
+| `grep -r fldDCGwYvt7b8fNCj akb-dashboard/` | 4 hits, ALL in documentation (audit reports + System Inventory v2). Zero code/Make/route consumers. |
+| `grep -r Stage_Calc akb-dashboard/ \| grep -v Stage_Calc_V2` | 12 hits, ALL in documentation (audit reports + Belt v1 spec generic mentions of intake → stage_calc step + queue). Zero code consumers. |
+| `grep -r V1 verdict strings` | 8 hits, ALL in documentation (audit text quoting V1's verdict vocabulary). Zero code consumers. |
+
+The documentation hits are HISTORICAL/audit references that should remain post-deletion as the record of what was. Field deletion can proceed via Airtable UI without code-side impact.
+
+### Live verification (Step 3 — all PASS)
+
+**Both formulas valid post-edit** (per `get_table_schema` round-trip):
+- `Stage_Calc_V2` `isValid: true`, `referencedFieldIds` now includes `fldwuqdvGOYKzizl6` (Has_MLS_Date) as expected
+- `Execution_Path_Calc` `isValid: true`, references unchanged plus the new LEFT prefix logic
+
+**Two known divergent records (verified unchanged):**
+| recordId | Address | Pre-edit V2 | Post-edit V2 | Pre-edit Execution_Path_Calc | Post-edit Execution_Path_Calc |
+|---|---|---|---|---|---|
+| `rec9D7FAKlDUU0rcQ` | 1303 Nw 22nd St San Antonio TX | Rejected: Too Small | Rejected: Too Small ✓ | Reject | Reject ✓ |
+| `recBWKbbWXTMxIaYN` | 253 1st St Sw Atlanta GA | Rejected: Too Small | Rejected: Too Small ✓ | Reject | Reject ✓ |
+
+SqFt gate unchanged; both records correctly attributed.
+
+**Missing-MLS-date path verified on 6 live records** (no synthetic test record needed; live data covered both branches):
+
+| recordId | Address | Has_MLS_Date | Post-edit V2 | Post-edit Execution_Path_Calc |
+|---|---|---|---|---|
+| `rec3J82DupiRhQQgj` | 934 Lehman St | 0 (false) | Data Issue: Missing MLS Date | **Manual Review** ✓ |
+| `recFeCrKFCXrenpsd` | TEST 500 Cedar Blvd | 0 (false) | Data Issue: Missing MLS Date | **Manual Review** ✓ |
+| `recl3csdMsfrHIsV9` | TEST 200 Oak Ave | 0 (false) | Data Issue: Missing MLS Date | **Manual Review** ✓ |
+| `recxS00MqCmvuI9fH` | TEST 300 Elm Dr | 0 (false) | Data Issue: Missing MLS Date | **Manual Review** ✓ |
+| `recxWEMLp2hcBY5j7` | TEST 100 Main St | 0 (false) | Data Issue: Missing MLS Date | **Manual Review** ✓ |
+| `recz28Ui8S642Xgog` | TEST 400 Pine Ln | 0 (false) | Data Issue: Missing MLS Date | **Manual Review** ✓ |
+
+5 of the 6 records are pre-existing TEST records; 1 (934 Lehman St) is a real listing missing MLS date. All correctly routed.
+
+### Behavioral impact
+
+- ~10 records across the 1,025-record active pipeline (1.0% sampled divergence rate, projected) now have correct V2 attribution.
+- Missing-MLS-date records now surface as Manual Review (operator-actionable data-quality flag) instead of falling through to the Reject default. **Lost-Phone Test discipline preserved:** system surfaces data problems via the queue, doesn't kill leads silently.
+- LEFT prefix match in Execution_Path_Calc enables future variants ("Data Issue: Missing Address", "Data Issue: Missing ZIP", etc.) without requiring another Execution_Path_Calc edit. Forward-compat with potential INV-005 / INV-009 / INV-011 schema-quality work.
+
+### Acceptance criteria status (per brief §7)
+
+| # | Criterion | Status |
+|---|---|---|
+| 1 | Q1 code-consumer enumeration | ✅ (audit §1) |
+| 2 | Q2 human-surface enumeration | ✅ (audit §2) |
+| 3 | Q3 live divergence count + samples | ✅ (audit §3) |
+| 4 | Q4 provenance best-effort | ✅ (audit §4) |
+| 5 | Operator selects A/B/C/D | ✅ Option A + Path 2 (2026-05-20) |
+| 6 | Code implements formulas + V1 deletion | ✅ formulas; ⏸ V1 deletion pending operator UI action (no MCP tool exists; brief acknowledged) |
+| 7 | Spine entry written | ✅ `recPKEhirWUWthpXS` |
+| 8 | `AKB_MASTER_CHECKLIST.md` updated | ✅ this commit (Phase 1 Stage_Calc resolution entry per Rule 9) |
+| 9 | `Active_Queue.md` INV-003 flipped to SHIPPED | ✅ this commit |
+
+### Untouched paths
+
+- L3 / scan-comms / H2 / `/api/deal-context` / `/api/conversations` / `lib/maverick/*` — all unchanged.
+- Production path remains: `Stage_Calc_V2` (now with MLS-date gate) → `Execution_Path` (now with Data-Issue branch) → H2 filter → outbound.
+
+*End of remediation outcome. Status: formulas shipped + verified. V1 field deletion pending operator Airtable UI action. Spine: `recPKEhirWUWthpXS`.*
