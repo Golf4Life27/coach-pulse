@@ -11,7 +11,7 @@ Discipline: each line = a discrete forensic investigation, briefed to Code separ
 
 ## Queued
 
-3. **[INV-003] Stage_Calc V1 vs V2 sibling formulas** — both formulas exist on Listings_V1 with identical gate logic but different rejection-string copy. Discovered during INV-001. Likely migration artifact, V1 deprecation candidate. Lower urgency. Brief: TBD.
+3. **[INV-003] Stage_Calc V1 vs V2 sibling formulas** — INVESTIGATION COMPLETE 2026-05-20 → `docs/investigations/Stage_Calc_V1_V2_Audit_v1.md` → pending operator decision on remediation. Key findings: V1 has ZERO code/Make/operator consumers (vestigial post-V2-refactor artifact); V2 is consumed by exactly one downstream formula (`Execution_Path`); live divergence ~1% (2/200 sampled active records — both V1=Qualified V2=Rejected:Too Small, V2 catches SqFt gate that V1 lacks). Brief's Option A (deprecate V1, add MLS-date branch to V2) is lowest-cost given findings; Option D (keep both, formally scope) effectively rejected by Q4 evidence; operator picks A/B/C/D in chat.
 
 4. **[INV-004] Crier stale-contact false-positive on fresh contracts** — Crier alert "32 days without contact" fired on 23 Fields Ave on 2026-05-20 despite binding agreement dated 2026-05-19 (one-day-old contract). Timestamp calculation likely keying off `Last_Outreach_Date` or similar SMS-only field, not last meaningful contact (which includes the just-signed agreement and presumably-recent email/Quo exchanges). Affects every freshly-contracted deal — false-positive surfaces noise on records that just moved forward. Brief: TBD.
 
