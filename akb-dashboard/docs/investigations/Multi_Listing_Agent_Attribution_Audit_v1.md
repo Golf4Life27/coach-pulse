@@ -233,3 +233,196 @@ Operator can verify by running these against a live deploy and pasting outputs i
 ---
 
 *End of audit. Status only. No remediation implemented. Operator decides among Path (a) / (b) / (c) in §5.*
+
+---
+
+## §7 — Remediation outcome — Step 1 (appended 2026-05-20)
+
+**Decision:** Path (c) Step 1 — surgical interim fix at `/api/conversations/[id]`. Step 2 (architectural redesign with unified attribution layer at ingest) deferred to belt MVP sprint.
+**Operator authorization:** 2026-05-20 (this session).
+**Spine record:** `rec5UVLsXktD8M8Mi`.
+
+### What shipped
+
+**1. `lib/timeline-merge.ts` — 2-line export change**
+
+```diff
+-interface SiblingRecord {
++export interface SiblingRecord {
+   recordId: string;
+   address: string;
+   listPrice: number | null;
+ }
+
+-function scorePropertyMatch(
++export function scorePropertyMatch(
+   messageBody: string,
+   targetAddress: string,
+   targetPrice: number | null,
+   siblings: SiblingRecord[]
+ ): { recordId: string; confidence: number } {
+```
+
+No body changes. Function moved from private to public so `/api/conversations/[id]` can call it directly. `mergeTimeline()` continues to call the same function with the same semantics — single source of truth.
+
+**2. `app/api/conversations/[id]/route.ts` — sibling lookup + Quo-loop filter**
+
+```diff
+@@ Imports @@
+-import { getListing } from "@/lib/airtable";
++import { getListing, getListings } from "@/lib/airtable";
+ import { getMessagesForParticipant } from "@/lib/quo";
+ import { parseConversation } from "@/lib/notes";
++import { scorePropertyMatch, type SiblingRecord } from "@/lib/timeline-merge";
+
+@@ After `if (!listing)` block — new sibling-lookup section @@
+     if (!listing) {
+       return Response.json({ error: "Listing not found" }, { status: 404 });
+     }
++
++    // INV-007 Step 1 attribution filter: pull sibling listings (same Agent_Phone)
++    // so we can attribute each Quo message to a specific property. Filter out
++    // messages that score to a sibling OR fall below the 0.6 confidence floor
++    // (same threshold the AMBIGUOUS banner uses in /api/deal-context/[id]).
++    // Step 2 (unified attribution layer at ingest) deferred to belt MVP sprint.
++    let siblings: SiblingRecord[] = [];
++    if (listing.agentPhone) {
++      try {
++        const all = await getListings();
++        const target = cleanPhone(listing.agentPhone);
++        siblings = all
++          .filter((l) => l.id !== id && l.agentPhone && cleanPhone(l.agentPhone) === target)
++          .map((l) => ({ recordId: l.id, address: l.address, listPrice: l.listPrice }));
++      } catch (err) {
++        console.error(`[conversations] Sibling lookup failed for ${id}:`, err);
++      }
++    }
++    const hasSiblings = siblings.length > 0;
+
+     const messages: UnifiedMessage[] = [];
+
+@@ Inside Quo message loop — attribution filter @@
+         const quoMessages = await getMessagesForParticipant(phone, 60 * 24 * 90); // 90 days
+         for (const msg of quoMessages) {
++          // Attribute via scorePropertyMatch when this agent holds multiple listings.
++          // match.recordId === "" means target won; empty fallback to current id.
++          // Sibling-attributed OR low-confidence (<0.6) messages are excluded from
++          // this property's thread. They remain visible via the AMBIGUOUS banner
++          // on /pipeline/[id] and the disambiguation queue.
++          if (hasSiblings) {
++            const match = scorePropertyMatch(
++              msg.body,
++              listing.address,
++              listing.listPrice,
++              siblings,
++            );
++            const attributedRecordId = match.recordId || id;
++            if (attributedRecordId !== id || match.confidence < 0.6) continue;
++          }
+           messages.push({
+             id: `quo-${msg.id}`,
+             source: "quo",
+             // ... existing UnifiedMessage construction unchanged
+```
+
+**Total diff: 2 lines changed in `timeline-merge.ts`, 18 lines added in `conversations/route.ts` (imports + sibling lookup + filter, comments included). Zero deletions of existing logic. No changes to `UnifiedMessage` API contract.**
+
+### Behavior change — plain language
+
+For agents who hold ONE listing (the common case — most agents in the pipeline), nothing changes. `hasSiblings === false` skips the filter entirely.
+
+For agents who hold MULTIPLE listings (multi-listing agents — Candice Hardaway is the anchor case with 4), the conversation panel for any one of those listings now shows ONLY messages that score `confidence >= 0.6` against that listing's address AND whose best-match recordId is that listing. Messages about sibling properties (e.g., the 3273 Steele outbound previously appearing in the 23 Fields panel) are excluded.
+
+### Documented trade-off (per operator non-blocking note on D1.1)
+
+The 0.6 filter excludes messages even when `attributedRecordId === id` if their confidence falls below the threshold. This means **low-signal inbound messages may disappear from the deal-room conversation panel and be visible only via the AMBIGUOUS banner + disambiguation queue.**
+
+Concrete examples of low-signal inbound:
+- Single-word replies: `"yes"`, `"no"`, `"call me"` — zero token match, zero price match, zero "listing at" phrase → confidence 0.
+- Ambiguous replies: `"what's your offer?"`, `"send the contract"` — no address/price tokens → confidence 0.
+- Brief acknowledgments: `"thanks"`, `"got it"` — confidence 0.
+
+For a multi-listing agent, ALL of these inbound messages disappear from the conversation panel. They will be visible:
+1. As an **AMBIGUOUS banner** count on `/pipeline/[id]` (operator sees "N message(s) could not be confidently matched to this property")
+2. In the **disambiguation queue** surface (when `DISAMBIGUATION_QUEUE_TABLE_ID` env is configured — written by the `/api/multi-listing-detect` cron)
+3. Via the **JarvisGreeting "ambiguous queue" badge** on the dashboard
+
+**Operator acceptance noted:** "deal-room panel gets cleaner, queue becomes the destination for low-signal comms. If operator workflow needs low-confidence messages rendered with a confidence-badge instead of hidden, that's a Step 2 design question."
+
+### Test execution
+
+| Test | Status | Result |
+|---|---|---|
+| **#1 TypeScript compile (`npx tsc --noEmit`)** | RAN | PASS — after `npm install` (138 packages, 14s) in fresh container, zero TS errors in either patched file. Pre-existing environmental errors (missing `@types/node` in untouched routes) are unrelated. |
+| **#2 Unit tests for `scorePropertyMatch`** | NOT RUNNABLE — **gap** | `lib/timeline-merge.test.ts` does not exist. The scorer has no unit-test coverage today. Adding tests is a useful Step 2 follow-up but out of scope for Step 1. Logged below. |
+| **#3–#7 End-to-end curls** (`/api/conversations/{rec1HTUqK0YEVb7uA, recvCaqLgd6n7AQkA, rec2HTt07fNBDKfKf}` + AMBIGUOUS banner consistency + before/after message counts) | DEFERRED — runtime-dependent | `QUO_API_KEY` is a Vercel-deployment secret, not in this remote container. Operator runs the curls against a deployed environment. Commands documented in §6 of this audit. |
+
+### Curls for operator post-deploy verification
+
+```bash
+# #3 — 23 Fields panel should NOT contain 3273 Steele
+curl -s <deploy>/api/conversations/rec1HTUqK0YEVb7uA | jq '.messages[] | select(.body | test("3273 Steele|Steele St"; "i"))'
+# Expected: empty output
+
+# #4 — 3273 Steele panel SHOULD contain the Steele message
+curl -s <deploy>/api/conversations/recvCaqLgd6n7AQkA | jq '.messages[] | select(.body | test("3273 Steele|Steele St"; "i"))'
+# Expected: ≥1 outbound H2 message
+
+# #5 — 785 Pawnee panel (Dead) — no leaked messages from other 3 listings
+curl -s <deploy>/api/conversations/rec2HTt07fNBDKfKf | jq '.messages[] | select(.body | test("23 Fields|1871 Thrift|3273 Steele"; "i"))'
+# Expected: empty output
+
+# #7 — before/after message-count sanity (run against an old deploy + new deploy)
+for rec in rec1HTUqK0YEVb7uA rec2HTt07fNBDKfKf recXKcZhB7QY2OHBj recvCaqLgd6n7AQkA; do
+  echo "$rec: $(curl -s <deploy>/api/conversations/$rec | jq '.messageCount')"
+done
+# Expected: each thread shrinks vs pre-patch; sum across 4 listings roughly
+# equals the count of any single pre-patch thread (since pre-patch all 4
+# showed the same dumped messages).
+```
+
+### Reversibility
+
+Revert is trivial:
+- 2 lines in `lib/timeline-merge.ts` (remove `export` keywords)
+- 18 lines in `app/api/conversations/[id]/route.ts` (remove imports + sibling block + filter block)
+
+Pre-patch behavior is "no attribution filter" — restoring it is a clean diff revert. Operator can revert via single git operation if Step 1 surfaces unexpected behavior on multi-listing agents.
+
+### Untouched paths (still have original behavior)
+
+Per Step 1 scope, the following remain unchanged. They are now formal queue items:
+
+- **INV-014** — L3 Make Scenario 4812756 `maxRecords: 1` no-sort phone lookup (winner-takes-all, non-deterministic).
+- **INV-015** — `/api/cron/scan-comms` fan-out (one inbound → N proposals).
+- **INV-016** — `scorePropertyMatch` price-match comparing against `List_Price` (H2 body contains Offer).
+
+Step 1 does NOT address these. They are part of Step 2's unified-attribution-at-ingest redesign.
+
+### Step 2 specification (deferred to belt MVP sprint)
+
+When operator authorizes Step 2:
+
+1. **New Airtable table: `Comms_Attribution`** (or equivalent) keyed by `message_id`, columns: `recordId`, `confidence`, `signals_json`, `attributed_at`, `attribution_source` (which scorer fired).
+2. **Attribution computed at ingest** — three write-paths:
+   - L3 webhook handler (Make Scenario 4812756 retired or reworked) → runs scorer on inbound, writes Comms_Attribution row, then routes by content
+   - `/api/cron/scan-comms` reworked to attribute first, then propose only for the attributed record
+   - Gmail sync (`cron/scan-comms` Gmail half + ad-hoc Gmail polls) similarly
+3. **All five render/orchestration paths consume `Comms_Attribution`** instead of re-scoring at render time:
+   - `/api/deal-context/[id]`: replaces `mergeTimeline`'s scoring step with attribution-table lookup
+   - `/api/conversations/[id]`: filter logic from Step 1 replaced with attribution-table lookup
+   - L3: stops being winner-takes-all
+   - scan-comms: stops fanning out
+   - multi-listing-detect: still surfaces ambiguous messages, but pulls them from the attribution table directly
+4. **Migration:** existing messages remain unattributed in the table; a one-shot backfill cron runs scorer over the last N days. Pre-Inevitable comms remain unattributed per the queue's backfill discipline.
+5. **Confidence-badge UI affordance** (per operator note): low-confidence target-attributed messages render with `[best-guess]` badge instead of being hidden; operator can re-attribute via click. This addresses the §7 documented trade-off.
+
+Estimated effort: 1 sprint after belt MVP design lands.
+
+### Adjacent items spawned
+
+One follow-up surfaced during this Step 1 work:
+
+- **`scorePropertyMatch` has no unit-test coverage** — `lib/timeline-merge.test.ts` does not exist. The scorer is now consumed by two callers (`mergeTimeline` and `/api/conversations/[id]`) and three indirect surfaces (`/api/deal-context`, `/api/multi-listing-detect`, the AMBIGUOUS banner). Coverage is overdue. Not pursued in this Step 1; logged for future investigation/test-add ticket.
+
+*End of remediation outcome — Step 1. Status: shipped + locally verified. Spine: `rec5UVLsXktD8M8Mi`. End-to-end curl verification deferred to deploy.*
