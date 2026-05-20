@@ -1,6 +1,6 @@
 # AKB Belt v1 — Architectural Spec
 
-**Document version:** v1.0
+**Document version:** v1.2
 **Authored:** 2026-05-20 (Code — architectural design, not implementation)
 **Branch:** `claude/fix-token-burn-cost-JUDad` (PR #5)
 **Scope:** DESIGN-ONLY. No orchestrator code. No endpoint modifications. Every section traces to the Lost-Phone Test.
@@ -67,7 +67,10 @@ stateDiagram-v2
 
 - **X_REJECTED_FORMULA** — Stage_Calc_V2 returns one of six rejection strings. Terminal; surfaced as raw count in Pulse intake-signal detector.
 - **X_DEAD** — Outreach_Status = Dead via L3 Route 1 or operator. Terminal.
-- **X_STALLED** — On any active state >14d with no inbound/outbound movement; Pulse stale-data-drift fires. Surfaced (not terminal — manual unstick path).
+- **X_STALLED** — State-specific Tier 1 / Tier 2 thresholds (Pulse stale-data-drift fires; surfaced, not terminal — manual unstick path):
+  - **S5 (Priced) / S6 (Sentry Cleared):** >3d Tier 1, >7d Tier 2.
+  - **S7 (Outreach Fired) / S8 (Inbound Replied):** >14d Tier 1, >21d Tier 2.
+  - **S9 (Triaged) / S10 (Negotiating):** >7d Tier 1, >14d Tier 2.
 - **X_TIER3_ESCALATION** — Sentinel intent ∈ {wire_fraud_red_flag} OR motivation_score >=4. Fires Stage 4 SMS (Phase 9.7). Operator touches (sanctioned exception #2).
 - **MANUAL_REVIEW** — Execution_Path = "Manual Review" via Airtable formula. Parked; surfaced via Sentry room.
 
@@ -87,6 +90,8 @@ stateDiagram-v2
 | S9-S11 | Outreach_Status: Negotiating / Counter Received / Offer Accepted / Response Received |
 | S12 | Envelope_ID non-null |
 | S13 | (Phase 5.8 in progress) |
+
+**Note on S3 (Stage_Calc_V2):** `Stage_Calc_V2 = "Rejected: No Distress"` fires when `Distress_Pass` (`fldlQJV00psn0vucy`) = 0. The logic that SETS `Distress_Pass` on intake is currently unverified for false-negative rate — investigated parallel track per §8 item 18.
 
 ---
 
@@ -158,6 +163,18 @@ A new record in Listings_V1 with `Live_Status = "Active"` and `Outreach_Status` 
 - Off-market source adapters (probate / tax / code) → `AKB_Crawler_v1_Spec.md`
 - Cross-source deduplication → Phase 21.6 / Crawler 2.0; uses existing `lib/dedupe/normalize.ts` interface
 
+### Current state and migration path
+
+Today's ingestion: operator manually exports CSV from PropStream UI → uploads to Google Drive → Make Scenario A polls Drive every 15 min → parses CSV → writes records to Listings_V1.
+
+Belt-era intake (MVP scope): Scenario A retired alongside Verification. Replacement options:
+- **Path 1:** Vercel cron polls Drive, parses CSV, writes Airtable (same operator workflow, polling moved to Vercel).
+- **Path 2:** Vercel `/api/intake` endpoint with dashboard upload UI (operator drops CSV in dashboard, skips Drive).
+
+Operator selects Path 1 or 2 at MVP build time. Both produce identically-shaped records.
+
+Belt-era intake (Crawler 1.0 scope, future): same `/api/intake` endpoint, but called by Crawler directly with scraped records — no manual CSV step. Crawler internals deferred to `AKB_Crawler_v1_Spec.md`. The intake endpoint is the convergence point between manual and automated paths.
+
 ---
 
 ## §4 — Station map
@@ -166,7 +183,7 @@ Each station evaluated against orchestration-readiness: clean API contract, idem
 
 | Station | Mode A (Make) | Mode B (Vercel) | Inputs | Outputs | Side effects | Failure modes | Readiness |
 |---|---|---|---|---|---|---|---|
-| **Intake filter** | Scenario A 4256273 | `/api/process-intake` | Listings_V1 raw record | Live_Status="Active" + initial fields | intake-quality-gates (off-market / flip-keyword / agent-phone per Phase 1.4/1.5/1.7) | Filter mismatch → record excluded; quality-gate flags → manual_review route | **orchestration-ready** in both modes |
+| **Intake filter** | Scenario A 4256273 | `/api/process-intake` | Listings_V1 raw record | Live_Status="Active" + initial fields | intake-quality-gates (off-market / flip-keyword / agent-phone per Phase 1.4/1.5/1.7) | Filter mismatch → record excluded; quality-gate flags → manual_review route | **replace-with-Vercel-native** — Scenario A 4256273 retired alongside Verification per Phase 20.1 emerging pattern (polled/scheduled scenarios migrate). Replacement: Vercel `/api/intake` endpoint (Path 1 or 2 per §3.5). Same intake endpoint becomes Crawler 1.0 convergence point. |
 | **Verification** | Scenario B 4331170 | `/api/verify-listing` | record post-intake | Execution_Path written; Phase 1.4-1.7 quality checks | Writes Execution_Path; logs Manual Review | Phase 1.6 (DOM discrepancy) deferred; Agent_Phone validation gates outreach | **replace-with-Firecrawl-native** — Vercel `/api/verify-listing` v2 + Firecrawl + markdown parser. Scenario B 4331170 retired, kept OFF as legacy. Phase 1.4-1.7 checklist defects superseded by Firecrawl architecture. |
 | **Stage_Calc_V2** | Airtable formula | Airtable formula | 6 boolean gates | "Passed: Ready for Offer" / "Rejected: <reason>" | None — pure formula | None — fires deterministically | **orchestration-ready** by definition |
 | **Execution_Path** | Airtable formula | Airtable formula | Stage_Calc_V2 + risk + buyer pool | "Auto Proceed" / "Manual Review" / "Reject" | None | None | **orchestration-ready** |
@@ -184,7 +201,21 @@ Each station evaluated against orchestration-readiness: clean API contract, idem
 
 ## §5 — Surfacing & failure handling
 
-### Stall surfacing to Maverick
+### Operator action queue (primary wake-up surface)
+
+Lost-Phone Test requires that when operator returns to the system, they encounter ACTION ITEMS, not a summary report. Daily rollups, statistics, and activity dashboards are explicitly NOT the wake-up surface — they bury decisions in noise.
+
+The action queue surface presents N items requiring operator input. Each item:
+- States what needs to happen (one line).
+- Provides immediate context (linked Property Record workspace with full Quo + Gmail timestamped chain).
+- Offers a binary affordance: **ADVANCE** (to belt next state) or **REJECT** (to dead pile).
+- Optionally: **OPEN FOR FULL CONTEXT** (drill into Property Record workspace).
+
+Items in the action queue come from: Tier 2+ Sentinel escalations, Manual Review queue, X_TIER3_ESCALATION forks, field-edit-required stalls, and any state where operator decision unblocks belt advancement.
+
+Items NOT in the action queue: successful auto-advancements (those flow silently — belt working as intended produces no operator surface noise), informational Tier 0/1 items (visible in Sentry room if operator chooses to look, but not surfaced).
+
+### Action queue item structure
 
 Every belt transition that fails (X_STALLED, X_TIER3_ESCALATION, MANUAL_REVIEW) surfaces as a BroCard on the priority surface (Phase 9.2). Proposed card shape — **derives from existing data; no new persisted card storage**:
 
@@ -260,6 +291,16 @@ recall { query: "<address or recordId>", source: ["audit"], event_filter: "belt_
 ```
 No new infrastructure needed — audit + Spine layers already exist.
 
+### Principle: Source-of-truth communications
+
+The belt treats Quo + Gmail threads as the canonical communications record. The Property Record workspace pattern (timestamped Quo + Gmail interleave) is the operator's primary view of any record's communications history.
+
+Classifications, intents, routing decisions, and `Verification_Notes` entries are METADATA layers on top of the canonical chain — not summaries that replace it. The belt MUST NOT generate summaries of communications that could be confused with primary data.
+
+When the action queue (§5) surfaces an item, the "open for full context" affordance links to the Property Record workspace — never to a generated summary. Maverick recall queries (§6 above) consume audit + Spine layers, but always with reference to the underlying chain.
+
+**Implication for L3 reply triage:** L3's `Verification_Notes` append is metadata classification, not summary. The full inbound message remains in Quo. The L3 entry says `classified as: motivated_seller` or similar — never "seller said they want to negotiate price" (that's summary, lossy).
+
 ---
 
 ## §7 — Order of build (MVP → full)
@@ -328,6 +369,10 @@ No new infrastructure needed — audit + Spine layers already exist.
 15. **A2P 10DLC carrier registration** → Phase 12.3 carrier-side. Belt Tier 3 escalation already wired (Phase 9.7); delivery flows when carrier clears.
 16. **Cadence_Queue substrate** → Phase 21.13 architectural fork. Belt's process boundary (open question #8) rides on this.
 17. **Cross-source dedup fixtures** → Phase 21.6 / Crawler 2.0. Belt's landing contract supports multi-source; dedup quality lock waits on Crawler 2.0.
+18. **Distress_Pass evaluation integrity (parallel-track investigation).** `Distress_Pass` field (`fldlQJV00psn0vucy`) drives Stage_Calc_V2's "Rejected: No Distress" verdict. The logic that sets `Distress_Pass` on intake is currently unverified — likely lives in Scenario A or the Vercel `/api/process-intake` route. Belt MVP processes Auto Proceed records only, so records with false-negative `Distress_Pass` are filtered out before the belt sees them. INVESTIGATION REQUIRED PARALLEL TO BELT BUILD: (a) locate the `Distress_Pass` evaluation logic, (b) audit recent rejections against ground truth, (c) tune or replace if false-negative rate is material. This is the same architectural bug surfaced on 5/19 — formula resolved, but the upstream `Distress_Pass` setter remains unaudited. Separate Code brief incoming.
+19. **Wake-up surface implementation (action queue).** Action queue surface (§5) requires an implementation home. Three options: (a) extend existing Sentinel queue UI to encompass all action-queue items beyond just Sentinel escalations, (b) build dedicated `/api/belt/action-queue` endpoint + dashboard surface, (c) extend Sentry room as the primary action queue. Recommendation tilts toward (a) — Sentinel queue UI already implements approve/reject affordances. Operator decision required at build time.
+20. **Outreach_Offer_Price write timing (operator-decided 2026-05-20).** DECISION LOCKED: Eager write at appraisal completion (Option B). `Outreach_Offer_Price = 65% × current List_Price` gets written when Phase 4 (ARV/Rehab/Buyer Intel) completes — not at H2 fire moment. H2 reads the stored value. Stickiness discipline (memory #9 — never auto-revise down) enforced because the price is locked the moment Phase 4 completes. Manual override via Airtable field edit still respected (never-stomp). Pricing-math station spec (§4) must be updated when MVP builds to write at appraisal completion, NOT at outreach-fire send.
+21. **Source_URL field requirement for Firecrawl verification.** Firecrawl-native verification requires a listing URL to scrape. Today's Listings_V1 records do NOT carry `Source_URL`. Recommendation: build Firecrawl search-then-scrape into verification (one extra API call per verify, handles all source types uniformly) — preferred over requiring `Source_URL` on landing. Operator confirms at MVP verify-listing v2 build.
 
 ### Items explicitly NOT designed in this spec
 
