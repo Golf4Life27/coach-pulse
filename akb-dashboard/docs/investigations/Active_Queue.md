@@ -19,7 +19,7 @@ Discipline: each line = a discrete forensic investigation, briefed to Code separ
 
 6. **[INV-006] Outreach_Status / Stage transition logic on signed contracts** — 23 Fields Ave shows `STAGE: ACCEPTED PENDING PA` on deal-room view, but adjacent dashboard view shows "Negotiating" badge AND RESPONSE DUE alert. Field-state inconsistency across views: stage field updated but downstream consumers (badge, alert system) read stale or different fields. Brief: TBD.
 
-7. **[INV-007] Multi-listing-agent message attribution — CRITICAL** — Candice Hardaway holds 4+ Memphis listings (23 Fields, 785 Pawnee, 1871 Thrift, 3273 Steele). Single Quo phone number per agent → messages cannot be deterministically attributed to specific property. AMBIGUOUS banner correctly fires, but wrong-property message (3273 Steele text dated 4/20/2026) appears in 23 Fields conversation thread. Highest-leverage for high-volume agent relationships. Brief: TBD.
+7. **[INV-007] Multi-listing-agent message attribution — CRITICAL** — INVESTIGATION COMPLETE 2026-05-20 → `docs/investigations/Multi_Listing_Agent_Attribution_Audit_v1.md` → pending operator decision on remediation. Root cause: five independent attribution behaviors across the system (deal-context, conversations, L3, scan-comms, multi-listing-detect). Recommended path (c) — surgical fix at `/api/conversations/[id]` to close visible leak + architectural redesign (persist attribution at ingest in a `Comms_Attribution` table) to close all five paths.
 
 8. **[INV-008] DD Checklist auto-extraction from comms chain** — DD Checklist shows 0/12 on 23 Fields despite operator stating DDs have been answered in conversation history (Quo + Gmail). No auto-extraction pipeline from comms content → structured DD fields. Manual click-tracking defeats system intent: the answers are already in the chain, the system just doesn't parse them. Brief: TBD.
 
@@ -35,7 +35,11 @@ Discipline: each line = a discrete forensic investigation, briefed to Code separ
 
 ## Discovered during prior investigations
 
-(empty — Code's INV-002 discoveries promoted to INV-011 / INV-012 / INV-013 above)
+- **[INV-014 candidate] L3 winner-takes-all on multi-listing-agent phone matches** — Discovered during INV-007. Make Scenario 4812756 (Reply_Triage_V3) Module 3 (`ActionSearchRecords`) uses `maxRecords: 1` with no sort order. When multiple Listings_V1 records share an Agent_Phone (common for multi-listing agents), L3 updates whichever record Airtable returns first — non-deterministic. Updates to Outreach_Status and Verification_Notes may land on the wrong listing. Should be wired through the same attribution layer as the INV-007 Step 2 redesign.
+
+- **[INV-015 candidate] scan-comms cron fan-out on multi-listing-agent inbound** — Discovered during INV-007. `app/api/cron/scan-comms/route.ts` lines 228-262 groups listings by phone and, for each inbound message, creates an Agent_Proposals row for EVERY listing in the group (`for (const listing of matchedListings)`). One Candice reply → 4 pending proposals, all referencing identical inbound body. Operator triages 4 cards when only one is real. Same redesign-path as INV-014.
+
+- **[INV-016 candidate] `scorePropertyMatch` price-match likely misaligned** — Discovered during INV-007. `lib/timeline-merge.ts:54-60` matches body `$N,NNN` patterns against `targetPrice` (= `List_Price`). But H2 outbound bodies (`outreach-fire/route.ts:31-38`) contain the OFFER (≈ 65% × List_Price), not the list price. So the +0.3 price-match bonus likely never fires correctly on H2 outbound. Needs live verification with a sample of H2 message bodies. Cheap to fix once confirmed (compare against both List_Price and Outreach_Offer_Price).
 
 ## Discipline notes
 
