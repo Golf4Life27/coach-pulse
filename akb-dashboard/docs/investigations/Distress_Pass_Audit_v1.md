@@ -345,3 +345,77 @@ Audit trail. 100 records, sorted by record id, all carrying `Distress_Pass = 0` 
 ---
 
 *End of audit. Status only. No fixes implemented. Operator decides next step among Path α / β / γ in §4.*
+
+---
+
+## §6 — Remediation outcome (appended 2026-05-20)
+
+**Decision:** Path α — consume `Distress_Bucket`. Operator-authorized 2026-05-20 (this session).
+**Spine record:** `rece3J2f0TbHXOuE2`.
+**Implementation:** single Airtable formula update via `update_field` MCP. No code, no Make scenarios, no other fields touched. Stage_Calc V1 untouched per spec (V1 broadens as intended side-effect since both formulas consume `Distress_Pass`).
+
+### Formula change
+
+**Before** (verbatim):
+
+```airtable
+IF(
+  AND({fldfsGAAae2mGXzvC}, {fldrHvFPTyQZ95mFx}, {fldfsGAAae2mGXzvC} >= {fldrHvFPTyQZ95mFx}),
+  1,
+  0
+)
+```
+
+**After** (verbatim, verified via post-change `get_table_schema` round-trip):
+
+```airtable
+IF(
+  OR({fldpFHAXujnz9x72x} = "High", {fldpFHAXujnz9x72x} = "Extreme", {fldpFHAXujnz9x72x} = "Moderate"),
+  1,
+  0
+)
+```
+
+`referencedFieldIds` changed from `["fldfsGAAae2mGXzvC", "fldrHvFPTyQZ95mFx"]` (DOM + DOM_Min) to `["fldpFHAXujnz9x72x"]` (Distress_Bucket).
+
+### Operator framing
+
+Distress_Pass is the **permissive floor**, not the precise filter. Downstream stations (Stage_Calc_V2's other rejection branches, pricing math, pre-outreach checks, Execution_Path) carry the per-record verdict. Moderate-bucket records are the volume opportunity and shouldn't be excluded at the floor. The 7–17% gate-out target floated in the original brief was a sanity-check guardrail against the broken 43% gate, not a measured operational target — ~2% gate-out is acceptable given the gate's role as a floor.
+
+### Post-change audit (30-day window, same query as §2)
+
+Re-ran the identical Airtable `list_records_for_table` filter (`Distress_Pass = 0 AND Last_Seen within past 30 days`) immediately after the formula update. Total 30-day population unchanged at 2,280 records.
+
+| Metric | Pre-change | Post-change | Δ |
+|---|---|---|---|
+| Distress_Pass = 0 (rejected on no-distress) | 980 | **35** | −945 (−96%) |
+| Distress_Pass = 1 (passing the gate) | 1,300 | **2,245** | +945 |
+| Gate-out rate | 43.0% | **1.5%** | −41.5 pp |
+
+All 35 remaining rejections carry `Distress_Bucket = "Low"` — formula consumes the bucket cleanly, behaves exactly as designed. Spot-check on rejected sample confirms `Stage_Calc_V2` now returns `"Rejected: No Distress"` only for Low-bucket records (with one outlier hitting `"Rejected: Price Floor"` instead — multi-gate cascade still works correctly).
+
+### N=100 sample re-classification (from §2)
+
+The same 100 record IDs from the original audit (Appendix §5):
+
+| Original class | Count | Post-change Distress_Pass |
+|---|---|---|
+| FN (gate=0, bucket=High/Extreme) | 83 | now 1 (advanced to belt) |
+| BORDER (gate=0, bucket=Moderate) | 15 | now 1 (advanced per Moderate→1 mapping) |
+| TN (gate=0, bucket=Low) | 2 | still 0 (defensibly rejected) |
+
+98 of 100 previously-rejected records now pass. The 2 TN continue to reject — that's the floor doing the one thing it should still do.
+
+### Reversibility
+
+Single formula expression. Revertible via the same `update_field` call with the original formula body. No data was written; no fields were created; no schema was changed. Pre-change formula preserved verbatim above for audit trail.
+
+### Adjacent items now queued
+
+Spawned during this remediation, added to `docs/investigations/Active_Queue.md`:
+- **INV-002** — Listing_Condition persistence (filtered at intake, dropped before write; high-leverage once persisted)
+- **INV-003** — Stage_Calc V1 vs V2 sibling formulas (migration artifact; V1 deprecation candidate)
+
+Both deferred — not in scope for this remediation.
+
+*End of remediation outcome. Status: shipped + verified. Spine: `rece3J2f0TbHXOuE2`.*
