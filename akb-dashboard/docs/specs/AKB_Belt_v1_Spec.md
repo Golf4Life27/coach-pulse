@@ -167,7 +167,7 @@ Each station evaluated against orchestration-readiness: clean API contract, idem
 | Station | Mode A (Make) | Mode B (Vercel) | Inputs | Outputs | Side effects | Failure modes | Readiness |
 |---|---|---|---|---|---|---|---|
 | **Intake filter** | Scenario A 4256273 | `/api/process-intake` | Listings_V1 raw record | Live_Status="Active" + initial fields | intake-quality-gates (off-market / flip-keyword / agent-phone per Phase 1.4/1.5/1.7) | Filter mismatch → record excluded; quality-gate flags → manual_review route | **orchestration-ready** in both modes |
-| **Verification** | Scenario B 4331170 | `/api/verify-listing` | record post-intake | Execution_Path written; Phase 1.4-1.7 quality checks | Writes Execution_Path; logs Manual Review | Phase 1.6 (DOM discrepancy) deferred; Agent_Phone validation gates outreach | **needs-wrapping** — Scenario B has pending UI defects (Checklist 1.4–1.7); Vercel verify-listing cleaner |
+| **Verification** | Scenario B 4331170 | `/api/verify-listing` | record post-intake | Execution_Path written; Phase 1.4-1.7 quality checks | Writes Execution_Path; logs Manual Review | Phase 1.6 (DOM discrepancy) deferred; Agent_Phone validation gates outreach | **replace-with-Firecrawl-native** — Vercel `/api/verify-listing` v2 + Firecrawl + markdown parser. Scenario B 4331170 retired, kept OFF as legacy. Phase 1.4-1.7 checklist defects superseded by Firecrawl architecture. |
 | **Stage_Calc_V2** | Airtable formula | Airtable formula | 6 boolean gates | "Passed: Ready for Offer" / "Rejected: <reason>" | None — pure formula | None — fires deterministically | **orchestration-ready** by definition |
 | **Execution_Path** | Airtable formula | Airtable formula | Stage_Calc_V2 + risk + buyer pool | "Auto Proceed" / "Manual Review" / "Reject" | None | None | **orchestration-ready** |
 | **Phase 4A ARV** | n/a | `/api/agents/appraiser/arv/[recordId]` | recordId | Real_ARV_*, ARV_Confidence, ARV_Validated_At | Writes Airtable; emits `appraiser` audit; consumes RentCast quota | LOW confidence → Manual Review classification; RentCast 5xx → retry-next-cycle | **orchestration-ready** |
@@ -175,7 +175,7 @@ Each station evaluated against orchestration-readiness: clean API contract, idem
 | **Phase 4C Buyer Intel** | n/a | `/api/agents/appraiser/buyer-intelligence/[recordId]` | recordId | Dual-track flipper/landlord MAO; Estimated_Monthly_Rent | Writes Airtable; consumes RentCast quota | RentCast rent fail → flipper-only fallback | **orchestration-ready** |
 | **Pricing math** | (Scenario D / G retired path) | `lib/pricing-math.ts` + `/api/agents/pricing/[recordId]` | Phase 4 outputs + record | Contract_Offer_Price (Pricing) or Outreach_Offer_Price (outreach-fire on send) | Writes Airtable; emits `pricing` audit | <20 priced transactions → Manual Review gate (Phase 3.3 enforced in pre-send-checks) | **orchestration-ready** — Phase 11.4 audit confirms write paths |
 | **Pre-outreach checks** | n/a | `lib/orchestrator/pre-outreach-checks.ts` + `/api/outreach-safety-check` | recordId + intended action | clear / blocked + reasons | None directly | NEVER-list match → block; <20 priced → block; missing Agent_Phone → block | **orchestration-ready** — pure family |
-| **H2 Quo outreach** | Scenario H2 4724197 | `/api/outreach-fire` | record where Execution_Path=Auto Proceed, Live_Status=Active, Outreach_Status empty, State=TX, NOT(Do_Not_Text), Agent_Phone non-empty, <21:00 CT | Outreach_Status=Texted, Last_Outreach_Date set, Outreach_Offer_Price + List_Price_At_Send written (Phase 11.4) | Sends Quo SMS; emits `crier` audit | Quo 5xx, A2P gate, throttle cap → retry; H2 currently `isinvalid: true` per System Inventory v2 | **needs-wrapping (Mode A)** — H2 invalid. **orchestration-ready (Mode B)** — `/api/outreach-fire` shipping |
+| **H2 Quo outreach** | Scenario H2 4724197 | `/api/outreach-fire` | record where Execution_Path=Auto Proceed, Live_Status=Active, Outreach_Status empty, State=TX, NOT(Do_Not_Text), Agent_Phone non-empty, <21:00 CT | Outreach_Status=Texted, Last_Outreach_Date set, Outreach_Offer_Price + List_Price_At_Send written (Phase 11.4) | Sends Quo SMS; emits `crier` audit | Quo 5xx, A2P gate, throttle cap → retry; H2 currently `isinvalid: true` per System Inventory v2 | **retire Mode A** (Make H2 4724197 `isinvalid`). Belt uses Mode B (`/api/outreach-fire`) exclusively. Same architectural pattern as Verification migration. |
 | **L3 reply triage** | Scenario L3 4812756 (active) | n/a — keep-per-20.1 | Quo inbound webhook | Outreach_Status transition; Verification_Notes append | Writes Airtable | None routed → Default First Response branch | **orchestration-ready (Mode A)** — KEEP per Phase 20.1 retirement plan |
 | **L4 reply capture** | Scenario L4 4883113 (active) | also via `cron/scan-comms` | Outbound message events | Last_Outbound_At update; Verification_Notes append | Writes Airtable | None | **orchestration-ready** |
 | **Sentinel inbound** | n/a | `/api/sentinel/{classify,draft,queue}` + `/sentinel` UI | record where lastInboundAt > lastOutboundAt | intent + draft package + motivation-score auto-write (never-stomp) | Writes Seller_Motivation_Score (motivated/lukewarm only); emits `sentinel_*` audits | Operator must approve send (Phase 13 charter) — sanctioned exception #2 | **orchestration-ready as escalation surface** — NOT a belt-pure station; integrates via X_TIER3_ESCALATION fork |
@@ -271,6 +271,9 @@ No new infrastructure needed — audit + Spine layers already exist.
 **Success criteria:** A new PropStream CSV record advances autonomously from landing to Texted within a single 24h cycle, without operator intervention, on Auto Proceed records. One verified deal-record fires outreach via the belt orchestrator (not via direct admin route).
 **Deliverable:** `lib/belt/inferBeltState.ts` (pure) + `lib/belt/trigger-registry.ts` (JSON manifest) + audit-log instrumentation per §6 + one shipping orchestrator route that drives the S6 → S7 transition end-to-end.
 **Estimated build effort:** 1 sprint (3–5 commits). No new Airtable fields. No new Make scenarios. Wraps existing endpoints.
+**Station-scope adjustments (post Firecrawl validation, operator-authorized 2026-05-20):**
+- **Verification:** Vercel `/api/verify-listing` v2 build (Firecrawl + markdown parser) is now MVP-scope, ~1–2 day effort. Scenario B 4331170 retired.
+- **H2 (S6 → S7):** no build work — `/api/outreach-fire` already shipping; belt MVP just wires the call. Make H2 4724197 closed.
 
 ### Phase 2 — inbound triage + Sentinel escalation surface
 
@@ -306,22 +309,25 @@ No new infrastructure needed — audit + Spine layers already exist.
 2. **Source_System field.** Belt requires explicit source attribution on landing. Today's PropStream-only intake doesn't carry this. Decision: (a) add new Listings_V1 field `Source_System`, (b) piggyback on existing `Verification_Notes` (first-line tag), or (c) defer until Crawler 2.0 multi-source lands. No new field proposed unilaterally.
 3. **MVP slice selection.** §7 MVP recommends Auto Proceed records on outbound funnel. Operator confirms slice before MVP build kicks off.
 4. **Mode A vs Mode B for S6 → S7.** H2 (Mode A) currently `isinvalid: true`. `/api/outreach-fire` (Mode B) is shipping. Belt MVP picks one — operator's call per Phase 20.1 retirement plan.
+5. **Scenario B retirement (defensible, operator-authorized 2026-05-20):** superseded by Firecrawl validation. Phase 1.4-1.7 checklist items reclassified as obsolete.
+6. **Make H2 retirement (defensible, operator-authorized 2026-05-20):** `/api/outreach-fire` is shipping and cleaner. Mode A path closed.
+7. **Phase 20.1 emerging resolution (NOT YET LOCKED, but pattern visible):** Webhook-driven event scenarios stay in Make (L3, L4 — no idle cost, fire on events). Polled / scheduled / state-persistent scenarios migrate to Vercel-native belt stations. Full Phase 20.1 lock deferred until belt MVP demonstrates the pattern at runtime.
 
 ### Architectural unknowns flagged
 
-5. **Belt orchestrator process boundary.** Belt logic could live as (a) a Vercel cron sweep, (b) Airtable→Vercel webhooks on each state transition, (c) an external scheduler (Inngest / QStash per Phase 21.13 Cadence_Queue substrate decision), or (d) Anthropic Managed Routines (Map 2 substrate). Decision deferred until Phase 21.13 resolves.
-6. **Idempotency primitives.** Each station today gates on field combinations. Belt-level idempotency could add a `belt_last_transition_at` field to prevent double-firing during overlapping triggers. No new field proposed.
-7. **State store for in-flight transitions.** Long-running stations (Phase 4 endpoints) take 15–30s. Mid-flight state representation undefined — does belt mark "S4 in progress" anywhere? Today: no. Pulse stale-data-drift catches the failure case; live in-flight UX is a gap.
+8. **Belt orchestrator process boundary.** Belt logic could live as (a) a Vercel cron sweep, (b) Airtable→Vercel webhooks on each state transition, (c) an external scheduler (Inngest / QStash per Phase 21.13 Cadence_Queue substrate decision), or (d) Anthropic Managed Routines (Map 2 substrate). Decision deferred until Phase 21.13 resolves.
+9. **Idempotency primitives.** Each station today gates on field combinations. Belt-level idempotency could add a `belt_last_transition_at` field to prevent double-firing during overlapping triggers. No new field proposed.
+10. **State store for in-flight transitions.** Long-running stations (Phase 4 endpoints) take 15–30s. Mid-flight state representation undefined — does belt mark "S4 in progress" anywhere? Today: no. Pulse stale-data-drift catches the failure case; live in-flight UX is a gap.
 
 ### Dependencies on deferred work (Phase 21 + spec carve-outs)
 
-8. **Crawler internals** → `AKB_Crawler_v1_Spec.md`. Belt's §3.5 handoff contract is the interface; internals out of scope.
-9. **Photo analysis / vision model** → separate vision-model spec. Belt's Phase 4B station accepts optional vision input; v1 builds without it; spec deferred.
-10. **PropStream API credentials** → Phase 21.5 operator external work. Belt MVP runs against today's manual-CSV intake; automated source landing waits on credentials.
-11. **DocuSign JWT credentials** → Phase 21.3 operator external work. Belt Phase 3 gated.
-12. **A2P 10DLC carrier registration** → Phase 12.3 carrier-side. Belt Tier 3 escalation already wired (Phase 9.7); delivery flows when carrier clears.
-13. **Cadence_Queue substrate** → Phase 21.13 architectural fork. Belt's process boundary (open question #5) rides on this.
-14. **Cross-source dedup fixtures** → Phase 21.6 / Crawler 2.0. Belt's landing contract supports multi-source; dedup quality lock waits on Crawler 2.0.
+11. **Crawler internals** → `AKB_Crawler_v1_Spec.md`. Belt's §3.5 handoff contract is the interface; internals out of scope.
+12. **Photo analysis / vision model** → separate vision-model spec. Belt's Phase 4B station accepts optional vision input; v1 builds without it; spec deferred.
+13. **PropStream API credentials** → Phase 21.5 operator external work. Belt MVP runs against today's manual-CSV intake; automated source landing waits on credentials.
+14. **DocuSign JWT credentials** → Phase 21.3 operator external work. Belt Phase 3 gated.
+15. **A2P 10DLC carrier registration** → Phase 12.3 carrier-side. Belt Tier 3 escalation already wired (Phase 9.7); delivery flows when carrier clears.
+16. **Cadence_Queue substrate** → Phase 21.13 architectural fork. Belt's process boundary (open question #8) rides on this.
+17. **Cross-source dedup fixtures** → Phase 21.6 / Crawler 2.0. Belt's landing contract supports multi-source; dedup quality lock waits on Crawler 2.0.
 
 ### Items explicitly NOT designed in this spec
 
