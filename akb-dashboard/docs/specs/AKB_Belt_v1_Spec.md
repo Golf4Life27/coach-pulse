@@ -328,6 +328,28 @@ When all four prerequisites are met, Option B becomes implementable as a follow-
 
 Crier today (Option A): **deterministic rule layer with contract-state guard.** Pulse stale-data-drift detector inherits the same guard for aggregate-level parity. Crier tomorrow (Option B): **phase-aware deterministic ladder.** Pulse next (Phase 14 confidence-scored proactive surfacing per `lib/maverick/deal-commentary.ts` header note): **confidence layer on top of Crier's deterministic output.** Crier owns the rules; Pulse scores them.
 
+### Phase 12.7 — In-process Outreach_Status transition (INV-006 sequel)
+
+INV-006 (Spine entry this commit) shipped Option D's cron-reconciler arm in Phase 11.5 (`/api/cron/outreach-status-reconcile`, daily 14:00 UTC). The in-process arm activates when Phase 12.7 introduces the DocuSign envelope-create route. At that landing:
+
+#### Wire transition into the envelope-create handler
+
+Whatever route creates DocuSign envelopes (likely `POST /api/agents/scribe/envelope/[recordId]` or similar) must, after successful envelope creation:
+
+1. Set `Outreach_Status = "Offer Accepted"` on the Listings_V1 record.
+2. Append the same Notes audit line shape the cron reconciler uses (for idempotency consistency — `lib/maverick/outreach-status-reconcile.buildAuditNoteLine`).
+3. Write Spine entry `event_type=build_event`, `attribution_agent=scribe`, title naming the envelope creation event.
+
+The cron reconciler from Phase 11.5 stays in place as belt-and-suspenders — catches envelopes created via direct DocuSign UI (operator bypasses Jarvis) and re-runs harmlessly on already-transitioned records via Notes-marker idempotency.
+
+#### Reverse-transition handling (deferred)
+
+Envelope cancellation / expiration reverse-transitions are NOT auto-handled. Operator uses existing `walk` action (→ Dead) or future `unaccept` action when needed. Reverse-transition automation requires DocuSign webhook integration (Phase 13+ scope; out of v1).
+
+#### Lineage
+
+INV-004 (`rec0A9ZWSMMT5Nk9a`) was the patch — runtime guard on Crier silence rule when `Envelope_ID` is set. INV-006 (this commit) is the cure — the status field itself transitions automatically so consumers see correct state without depending on the guard. Phase 12.7 sequel makes the transition synchronous with envelope creation; cron stays as the reconciler for the 24h reconciliation window between async paths.
+
 ---
 
 ## §7 — Order of build (MVP → full)

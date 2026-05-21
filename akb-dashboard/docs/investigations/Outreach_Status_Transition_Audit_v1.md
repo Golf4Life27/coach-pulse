@@ -353,15 +353,92 @@ Zero records system-wide. Confirms INV-004 Q1 finding extended to the full table
 
 *End of audit. Status only. No remediation implemented. Operator decides among Option A / B / C / D / E in §6.*
 
-**Acceptance criteria mapping (per brief §7):**
-1. ✅ Q1 deliverable produced (§1).
-2. ✅ Q2 deliverable produced (§2).
-3. ✅ Q3 deliverable produced (§3).
-4. ✅ Q4 deliverable produced (§4).
-5. ⏸ Awaiting operator selection of Option A / B / C / D / E.
-6. ⏸ Implementation pending operator decision.
-7. ⏸ Spine entry pending (will write at remediation, `event_type=principle_amendment`, `attribution_agent=crier` for state-machine discipline OR `jarvis` for operator-action surface — operator's call at remediation time).
-8. ⏸ `AKB_MASTER_CHECKLIST.md` update pending — will land alongside remediation per Rule 9.
-9. ⏸ `Active_Queue.md` INV-006 status flip pending remediation; currently marked **INVESTIGATION COMPLETE**.
+---
 
-**Next operator action:** select A / B / C / D / E in chat. Code then implements + writes Spine + updates checklist + flips queue status.
+## §9 — Remediation outcome (appended 2026-05-20)
+
+**Decision:** Option D (Hybrid) — cron reconciler ships now; in-process transition at Phase 12.7 envelope-create handler documented for sequel. Operator-ratified 2026-05-20.
+**Spine record:** `recmiFJLja4cHrZ3O` (`event_type: principle_amendment`, `attribution_agent: crier`, `related_spine_decision: rec0A9ZWSMMT5Nk9a` INV-004 patch).
+
+### What shipped
+
+**1. `lib/maverick/outreach-status-reconcile.ts`** — pure helper module:
+- `RECONCILE_IDEMPOTENCY_MARKER` constant (substring scanned in Notes)
+- `ELIGIBLE_SOURCE_STATES` = `{Negotiating, Response Received}`
+- `shouldAutoTransition(listing)` returns `{action, reason}` with 4 stable reason codes
+- `notesContainMarker(notes)` null-safe, case-insensitive substring scan
+- `buildAuditNoteLine(now, envelopeId)` emits the Notes line that includes the marker
+
+**2. `app/api/cron/outreach-status-reconcile/route.ts`** — new cron route:
+- Auth waterfall (dashboard → OAuth/cron/bearer; mirrors arv/buyer-intelligence/rehab routes)
+- `MAVERICK_CRON_ENABLED` gate on `cron`-kind auth (matches Phase 11.6 cron-burn safeguard)
+- Iterates `getListings()`, filters via `shouldAutoTransition`
+- Per transition: `updateListingRecord` (status + appended note) + `audit({...})` + `writeState({...})` with per-record Spine row; per-record errors isolated (batch continues)
+- Returns summary JSON: `{scanned, transitioned, skipped_no_envelope, skipped_status, skipped_already_transitioned, errors, transitioned_records}`
+
+**3. `vercel.json`** — daily 14:00 UTC cron entry added. No collision with existing 08:00–13:00 daily crons. Hobby plan once-daily cap respected.
+
+**4. `docs/specs/AKB_Belt_v1_Spec.md` §6** — new "Phase 12.7 — In-process Outreach_Status transition (INV-006 sequel)" subsection. Documents the envelope-create-handler wiring at Phase 12.7 landing + reverse-transition deferral to Phase 13+ DocuSign-webhook scope + lineage to INV-004.
+
+**5. 10 unit tests** in `lib/maverick/outreach-status-reconcile.test.ts` covering all transition + skip paths + idempotency roundtrip:
+- Cases 1–6 mirror brief §3 specification
+- Plus: whitespace-only envelope_id → skip; case-insensitive marker match; null-safe `notesContainMarker`; `buildAuditNoteLine` output is detected by `notesContainMarker` (idempotency invariant)
+
+### Live behavior today
+
+- **0 records have `Envelope_ID` populated** table-wide (confirmed at commit time; matches audit `a2ba60f` finding).
+- Cron runs as a **no-op**: every record falls into `skipped_no_envelope` bucket. Zero transitions, zero Spine writes, zero audit events from this code path.
+- **First non-zero run** will occur when Phase 12.7 DocuSign provisioning lands and operator's first envelope creates an `Envelope_ID`. Next 14:00 UTC tick (at most ~24h later) auto-transitions that record. Operator will see the Notes audit line + `Outreach_Status = Offer Accepted` + per-record Spine entry on Maverick. Expected behavior.
+
+### Test execution
+
+| Test | Status | Result |
+|---|---|---|
+| `vitest run lib/maverick/outreach-status-reconcile.test.ts` | ✅ | 10/10 (all new) |
+| `vitest run` full suite | ✅ | **1000/1000** (was 990; +10 new) |
+| `npx tsc --noEmit` on patched files | ✅ | Zero errors |
+| Live deploy curl tests | ⏸ deferred | Operator runs against deployed env after merge; expected zero transitions until Phase 12.7 lands |
+
+### Pair-with INV-004 lineage
+
+INV-004 (Spine `rec0A9ZWSMMT5Nk9a`) was the **patch**: runtime guard on Crier silence + Pulse stale-data-drift when `Envelope_ID` is set.
+
+INV-006 (Spine `recmiFJLja4cHrZ3O`) is the **cure**: the status field itself transitions, so the guard becomes belt-and-suspenders for the ≤24h cron reconciliation window. Two-layer defense.
+
+When Phase 12.7 lands, the in-process arm (`Phase 12.7 sequel`) collapses the reconciliation window to zero: envelope-create writes status synchronously; the cron stays as the safety-net for envelopes created via direct DocuSign UI (operator bypassing Jarvis).
+
+### Operator-override discipline preserved
+
+- Cron writes only when `Outreach_Status ∈ {Negotiating, Response Received}` AND `Envelope_ID` set AND Notes does NOT contain marker.
+- If operator manually moves a record to Dead between cron ticks → cron next-run skips (`status_not_eligible`).
+- If operator reverts post-transition to Negotiating → cron next-run skips (Notes marker present from first transition).
+- Marker is the **durable signal** that the cron has done its job for this record.
+
+### Acceptance criteria status (per brief §7)
+
+| # | Criterion | Status |
+|---|---|---|
+| 1 | Q1 state-machine accuracy | ✅ (audit §1) |
+| 2 | Q2 other drift cases | ✅ (audit §2) |
+| 3 | Q3 architectural placement | ✅ (audit §3) |
+| 4 | Q4 reverse-transition matrix | ✅ (audit §4) |
+| 5 | Operator selects A/B/C/D/E | ✅ Option D (2026-05-20) |
+| 6 | Code implements selected option | ✅ Cron route + helper + tests shipped |
+| 7 | Spine entry (`principle_amendment`, `crier`) | ✅ `recmiFJLja4cHrZ3O` |
+| 8 | `AKB_MASTER_CHECKLIST.md` updated | ✅ Phase 22.10 entry per Rule 9 |
+| 9 | `Active_Queue.md` INV-006 flipped to SHIPPED | ✅ this commit |
+
+### Rejected: Option A (Airtable native automation)
+
+Per Master Checklist Rule 10 + Belt v1 §6 source-of-truth communications principle — Airtable native automations bypass Spine + audit log. The system's audit trail is the canonical "what happened" record; Airtable automations break that contract.
+
+### Reversibility
+
+- Set cron schedule disabled or remove `vercel.json` entry → cron stops firing.
+- Route file remains in place (no consumer dependency).
+- Spec/checklist/queue additions document intent independently; safe to leave.
+- Pure helper + tests can stay (zero coupling; no external imports break).
+
+Single revert restores pre-INV-006 state with no downstream impact.
+
+*End of remediation outcome. Status: shipped + verified. Spine: `recmiFJLja4cHrZ3O`.*
