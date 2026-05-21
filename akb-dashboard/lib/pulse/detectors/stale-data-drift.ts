@@ -3,13 +3,24 @@
 // Carries forward the 33-response-cluster class of failure: active
 // deals where the agent owes us a reply but the thread has aged
 // without any movement on either side. Pulse counts listings in
-// active outreach status where MAX(lastInboundAt, lastOutboundAt)
-// is older than N days. Above warning threshold → fire warning;
-// above critical threshold → fire critical.
+// active outreach status where the most-recent contact across SMS +
+// email + inbound is older than N days. Above warning threshold →
+// fire warning; above critical threshold → fire critical.
+//
+// Phase 11.4 (INV-004) — parity fixes against Crier deal-commentary:
+//   - mostRecentTouchMs now reads all 4 contact timestamps (Phase 11.2
+//     parity — was 2-field, missed lastOutreachDate +
+//     lastEmailOutreachDate).
+//   - Records with contract execution in flight (Envelope_ID populated)
+//     are excluded from the stale aggregate via the shared
+//     isUnderContract() helper. Same guard the per-deal Crier silence
+//     rule uses — Pulse inherits to avoid false-positive aggregate
+//     counts when DocuSign provisioning lands.
 
 import type { PulseDetection } from "../types";
 import type { PulseDetectorInput } from "../detector-input";
 import type { Listing } from "@/lib/types";
+import { isUnderContract } from "@/lib/maverick/deal-commentary";
 
 const DEFAULT_STALE_DAYS = 14;
 const DEFAULT_WARNING_COUNT = 5;
@@ -27,20 +38,41 @@ function readIntThreshold(
   return Math.floor(n);
 }
 
-/** Pure: most-recent touch timestamp across both directions, ms. Null
- *  when neither side has touched the listing. */
-export function mostRecentTouchMs(listing: Pick<Listing, "lastInboundAt" | "lastOutboundAt">): number | null {
-  const inb = listing.lastInboundAt ? new Date(listing.lastInboundAt).getTime() : NaN;
-  const out = listing.lastOutboundAt ? new Date(listing.lastOutboundAt).getTime() : NaN;
+/** Pure: most-recent touch timestamp across all 4 contact fields, ms.
+ *  Null when no field has a parseable timestamp.
+ *
+ *  Phase 11.4 (INV-004) — extended from 2-field to 4-field parity with
+ *  Crier's `latestContactIso()`. Pre-fix omission of lastOutreachDate
+ *  and lastEmailOutreachDate caused the same 23 Fields-style false-stale
+ *  Phase 11.2 fixed in deal-commentary. */
+export function mostRecentTouchMs(
+  listing: Pick<
+    Listing,
+    "lastInboundAt" | "lastOutboundAt" | "lastOutreachDate" | "lastEmailOutreachDate"
+  >,
+): number | null {
   const candidates: number[] = [];
-  if (Number.isFinite(inb)) candidates.push(inb);
-  if (Number.isFinite(out)) candidates.push(out);
+  for (const iso of [
+    listing.lastInboundAt,
+    listing.lastOutboundAt,
+    listing.lastOutreachDate,
+    listing.lastEmailOutreachDate,
+  ]) {
+    if (!iso) continue;
+    const t = new Date(iso).getTime();
+    if (Number.isFinite(t)) candidates.push(t);
+  }
   if (candidates.length === 0) return null;
   return Math.max(...candidates);
 }
 
 /** Pure: filter listings to those whose most-recent touch is older
- *  than `staleDays` days from `now`. */
+ *  than `staleDays` days from `now`, AND not under contract.
+ *
+ *  Phase 11.4 (INV-004) — under-contract exclusion: records with
+ *  Envelope_ID populated are excluded from the stale aggregate. Same
+ *  guard the per-deal Crier silence rule uses (isUnderContract from
+ *  lib/maverick/deal-commentary). */
 export function findStaleListings(
   listings: Listing[],
   staleDays: number,
@@ -49,6 +81,7 @@ export function findStaleListings(
   const cutoff = now.getTime() - staleDays * 86_400_000;
   const out: Array<{ id: string; address: string; days_since_touch: number }> = [];
   for (const l of listings) {
+    if (isUnderContract(l)) continue;
     const latest = mostRecentTouchMs(l);
     if (latest == null) continue;
     if (latest >= cutoff) continue;

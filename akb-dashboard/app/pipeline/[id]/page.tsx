@@ -219,6 +219,9 @@ export default function DealWorkspace() {
           lastOutboundAt: listing.lastOutboundAt ?? null,
           // Phase 11.2 — email-attributable contact timestamp.
           lastEmailOutreachDate: listing.lastEmailOutreachDate ?? null,
+          // Phase 11.4 (INV-004) — drives isUnderContract() guard on
+          // Crier silence. Populated by "Track in Scribe" affordance.
+          envelopeId: listing.envelopeId ?? null,
         }}
       />
 

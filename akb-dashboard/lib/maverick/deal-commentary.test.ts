@@ -5,6 +5,7 @@ import {
   inferDealCommentary,
   filterEventsForDeal,
   latestContactIso,
+  isUnderContract,
   type DealCommentaryListing,
 } from "./deal-commentary";
 import type { StructuredBriefing } from "./briefing";
@@ -19,6 +20,7 @@ function listing(over: Partial<DealCommentaryListing> = {}): DealCommentaryListi
     lastInboundAt: null,
     lastOutboundAt: null,
     lastEmailOutreachDate: null,
+    envelopeId: null,
     ...over,
   };
 }
@@ -329,5 +331,81 @@ describe("inferDealCommentary — ordering", () => {
     );
     expect(r[0].tier).toBeGreaterThanOrEqual(r[r.length - 1].tier);
     expect(r[0].tier).toBe(2);
+  });
+});
+
+describe("isUnderContract — Phase 11.4 INV-004 guard", () => {
+  it("returns true when envelopeId is a non-empty string", () => {
+    expect(isUnderContract({ envelopeId: "abc-123-guid" })).toBe(true);
+  });
+
+  it("returns false when envelopeId is null", () => {
+    expect(isUnderContract({ envelopeId: null })).toBe(false);
+  });
+
+  it("returns false when envelopeId is an empty string", () => {
+    expect(isUnderContract({ envelopeId: "" })).toBe(false);
+  });
+});
+
+describe("inferDealCommentary — Phase 11.4 INV-004 contract-state guard", () => {
+  it("suppresses tier-2 silence when contract is in flight (envelopeId set, Negotiating + 14d silent)", () => {
+    const r = inferDealCommentary(
+      briefing([]),
+      "recA",
+      listing({
+        outreachStatus: "Negotiating",
+        lastOutreachDate: "2026-05-01T12:00:00Z", // 16 days ago → would be tier 2
+        envelopeId: "envelope-guid-xyz",
+      }),
+      NOW,
+    );
+    expect(r.find((s) => s.id === "crier_silence_t2")).toBeUndefined();
+    expect(r.find((s) => s.id === "crier_silence_t1")).toBeUndefined();
+  });
+
+  it("still fires tier-2 silence when no contract state and 14d silent (regression test)", () => {
+    const r = inferDealCommentary(
+      briefing([]),
+      "recA",
+      listing({
+        outreachStatus: "Negotiating",
+        lastOutreachDate: "2026-05-01T12:00:00Z", // 16 days ago → tier 2
+        envelopeId: null,
+      }),
+      NOW,
+    );
+    expect(r.find((s) => s.id === "crier_silence_t2")).toBeDefined();
+  });
+
+  it("suppresses silence signal for Response Received under contract (envelopeId set, 14d silent)", () => {
+    const r = inferDealCommentary(
+      briefing([]),
+      "recA",
+      listing({
+        outreachStatus: "Response Received",
+        lastInboundAt: "2026-05-01T12:00:00Z", // 16 days ago → would be tier 2
+        envelopeId: "envelope-guid-abc",
+      }),
+      NOW,
+    );
+    expect(r.find((s) => s.id === "crier_silence_t2")).toBeUndefined();
+    expect(r.find((s) => s.id === "crier_silence_t1")).toBeUndefined();
+  });
+
+  it("never fires silence under contract regardless of contact recency (Hallbrook-shape)", () => {
+    // Recent contact + envelope set: no silence, no false-positive
+    const r = inferDealCommentary(
+      briefing([]),
+      "recA",
+      listing({
+        outreachStatus: "Negotiating",
+        lastOutreachDate: "2026-05-15T12:00:00Z", // 2 days ago → wouldn't fire anyway
+        envelopeId: "envelope-guid-hallbrook",
+      }),
+      NOW,
+    );
+    expect(r.find((s) => s.id === "crier_silence_t2")).toBeUndefined();
+    expect(r.find((s) => s.id === "crier_silence_t1")).toBeUndefined();
   });
 });

@@ -301,6 +301,33 @@ When the action queue (§5) surfaces an item, the "open for full context" afford
 
 **Implication for L3 reply triage:** L3's `Verification_Notes` append is metadata classification, not summary. The full inbound message remains in Quo. The L3 entry says `classified as: motivated_seller` or similar — never "seller said they want to negotiate price" (that's summary, lossy).
 
+### Phase 14 — Crier phase-aware ladder (post-INV-004)
+
+INV-004 (commit `3b63efe` audit; resolution this commit) shipped **Option A**: a contract-state guard on the Crier silence rule. `isUnderContract(listing)` returns true when `Envelope_ID` is populated; silence signals are suppressed for those records. Pulse `stale-data-drift` detector inherits the same guard + Phase 11.2 4-field parity. **Option B** is the planned expansion: Crier learns the full deal-phase ladder when contract-state signals are populated systematically.
+
+#### Phase ladder Crier will recognize (post-Option-B)
+
+| Phase | Trigger | Signal logic |
+|---|---|---|
+| Outreach silence | Texted / Emailed / Response Received + no contract state | Current Tier 1 / Tier 2 silence rule (unchanged) |
+| Pre-contract negotiation | Negotiating + no `Envelope_ID` | Current silence rule (unchanged) |
+| Contract in-flight | `Envelope_ID` set + `EMD_Status != Received` | **NEW** — DocuSign-aging vs envelope creation date |
+| EMD requested, not received | `EMD_Status = Requested` + past `EMD_Due_Date` | **NEW** — EMD-aging signal |
+| Closing scheduled | `Closing_Scheduled_Date` populated | **NEW** — closing-day proximity signal |
+
+#### Prerequisites for Option B implementation
+
+1. **Phase 12.7 DocuSign JWT provisioning live** (currently STOP — operator-external). Until DocuSign credentials land, `Envelope_ID` is populated only by manual "Track in Scribe" clicks; broad adoption needs the live integration.
+2. **Listings_V1 ↔ Deals join hardened** (currently fragile per INV-004 §2 — only indirect via Offer_Drafts; 35 of 43 active records have no Offer_Drafts link). Schema discipline candidate: explicit `Deal_Link` field on Listings_V1.
+3. **Operator workflow consistently produces Deals rows for contracted listings.** Today only 3 historical Deals rows exist, none linked to current active deals.
+4. **`EMD_Status` and `Closing_Scheduled_Date` populated for at least the prior 5 contracted deals.** Without sample data, the new aging signals have nothing to fire on.
+
+When all four prerequisites are met, Option B becomes implementable as a follow-up to Option A. Until then, Option A's guard is the correct discipline.
+
+#### Architectural framing
+
+Crier today (Option A): **deterministic rule layer with contract-state guard.** Pulse stale-data-drift detector inherits the same guard for aggregate-level parity. Crier tomorrow (Option B): **phase-aware deterministic ladder.** Pulse next (Phase 14 confidence-scored proactive surfacing per `lib/maverick/deal-commentary.ts` header note): **confidence layer on top of Crier's deterministic output.** Crier owns the rules; Pulse scores them.
+
 ---
 
 ## §7 — Order of build (MVP → full)

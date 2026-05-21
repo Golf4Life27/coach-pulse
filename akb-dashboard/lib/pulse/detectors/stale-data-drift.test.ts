@@ -14,7 +14,19 @@ function listing(
   id: string,
   daysAgoInbound: number | null,
   daysAgoOutbound: number | null,
-): Pick<Listing, "id" | "address" | "lastInboundAt" | "lastOutboundAt"> {
+  over: Partial<
+    Pick<Listing, "lastOutreachDate" | "lastEmailOutreachDate" | "envelopeId">
+  > = {},
+): Pick<
+  Listing,
+  | "id"
+  | "address"
+  | "lastInboundAt"
+  | "lastOutboundAt"
+  | "lastOutreachDate"
+  | "lastEmailOutreachDate"
+  | "envelopeId"
+> {
   return {
     id,
     address: `${id} Test Ln`,
@@ -26,6 +38,9 @@ function listing(
       daysAgoOutbound != null
         ? new Date(NOW.getTime() - daysAgoOutbound * 86_400_000).toISOString()
         : null,
+    lastOutreachDate: over.lastOutreachDate ?? null,
+    lastEmailOutreachDate: over.lastEmailOutreachDate ?? null,
+    envelopeId: over.envelopeId ?? null,
   };
 }
 
@@ -146,5 +161,37 @@ describe("detectStaleDataDrift", () => {
     const sample = dets[0].source_data?.oldest_sample as Array<{ id: string }>;
     expect(sample).toBeDefined();
     expect(sample[0].id).toBe("L5"); // 25d, oldest
+  });
+});
+
+describe("stale-data-drift — Phase 11.4 INV-004 parity fixes", () => {
+  it("excludes envelopeId-populated records from stale aggregate (contract-state guard)", () => {
+    // 6 stale records but 2 have envelopeId set → only 4 counted → below warning (5)
+    const listings = [
+      ...Array.from({ length: 4 }, (_, i) => listing(`stale-${i}`, 20, null)),
+      listing("contract-1", 20, null, { envelopeId: "env-1" }),
+      listing("contract-2", 20, null, { envelopeId: "env-2" }),
+    ] as Listing[];
+    expect(detectStaleDataDrift({ ...baseInput, listings })).toEqual([]);
+  });
+
+  it("considers lastEmailOutreachDate when computing record staleness (Phase 11.2 parity)", () => {
+    // Pre-fix: only lastInbound + lastOutbound were considered. Now lastEmail and
+    // lastOutreachDate also count toward freshness. Record with stale 4-field max
+    // counts as stale; record with fresh email but stale inbound/outbound counts
+    // as FRESH (not stale).
+    const listings = [
+      // Stale on inbound/outbound but FRESH via email — should NOT be flagged
+      listing(`fresh-email`, 30, 30, {
+        lastEmailOutreachDate: new Date(NOW.getTime() - 2 * 86_400_000).toISOString(),
+      }),
+      // Stale on every field — should be flagged
+      listing(`truly-stale`, 30, 30, {
+        lastOutreachDate: new Date(NOW.getTime() - 30 * 86_400_000).toISOString(),
+        lastEmailOutreachDate: new Date(NOW.getTime() - 30 * 86_400_000).toISOString(),
+      }),
+    ] as Listing[];
+    const stale = findStaleListings(listings, 14, NOW);
+    expect(stale.map((s) => s.id)).toEqual(["truly-stale"]);
   });
 });

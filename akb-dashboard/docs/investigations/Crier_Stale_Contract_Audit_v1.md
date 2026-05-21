@@ -350,15 +350,83 @@ Compact table — full set; columns: `recordId | Address | City | State | Outrea
 
 *End of audit. Status only. No remediation implemented. Operator decides among Path (a) / (b) / (c) / (d) in §6.*
 
-**Acceptance criteria mapping (per brief §7):**
-1. ✅ Q1 deliverable produced (§1).
-2. ✅ Q2 deliverable produced (§2).
-3. ✅ Q3 deliverable produced (§3).
-4. ✅ Q4 deliverable produced (§4).
-5. ⏸ Awaiting operator selection of Option A / B / C / D.
-6. ⏸ Implementation pending operator decision.
-7. ⏸ Spine entry pending (will write at remediation, `event_type=principle_amendment`, `attribution_agent=crier`).
-8. ⏸ `AKB_MASTER_CHECKLIST.md` update pending — will land alongside remediation per Rule 9.
-9. ⏸ `Active_Queue.md` INV-004 status flip pending remediation; currently marked **INVESTIGATION COMPLETE**.
+---
 
-**Next operator action:** select A / B / C / D in chat. Code then implements + writes Spine + updates checklist + flips queue status.
+## §9 — Remediation outcome (appended 2026-05-20)
+
+**Decision:** Option D (Hybrid) — Option A guard now + Option B phase-aware ladder documented for Phase 14. Operator-ratified 2026-05-20.
+**Spine record:** `rec0A9ZWSMMT5Nk9a` (`event_type: principle_amendment`, `attribution_agent: crier`, `related_spine_decision: recOry0VQVddhEWFb` Phase 11.2 max() staleness math).
+
+### What shipped
+
+**1. `lib/maverick/deal-commentary.ts`:**
+- `DealCommentaryListing` interface gains `envelopeId: string | null`
+- New `isUnderContract(listing)` exported pure helper — returns true when `Envelope_ID` is populated
+- Crier silence branch wrapped in `!isUnderContract(listing)` guard
+
+**2. `app/pipeline/[id]/page.tsx`:**
+- `DealCommentaryListing` projection passes `envelopeId: listing.envelopeId ?? null`
+
+**3. `lib/pulse/detectors/stale-data-drift.ts`:**
+- `mostRecentTouchMs` extended from 2-field to 4-field parity with Crier's `latestContactIso` (closes Phase 11.2 parallel regression: added `lastOutreachDate` + `lastEmailOutreachDate`)
+- `findStaleListings` skips records where `isUnderContract(listing)` is true (imported from deal-commentary, single source of truth)
+- Pick widened to include all 4 contact fields + `envelopeId`
+
+**4. Test coverage — 9 new tests, full suite 990/990 passing:**
+- 3 `isUnderContract` tests (deal-commentary.test.ts): non-empty string → true, null → false, empty string → false
+- 4 contract-state guard tests (deal-commentary.test.ts):
+  - Negotiating + Envelope set + 16d stale → silence suppressed
+  - Negotiating + no contract + 16d stale → silence fires (regression preserved)
+  - Response Received + Envelope set + 16d stale → silence suppressed
+  - Hallbrook-shape (Negotiating + Envelope + recent contact) → never fires under contract
+- 2 Pulse stale-data-drift tests (stale-data-drift.test.ts):
+  - Envelope-populated records excluded from aggregate (6 stale, 2 with envelopes → below warning threshold)
+  - 4-field parity (fresh email saves record from being flagged stale)
+
+**5. `docs/specs/AKB_Belt_v1_Spec.md` §6** — new "Phase 14 — Crier phase-aware ladder (post-INV-004)" subsection documents Option B's 5-row phase ladder + 4 prerequisites + architectural framing (Crier rules → Pulse confidence scores).
+
+### Live behavior today
+
+- **Zero records affected.** 0 of 43 active Negotiating/Response Received records have `Envelope_ID` populated. `isUnderContract(listing)` returns false everywhere; silence signals fire identically to pre-fix behavior.
+- **Preventive infrastructure activates the moment DocuSign provisioning lands.** `rec1HTUqK0YEVb7uA` (23 Fields Ave, 32d stale) becomes a clean suppression the moment its envelope is tracked.
+
+### Test execution
+
+| Test | Status | Result |
+|---|---|---|
+| `vitest run lib/maverick/deal-commentary.test.ts lib/pulse/detectors/stale-data-drift.test.ts` | ✅ | 45/45 (existing 36 + 9 new) |
+| `vitest run` full suite | ✅ | **990/990** |
+| `npx tsc --noEmit` on patched files | ✅ | Zero errors |
+| Live deploy curl tests (deferred — no `QUO_API_KEY` in container) | ⏸ | Operator runs against deployed env when DocuSign provisioning lands |
+
+### Acceptance criteria status (per brief §7)
+
+| # | Criterion | Status |
+|---|---|---|
+| 1 | Q1 false-positive count + recordIds | ✅ (audit §1 + appendix) |
+| 2 | Q2 Listings_V1 ↔ Deals linkage | ✅ (audit §2) |
+| 3 | Q3 staleness path enumeration | ✅ (audit §3) |
+| 4 | Q4 Pulse vs Crier responsibility | ✅ (audit §4) |
+| 5 | Operator selects A/B/C/D | ✅ Option D (Hybrid) (2026-05-20) |
+| 6 | Code implements + unit tests | ✅ 9 new tests, full suite 990/990 passing |
+| 7 | Spine entry (`principle_amendment`, `crier`) | ✅ `rec0A9ZWSMMT5Nk9a` |
+| 8 | `AKB_MASTER_CHECKLIST.md` updated | ✅ Phase 22.9 entry + Insertion log |
+| 9 | `Active_Queue.md` INV-004 flipped to SHIPPED | ✅ this commit |
+
+### Untouched paths (per Q3 audit + brief scope)
+
+- `app/api/jarvis-brief/route.ts` synthesizer prompt — inherits Crier + Pulse output; no own logic.
+- `PipelineBoard.tsx`, `MorningBriefing.tsx`, `outreach-safety-check`, `bulk-dead-stale-texted` — decorative or different-purpose. Out of scope.
+- L3 / scan-comms / H2 / `/api/deal-context` / `/api/conversations` — untouched.
+
+### Reversibility
+
+- 2 lines in `lib/maverick/deal-commentary.ts` interface (envelopeId addition; non-breaking).
+- `isUnderContract` helper removable; silence branch revertible to pre-guard logic.
+- `lib/pulse/detectors/stale-data-drift.ts` revertible to 2-field `mostRecentTouchMs` + no-guard `findStaleListings`.
+- Test additions removable.
+- Belt v1 Spec §6 Phase 14 subsection removable; documentary content only.
+
+Single git revert restores pre-INV-004 state cleanly.
+
+*End of remediation outcome. Status: shipped + verified. Spine: `rec0A9ZWSMMT5Nk9a`.*

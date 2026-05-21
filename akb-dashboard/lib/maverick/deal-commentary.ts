@@ -45,6 +45,15 @@ export interface DealCommentaryListing {
    * three via max() to compute the actual last-contact instant.
    */
   lastEmailOutreachDate: string | null;
+  /**
+   * Phase 11.4 (INV-004) — DocuSign envelope GUID from
+   * Listings_V1.Envelope_ID. Populated when "Track in Scribe" affordance
+   * creates an envelope; null otherwise. Drives isUnderContract() guard
+   * on the Crier silence rule — contract-in-flight deals bypass silence
+   * signals because Negotiating/Response Received during contract
+   * execution is legitimate, not the outreach-silence failure mode.
+   */
+  envelopeId: string | null;
 }
 
 /**
@@ -86,6 +95,31 @@ const CRIER_SILENCE_TIER_2_DAYS = 14;
 const CRIER_SILENCE_TIER_1_DAYS = 7;
 
 /**
+ * Phase 11.4 (INV-004 Option A) — contract-state guard.
+ *
+ * Returns true when the listing has any signal that contract execution
+ * is in flight (DocuSign envelope created, EMD activity, assignment
+ * executed). The Crier silence rule is suppressed for these records
+ * because "Negotiating"/"Response Received" Outreach_Status during
+ * contract execution is legitimate — not the outreach-silence failure
+ * mode Crier was designed to catch.
+ *
+ * v1 gates purely on Envelope_ID — the only contract-state signal that
+ * lives directly on Listings_V1. Deals-side fields (Closing_Status,
+ * EMD_Status, Assignment_Executed) require a Listings_V1↔Deals join
+ * that is structurally unreliable today (Q2 audit, commit 3b63efe).
+ * Logged as a Phase 14 expansion point in Belt v1 Spec: when the join
+ * is hardened, this guard extends to read those signals.
+ *
+ * Pure. Deterministic. No I/O.
+ */
+export function isUnderContract(
+  listing: Pick<DealCommentaryListing, "envelopeId">,
+): boolean {
+  return Boolean(listing.envelopeId);
+}
+
+/**
  * Project the briefing + listing into a list of commentary signals
  * for the named deal. Returns [] when no rules fire — caller renders
  * the watching empty state.
@@ -100,9 +134,15 @@ export function inferDealCommentary(
   const dealEvents = filterEventsForDeal(briefing, recordId);
 
   // ── Crier silence on Negotiating / Response Received deals.
+  // Phase 11.4 (INV-004) — guard: when contract execution is in flight
+  // (Envelope_ID populated), Crier silence is suppressed. The deal isn't
+  // outreach-silent; it's contract-active. False-positive silence at this
+  // moment erodes operator trust at the highest-leverage moment in the
+  // pipeline.
   if (
-    listing.outreachStatus === "Negotiating" ||
-    listing.outreachStatus === "Response Received"
+    (listing.outreachStatus === "Negotiating" ||
+      listing.outreachStatus === "Response Received") &&
+    !isUnderContract(listing)
   ) {
     // Phase 11.2 — true most-recent contact across SMS + email + inbound.
     // The prior fallback-chain semantics surfaced false-stale on active
