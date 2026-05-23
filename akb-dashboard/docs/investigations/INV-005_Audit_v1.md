@@ -251,3 +251,74 @@ Rationale:
 ## Standing by
 
 Awaiting operator pick: **A / B / D**, plus disposition on the four discovered-during findings (promote to INVs / fold into INV-005 remediation / defer).
+
+---
+
+## Remediation outcome — 2026-05-23
+
+**Status:** SHIPPED → Option D core + local-1 + local-4 in-scope.
+**Commit:** `2dfa57e` (`feat(appraiser): manual rehab affordance + Rehab_Source provenance (INV-005)`).
+**Spine:** `rec84OQ8UCqLKElCU` (`build_event`, `attribution_agent=appraiser`).
+**Branch:** `claude/test-firecrawl-egress-fkpyY`.
+
+### What landed
+
+| Surface | Change |
+|---|---|
+| Airtable schema | `Rehab_Source` singleSelect created (id `fldhn2vxQipa3PVsX`, choices `vision` / `manual_operator` / `manual_partner`). Auxiliary to `Rehab_Confidence_Score` — not deprecated. |
+| `GET /api/agents/appraiser/rehab/[recordId]` | Writes `Rehab_Source: "vision"` on success. `skip_photos=1` hard-reject retained with Constitution Rule 3 reference (no preemptive bypass). |
+| `POST /api/agents/appraiser/rehab/[recordId]/manual` (NEW) | Operator fallback. Validates payload, writes Est_Rehab + Rehab_Source. Confidence fixed at 50. Per-write Spine entry. Cron auth rejected (operator-only). |
+| `POST /api/agents/appraiser/rehab/[recordId]/drift-resolve` (NEW) | Operator resolution for vision-vs-manual drift. `accept_vision` / `keep_manual` outcomes. Appends `[REHAB_DRIFT_RESOLVED]` Notes marker. |
+| `GET /api/cron/rehab-vision-retry` (NEW) | Daily 15:00 UTC. For active `manual_operator` records, re-runs vision. Three outcomes: `vision_failed` / `vision_agrees` / `drift_detected`. 7-day cooldown. NEVER overwrites manual Est_Rehab fields. |
+| `components/AppraiserRehabPanel.tsx` | Provenance badge; conditional manual-entry expander (only renders after a 422/502 unlock reason); Type 2C drift banner with [Accept vision update] / [Keep manual] buttons. |
+| `components/brocard/PricingBlock.tsx` | `RehabProvenanceBadge` rendered alongside the existing calibration-epoch `RehabSourceBadge` — semantically distinct (calibration vs provenance). |
+| `.env.example` | Documents `SCRAPER_API_KEY` and `GOOGLE_MAPS_API_KEY` with INV-005 context (local-1 promotion). |
+| `lib/types.ts` | `Listing.rehabSource` typed as `"vision" | "manual_operator" | "manual_partner" | null`. |
+| `types/jarvis.ts` | `BroCardPricing.modifier_inputs.rehab_provenance` added — distinct from existing `rehab_source` (calibration-epoch) field. |
+| `lib/brocard/pricing.ts` | Threads `rehabSource` through pricing classifier into BroCard payload. |
+| `vercel.json` | Added 15:00 UTC daily cron slot (16th slot; within Hobby cap). |
+
+### Tests
+
+38 new tests across two pure-helper modules:
+
+- `lib/appraiser/manual-rehab.test.ts` — payload validation (mid/low/high band coercion, source enum), Airtable payload assembly, Notes line format
+- `lib/maverick/rehab-vision-retry.test.ts` — retry predicate (manual_operator gate, Active gate, 7-day cooldown), drift computation (±25% threshold, signed delta), Notes-marker scanner roundtrip (drift detected → resolved → re-armed)
+
+Full suite **1038/1038 passing** (was 1000/1000 pre-remediation). `tsc --noEmit` clean.
+
+### Constitution Rule 3 enforcement
+
+All six discipline points from operator spec confirmed in code:
+
+1. ✅ Manual input is FALLBACK ONLY (POST `/manual` accepts manual-only sources; `vision` rejected as `invalid_source`)
+2. ✅ Vision GET path always attempted first (no preemptive bypass; `skip_photos=1` hard-reject retained)
+3. ✅ Manual UI affordance only appears AFTER GET returns one of `no_photos_available` / `photo_collection_failed` / `vision_call_failed` (UI checks `errorCode` against `UNLOCK_MANUAL_REASONS` set before rendering form)
+4. ✅ NO preemptive-skip button (UI has no "set manually without trying" path; first interaction is always "Run rehab")
+5. ✅ Manual records flagged in all downstream displays (`AppraiserRehabPanel` badge + `BroCard PricingBlock` badge; provenance threaded through `BroCardPricing` payload)
+6. ✅ Nightly cron re-attempts vision; on drift > 25% surfaces Type 2C card; NEVER silently overwrites (drift cron only writes Notes marker; Est_Rehab fields untouched; operator resolution required via `/drift-resolve`)
+
+### Local findings disposition
+
+- **local-1** → IN-SCOPE, shipped (`.env.example` documents both keys)
+- **local-2** → PROMOTED to INV-021 (4-consumer photo-collection divergence — separate INV, separate commit)
+- **local-3** → PROMOTED to INV-021 (same divergence audit covers it)
+- **local-4** → IN-SCOPE, shipped (`Rehab_Source` field + downstream provenance plumbing)
+
+### Architecture choices made under operator authorization
+
+- **Three separate routes** (manual + drift-resolve + cron) rather than extending GET with query params. Separate routes keep auth surfaces clean and make Rule 3 enforcement readable in the file structure.
+- **UI-only Rule 3 gating** (manual form renders only on error states) rather than API-level enforcement (which would have required `Rehab_Last_Auto_Attempt_At` + `Rehab_Last_Auto_Attempt_Error` schema fields). Threat model today doesn't justify the schema bloat. Operator authorized this tradeoff.
+- **Drift surface via Notes marker** (`[REHAB_DRIFT_DETECTED]`) + inline AppraiserRehabPanel banner, rather than a new Action_Card field. Lightweight; doesn't preempt INV-020 dashboard Action Queue architecture.
+- **Drift resolution UI shipped in same commit** (operator approved during plan surfacing) rather than deferred to follow-up. The `[Accept vision update]` / `[Keep manual / dismiss]` buttons + `/drift-resolve` route landed together so the loop closes end-to-end on day one.
+- **Source enum scoped to 3 values** (`vision` / `manual_operator` / `manual_partner`) per operator spec, narrower than the v1 audit draft's 5.
+
+### Acceptance criteria status (final)
+
+1. ✅ Q1–Q4 deliverables produced (audit v1)
+2. ✅ Operator selected D (recorded above)
+3. ✅ Code implemented + tests (38 new, 1038/1038 passing)
+4. ✅ Spine entry written via `maverick_write_state` (`rec84OQ8UCqLKElCU`)
+5. ⏸️ `AKB_MASTER_CHECKLIST.md` update pending operator (`.docx` canonical doc — operator-side action)
+6. ✅ `Active_Queue.md` flips INV-005 to SHIPPED (commit #2 of this remediation cycle)
+
