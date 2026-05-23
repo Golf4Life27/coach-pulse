@@ -90,8 +90,13 @@ export async function GET(
   }
 
   if (skipPhotos) {
+    // Constitution Rule 3 + INV-005: no preemptive-skip path. The manual
+    // affordance is unlocked only AFTER this route returns one of the
+    // automation-failure surfaces (no_photos_available / vision_call_failed /
+    // photo_collection_failed) and the operator hits the POST /manual
+    // sibling endpoint via the UI.
     return NextResponse.json(
-      { error: "skip_photos_unimplemented", reason: "no fallback rehab path without vision; supply photos" },
+      { error: "skip_photos_unimplemented", reason: "manual rehab is fallback-only; vision must be attempted first (INV-005)" },
       { status: 422 },
     );
   }
@@ -233,6 +238,10 @@ export async function GET(
       }).slice(0, 95_000),
       Rehab_Red_Flags: vision.red_flags.join(", "),
       Rehab_Estimated_At: nowIso,
+      // INV-005 — provenance flag. Vision pipeline owns this write
+      // path; manual fallback (POST /manual sibling) writes
+      // manual_operator or manual_partner.
+      Rehab_Source: "vision",
     };
     try {
       await updateListingRecord(recordId, fieldsToWrite);

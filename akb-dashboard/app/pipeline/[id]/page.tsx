@@ -261,7 +261,9 @@ export default function DealWorkspace() {
           rehabEstimatedAt: listing.rehabEstimatedAt ?? null,
           rehabLineItemsJson: listing.rehabLineItemsJson ?? null,
           rehabRedFlags: listing.rehabRedFlags ?? null,
+          rehabSource: listing.rehabSource ?? null,
           buildingSqFt: listing.buildingSqFt ?? null,
+          notes: listing.notes ?? null,
         }}
       />
 

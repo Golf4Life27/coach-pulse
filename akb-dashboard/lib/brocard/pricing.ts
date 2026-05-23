@@ -31,6 +31,7 @@ export type PricingClassifierListing = Pick<
   | "state"
   | "outreachOfferPrice"
   | "contractOfferPrice"
+  | "rehabSource"
 >;
 
 /**
@@ -91,6 +92,7 @@ export function classifyBroCardPricing(
           monthly_rent: range.modifier_inputs.monthly_rent,
           state: range.modifier_inputs.state ?? null,
           rehab_source: rehabPick.source,
+          rehab_provenance: listing.rehabSource ?? null,
         },
       },
     };

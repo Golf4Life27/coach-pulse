@@ -1,31 +1,33 @@
 "use client";
 
 /**
- * Appraiser rehab panel (Phase 4B.1 / Commit J.2).
+ * Appraiser rehab panel (Phase 4B.1 / Commit J.2; INV-005 manual affordance).
  *
- * Mirrors AppraiserArvPanel. Three states:
+ * State surfaces:
  *
  *   1. Listing has computed rehab (estRehabMid + rehabEstimatedAt) →
  *      render value + BBC tier + market tier + multiplier + vision
  *      confidence + red-flag chips + click-to-expand line-items table
- *      + "Refresh" button.
+ *      + "Refresh" button + provenance badge (Vision / Manual operator
+ *      / Manual partner — INV-005). Drift banner renders when nightly
+ *      retry cron flagged a divergence (Notes marker scan).
  *
- *   2. No rehab computed → "Run rehab" button. Hits the endpoint;
- *      on success reload the page so values land.
+ *   2. No rehab computed → "Run rehab" button. Hits the GET endpoint;
+ *      on success reload the page so values land. On failure (no
+ *      photos / vision call failed) the "or set manually" expander
+ *      surfaces — Constitution Rule 3, manual is fallback-only.
  *
  *   3. Compute in flight → button shows "Running… (15-30s — Vision call)".
- *
- * Rehab_Line_Items_JSON is written by the Phase 4B.1 endpoint and
- * contains { bbc_tier, market_tier, market_multiplier,
- * anchor_per_sqft, calibrated_rate_per_sqft, vision_condition,
- * vision_line_items }. Older records from the existing pricing
- * route may not have this; in that case we render the simpler view
- * without the calibration block.
  */
 
 import { useState } from "react";
 import type { Listing } from "@/lib/types";
 import { BBC_ANCHOR_PER_SQFT, type BbcTier } from "@/lib/appraiser/rehab-calibration";
+import {
+  DRIFT_NOTES_MARKER,
+  DRIFT_RESOLVED_MARKER,
+  hasUnresolvedDriftMarker,
+} from "@/lib/maverick/rehab-vision-retry";
 
 export interface AppraiserRehabPanelProps {
   recordId: string;
@@ -39,7 +41,9 @@ export interface AppraiserRehabPanelProps {
     | "rehabEstimatedAt"
     | "rehabLineItemsJson"
     | "rehabRedFlags"
+    | "rehabSource"
     | "buildingSqFt"
+    | "notes"
   >;
 }
 
@@ -95,10 +99,70 @@ const BBC_TIER_STYLES: Record<BbcTier, { border: string; text: string }> = {
   Gut: { border: "border-red-700", text: "text-red-400" },
 };
 
+// INV-005 — automation-failure error reasons that unlock the manual
+// fallback expander. The GET sibling returns these via the `error`
+// field on 422/502 responses.
+const UNLOCK_MANUAL_REASONS = new Set([
+  "no_photos_available",
+  "photo_collection_failed",
+  "vision_call_failed",
+]);
+
+function ProvenanceBadge({ source }: { source: Listing["rehabSource"] | undefined }) {
+  if (!source) return null;
+  const style =
+    source === "vision"
+      ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300"
+      : source === "manual_operator"
+        ? "bg-amber-500/15 border-amber-500/30 text-amber-300"
+        : "bg-orange-500/15 border-orange-500/30 text-orange-300";
+  const label =
+    source === "vision"
+      ? "Vision"
+      : source === "manual_operator"
+        ? "Manual (operator)"
+        : "Manual (partner)";
+  return (
+    <span
+      className={`text-[9px] uppercase tracking-wider px-1 py-0.5 rounded border ${style}`}
+      title={`Rehab_Source = ${source} (INV-005)`}
+    >
+      {label}
+    </span>
+  );
+}
+
+// INV-005 — drift banner parser. Walks Notes for the most recent
+// DRIFT_NOTES_MARKER line and surfaces the data inline above the
+// rehab panel.
+function extractLatestDriftLine(notes: string | null | undefined): string | null {
+  if (!notes) return null;
+  const lines = notes.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].includes(DRIFT_NOTES_MARKER)) return lines[i];
+  }
+  return null;
+}
+
 export default function AppraiserRehabPanel({ recordId, listing }: AppraiserRehabPanelProps) {
   const [running, setRunning] = useState(false);
   const [showItems, setShowItems] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<string | null>(null);
+
+  // Manual form state
+  const [showManual, setShowManual] = useState(false);
+  const [manualMid, setManualMid] = useState("");
+  const [manualLow, setManualLow] = useState("");
+  const [manualHigh, setManualHigh] = useState("");
+  const [manualSource, setManualSource] =
+    useState<"manual_operator" | "manual_partner">("manual_operator");
+  const [savingManual, setSavingManual] = useState(false);
+
+  // Drift banner state (cron-detected vision-vs-manual divergence)
+  const [resolvingDrift, setResolvingDrift] = useState<null | "accept" | "keep">(
+    null,
+  );
 
   const rehabMid = listing.estRehabMid ?? listing.estRehab ?? null;
   const hasRehab = rehabMid != null && listing.rehabEstimatedAt != null;
@@ -115,13 +179,18 @@ export default function AppraiserRehabPanel({ recordId, listing }: AppraiserReha
     .map((s) => s.trim())
     .filter(Boolean);
 
+  const driftActive = hasUnresolvedDriftMarker(listing.notes ?? null);
+  const driftLine = driftActive ? extractLatestDriftLine(listing.notes) : null;
+
   const runRehab = async () => {
     setError(null);
+    setErrorCode(null);
     setRunning(true);
     try {
       const res = await fetch(`/api/agents/appraiser/rehab/${recordId}`);
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
+        setErrorCode(typeof body.error === "string" ? body.error : null);
         throw new Error(body.message ?? body.reason ?? body.error ?? `HTTP ${res.status}`);
       }
       if (typeof window !== "undefined") window.location.reload();
@@ -131,6 +200,57 @@ export default function AppraiserRehabPanel({ recordId, listing }: AppraiserReha
       setRunning(false);
     }
   };
+
+  const submitManual = async () => {
+    setSavingManual(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/agents/appraiser/rehab/${recordId}/manual`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rehab_mid: Number(manualMid),
+          rehab_low: manualLow ? Number(manualLow) : undefined,
+          rehab_high: manualHigh ? Number(manualHigh) : undefined,
+          source: manualSource,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.reason ?? body.message ?? body.error ?? `HTTP ${res.status}`);
+      }
+      if (typeof window !== "undefined") window.location.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingManual(false);
+    }
+  };
+
+  const resolveDrift = async (action: "accept_vision" | "keep_manual") => {
+    setResolvingDrift(action === "accept_vision" ? "accept" : "keep");
+    try {
+      const res = await fetch(
+        `/api/agents/appraiser/rehab/${recordId}/drift-resolve`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ resolution: action }),
+        },
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.reason ?? body.message ?? `HTTP ${res.status}`);
+      }
+      if (typeof window !== "undefined") window.location.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setResolvingDrift(null);
+    }
+  };
+
+  const manualFormCanRender =
+    error !== null && errorCode !== null && UNLOCK_MANUAL_REASONS.has(errorCode);
 
   if (!hasRehab) {
     return (
@@ -150,15 +270,124 @@ export default function AppraiserRehabPanel({ recordId, listing }: AppraiserReha
           {running ? "Running… (15-30s — Vision call)" : "Run rehab"}
         </button>
         {error && <p className="text-[10px] text-red-400">{error}</p>}
+        {/* INV-005 manual fallback — only renders after a vision/photo
+            failure unlocks it. Rule 3 #3 + #4: NO preemptive skip. */}
+        {manualFormCanRender && (
+          <div className="border-t border-[#30363d] pt-2 mt-2">
+            <button
+              type="button"
+              onClick={() => setShowManual((v) => !v)}
+              className="text-[10px] text-amber-400 hover:text-amber-300"
+              aria-expanded={showManual}
+            >
+              {showManual ? "▴ Hide manual entry" : "▾ or set manually (fallback)"}
+            </button>
+            {showManual && (
+              <div className="mt-2 space-y-2 bg-[#161b22] rounded px-2 py-2">
+                <div className="grid grid-cols-3 gap-2">
+                  <label className="text-[10px] text-gray-400 flex flex-col">
+                    Mid *
+                    <input
+                      type="number"
+                      value={manualMid}
+                      onChange={(e) => setManualMid(e.target.value)}
+                      placeholder="25000"
+                      className="bg-[#0d1117] border border-[#30363d] rounded px-1.5 py-1 text-[11px] text-gray-200"
+                      min={1}
+                    />
+                  </label>
+                  <label className="text-[10px] text-gray-400 flex flex-col">
+                    Low
+                    <input
+                      type="number"
+                      value={manualLow}
+                      onChange={(e) => setManualLow(e.target.value)}
+                      placeholder="auto"
+                      className="bg-[#0d1117] border border-[#30363d] rounded px-1.5 py-1 text-[11px] text-gray-200"
+                      min={0}
+                    />
+                  </label>
+                  <label className="text-[10px] text-gray-400 flex flex-col">
+                    High
+                    <input
+                      type="number"
+                      value={manualHigh}
+                      onChange={(e) => setManualHigh(e.target.value)}
+                      placeholder="auto"
+                      className="bg-[#0d1117] border border-[#30363d] rounded px-1.5 py-1 text-[11px] text-gray-200"
+                      min={0}
+                    />
+                  </label>
+                </div>
+                <label className="text-[10px] text-gray-400 flex flex-col">
+                  Source
+                  <select
+                    value={manualSource}
+                    onChange={(e) =>
+                      setManualSource(e.target.value as typeof manualSource)
+                    }
+                    className="bg-[#0d1117] border border-[#30363d] rounded px-1.5 py-1 text-[11px] text-gray-200"
+                  >
+                    <option value="manual_operator">manual_operator</option>
+                    <option value="manual_partner">manual_partner</option>
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  onClick={submitManual}
+                  disabled={savingManual || !manualMid}
+                  className="bg-amber-700 hover:bg-amber-600 text-white text-[11px] font-semibold px-3 py-1.5 rounded disabled:opacity-50"
+                >
+                  {savingManual ? "Saving…" : "Save manual rehab"}
+                </button>
+                <p className="text-[9px] text-gray-500 italic">
+                  Nightly retry will re-run vision and flag drift &gt;25% — never silently overwrites.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     );
   }
 
   return (
     <div className={`bg-[#1c2128] rounded-lg border ${style.border} p-3 space-y-2`}>
+      {/* INV-005 drift banner — only renders when cron flagged divergence */}
+      {driftActive && (
+        <div className="bg-amber-950/40 border border-amber-700/60 rounded px-2 py-1.5 space-y-1">
+          <div className="text-[10px] font-semibold text-amber-300 uppercase tracking-wider">
+            ⚠ Vision vs manual drift detected
+          </div>
+          {driftLine && (
+            <p className="text-[10px] text-amber-200/80 leading-snug">
+              {driftLine.replace(DRIFT_NOTES_MARKER, "").replace(/^[^—]+— /, "").trim()}
+            </p>
+          )}
+          <div className="flex gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => resolveDrift("accept_vision")}
+              disabled={resolvingDrift !== null}
+              className="bg-emerald-700 hover:bg-emerald-600 text-white text-[10px] font-semibold px-2 py-1 rounded disabled:opacity-50"
+            >
+              {resolvingDrift === "accept" ? "Accepting…" : "Accept vision update"}
+            </button>
+            <button
+              type="button"
+              onClick={() => resolveDrift("keep_manual")}
+              disabled={resolvingDrift !== null}
+              className="bg-[#21262d] hover:bg-[#30363d] text-gray-200 text-[10px] font-semibold px-2 py-1 rounded disabled:opacity-50"
+            >
+              {resolvingDrift === "keep" ? "Saving…" : "Keep manual / dismiss"}
+            </button>
+          </div>
+        </div>
+      )}
       <div className="flex items-center justify-between">
-        <h3 className={`text-[10px] font-bold uppercase tracking-wider ${style.text}`}>
-          Appraiser — Rehab {bbcTier ?? ""}
+        <h3 className={`text-[10px] font-bold uppercase tracking-wider ${style.text} flex items-center gap-2`}>
+          <span>Appraiser — Rehab {bbcTier ?? ""}</span>
+          <ProvenanceBadge source={listing.rehabSource} />
         </h3>
         <button
           type="button"
@@ -288,3 +517,4 @@ function inferTierFromRate(ratePerSqft: number): BbcTier {
 // Suppress unused-import warning on BBC_ANCHOR_PER_SQFT — re-exported
 // via the type import to keep the panel's bundle small.
 void BBC_ANCHOR_PER_SQFT;
+void DRIFT_RESOLVED_MARKER;

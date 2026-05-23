@@ -143,6 +143,27 @@ function RehabSourceBadge({ source }: { source: "phase_4b_calibrated" | "legacy_
   return null;
 }
 
+// INV-005 — distinct from RehabSourceBadge (which marks calibration
+// epoch). This badge marks data provenance: did the value come from
+// the autonomous vision pipeline or the manual fallback?
+function RehabProvenanceBadge({
+  provenance,
+}: {
+  provenance: "vision" | "manual_operator" | "manual_partner" | null;
+}) {
+  if (!provenance || provenance === "vision") return null;
+  const label =
+    provenance === "manual_operator" ? "manual (operator)" : "manual (partner)";
+  return (
+    <span
+      className="ml-1 text-[9px] uppercase tracking-wider px-1 py-0.5 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300"
+      title={`INV-005: Rehab_Source = ${provenance}`}
+    >
+      {label}
+    </span>
+  );
+}
+
 function ModifierInputsPanel({ pricing }: { pricing: Extract<BroCardPricing, { mode: "phase4" }> }) {
   const { range } = pricing;
   const mi = range.modifier_inputs;
@@ -157,6 +178,7 @@ function ModifierInputsPanel({ pricing }: { pricing: Extract<BroCardPricing, { m
         <span className="text-gray-600">Rehab:</span>{" "}
         <span className="text-gray-300">{formatCurrency(mi.est_rehab)}</span>
         <RehabSourceBadge source={mi.rehab_source} />
+        <RehabProvenanceBadge provenance={mi.rehab_provenance} />
       </div>
       <div>
         <span className="text-gray-600">Wholesale fee:</span>{" "}

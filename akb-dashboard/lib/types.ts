@@ -104,6 +104,12 @@ export interface Listing {
   rehabEstimatedAt?: string | null;
   rehabLineItemsJson?: string | null;
   rehabRedFlags?: string | null;
+  // INV-005 — Rehab_Source provenance flag. Distinct from the BroCard
+  // pricing classifier's "rehab_source" (phase_4b_calibrated | legacy_
+  // est_rehab | none — calibration epoch). This field records whether
+  // the persisted Est_Rehab came from the autonomous vision pipeline
+  // or from the operator/partner fallback unlocked after vision failed.
+  rehabSource?: "vision" | "manual_operator" | "manual_partner" | null;
   photoConfidence?: number | null;
   lineItemsJson?: string | null;
   redFlags?: string[] | string | null;

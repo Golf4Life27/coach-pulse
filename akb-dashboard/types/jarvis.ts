@@ -155,6 +155,11 @@ export interface BroCardPricingPhase4 {
       // (preferred) vs legacy estRehab fallback. Future Pulse alerts
       // on stale "legacy_est_rehab" rates across the active pipeline.
       rehab_source: "phase_4b_calibrated" | "legacy_est_rehab" | "none";
+      // INV-005 provenance — distinct from rehab_source (calibration
+      // epoch). Records whether the persisted Est_Rehab came from the
+      // vision pipeline or the manual fallback. null when no source
+      // recorded (legacy records pre-INV-005).
+      rehab_provenance: "vision" | "manual_operator" | "manual_partner" | null;
     };
   };
 }
