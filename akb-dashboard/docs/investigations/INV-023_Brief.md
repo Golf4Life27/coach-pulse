@@ -79,6 +79,25 @@ This brief replaces v1 which embedded "Posts to Action Queue: click here to auth
 - [ ] Inspection contingency present (HARD RULE, no override path)
 - [ ] TN-specific: Memphis assignment clause checked
 
+### CONTRACT-CLAUSE AUTO-EXTRACTION (Type 1 autonomous — folded into INV-023 scope per 2026-05-23 operator decision)
+- [ ] Executed contract PDF detected and parsed (DocuSign / Authentisign / manually-uploaded TAR / TREC / state-specific PSAs)
+- [ ] Purchase price extracted and cross-checked against Listings_V1 Contract_Offer_Price
+- [ ] EMD amount + deadline + holder + holder contact info extracted into Property_Intel
+- [ ] Financing contingency status (waived / loan-type-specified) extracted
+- [ ] Appraisal contingency status (contingent / non-contingent) extracted
+- [ ] Inspection period length + start date computed from Binding Agreement Date
+- [ ] Closing date extracted, calendar invite auto-generated (Type 1)
+- [ ] Title cost allocation parsed: who pays title search, who pays owner's policy, who pays mortgage policy
+- [ ] Non-Assignability clause status: in force / struck through / explicitly amended
+- [ ] Section 8 (Inspections) Buyer's Resolution Period length extracted
+- [ ] Special Stipulations section parsed for any non-standard clauses
+- [ ] Both-side closing cost preview generated: buyer-side total + seller-side total + assignee-side total (when contract is assignable)
+- [ ] All extracted clauses surface in deal-room as Type 1 hydrated data; ambiguities surface as Type 2C cards
+
+Genesis: 2026-05-23 operator + Maverick manually read 11-page TAR RF401 for 23 Fields Ave to answer (a) EMD refundability question, (b) Section 16 Non-Assignability strikethrough verification, (c) "Seller to pay for title search. Buyer to pay for owners/mortgage policies" cost-allocation buyer-clarification request from Almira at BBC. Each manual read consumed operator + Maverick time. Underwriter Agent should extract all of this on first PDF detection and store in Property_Intel with clause-level provenance. Same regression class as INV-008 (parse comms for structured signal) — the data is already in the document; the system shouldn't make operator re-read it.
+
+Out-of-scope for INV-023 v1 implementation: clause-level semantic interpretation that requires legal judgment (e.g., "is this Special Stipulation enforceable in TN?"). That's Type 2C surface for attorney review, not Type 1 extraction.
+
 ### DOWNSTREAM CASCADE ON PASS
 - [ ] `Ready_For_Contract = true` (Type 1)
 - [ ] Crier announces transition with full summary (Type 1)
