@@ -25,20 +25,21 @@ The codebase already contains **more federation scaffolding than the brief assum
 
 | Vendor | In-code today | API status | Plan / cost | Endpoints needed | Fallback if no API |
 |---|---|---|---|---|---|
-| **RentCast** | ✅ LIVE (`lib/rentcast.ts`) | Confirmed REST API, `X-Api-Key` header | Pro **$199/mo = 2,000 req/mo**, then per-req overage (Free=2, Starter $29=100, Growth $99=500) [1] | `/avm/value` ✅, `/avm/rent/long-term` ✅ (NOT `/avm/rent`), comps embedded in `/avm/value` (NO standalone `/avm/sale-comparables` — it 404s, confirmed in code comment) | n/a — API works |
+| **RentCast** | ✅ LIVE (`lib/rentcast.ts` + `app/api/verify-listing/route.ts`) | Confirmed REST API, `X-Api-Key` header | Pro **$199/mo = 2,000 req/mo**, then per-req overage (Free=2, Starter $29=100, Growth $99=500) [1] | **THREE confirmed endpoints:** `/avm/value` ✅ (value + embedded comps), `/avm/rent/long-term` ✅ (rent), `/v1/listings/sale` ✅ (active-listing confirmation — powers live `/api/verify-listing`). What does NOT exist: `/avm/sale-comparables` (a comps endpoint — 404s; comps come embedded in `/avm/value`). | n/a — API works |
 | **PropStream** | ⏳ SCAFFOLDED, uncredentialed (`lib/crawler/sources/propstream.ts`) | API exists (powers third-party CRMs) but **gated behind business tier + access request** [2] | Public Core **$99/mo**; internal note **~$299/mo API-capable tier (5/19)**; discrepancy to resolve with vendor | property lookup, comp search, owner lookup, **lien search** (drives INV-023) | Browser automation (Q6) |
-| **ScraperAPI** (brief calls it "Firecrawl") | ✅ LIVE (`lib/photo-sources.ts`, `SCRAPER_API_KEY`) | Confirmed; used for Redfin photo scrape | already provisioned (post-INV-005 `.env.example`) | Redfin listing re-scrape | n/a — **naming flag below** |
+| **ScraperAPI** | ✅ LIVE (`lib/photo-sources.ts`, `SCRAPER_API_KEY`) | Confirmed; used for Redfin photo scrape | already provisioned (post-INV-005 `.env.example`) | Redfin **photo** URL extraction → vision pipeline | n/a — live |
+| **Firecrawl** | ⚠️ Egress-validated 5/20 (HTTP 200, 26,836 chars markdown against 4838 Wisteria; checklist 22.1 DONE) but **NOT wired into production code** (no `lib/firecrawl.ts`, no route calls `api.firecrawl.dev`) | API confirmed, account provisioned | per-page or per-token pricing | listing **markdown extraction + keyword scoring** (intended for `/api/verify-listing` v2 per `AKB_Belt_v1_Spec.md` §4, replacing retired Scenario B keyword-scoring work) | n/a — needs production wiring (see **INV-028**) |
 | **InvestorBase** | ❌ CSV-only (`app/api/buyers/import-csv`) | **No API integration in code. Likely UI-only.** OPEN QUESTION. | unknown | smart-match buyer pull → `Buyer_Median` | Browser automation (Q6) — likely the only path |
 | **FEMA NFHL** | ❌ none | ✅ Free public ArcGIS REST: `https://hazards.fema.gov/gis/nfhl/rest/services/public/NFHL/MapServer` [3] | **$0** | point-in-polygon flood-zone query by lat/lng | n/a — free gov API |
 | **Crime grade** | ❌ none | Multiple vendors, no clear winner [4] | varies (CrimeoMeter, DoorProfit, CrimeGrade-via-Apify, NeighborhoodScout) | crime grade by lat/lng or ZIP | pick one in v2 |
 
 ### Flags
 
-1. **"Firecrawl" vs ScraperAPI naming drift.** The brief says "Firecrawl listing re-scrape" but the live code (`lib/photo-sources.ts`) uses **ScraperAPI** (`SCRAPER_API_KEY`), not Firecrawl. These are different vendors. Either the brief means "the existing scrape primitive" (= ScraperAPI) or there's an intent to migrate to Firecrawl. **Open question for operator.** v1 should reuse the proven ScraperAPI path unless operator wants the Firecrawl swap (separate decision).
+1. **Firecrawl: validated egress, unwired production status.** Firecrawl is NOT merely a loose name for ScraperAPI (this audit's v1 said so — incorrect, now corrected). It is a distinct vendor whose egress was validated end-to-end on 5/20 (checklist 22.1 DONE: HTTP 200, 26,836 chars markdown against 4838 Wisteria, content markers present, zero anti-bot) but which has **no production wiring** — no `lib/firecrawl.ts`, no route calls `api.firecrawl.dev`. It is intended to power the **unbuilt half of listing verification**: off-market body-text detection (checklist 1.4) + flip/distress keyword scoring (checklist 1.5) that was lost when Make Scenario B was retired. ScraperAPI (live) extracts Redfin photos for vision; Firecrawl (unwired) is the listing-content/markdown layer. Production wiring tracked as **INV-028**.
 
 2. **"Prostream" ≠ "PropStream."** Web search surfaces `prostream.app` ("Prostream API") — a **different company**, not PropStream the real-estate-data vendor. Do not wire against it. PropStream API access is via PropStream directly (877-204-9040 / support@propstream.com).
 
-3. **RentCast endpoint correction.** Brief lists `/v1/avm/rent` and `/v1/listings/sale`. Actual working endpoints are `/avm/rent/long-term` (rent) and `/avm/value` (value + embedded comps). There is no separate sale-comps endpoint — code comment documents that `/avm/sale-comparables` 404s and was removed for violating the Positive Confirmation Principle.
+3. **RentCast serves three confirmed endpoints** (corrected): `/avm/value` (value + embedded comps), `/avm/rent/long-term` (rent), and `/v1/listings/sale` (active-listing confirmation — live in `/api/verify-listing`). The brief's `/v1/listings/sale` reference was correct. What does NOT exist is `/avm/sale-comparables` (a comps endpoint that 404s; comps are embedded in `/avm/value`) — this audit's v1 conflated active-listing-lookup with comps.
 
 4. **RentCast burn-rate guard already exists** (`lib/maverick/rentcast-burn-rate.ts` + `RENTCAST_MONTHLY_CAP` env). v1 federation must respect it — see Q4.
 
@@ -103,8 +104,18 @@ New Airtable table `Property_Intel` on base `appp8inLAGTg4qpEZ`. Linked 1:1 to `
 | **Discrepancy surface (Q5)** | | |
 | `Discrepancy_Flags_JSON` | multilineText | array of `{type, severity, detail, detected_at}` |
 | `Discrepancy_Severity_Max` | singleSelect | `none` / `info` / `amber` / `red` — drives dashboard surface |
+| **RESERVED for INV-028 (created at v1 provisioning, populated when INV-028 ships)** | | |
+| `Listing_Flip_Score` | number(0) | 0-10, count of flip keywords matched per checklist 1.5 |
+| `Listing_Flip_Bucket` | singleSelect | `none` / `manual_review` / `reject` — 4+ → manual_review, 7+ → reject |
+| `Off_Market_Body_Text_Detected` | checkbox | true if Firecrawl body scan matched checklist 1.4 patterns |
+| `Restriction_Risk_Level` | singleSelect | `clear` / `caution` / `restricted` — from restriction-keyword scan |
+| `DOM_Discrepancy_Days` | number(0) | PropStream DOM minus Redfin DOM |
+| `Listing_Content_Source` | singleSelect | `firecrawl` / `manual_operator` — provenance |
+| `Listing_Content_FetchedAt` | dateTime | |
 
 **Provenance enum convention:** every `*_Source` field is a singleSelect with at minimum `<vendor>` + `manual_operator`. This mirrors INV-005's `Rehab_Source` pattern exactly, so the fabrication-prohibition holds: a field with no `*_Source` set is unhydrated, never guessed.
+
+**INV-028 reserved-field rationale:** the seven fields above are created (empty) at v1 Property_Intel provisioning so INV-028 (Firecrawl wiring) does not require a schema migration when it ships in v2. They stay null until INV-028 populates them. This is the same forward-reservation discipline that avoids the mid-flight Airtable migrations the project has been bitten by before.
 
 **Open question:** one wide `Property_Intel` table vs. fields-on-Listings_V1. Recommendation: **separate table** — keeps Listings_V1 from bloating ~30 more fields, and the 1:1 link is cheap. Operator/Maverick to confirm.
 
@@ -138,7 +149,7 @@ Assume 100-deal/month pipeline, ~30 active DD-phase records at any time, 1 initi
 
 | Vendor | Monthly volume | Plan needed | Est. monthly cost | Rate-limit risk |
 |---|---|---|---|---|
-| RentCast | ~900 value + ~900 rent = **~1,800 req/mo** (each endpoint = 1 req) | Pro ($199 = 2,000/mo) covers it; nightly refresh of all 30 could push over → overage or Enterprise | **$199/mo** + possible overage [1] | ⚠️ Nightly refresh × 2 endpoints × 30 records = 1,800/mo, near the 2,000 Pro cap. **`RENTCAST_MONTHLY_CAP` guard already exists** — v1 must wire federation through it. Consider refreshing only on material event, not blindly nightly. |
+| RentCast | ~900 value + ~900 rent + `/v1/listings/sale` active-listing refresh (verify-listing already consumes this on existing records — federation adds DD-phase pulls on top) = **~1,800–2,700+ req/mo** (each endpoint = 1 req) | Pro ($199 = 2,000/mo) is already tight at 2 endpoints; adding the third endpoint's federation volume **likely pushes over → overage or Enterprise** | **$199/mo** + near-certain overage [1] | 🔴 Three endpoints × 30 records nightly blows past the 2,000 Pro cap. **`RENTCAST_MONTHLY_CAP` guard already exists** — v1 MUST wire federation through it. Strong recommendation: refresh volatile data weekly (not nightly) + only on material event; `/v1/listings/sale` is already spent by verify-listing, so federation should READ the existing verify result rather than re-pull. |
 | PropStream | ~900/mo | business/API tier | **~$99–299/mo** (verify) [2] | unknown until credentialed |
 | ScraperAPI | ~900/mo | existing plan | already paid | existing throttle (`lib/quo-throttle` pattern exists for ref) |
 | InvestorBase | ~900/mo | unknown (browser-auto rate-limited by UI) | unknown | ⚠️ **HIGH** — browser automation against a UI caps far below 900/mo; may need per-deal-on-demand only, not nightly |
@@ -234,7 +245,7 @@ Need to pull from a vendor?
 
 2. **Sequencing tension: INV-023 depends on PropStream liens, but PropStream is v2.** If INV-023 implementation starts before PropStream is credentialed, its MORTGAGE PAYOFF VIABILITY check has no data source. **Options:** (a) pull PropStream forward into v1 (requires operator to provision `PROPSTREAM_API_KEY` + pay API tier now); (b) ship INV-023's check with a manual-entry fallback for `Payoff_Total` until PropStream lands (mirrors INV-005's manual rehab pattern). Recommend **(b)** for consistency with the manual-fallback discipline already established.
 
-3. **"Firecrawl" vs ScraperAPI** — reuse the proven ScraperAPI path, or migrate to Firecrawl? (Q1 flag #1.)
+3. **Firecrawl wiring** — RESOLVED: not a naming question. Firecrawl is validated-but-unwired; its production wiring (off-market body text + flip/distress keyword scoring per checklist 1.4-1.5) is filed as **INV-028** and scoped to v2. v1 reuses the live ScraperAPI photo path unchanged. (Q1 flag #1, corrected.)
 
 4. **PropStream pricing** — public Core is $99/mo but the internal note says ~$299/mo for the API-capable tier (5/19). Needs a direct vendor confirmation before Q4 cost is firm.
 
@@ -254,16 +265,35 @@ All federation pulls Type 1 autonomous. All discrepancies Type 2C. No "click to 
 
 ---
 
+## Authorization — 2026-05-25 (operator, relayed via Maverick)
+
+**Option B (phased) AUTHORIZED for implementation.** Dispositions on the open questions:
+
+- **OQ1 (InvestorBase):** Resolved **(b)** — `Buyer_Median` pulled on-demand per-deal (when a record enters Negotiating), NOT bulk nightly. Browser automation (Claude in Chrome) in v2.
+- **OQ2 (INV-023 ↔ PropStream sequencing):** Resolved **(b)** — INV-023 mortgage payoff check ships with a **manual `Payoff_Total` fallback** until PropStream is credentialed in v2 (Scenario 2 operator selection).
+- **OQ3 (Firecrawl):** Resolved — filed as **INV-028**; v1 reuses live ScraperAPI photo path; Firecrawl wiring is v2.
+- **OQ4 (PropStream pricing):** Open — verify directly with vendor before v2.
+- **OQ5 (crime vendor):** Deferred to v2.
+- **OQ6 (table shape):** Resolved — separate `Property_Intel` table.
+
+**v1 scope (authorized to build, pending Sprint-plan review):** RentCast (3 endpoints) + ScraperAPI (photos, live) + FEMA (free) + `Property_Intel` table (including the 7 INV-028 reserved fields) + α cron at 16:00 UTC + discrepancy surface.
+
+**v2 scope:** PropStream (when credentialed) + InvestorBase (browser-auto, on-demand per-deal) + crime grade + Firecrawl wiring (INV-028).
+
+**Two-phase discipline (mirrors INV-005):** this authorization does NOT green-light runtime code. Code surfaces a Sprint 1/2/3 implementation plan to Maverick first; only after Maverick review does any schema migration or runtime code land. This commit cycle is **documentation-only** (audit amendment + INV-028 placeholder + this authorization record).
+
+---
+
 ## Acceptance criteria status (audit phase)
 
 1. ✅ Q1–Q6 deliverables produced
-2. ⏸️ Maverick review pending
-3. ⏸️ Operator selects A / B / C
-4. ⏸️ Implementation (separate commit cycle — NOT this batch)
+2. ✅ Maverick/operator review → Option B authorized (above)
+3. ✅ Operator selected **B** (phased)
+4. ⏸️ Implementation — Sprint plan surfaced to Maverick next; runtime code is a separate commit cycle after plan approval
 
 ## Standing by
 
-Awaiting Maverick review of this audit + operator pick on **A** (full all-in) / **B** (phased, recommended) / **C** (operator-pays-vendor-fees), plus dispositions on open questions 1–6.
+Option B authorized. Next: Code surfaces the Sprint 1/2/3 implementation plan for Maverick review before any runtime code or schema mutation. No build in this commit cycle.
 
 ---
 
