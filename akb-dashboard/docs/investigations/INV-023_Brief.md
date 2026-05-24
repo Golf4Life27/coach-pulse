@@ -60,6 +60,23 @@ This brief replaces v1 which embedded "Posts to Action Queue: click here to auth
 - [ ] Buyer-pool size check (min N=5 active buyers in subject ZIP + footprint, ≥1 recent purchase)
 - [ ] Days-on-market + price-drop history + 12-month listing history
 
+### MORTGAGE PAYOFF VIABILITY (Type 1 autonomous — added 2026-05-25 per operator learning on 23 Fields Ave)
+- [ ] PropStream/public records pull surfaces recorded mortgage amount(s) on subject property
+- [ ] Mortgage type flagged: fixed-balance (purchase mortgage, refi) vs revolving (HELOC, credit line, business LOC). Revolving lines carry elevated risk because current balance ≠ recorded amount.
+- [ ] System computes: `payoff_headroom = Contract_Offer_Price − (Recorded_Mortgage_Amount + estimated_seller_closing_costs + listing_agent_commission_if_paid_from_seller_proceeds + buyer_agent_BSF_if_applicable)`
+- [ ] HEADROOM ≥ $5,000: GREEN. Deal math viable. Proceed.
+- [ ] HEADROOM $2,500–$5,000: AMBER. Surface as Type 1 informational note in deal-room: "Payoff math is tight; seller proceeds are thin. Recommended: confirm current mortgage balance with listing agent before EMD wire."
+- [ ] HEADROOM < $2,500 OR negative: RED. Surface as Type 2C card with full diagnosis: "Mortgage payoff math may not close. Recorded mortgage $X, contract price $Y, estimated closing costs $Z, projected seller net $W. Action required: verify current mortgage balance with listing agent; if balance has grown above recorded amount, deal may not close on current terms. Options: (a) request seller bring funds, (b) renegotiate contract price upward + reprice assignment to end buyer, (c) terminate during inspection."
+- [ ] If mortgage type = revolving line of credit (HELOC, business LOC, credit line revolving): elevate severity one tier. Recorded amount is the lower bound; current balance may be higher. Always trigger Type 2A draft: "Text/email to listing agent: 'Quick diligence question — can you confirm current mortgage balance from seller? Need to verify payoff math for closing.'"
+- [ ] If multiple liens present (2nd mortgage, judgment liens, mechanic's liens, tax liens): sum all into payoff_total before headroom calculation
+- [ ] Pre-EMD-wire gate: Operator's Type 2B EMD wire action requires this check to be GREEN, or operator must explicitly override with named justification recorded in deal Notes + Spine entry
+
+Genesis: 2026-05-25 — operator under contract on 23 Fields Ave (Memphis 38109) at $61,750. Buyer-side agent Almira at Grandin Taylor Properties surfaced mid-inspection: "There is an existing mortgage on this property. Are they aware that they have to payoff the mortgage on or before closing?" Operator pulled PropStream records and found: Terrance Williams acquired property 12/18/2025 for $15,000 cash; immediately recorded $55,000 revolving credit line with Genesis Prop Managers Corp 01/06/2026. Payoff headroom against $61,750 contract = ~$5,000-6,000 after estimated closing costs + Candice Hardaway BSF. AMBER per this new check. Critically, revolving line type means current balance may exceed recorded $55K — operator now texting Candice for current Genesis payoff figure to confirm headroom is real. Operator's listing-agent thread (Candice Hardaway, KW) had referenced "math fit cleanly" on 23 Fields vs. Steele (where owner owed ~$115K and couldn't close), but specific 23 Fields mortgage figure was never explicitly disclosed — only implied by which deals Candice chose to send vs. hold.
+
+Same regression class as INV-008 (parse comms for structured signal) + the existing contract-clause auto-extraction subsection — the data was in PropStream's public records, the system just didn't compute against contract price proactively. Underwriter Agent should make this check a hard precondition before any new deal advances to Outreach_Status = Offer Accepted.
+
+Out-of-scope for v1: predicting credit-line draw behavior. System cannot know if Terrance has drawn additional funds since 01/06/2026 recording — that requires either listing agent communication or title company payoff letter. The check should flag the risk, not estimate the unknown.
+
 ### STRUCTURAL MATH (powered by Decision Preconditions Rule 1 — Type 1 autonomous)
 - [ ] `Investor_MAO = Buyer_Median − Est_Rehab`
 - [ ] `Your_MAO = Investor_MAO − Wholesale_Fee`
