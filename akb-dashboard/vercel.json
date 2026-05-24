@@ -31,6 +31,10 @@
     {
       "path": "/api/cron/rehab-vision-retry",
       "schedule": "0 15 * * *"
+    },
+    {
+      "path": "/api/cron/data-federation-pull",
+      "schedule": "0 16 * * *"
     }
   ]
 }

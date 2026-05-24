@@ -304,13 +304,17 @@ All federation pulls Type 1 autonomous. All discrepancies Type 2C. No "click to 
 
 **Framing correction (per operator 2026-05-25):** earlier audit text said "read the existing `/v1/listings/sale` result instead of re-pulling." That was wrong — corrected to: **federation pulls `/avm/value` + `/avm/rent/long-term` independently from verify-listing's `/v1/listings/sale` (different endpoints, no shared cadence).** No `/api/verify-listing` modification was made or required; clean separation of concerns preserved.
 
-**Sprint 3 — PENDING** (next cycle, after Maverick review): `/api/cron/data-federation-pull` at 16:00 UTC composing the hydrators + discrepancy surface + idempotency via `Hydration_Status`/`Last_Hydrated_At`.
+**Sprint 3 — SHIPPED** (this commit). `/api/cron/data-federation-pull` at 16:00 UTC.
+- `lib/federation/federation-orchestration.ts` — `hydrateRecord` (dependency-injected per-record orchestration with partial-failure isolation: each vendor in its own try/catch), `summarizeHydrationStatus` (complete/partial/failed), `memphisAssignmentApplies`.
+- Cron route: auth waterfall (mirrors rehab-vision-retry), budget gate at top (`RENTCAST_FEDERATION_PER_RUN_CREDITS` default 40 — abort cleanly if can't afford one hydration), eligibility scan (`Negotiating`/`Offer Accepted`/`Contract Signed` + `shouldHydrate` freshness), per-record budget decrement (RentCast → `skipped_budget` once exhausted while free FEMA/photos continue), discrepancy surface, `upsertPropertyIntel`.
+- `vercel.json` 16:00 UTC daily slot (Hobby cap respected).
+- 25 new tests incl. the required end-to-end partial-failure verification (RentCast throws → status `partial`, photos + flood still persist).
 
 ---
 
 ## Standing by
 
-Sprint 2 shipped (vendor hydrators + Property_Intel persistence, all pure logic tested, no cron yet). Awaiting Maverick review before Sprint 3 (the federation cron) lands.
+INV-022 v1 complete (Sprints 1–3 shipped). All federation pulls Type 1 autonomous; discrepancies Type 2C; per-field provenance throughout. v2 (PropStream liens/owner, InvestorBase Buyer_Median, crime, Firecrawl/INV-028) is separate. Awaiting Maverick review + merge-candidacy decision.
 
 ---
 

@@ -287,9 +287,13 @@ describe("normalizeName", () => {
 });
 
 describe("constants", () => {
-  it("eligible states are the two DD-phase statuses", () => {
+  it("eligible states are the DD-stage-and-later statuses", () => {
     expect(HYDRATION_ELIGIBLE_STATES.has("Negotiating")).toBe(true);
     expect(HYDRATION_ELIGIBLE_STATES.has("Offer Accepted")).toBe(true);
+    expect(HYDRATION_ELIGIBLE_STATES.has("Contract Signed")).toBe(true);
+    // Pre-DD stages excluded — too noisy, burns budget.
     expect(HYDRATION_ELIGIBLE_STATES.has("Texted")).toBe(false);
+    expect(HYDRATION_ELIGIBLE_STATES.has("Response Received")).toBe(false);
+    expect(HYDRATION_ELIGIBLE_STATES.has("Inbound Lead")).toBe(false);
   });
 });

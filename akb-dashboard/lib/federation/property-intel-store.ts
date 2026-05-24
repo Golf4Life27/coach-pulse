@@ -141,10 +141,11 @@ interface AirtableRecord {
 
 /** Find the Property_Intel row linked to a given Listings_V1 record id.
  *  Matches the Subject_Listing_Id link array in-code (v1 scale). Returns
- *  the Property_Intel record id, or null if none exists yet. */
-export async function findPropertyIntelByListing(
+ *  the full record ({recordId, fields}) so callers can read freshness +
+ *  cached static data (Last_Hydrated_At, FEMA_Flood_Zone). Null if none. */
+export async function findPropertyIntelRecordByListing(
   listingId: string,
-): Promise<string | null> {
+): Promise<{ recordId: string; fields: Record<string, unknown> } | null> {
   const pat = requirePat();
   let offset: string | undefined;
   do {
@@ -164,7 +165,7 @@ export async function findPropertyIntelByListing(
     for (const rec of body.records ?? []) {
       const link = rec.fields["Subject_Listing_Id"];
       if (Array.isArray(link) && link.includes(listingId)) {
-        return rec.id;
+        return { recordId: rec.id, fields: rec.fields };
       }
     }
     offset = body.offset;
@@ -235,10 +236,10 @@ export async function upsertPropertyIntel(
   subjectAddress: string,
   fields: Record<string, unknown>,
 ): Promise<{ recordId: string; created: boolean }> {
-  const existing = await findPropertyIntelByListing(listingId);
+  const existing = await findPropertyIntelRecordByListing(listingId);
   if (existing) {
-    await updatePropertyIntelRecord(existing, fields);
-    return { recordId: existing, created: false };
+    await updatePropertyIntelRecord(existing.recordId, fields);
+    return { recordId: existing.recordId, created: false };
   }
   const recordId = await createPropertyIntel(listingId, subjectAddress, fields);
   return { recordId, created: true };

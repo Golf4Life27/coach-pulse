@@ -15,10 +15,13 @@ import type {
 } from "@/lib/property-intel";
 
 /** Outreach_Status values that make a record eligible for DD-phase
- *  hydration. Mirrors INV-006's ELIGIBLE_SOURCE_STATES discipline. */
+ *  hydration. Mirrors INV-006's ELIGIBLE_SOURCE_STATES discipline.
+ *  Federation is DD-stage-and-later — Response Received / Inbound Lead are
+ *  deliberately excluded (too noisy, burns budget pre-DD). */
 export const HYDRATION_ELIGIBLE_STATES: ReadonlySet<string> = new Set([
   "Negotiating",
   "Offer Accepted",
+  "Contract Signed",
 ]);
 
 /** Default freshness window (hours). A record hydrated more recently than
