@@ -291,9 +291,26 @@ All federation pulls Type 1 autonomous. All discrepancies Type 2C. No "click to 
 3. ✅ Operator selected **B** (phased)
 4. ⏸️ Implementation — Sprint plan surfaced to Maverick next; runtime code is a separate commit cycle after plan approval
 
+## Implementation progress
+
+**Sprint 1 — SHIPPED** (`ee0791a`). Property_Intel table provisioned (`tbllf0GNjYepvnUuv`, 38 v1 + 7 reserved INV-028 fields). `lib/property-intel.ts` (field-ID map + provenance types) + `lib/maverick/property-intel-hydrate.ts` (pure helpers: eligibility, freshness window, payoff total, SFHA flood classification, price-drift, Q5 discrepancy taxonomy with revolving-mortgage RED elevation). 43 tests.
+
+**Sprint 2 — SHIPPED** (this commit). Vendor hydration + persistence:
+- `lib/federation/property-intel-store.ts` — Airtable upsert (find-by-listing-link / create / patch) + pure `buildHydrationFields` assembler (only-present fields, JSON cap, provenance).
+- `lib/federation/rentcast-hydrate.ts` — `hydrateValuation` (AS-IS value + rent + comps, partial-failure isolated) + pure `rentcastBudgetAllows` guard wired to `RENTCAST_MONTHLY_CAP` (default 1000; 2 credits/hydration).
+- `lib/federation/scraperapi-hydrate.ts` — reuses `collectPhotos` as-is, shapes photo set → 4 new Property_Intel photo fields.
+- `lib/fema-flood.ts` — NFHL public REST (no key) + Google geocode bridge; `shouldPullFlood` caches static-per-parcel zones permanently.
+- Photo fields added to schema (`Photo_Urls_JSON`/`Photo_Count`/`Photos_Source`/`Photos_FetchedAt`).
+
+**Framing correction (per operator 2026-05-25):** earlier audit text said "read the existing `/v1/listings/sale` result instead of re-pulling." That was wrong — corrected to: **federation pulls `/avm/value` + `/avm/rent/long-term` independently from verify-listing's `/v1/listings/sale` (different endpoints, no shared cadence).** No `/api/verify-listing` modification was made or required; clean separation of concerns preserved.
+
+**Sprint 3 — PENDING** (next cycle, after Maverick review): `/api/cron/data-federation-pull` at 16:00 UTC composing the hydrators + discrepancy surface + idempotency via `Hydration_Status`/`Last_Hydrated_At`.
+
+---
+
 ## Standing by
 
-Option B authorized. Next: Code surfaces the Sprint 1/2/3 implementation plan for Maverick review before any runtime code or schema mutation. No build in this commit cycle.
+Sprint 2 shipped (vendor hydrators + Property_Intel persistence, all pure logic tested, no cron yet). Awaiting Maverick review before Sprint 3 (the federation cron) lands.
 
 ---
 

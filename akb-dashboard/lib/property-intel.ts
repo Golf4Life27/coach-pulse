@@ -35,6 +35,11 @@ export const PROPERTY_INTEL_FIELD_IDS = {
   // Comps (embedded in /avm/value)
   soldCompsJson: "fld9hXnoPbws2AO6n",
   soldCompsCount: "fldJWKSbhSJ6i5Kmw",
+  // Photos (ScraperAPI listing + Street View, via collectPhotos) — Sprint 2
+  photoUrlsJson: "fldgFwAinHgzVa6Op",
+  photoCount: "fldfxDOcY9z2gKCK5",
+  photosSource: "fld1lQrNX3TGWqy0P",
+  photosFetchedAt: "fldYxO1ZulSMVtnIn",
   // Buyer demand (InvestorBase — v2)
   buyerMedianValue: "fldCltGNla5PU6uwa",
   buyerMedianSource: "fldJFeiWWnrndbF9e",
@@ -87,6 +92,9 @@ export type VendorSource =
   | "crimegrade"
   | "neighborhoodscout"
   | "firecrawl"
+  | "scraperapi"
+  | "streetview"
+  | "mixed"
   | "manual_operator";
 
 export type HydrationStatus = "pending" | "partial" | "complete" | "failed";
