@@ -7,6 +7,12 @@ import { Listing } from "@/lib/types";
 import { formatCurrency } from "@/lib/utils";
 import { ALL_DD_ITEMS } from "@/lib/actionQueue";
 import { showToast } from "@/components/Toast";
+import MaverickDealCommentary from "@/components/MaverickDealCommentary";
+import AppraiserArvPanel from "@/components/AppraiserArvPanel";
+import AppraiserRehabPanel from "@/components/AppraiserRehabPanel";
+import AppraiserBuyerIntelligencePanel from "@/components/AppraiserBuyerIntelligencePanel";
+import RelatedDealsRecall from "@/components/RelatedDealsRecall";
+import ScribeDealCommentary from "@/components/ScribeDealCommentary";
 import type { DealContext } from "@/types/jarvis";
 
 function cleanPhone(phone: string): string {
@@ -203,6 +209,77 @@ export default function DealWorkspace() {
         </span>
       </div>
 
+      {/* Phase 9.8 — Maverick deal commentary */}
+      <MaverickDealCommentary
+        recordId={listing.id}
+        listing={{
+          outreachStatus: listing.outreachStatus,
+          lastOutreachDate: listing.lastOutreachDate ?? null,
+          lastInboundAt: listing.lastInboundAt ?? null,
+          lastOutboundAt: listing.lastOutboundAt ?? null,
+          // Phase 11.2 — email-attributable contact timestamp.
+          lastEmailOutreachDate: listing.lastEmailOutreachDate ?? null,
+          // Phase 11.4 (INV-004) — drives isUnderContract() guard on
+          // Crier silence. Populated by "Track in Scribe" affordance.
+          envelopeId: listing.envelopeId ?? null,
+        }}
+      />
+
+      {/* Phase 5.3 — Scribe envelope panel */}
+      <ScribeDealCommentary
+        recordId={listing.id}
+        envelopeId={listing.envelopeId ?? null}
+      />
+
+      {/* Phase 4A.1 — Appraiser ARV panel */}
+      <AppraiserArvPanel
+        recordId={listing.id}
+        listing={{
+          realArvMedian: listing.realArvMedian ?? null,
+          realArvLow: listing.realArvLow ?? null,
+          realArvHigh: listing.realArvHigh ?? null,
+          arvConfidence: listing.arvConfidence ?? null,
+          arvCompCount: listing.arvCompCount ?? null,
+          arvCompAvgPrSqFt: listing.arvCompAvgPrSqFt ?? null,
+          arvCompDetailsJson: listing.arvCompDetailsJson ?? null,
+          arvValidatedAt: listing.arvValidatedAt ?? null,
+          estRehab: listing.estRehab ?? null,
+          wholesaleFeeTarget: listing.wholesaleFeeTarget ?? null,
+          listPrice: listing.listPrice,
+        }}
+      />
+
+      {/* Phase 4B.1 — Appraiser rehab panel */}
+      <AppraiserRehabPanel
+        recordId={listing.id}
+        listing={{
+          estRehab: listing.estRehab ?? null,
+          estRehabLow: listing.estRehabLow ?? null,
+          estRehabMid: listing.estRehabMid ?? null,
+          estRehabHigh: listing.estRehabHigh ?? null,
+          rehabConfidenceScore: listing.rehabConfidenceScore ?? null,
+          rehabEstimatedAt: listing.rehabEstimatedAt ?? null,
+          rehabLineItemsJson: listing.rehabLineItemsJson ?? null,
+          rehabRedFlags: listing.rehabRedFlags ?? null,
+          rehabSource: listing.rehabSource ?? null,
+          buildingSqFt: listing.buildingSqFt ?? null,
+          notes: listing.notes ?? null,
+        }}
+      />
+
+      {/* Phase 4C.1 — Appraiser buyer intelligence (dual-track) panel */}
+      <AppraiserBuyerIntelligencePanel
+        recordId={listing.id}
+        listing={{
+          realArvMedian: listing.realArvMedian ?? null,
+          estRehab: listing.estRehab ?? null,
+          estRehabMid: listing.estRehabMid ?? null,
+          wholesaleFeeTarget: listing.wholesaleFeeTarget ?? null,
+          estimatedMonthlyRent: listing.estimatedMonthlyRent ?? null,
+          state: listing.state,
+        }}
+      />
+
       {/* Jarvis context strip — keystone deal-context surface */}
       {dealContext && (
         <div className="space-y-2">
@@ -324,6 +401,13 @@ export default function DealWorkspace() {
               <button type="button" onClick={handleSaveNote} disabled={savingNote || !newNote.trim()} className="bg-emerald-700 hover:bg-emerald-600 text-white text-xs px-3 py-1.5 rounded disabled:opacity-50">Save</button>
             </div>
           </div>
+
+          {/* Phase 9.8 — Related-deal recall (user-triggered) */}
+          <RelatedDealsRecall
+            agentName={listing.agentName ?? null}
+            address={listing.address}
+            excludeRecordId={listing.id}
+          />
         </div>
 
         {/* RIGHT */}

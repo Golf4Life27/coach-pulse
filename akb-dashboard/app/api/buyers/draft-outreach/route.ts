@@ -2,12 +2,15 @@ import { NextResponse } from "next/server";
 import { getListing } from "@/lib/airtable";
 import { getBuyerV2 } from "@/lib/buyers-v2";
 import { buildJarvisSystemPrompt } from "@/lib/jarvis-system-prompt";
+import { synthesize } from "@/lib/maverick/synthesizer";
+import { VOICE_REGISTRY } from "@/lib/maverick/voice-registry";
 import type { BuyerDraft } from "@/types/jarvis";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
-const ANTHROPIC_MODEL = "claude-sonnet-4-5-20250929";
+/** @deprecated Phase 10 / P.2 — model resolved via voice-registry.scout. */
+const ANTHROPIC_MODEL = VOICE_REGISTRY.scout.model;
 
 interface RequestBody {
   recordId: string;
@@ -107,30 +110,21 @@ Output ONLY a JSON object, no prose:
 
     let draft: DraftOutput | null = null;
     try {
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model: ANTHROPIC_MODEL,
-          max_tokens: 600,
-          system,
-          messages: [{ role: "user", content: userPrompt }],
-        }),
+      // Phase 10 / P.2 migration — routed through unified synthesizer.
+      const result = await synthesize({
+        agent: "scout",
+        system,
+        user: userPrompt,
+        max_tokens: 600,
+        apiKey,
+        event_label: "scout_outreach_drafted",
       });
-      if (res.ok) {
-        const data = (await res.json()) as { content?: Array<{ type: string; text?: string }> };
-        const text = data.content?.find((b) => b.type === "text")?.text ?? "";
-        try {
-          const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
-          const parsed = JSON.parse(cleaned) as DraftOutput;
-          if (typeof parsed.body === "string") draft = parsed;
-        } catch {
-          /* fall through to fallback */
-        }
+      try {
+        const cleaned = result.text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
+        const parsed = JSON.parse(cleaned) as DraftOutput;
+        if (typeof parsed.body === "string") draft = parsed;
+      } catch {
+        /* fall through to fallback */
       }
     } catch (err) {
       console.error(`[buyers/draft-outreach] LLM call failed for ${buyer.id}:`, err);

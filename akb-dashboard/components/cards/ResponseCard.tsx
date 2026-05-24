@@ -13,6 +13,21 @@ interface Props {
   onActionComplete: () => void;
 }
 
+// Send state machine per Positive Confirmation Principle §UI Pattern.
+// idle → sending → confirming → confirmed | failed | uncertain
+// confirmed auto-clears after 2s; failed/uncertain persist until dismiss.
+type SendState =
+  | { kind: "idle" }
+  | { kind: "sending" }
+  | { kind: "confirming"; quoMessageId: string; attempts: number }
+  | { kind: "confirmed"; quoMessageId: string }
+  | { kind: "failed"; message: string; quoMessageId?: string }
+  | { kind: "uncertain"; quoMessageId: string };
+
+const POLL_INTERVAL_MS = 2000;
+const POLL_MAX_ATTEMPTS = 10; // 20s total → falls to "uncertain"
+const CONFIRMED_AUTO_CLEAR_MS = 2000;
+
 async function postAction(type: string, body: Record<string, unknown>) {
   const res = await fetch(`/api/actions/${type}`, {
     method: "POST",
@@ -35,12 +50,22 @@ function cleanPhone(phone: string): string {
 export default function ResponseCard({ card, onActionComplete }: Props) {
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyText, setReplyText] = useState("");
-  const [sending, setSending] = useState(false);
+  const [sendState, setSendState] = useState<SendState>({ kind: "idle" });
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (replyOpen && inputRef.current) inputRef.current.focus();
   }, [replyOpen]);
+
+  // Cleanup any pending timers on unmount.
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+      if (clearTimerRef.current) clearTimeout(clearTimerRef.current);
+    };
+  }, []);
 
   const handle = async (type: string, extra: Record<string, unknown> = {}) => {
     try {
@@ -51,9 +76,63 @@ export default function ResponseCard({ card, onActionComplete }: Props) {
     }
   };
 
+  // Poll Quo status until terminal or attempts exhausted. Each tick
+  // schedules the next via setTimeout (avoids overlapping requests).
+  const pollStatus = (quoMessageId: string, attempt: number) => {
+    pollTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/quo-message-status/${quoMessageId}`);
+        if (!res.ok) {
+          // Network/auth failure during polling — keep card visible,
+          // surface as uncertain so Alex can verify in Quo.
+          setSendState({ kind: "uncertain", quoMessageId });
+          return;
+        }
+        const data: {
+          status: string;
+          isTerminal: boolean;
+          isSuccess: boolean;
+        } = await res.json();
+
+        if (data.isTerminal && data.isSuccess) {
+          setSendState({ kind: "confirmed", quoMessageId });
+          clearTimerRef.current = setTimeout(() => {
+            setReplyOpen(false);
+            setReplyText("");
+            handle("clear");
+          }, CONFIRMED_AUTO_CLEAR_MS);
+          return;
+        }
+        if (data.isTerminal && !data.isSuccess) {
+          setSendState({
+            kind: "failed",
+            message: `Quo reports status: ${data.status}. Message did not deliver.`,
+            quoMessageId,
+          });
+          return;
+        }
+        // Still queued/sending — keep polling unless exhausted.
+        if (attempt + 1 >= POLL_MAX_ATTEMPTS) {
+          setSendState({ kind: "uncertain", quoMessageId });
+          return;
+        }
+        setSendState({
+          kind: "confirming",
+          quoMessageId,
+          attempts: attempt + 1,
+        });
+        pollStatus(quoMessageId, attempt + 1);
+      } catch {
+        setSendState({ kind: "uncertain", quoMessageId });
+      }
+    }, POLL_INTERVAL_MS);
+  };
+
   const handleSend = async () => {
-    if (!replyText.trim() || !card.agentPhone || sending) return;
-    setSending(true);
+    if (!replyText.trim() || !card.agentPhone || sendState.kind === "sending") {
+      return;
+    }
+    setSendState({ kind: "sending" });
     try {
       const res = await fetch("/api/jarvis-send", {
         method: "POST",
@@ -67,21 +146,63 @@ export default function ResponseCard({ card, onActionComplete }: Props) {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        showToast(data.error || "Send failed");
+        setSendState({
+          kind: "failed",
+          message: data.error || data.detail || `Send failed (HTTP ${res.status})`,
+        });
         return;
       }
-      showToast("Sent via Quo", "success");
-      setReplyOpen(false);
-      setReplyText("");
-      handle("clear");
-    } catch {
-      showToast("Send failed");
-    } finally {
-      setSending(false);
+      const data: {
+        quoMessageId: string | null;
+        quoStatus: string;
+        accepted: boolean;
+        isTerminal: boolean;
+        isSuccess: boolean;
+      } = await res.json();
+
+      if (data.isTerminal && data.isSuccess && data.quoMessageId) {
+        setSendState({ kind: "confirmed", quoMessageId: data.quoMessageId });
+        clearTimerRef.current = setTimeout(() => {
+          setReplyOpen(false);
+          setReplyText("");
+          handle("clear");
+        }, CONFIRMED_AUTO_CLEAR_MS);
+        return;
+      }
+      if (!data.quoMessageId) {
+        // 2xx but no message id — Quo accepted nothing identifiable. Treat
+        // as uncertain. Card persists; Alex must verify in Quo.
+        setSendState({ kind: "uncertain", quoMessageId: "(no id returned)" });
+        return;
+      }
+      setSendState({
+        kind: "confirming",
+        quoMessageId: data.quoMessageId,
+        attempts: 0,
+      });
+      pollStatus(data.quoMessageId, 0);
+    } catch (err) {
+      setSendState({
+        kind: "failed",
+        message: `Network error: ${String(err)}`,
+      });
     }
   };
 
+  const handleDismissSendState = () => {
+    if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    setSendState({ kind: "idle" });
+    setReplyText("");
+    setReplyOpen(false);
+  };
+
   const isHeld = card.cardState === "Held";
+  const isSending = sendState.kind === "sending";
+  const isConfirming = sendState.kind === "confirming";
+  const showBanner =
+    sendState.kind === "confirmed" ||
+    sendState.kind === "failed" ||
+    sendState.kind === "uncertain";
 
   return (
     <div
@@ -140,8 +261,58 @@ export default function ResponseCard({ card, onActionComplete }: Props) {
         </div>
       )}
 
+      {/* Send-state banner — persistent for failed/uncertain, brief for confirmed */}
+      {showBanner && (
+        <div
+          className={`mb-3 rounded p-2.5 border text-xs flex items-start gap-2 ${
+            sendState.kind === "confirmed"
+              ? "bg-emerald-900/30 border-emerald-500/40 text-emerald-200"
+              : sendState.kind === "failed"
+                ? "bg-red-900/30 border-red-500/50 text-red-200"
+                : "bg-amber-900/30 border-amber-500/50 text-amber-200"
+          }`}
+        >
+          <div className="flex-1">
+            {sendState.kind === "confirmed" && (
+              <>
+                <p className="font-semibold">Delivered via Quo</p>
+                <p className="opacity-70 mt-0.5 break-all">id: {sendState.quoMessageId}</p>
+              </>
+            )}
+            {sendState.kind === "failed" && (
+              <>
+                <p className="font-semibold">Send failed — not delivered</p>
+                <p className="opacity-90 mt-0.5">{sendState.message}</p>
+                {sendState.quoMessageId && (
+                  <p className="opacity-70 mt-0.5 break-all">id: {sendState.quoMessageId}</p>
+                )}
+                <p className="opacity-70 mt-1">Listing state unchanged. Try again or send from Quo directly.</p>
+              </>
+            )}
+            {sendState.kind === "uncertain" && (
+              <>
+                <p className="font-semibold">Delivery uncertain</p>
+                <p className="opacity-90 mt-0.5">
+                  Quo accepted the message but hasn&apos;t confirmed delivery. <strong>Verify in Quo before assuming sent.</strong>
+                </p>
+                <p className="opacity-70 mt-0.5 break-all">id: {sendState.quoMessageId}</p>
+              </>
+            )}
+          </div>
+          {sendState.kind !== "confirmed" && (
+            <button
+              type="button"
+              onClick={handleDismissSendState}
+              className="text-xs underline opacity-80 hover:opacity-100 shrink-0"
+            >
+              Dismiss
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Inline reply input */}
-      {replyOpen && (
+      {replyOpen && sendState.kind !== "confirmed" && (
         <div className="mb-3 space-y-2">
           <textarea
             ref={inputRef}
@@ -150,7 +321,7 @@ export default function ResponseCard({ card, onActionComplete }: Props) {
             placeholder={`Reply to ${card.agentName?.split(" ")[0] ?? "agent"}...`}
             rows={3}
             className="w-full bg-[#0d1117] border border-emerald-500/50 rounded p-2.5 text-sm text-white focus:outline-none focus:border-emerald-400 resize-y placeholder-gray-600"
-            disabled={sending}
+            disabled={isSending || isConfirming}
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSend();
               if (e.key === "Escape") { setReplyOpen(false); setReplyText(""); }
@@ -160,15 +331,20 @@ export default function ResponseCard({ card, onActionComplete }: Props) {
             <button
               type="button"
               onClick={handleSend}
-              disabled={sending || !replyText.trim()}
+              disabled={isSending || isConfirming || !replyText.trim()}
               className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold py-2 rounded min-h-[44px] disabled:opacity-50"
             >
-              {sending ? "Sending..." : "Send via Quo"}
+              {isSending
+                ? "Sending..."
+                : isConfirming
+                  ? `Confirming delivery... (${sendState.attempts + 1}/${POLL_MAX_ATTEMPTS})`
+                  : "Send via Quo"}
             </button>
             <button
               type="button"
               onClick={() => { setReplyOpen(false); setReplyText(""); }}
-              className="bg-[#30363d] hover:bg-[#3d444d] text-gray-300 text-xs font-semibold px-4 py-2 rounded min-h-[44px]"
+              disabled={isSending || isConfirming}
+              className="bg-[#30363d] hover:bg-[#3d444d] text-gray-300 text-xs font-semibold px-4 py-2 rounded min-h-[44px] disabled:opacity-50"
             >
               Cancel
             </button>
@@ -178,7 +354,7 @@ export default function ResponseCard({ card, onActionComplete }: Props) {
       )}
 
       <div className="flex gap-2 flex-wrap">
-        {card.agentPhone && !replyOpen && (
+        {card.agentPhone && !replyOpen && sendState.kind === "idle" && (
           <button
             type="button"
             onClick={() => setReplyOpen(true)}

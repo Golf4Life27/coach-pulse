@@ -1,5 +1,13 @@
 "use client";
 
+/**
+ * @deprecated Legacy chat surface. Superseded by the Maverick
+ * Shepherd panel chat surface (Phase 9.1). Component file retains
+ * the `Jarvis` name for backwards compatibility with existing
+ * imports until 9.1 lands and Shepherd panel replaces this. Visible
+ * identity strings updated to "Maverick" per Phase 9.11.
+ */
+
 import { useState, useCallback, useRef, useEffect } from "react";
 import { showToast } from "@/components/Toast";
 
@@ -50,7 +58,7 @@ export default function JarvisChat() {
         const data = await res.json();
 
         if (!res.ok) {
-          showToast(data.error || "Jarvis failed");
+          showToast(data.error || "Maverick failed");
           return;
         }
 
@@ -59,7 +67,7 @@ export default function JarvisChat() {
           { role: "assistant", content: data.answer },
         ]);
       } catch {
-        showToast("Jarvis failed");
+        showToast("Maverick failed");
       } finally {
         setLoading(false);
       }
@@ -95,7 +103,7 @@ export default function JarvisChat() {
             <div className="flex justify-between items-center px-4 py-3 border-b border-[#30363d]">
               <div className="flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-purple-500 animate-pulse" />
-                <h2 className="text-white font-bold text-sm">Jarvis</h2>
+                <h2 className="text-white font-bold text-sm">Maverick</h2>
               </div>
               <button
                 onClick={() => setOpen(false)}
@@ -122,14 +130,14 @@ export default function JarvisChat() {
                   {m.role === "user" ? (
                     <span className="text-purple-400">You:</span>
                   ) : (
-                    <span className="text-purple-400">Jarvis:</span>
+                    <span className="text-purple-400">Maverick:</span>
                   )}{" "}
                   {m.content}
                 </div>
               ))}
               {loading && (
                 <div className="text-sm text-gray-500 animate-pulse">
-                  Jarvis is thinking...
+                  Maverick is thinking...
                 </div>
               )}
             </div>
@@ -145,7 +153,7 @@ export default function JarvisChat() {
                   type="text"
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
-                  placeholder="Ask Jarvis..."
+                  placeholder="Ask Maverick..."
                   className="flex-1 bg-[#0d1117] border border-[#30363d] rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500 placeholder-gray-600"
                   disabled={loading}
                 />

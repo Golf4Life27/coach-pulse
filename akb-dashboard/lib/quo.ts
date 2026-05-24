@@ -90,6 +90,39 @@ export async function sendMessage(
   to: string,
   content: string
 ): Promise<void> {
+  // Back-compat shim — discards the queued id. New call sites should use
+  // sendMessageWithId() and poll getMessageStatus() per Positive
+  // Confirmation Principle.
+  await sendMessageWithId(to, content);
+}
+
+// OpenPhone POST /v1/messages response.
+// 202 Accepted with { data: { id, status, ... } } on success.
+// status starts as "queued"; transitions to sent/delivered/failed/undelivered
+// asynchronously. A 2xx here is NOT proof of delivery (Principle §Rule 1).
+export type QuoSendStatus =
+  | "queued"
+  | "sending"
+  | "sent"
+  | "delivered"
+  | "undelivered"
+  | "failed"
+  | "unknown";
+
+export interface QuoSendResult {
+  id: string | null;
+  status: QuoSendStatus;
+  httpStatus: number;
+  raw: unknown;
+}
+
+export async function sendMessageWithId(
+  to: string,
+  content: string,
+): Promise<QuoSendResult> {
+  if (!QUO_API_KEY) {
+    throw new Error("QUO_API_KEY not set");
+  }
   const res = await fetch("https://api.openphone.com/v1/messages", {
     method: "POST",
     headers: {
@@ -103,8 +136,92 @@ export async function sendMessage(
     }),
   });
 
+  const raw = await res.json().catch(() => null);
+
   if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Quo send error ${res.status}: ${errText}`);
+    throw new Error(
+      `Quo send error ${res.status}: ${JSON.stringify(raw) || "(no body)"}`,
+    );
   }
+
+  const data = (raw as { data?: Record<string, unknown> } | null)?.data ?? null;
+  const id = typeof data?.id === "string" ? data.id : null;
+  const statusRaw = typeof data?.status === "string" ? data.status : "unknown";
+
+  return {
+    id,
+    status: normalizeStatus(statusRaw),
+    httpStatus: res.status,
+    raw,
+  };
+}
+
+function normalizeStatus(s: string): QuoSendStatus {
+  const v = s.toLowerCase();
+  if (
+    v === "queued" ||
+    v === "sending" ||
+    v === "sent" ||
+    v === "delivered" ||
+    v === "undelivered" ||
+    v === "failed"
+  ) {
+    return v;
+  }
+  return "unknown";
+}
+
+// Poll once for the current OpenPhone message status. Caller is
+// responsible for retry cadence; this function does ONE fetch.
+// Confirmed terminal states: delivered (success), undelivered + failed
+// (failure). Anything else is still uncertain.
+export interface QuoStatusResult {
+  id: string;
+  status: QuoSendStatus;
+  isTerminal: boolean;
+  isSuccess: boolean;
+  httpStatus: number;
+  raw: unknown;
+}
+
+export async function getMessageStatus(messageId: string): Promise<QuoStatusResult> {
+  if (!QUO_API_KEY) {
+    throw new Error("QUO_API_KEY not set");
+  }
+  if (!messageId) {
+    throw new Error("messageId required");
+  }
+  const res = await fetch(
+    `https://api.openphone.com/v1/messages/${encodeURIComponent(messageId)}`,
+    {
+      headers: {
+        Authorization: QUO_API_KEY,
+        "Content-Type": "application/json",
+      },
+      cache: "no-store",
+    },
+  );
+
+  const raw = await res.json().catch(() => null);
+
+  if (!res.ok) {
+    throw new Error(
+      `Quo status error ${res.status}: ${JSON.stringify(raw) || "(no body)"}`,
+    );
+  }
+
+  const data = (raw as { data?: Record<string, unknown> } | null)?.data ?? null;
+  const statusRaw = typeof data?.status === "string" ? data.status : "unknown";
+  const status = normalizeStatus(statusRaw);
+  const isSuccess = status === "delivered" || status === "sent";
+  const isFailure = status === "failed" || status === "undelivered";
+
+  return {
+    id: messageId,
+    status,
+    isTerminal: isSuccess || isFailure,
+    isSuccess,
+    httpStatus: res.status,
+    raw,
+  };
 }

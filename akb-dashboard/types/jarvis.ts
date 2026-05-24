@@ -77,8 +77,109 @@ export interface BroCard {
   recommendation_index: number;
   agentContext?: AgentContext;
   dealStage?: DealStage;
+  // Phase 4D / L.1 — v1.3 range envelope + mode discriminator. Attached
+  // post-LLM by the brief route from the underlying Listing's pricing
+  // fields. Null when the brief route couldn't reach pricing inputs at
+  // all (e.g., listing fetch failed); otherwise always present with a
+  // mode marker so the BroCard surface always renders a definitive
+  // state instead of silently hiding pricing.
+  pricing?: BroCardPricing | null;
   metadata: Record<string, unknown>;
 }
+
+// ── Phase 4D BroCard two-track pricing ────────────────────────────────────
+//
+// The BroCard pricing payload is a discriminated union keyed on `mode`.
+// The math layer (lib/appraiser/mao-range.computeMaoRange) determines
+// which mode applies via a pure classifier (lib/brocard/pricing.ts):
+//
+//   phase4   — Real_ARV_Median + (Est_Rehab_Mid OR Est_Rehab) both
+//              populated, so the V2.1 floor (and optionally landlord
+//              track) computed cleanly. Carries the full MaoRange.
+//   legacy   — Pre-Phase-4 record: ARV/rehab can't drive math, but the
+//              old single-track Outreach_Offer_Price / Contract_Offer_Price
+//              fields are populated. Surfaced with a "Legacy" badge so
+//              the operator knows the BroCard is showing stale math.
+//   no_math  — Neither path has data. Pricing block renders a "No math
+//              yet" affordance pointing the operator at the deal-detail
+//              page's Run-ARV / Run-Rehab actions.
+
+export type BroCardPricingMode = "phase4" | "legacy" | "no_math";
+
+// Mirrors lib/appraiser/buyer-intelligence.DualTrackResult.dominant_track.
+// Inlined here so types/jarvis.ts stays the BroCard contract surface
+// without importing from the math layer at the type level.
+export type BroCardDominantTrack = "flipper" | "landlord" | "tie" | "neither";
+
+// Mirrors lib/appraiser/rehab-calibration.MarketTier — the env-overridable
+// market tier the cap rate + rehab multiplier are keyed on. Inlined for
+// the same reason as BroCardDominantTrack.
+export type BroCardMarketTier =
+  | "TX-Metro"
+  | "TN-Distressed"
+  | "MI-Distressed"
+  | "Conservative-Default";
+
+export interface BroCardPricingPhase4 {
+  mode: "phase4";
+  // The full v1.3 range envelope. Field shape mirrors lib/appraiser/
+  // mao-range.MaoRange (intentionally inlined — see comment above).
+  range: {
+    floor: number | null;
+    target: number | null;
+    list_price: number | null;
+    soft_ceiling: number | null;
+    exceeds_soft_ceiling: boolean;
+    dual_track: {
+      flipper_mao: number | null;
+      landlord_mao: number | null;
+      dominant_track: BroCardDominantTrack;
+      dominant_value: number | null;
+      // Phase 4D / L.2 — bubble cap_rate + cap_rate_tier up onto the
+      // BroCard's dual_track shape so the modifier-inputs tooltip can
+      // surface them without re-running computeDualTrack on the client.
+      // Source: lib/appraiser/buyer-intelligence.DualTrackResult.modifier_inputs.
+      cap_rate: number;
+      cap_rate_tier: BroCardMarketTier;
+    } | null;
+    modifier_inputs: {
+      arv_mid: number | null;
+      est_rehab: number | null;
+      wholesale_fee: number;
+      buyer_profit: number;
+      list_price: number | null;
+      seller_motivation_score: number | null;
+      monthly_rent: number | null;
+      state: string | null;
+      // Which source the rehab value came from — phase 4B calibrated
+      // (preferred) vs legacy estRehab fallback. Future Pulse alerts
+      // on stale "legacy_est_rehab" rates across the active pipeline.
+      rehab_source: "phase_4b_calibrated" | "legacy_est_rehab" | "none";
+      // INV-005 provenance — distinct from rehab_source (calibration
+      // epoch). Records whether the persisted Est_Rehab came from the
+      // vision pipeline or the manual fallback. null when no source
+      // recorded (legacy records pre-INV-005).
+      rehab_provenance: "vision" | "manual_operator" | "manual_partner" | null;
+    };
+  };
+}
+
+export interface BroCardPricingLegacy {
+  mode: "legacy";
+  outreach_offer_price: number | null;
+  contract_offer_price: number | null;
+  list_price: number | null;
+}
+
+export interface BroCardPricingNoMath {
+  mode: "no_math";
+  list_price: number | null;
+}
+
+export type BroCardPricing =
+  | BroCardPricingPhase4
+  | BroCardPricingLegacy
+  | BroCardPricingNoMath;
 
 export interface DealContext {
   recordId: string;

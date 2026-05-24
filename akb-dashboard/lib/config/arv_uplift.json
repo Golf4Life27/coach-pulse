@@ -1,0 +1,43 @@
+{
+  "$schema_note": "Phase 4A renovated-ARV uplift model. Used when RentCast's comp set represents AS-IS market value (Detroit/Memphis pattern — distressed wholesale flips dominate within search radius, renovated retail isn't in the response). Formula: ARV_renovated = ARV_as-is + (rehab_mid × multiplier). Per-market multipliers are working assumptions — refine against closed retail-renovated comps.",
+  "last_updated": "2026-05-12",
+  "source": "Alex 5/12 walkthrough — Sturtevant validation ($51,548 + $45K × 2.0 = $141,548 vs. Briyana boots-on-ground $145K, 2.4% delta)",
+  "version": 1,
+  "_default": {
+    "multiplier": 1.5,
+    "data_state_default": "renovated",
+    "_note": "Unknown markets default to data_state=renovated (no uplift fires); 1.5× multiplier applies only if a future operator flips this market to data_state=as_is"
+  },
+  "by_zip_prefix": {
+    "48": {
+      "multiplier": 2.0,
+      "data_state_default": "as_is",
+      "market": "Detroit",
+      "_note": "RentCast comp radius rarely contains renovated retail. Uplift fires whenever condition_target ∈ {good, renovated}. Validated against Sturtevant on 5/12."
+    },
+    "38": {
+      "multiplier": 2.0,
+      "data_state_default": "as_is",
+      "market": "Memphis",
+      "_note": "Same bimodal market as Detroit per briefing §14 #5. Uplift fires by default."
+    },
+    "78": {
+      "multiplier": 1.5,
+      "data_state_default": "renovated",
+      "market": "San Antonio",
+      "_note": "RentCast comp set typically represents renovated retail (validated by Highland $208K landing in $200-225K target band). Uplift does NOT fire unimodal — would over-count. Multiplier kept for the rare bimodal Detroit-style ZIP within SA."
+    },
+    "75": {
+      "multiplier": 1.5,
+      "data_state_default": "renovated",
+      "market": "Dallas",
+      "_note": "Same as SA — healthy retail market, comp cluster is renovated."
+    },
+    "77": {
+      "multiplier": 1.5,
+      "data_state_default": "renovated",
+      "market": "Houston",
+      "_note": "Same as SA — healthy retail market, comp cluster is renovated."
+    }
+  }
+}

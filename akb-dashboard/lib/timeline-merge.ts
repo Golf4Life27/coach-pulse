@@ -24,13 +24,13 @@ interface NotesEntry {
   timestamp: string | null;
 }
 
-interface SiblingRecord {
+export interface SiblingRecord {
   recordId: string;
   address: string;
   listPrice: number | null;
 }
 
-function scorePropertyMatch(
+export function scorePropertyMatch(
   messageBody: string,
   targetAddress: string,
   targetPrice: number | null,

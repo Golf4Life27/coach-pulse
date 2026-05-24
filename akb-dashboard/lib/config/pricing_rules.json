@@ -1,0 +1,29 @@
+{
+  "$schema_note": "Pricing constants for Phase 4C dual-track buyer math (Bible v3 §6 + Briefing §14 #6). All values are working assumptions per the truth hierarchy (§17) — edit JSON to override, no code change required. Each value should be revisited as real deals close.",
+  "last_updated": "2026-05-12",
+  "source": "Briefing §14 #6 (proposed $10K wholesale floor) + Bible v3 buyer math + 5/12 working assumptions for unresolved parameters",
+  "version": 1,
+  "wholesale_fee": {
+    "_note": "Briefing §14 #6: '$10K floor confirmed across all markets, or market-tiered?' — encoding $10K as default pending Alex confirmation. Old arv-validate code used $15K as placeholder.",
+    "floor_usd": 10000,
+    "by_zip_prefix": {}
+  },
+  "closing_costs": {
+    "_note": "Buyer-side closing as a fraction of ARV. 13% covers commission + title + financing + holding costs over a 3-4 month flip cycle. Source: existing arv-validate placeholder.",
+    "pct_of_arv": 0.13
+  },
+  "flipper_track": {
+    "_note": "Buyer-profit target the cash flipper needs to make the deal worth doing. $30K is the existing arv-validate placeholder; Bible v3 references 'reasonable flip profit' without naming a number. Refine against real flipper sales.",
+    "buyer_profit_usd": 30000
+  },
+  "landlord_track": {
+    "_note": "Landlord buyers accept thinner upfront margins because the return comes from cashflow + appreciation. $5K is a working assumption — landlords typically buy at NOI/cap and don't expect day-one rehab equity. Revisit once we close a landlord deal.",
+    "buyer_profit_usd": 5000,
+    "vacancy_pct": 0.08,
+    "opex_pct_of_gross_rent": 0.30
+  },
+  "dual_track_decision": {
+    "_note": "Sturtevant case: if YourMAO_Landlord exceeds YourMAO_Flipper by more than this dollar threshold, flag the deal as a creative-finance candidate (landlord buyer + seller-financed because flipper math is too thin). $5K threshold avoids flagging marginal differences.",
+    "creative_finance_threshold_usd": 5000
+  }
+}

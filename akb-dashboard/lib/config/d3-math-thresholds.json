@@ -1,0 +1,14 @@
+{
+  "_doc": "D3 Phase 0b cheap math filter — V2.1 thresholds. Pure formula-derived classification of Texted-bucket records by current Auto_Approve_v2 / Investor_MAO / Your_MAO / Prev_List_Price state. No live API calls. Reads Airtable cache only. Spec: docs/AKB_Deal_Flow_Orchestrator_Spec.md §V2.1 + Alex 5/13 directive on math-filter-first sequencing.",
+  "_alex_directive_5_13": "Cheap math filter runs BEFORE market re-verify. Math-fail records exit pipeline without burning RentCast quota. Math-pass-needs-refresh records (Auto_Approve_v2=1 but stale Pricing Agent inputs) are the eligible pool for Phase 0b.5 selective Pricing Agent re-run.",
+  "config": {
+    "auto_approve_spread_floor_usd": 20000,
+    "auto_approve_spread_floor_note": "Investor_MAO - Your_MAO >= $20K → math_pass_auto. Volume strategy, conservative buyer profit cushion.",
+    "manual_review_spread_floor_usd": 10000,
+    "manual_review_spread_floor_note": "$10K-$20K spread → math_pass_manual. Worth a look but not auto-fire. Surface to Alex.",
+    "list_drift_pct_threshold": 0.10,
+    "list_drift_pct_threshold_note": "If current List_Price has dropped >=10% from Prev_List_Price, math we ran at Texted-time is stale. Bucket to math_fail_list_drift even if Auto_Approve_v2=1 currently.",
+    "pricing_input_freshness_hours": 720,
+    "pricing_input_freshness_hours_note": "ARV_Validated_At older than 30 days (720hr) → math_pass_needs_refresh (eligible for Phase 0b.5 Pricing Agent re-run). Fresh inputs + auto-approve → math_pass_auto. RentCast quota budget gates how many needs_refresh records actually get re-run."
+  }
+}

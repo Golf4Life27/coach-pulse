@@ -1,4 +1,6 @@
 import { Listing, Deal, Buyer, ProspectiveBuyer } from "./types";
+import { auditWriteDrift, type FieldDrift } from "./airtable-verify";
+import { audit } from "./audit-log";
 
 const AIRTABLE_PAT = process.env.AIRTABLE_PAT!;
 const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
@@ -43,6 +45,69 @@ const LISTING_FIELDS: Record<string, string> = {
   fldiNKFpIBUYgg7el: "actionCardState",
   fld3IhR1DXzcVuq6F: "lastInboundAt",
   fldaK4lR5UNvycg11: "lastOutboundAt",
+  // Phase 11.2 (5/18) — email-attributable outbound send timestamp.
+  // Crier staleness math takes max() across this + lastOutreachDate
+  // (SMS) + lastInboundAt + lastOutboundAt so active email negotiations
+  // no longer surface as false-stale. Written by lib/gmail.ts sendEmail
+  // when a listing recordId is in scope.
+  fld4Jzjs8etKact6g: "lastEmailOutreachDate",
+  // Phase 5.4 (5/18) — DocuSign envelope attribution. Single-line text
+  // (envelope GUID). Written by the "Track in Scribe" affordance on
+  // the deal-detail page; read by components/ScribeDealCommentary.tsx
+  // to surface envelope status from briefing.external_signals.docusign.
+  fldKPVG9qmbzxW5lK: "envelopeId",
+  // ── Pre-Outreach Gate (orchestrator Gate 1) inputs
+  fldif6WwcJeXZtJcX: "mlsStatus",
+  fldrlbePeS9glaFQu: "propertyType",
+  fldg1j5wHJzoGJB0I: "priceDropCount",
+  fld2eUkKaC4pMjIdd: "lastVerified",
+  fldJt2pSCHiXqBxwj: "pipelineStage",
+  // ── Pre-Send Gate (orchestrator Gate 2) inputs
+  fld3lxWDerPs3rSNM: "rehabConfidenceScore",
+  fld0fWZGiFS73PPB7: "agentPriorOutreachCount",
+  // ── Pre-Negotiation Gate (orchestrator Gate 3) inputs
+  fldmup8SvMky9eyag: "estRehab",
+  // ── D3 Phase 0b math-filter inputs (formula fields read-only by design)
+  flduzFLSaFBfIl9Rn: "prevListPrice",
+  fldyDCVwvn9jfdiES: "estRehabMid",
+  // Phase 4B.1 — Appraiser rehab endpoint writes these:
+  fldRU4ITbMM4ZjaaK: "rehabEstimatedAt",
+  fldi3i6bnyzt2lKsu: "rehabLineItemsJson",
+  fldeLFgCV7jaf4Wn3: "rehabRedFlags",
+  // INV-005 — Rehab_Source provenance (vision | manual_operator | manual_partner).
+  // Auxiliary to rehabConfidenceScore (numeric). Per Constitution Rule 3,
+  // manual values are fallback-only — vision must fail first.
+  fldhn2vxQipa3PVsX: "rehabSource",
+  fldoNZxSZqQsCLIW6: "realArvMedian",
+  // Phase 4C.1 — RentCast AVM rent estimate, drives landlord-track MAO.
+  fldrFB0owY6BnQewr: "estimatedMonthlyRent",
+  // Phase 4A.1 — Appraiser ARV endpoint writes these fields (existing
+  // pricing route writes Real_ARV_* but leaves comp count + avg + JSON
+  // unwritten). New /api/agents/appraiser/arv/[recordId] fills them.
+  fldDcIiUajkvi8Wz3: "arvConfidence",
+  fldyukQHGzGdxoDGf: "arvCompCount",
+  fld9uJ3xRjkHGYruM: "arvCompAvgPrSqFt",
+  fldIrL7bFboOEr9vj: "arvCompDetailsJson",
+  // V2.1 floor inputs the new endpoint reads (defaults Bible v3 §9):
+  //   wholesaleFeeTarget default 15000, buyerProfitTarget default 30000
+  fldSPxo0LRdGDBxcv: "wholesaleFeeTarget",
+  fldpmMwfqbXx6d58N: "buyerProfitTarget",
+  fldHhSpaiNq1OPzfc: "investorMao",
+  fldfE06eS402RcPCN: "yourMao",
+  fldAvk2aIBU1Lh3Dz: "autoApproveV2",
+  fldvHDqtftWehMJR7: "arvValidatedAt",
+  // ── D3 cadence inputs
+  fldzqlBceCXhQ9Vlq: "followUpCount",
+  fldoG27mxF1FQSRr9: "lastStatusCheckSentAt",
+  // Phase 20.2 v1.3 amendment (5/18) — Stored_Offer_Price renamed to
+  // Outreach_Offer_Price. Field id preserved; existing data carried.
+  // Semantic split: outreachOfferPrice = sticky 65% set at outreach;
+  // contractOfferPrice = set at negotiation/DD; sellerMotivationScore
+  // = 1-5 rubric. See Listing type in lib/types.ts for full notes.
+  fldBFnL0HQJWahRov: "outreachOfferPrice",
+  fldfJWuEIHqaRuWq3: "contractOfferPrice",
+  fldfEVJijfPOBulpc: "sellerMotivationScore",
+  fldusUTeJQ2ALX37U: "listPriceAtSend",
 };
 
 // Reverse map: field name -> prop name (for single-record GET which returns field names)
@@ -80,10 +145,32 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "Action_Card_State": "actionCardState",
   "Last_Inbound_At": "lastInboundAt",
   "Last_Outbound_At": "lastOutboundAt",
+  "Last_Email_Outreach_Date": "lastEmailOutreachDate",
+  "Envelope_ID": "envelopeId",
+  // ── Pre-Outreach Gate (orchestrator Gate 1)
+  "MLS_Status": "mlsStatus",
+  "Property_Type": "propertyType",
+  "Price_Drop_Count": "priceDropCount",
+  "Last_Verified": "lastVerified",
+  "Pipeline_Stage": "pipelineStage",
+  "Rehab_Confidence_Score": "rehabConfidenceScore",
+  "Agent_Prior_Outreach_Count": "agentPriorOutreachCount",
+  "Est_Rehab": "estRehab",
+  "Prev_List_Price": "prevListPrice",
+  "Follow_Up_Count": "followUpCount",
+  "Last_Status_Check_Sent_At": "lastStatusCheckSentAt",
+  "Outreach_Offer_Price": "outreachOfferPrice",
+  "Contract_Offer_Price": "contractOfferPrice",
+  "Seller_Motivation_Score": "sellerMotivationScore",
+  "List_Price_At_Send": "listPriceAtSend",
   // ── Phase 3: photo analysis ──────────────────────────────────────────────
   "Est_Rehab_Low": "estRehabLow",
   "Est_Rehab_Mid": "estRehabMid",
   "Est_Rehab_High": "estRehabHigh",
+  "Rehab_Estimated_At": "rehabEstimatedAt",
+  "Rehab_Line_Items_JSON": "rehabLineItemsJson",
+  "Rehab_Red_Flags": "rehabRedFlags",
+  "Rehab_Source": "rehabSource",
   "Photo_Confidence": "photoConfidence",
   "Line_Items_JSON": "lineItemsJson",
   "Red_Flags": "redFlags",
@@ -94,6 +181,13 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "Real_ARV_Low": "realArvLow",
   "Real_ARV_High": "realArvHigh",
   "Real_ARV_Median": "realArvMedian",
+  "Estimated_Monthly_Rent": "estimatedMonthlyRent",
+  "ARV_Confidence": "arvConfidence",
+  "ARV_Comp_Count": "arvCompCount",
+  "ARV_Comp_Avg_PrSqFt": "arvCompAvgPrSqFt",
+  "ARV_Comp_Details_JSON": "arvCompDetailsJson",
+  "Wholesale_Fee_Target": "wholesaleFeeTarget",
+  "Buyer_Profit_Target": "buyerProfitTarget",
   "Investor_MAO": "investorMao",
   "Your_MAO": "yourMao",
   "Auto_Approve_v2": "autoApproveV2",
@@ -111,6 +205,7 @@ const LISTING_NAME_MAP: Record<string, string> = {
 const DEAL_FIELDS: Record<string, string> = {
   fld2AaqbSahBMY62j: "propertyAddress",
   fldoVbMXZxZV08sqG: "city",
+  fldfGiKZL970cvftH: "state",
   fldGZO10DHc9evl0L: "contractPrice",
   fldnxxzcMRzL1j1hJ: "offerPrice",
   flddXvwvKdx47Xa9X: "assignmentFee",
@@ -420,72 +515,339 @@ export async function getProspectiveBuyers(): Promise<ProspectiveBuyer[]> {
   return buyers;
 }
 
-export async function updateProspectiveBuyerRecord(
-  recordId: string,
-  fields: Record<string, unknown>
-): Promise<void> {
-  const url = `https://api.airtable.com/v0/${BASE_ID}/${PROSPECTIVE_BUYERS_TABLE}/${recordId}`;
+// Common write path. PATCH with typecast, parse the echo, compare each
+// written field against what Airtable stored, audit drift as uncertain.
+// Returns drift so callers can decide to react (none currently do; this
+// is intentionally non-breaking — the audit-log + morning brief is the
+// surfacing channel).
+async function patchAndVerify(opts: {
+  tableId: string;
+  tableName: string;
+  recordId: string;
+  fields: Record<string, unknown>;
+}): Promise<FieldDrift[]> {
+  // Airtable's single-record PATCH silently ignores
+  // returnFieldsByFieldId=true (verified via drift-test 5/13 — the echo
+  // came back keyed by name "Outreach_Status" even with the param set).
+  // detectWriteDrift translates field-ID keys to names via the schema
+  // cache from lib/airtable-verify when looking up echoed values.
+  const url = `https://api.airtable.com/v0/${BASE_ID}/${opts.tableId}/${opts.recordId}`;
   const res = await fetch(url, {
     method: "PATCH",
     headers: {
       Authorization: `Bearer ${AIRTABLE_PAT}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ fields, typecast: true }),
+    body: JSON.stringify({ fields: opts.fields, typecast: true }),
   });
 
   if (!res.ok) {
     const errText = await res.text();
     console.error(`[Airtable] PATCH ${url} failed: ${res.status} ${errText}`);
+
+    // Detect formula-field write attempts. Airtable returns:
+    //   422 INVALID_VALUE_FOR_COLUMN
+    //   "Field \"X\" cannot accept a value because the field is computed"
+    // for any write to formula/rollup/lookup/count fields. PATCH is
+    // atomic, so a single formula field in the request kills the entire
+    // batch — including legitimate writes to other fields. Audit the
+    // failure mode explicitly so future occurrences are durable in KV
+    // (was silently swallowed by call-site try/catch pre-5/13).
+    const isFormulaWriteBlocked =
+      res.status === 422 &&
+      /INVALID_VALUE_FOR_COLUMN/.test(errText) &&
+      /computed/i.test(errText);
+    if (isFormulaWriteBlocked) {
+      // Extract offending field name from Airtable's JSON payload.
+      // Parse the body — direct regex on errText fails because the
+      // outer JSON keeps " as \" (verified in audit log 5/13:
+      // `offending_field: "unknown"`).
+      let offendingField = "unknown";
+      try {
+        const parsed = JSON.parse(errText) as { error?: { message?: string } };
+        const msg = parsed.error?.message ?? "";
+        const fieldMatch = msg.match(/Field "([^"]+)" cannot accept/);
+        if (fieldMatch) offendingField = fieldMatch[1];
+      } catch {
+        // Body wasn't JSON; leave as "unknown"
+      }
+      await audit({
+        agent: "airtable-write",
+        event: "formula_field_write_blocked",
+        status: "confirmed_failure",
+        recordId: opts.recordId,
+        inputSummary: {
+          table: opts.tableName,
+          fields_written: Object.keys(opts.fields),
+          offending_field: offendingField,
+        },
+        outputSummary: {
+          http: res.status,
+          error_type: "INVALID_VALUE_FOR_COLUMN",
+          all_fields_in_patch_lost: Object.keys(opts.fields),
+        },
+        decision: "atomic_patch_rejected",
+        error: errText,
+      });
+    } else {
+      // General PATCH failure — also durable so we don't lose visibility
+      // when call sites swallow the throw.
+      await audit({
+        agent: "airtable-write",
+        event: "patch_failed",
+        status: "confirmed_failure",
+        recordId: opts.recordId,
+        inputSummary: {
+          table: opts.tableName,
+          fields_written: Object.keys(opts.fields),
+        },
+        outputSummary: { http: res.status },
+        error: errText,
+      });
+    }
     throw new Error(`Airtable update error ${res.status}: ${errText}`);
   }
 
+  // Parse the post-write echo. If Airtable somehow returns non-JSON or
+  // a body without `fields`, treat that as a field-level data_missing —
+  // we can't verify, but we don't throw (the write succeeded at HTTP).
+  let echoed: Record<string, unknown> = {};
+  try {
+    const body = (await res.json()) as { fields?: Record<string, unknown> };
+    echoed = body.fields ?? {};
+  } catch (err) {
+    console.error(`[Airtable] PATCH ${url} echo parse failed:`, err);
+    // No echo to compare → log every written field as drift-unknown.
+    return await auditWriteDrift({
+      table: opts.tableName,
+      tableId: opts.tableId,
+      recordId: opts.recordId,
+      written: opts.fields,
+      echoed: {},
+    });
+  }
+
+  return await auditWriteDrift({
+    table: opts.tableName,
+    tableId: opts.tableId,
+    recordId: opts.recordId,
+    written: opts.fields,
+    echoed,
+  });
+}
+
+export async function updateProspectiveBuyerRecord(
+  recordId: string,
+  fields: Record<string, unknown>
+): Promise<FieldDrift[]> {
+  const drift = await patchAndVerify({
+    tableId: PROSPECTIVE_BUYERS_TABLE,
+    tableName: "Prospective_Buyers",
+    recordId,
+    fields,
+  });
   delete cache["prospectiveBuyers"];
+  return drift;
 }
 
 export async function updateListingRecord(
   recordId: string,
   fields: Record<string, unknown>
-): Promise<void> {
-  const url = `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}/${recordId}`;
-  const res = await fetch(url, {
-    method: "PATCH",
-    headers: {
-      Authorization: `Bearer ${AIRTABLE_PAT}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ fields, typecast: true }),
+): Promise<FieldDrift[]> {
+  const drift = await patchAndVerify({
+    tableId: LISTINGS_TABLE,
+    tableName: "Listings_V1",
+    recordId,
+    fields,
   });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    console.error(`[Airtable] PATCH ${url} failed: ${res.status} ${errText}`);
-    throw new Error(`Airtable update error ${res.status}: ${errText}`);
-  }
-
   delete cache["listings"];
   delete cache[`listing:${recordId}`];
+  return drift;
 }
 
 export async function updateDealRecord(
   recordId: string,
   fields: Record<string, unknown>
-): Promise<void> {
-  const url = `https://api.airtable.com/v0/${BASE_ID}/${DEALS_TABLE}/${recordId}`;
+): Promise<FieldDrift[]> {
+  const drift = await patchAndVerify({
+    tableId: DEALS_TABLE,
+    tableName: "Deals",
+    recordId,
+    fields,
+  });
+
+  delete cache["deals"];
+  return drift;
+}
+
+// Batched PATCH for Listings_V1. Airtable's batched-update endpoint
+// caps at 10 records per request — do NOT raise this. Returns the
+// Airtable PATCH response per record (which echoes the post-write
+// state, sufficient for verification — same model patchAndVerify
+// uses, without the wasted extra GET).
+//
+// All-or-nothing semantics from Airtable: if any record in the batch
+// fails validation (e.g. formula-field write attempt), Airtable
+// rejects the ENTIRE batch with 422 and no records get updated. The
+// caller is expected to scope batches narrowly enough that this is
+// rare; on batch failure we audit + throw so the caller can decide
+// whether to retry individually.
+//
+// Pattern is reusable for future bulk admin operations per Alex's
+// 5/14 scale punch-list directive.
+const AIRTABLE_BATCH_LIMIT = 10;
+
+export interface BatchUpdateRequest {
+  recordId: string;
+  fields: Record<string, unknown>;
+}
+
+export interface BatchUpdateOutcome {
+  recordId: string;
+  echoed: Record<string, unknown> | null;
+  error: string | null;
+}
+
+export async function patchListingsBatch(
+  records: BatchUpdateRequest[],
+): Promise<BatchUpdateOutcome[]> {
+  if (records.length === 0) return [];
+  if (records.length > AIRTABLE_BATCH_LIMIT) {
+    throw new Error(
+      `patchListingsBatch: ${records.length} exceeds Airtable's ${AIRTABLE_BATCH_LIMIT}-records-per-PATCH cap. Caller must chunk upstream.`,
+    );
+  }
+
+  const url = `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}`;
+  const body = {
+    records: records.map((r) => ({ id: r.recordId, fields: r.fields })),
+    typecast: true,
+  };
+
   const res = await fetch(url, {
     method: "PATCH",
     headers: {
       Authorization: `Bearer ${AIRTABLE_PAT}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ fields, typecast: true }),
+    body: JSON.stringify(body),
   });
 
   if (!res.ok) {
     const errText = await res.text();
-    console.error(`[Airtable] PATCH ${url} failed: ${res.status} ${errText}`);
-    throw new Error(`Airtable update error ${res.status}: ${errText}`);
+    await audit({
+      agent: "airtable-write",
+      event: "batch_patch_failed",
+      status: "confirmed_failure",
+      inputSummary: {
+        table: "Listings_V1",
+        record_ids: records.map((r) => r.recordId),
+        fields_per_record: records.map((r) => Object.keys(r.fields)),
+      },
+      outputSummary: { http: res.status, batch_size: records.length },
+      error: errText,
+    });
+    throw new Error(
+      `Airtable batch PATCH error ${res.status}: ${errText}`,
+    );
   }
 
-  delete cache["deals"];
+  const parsed = (await res.json().catch(() => null)) as
+    | { records?: Array<{ id: string; fields: Record<string, unknown> }> }
+    | null;
+
+  // Echo each record's post-write state. The success of the HTTP call
+  // is itself confirmation Airtable accepted the writes; the echo is
+  // the schema-level verification source.
+  const echoByRecordId = new Map<string, Record<string, unknown>>();
+  for (const rec of parsed?.records ?? []) {
+    if (rec && typeof rec.id === "string") {
+      echoByRecordId.set(rec.id, rec.fields ?? {});
+    }
+  }
+
+  // Invalidate the in-memory listings cache — any of these records
+  // could now have stale data in cache.
+  delete cache["listings"];
+  for (const r of records) delete cache[`listing:${r.recordId}`];
+
+  return records.map((r) => ({
+    recordId: r.recordId,
+    echoed: echoByRecordId.get(r.recordId) ?? null,
+    error: echoByRecordId.has(r.recordId)
+      ? null
+      : "absent from Airtable PATCH response",
+  }));
+}
+
+const D3_MANUAL_FIX_QUEUE_TABLE = "tblV6OkNPDzOo6ubp";
+
+// Create a row in D3_Manual_Fix_Queue. Reusable across Scenario A/B,
+// D3 Phase 0a, L3, and manual triggers per Alex 5/13 directive.
+// Returns the created record ID so the caller can link back if needed.
+export async function createManualFixQueueRecord(fields: {
+  Address: string;
+  Source_Listing?: string[];
+  Agent_First_Name?: string | null;
+  Agent_Phone_Raw?: string | null;
+  Issue_Category:
+    | "invalid_phone_format"
+    | "wrong_number_per_status_check"
+    | "agent_changed"
+    | "property_changed"
+    | "other";
+  Detected_Date: string; // ISO date "YYYY-MM-DD"
+  Detected_By: "Scenario A" | "Scenario B" | "D3 Phase 0a" | "L3" | "manual";
+  Resolution_Status?: "pending" | "fixed" | "dead";
+  Notes?: string | null;
+}): Promise<{ recordId: string }> {
+  const url = `https://api.airtable.com/v0/${BASE_ID}/${D3_MANUAL_FIX_QUEUE_TABLE}`;
+  const payload = {
+    records: [
+      {
+        fields: {
+          Address: fields.Address,
+          ...(fields.Source_Listing ? { Source_Listing: fields.Source_Listing } : {}),
+          ...(fields.Agent_First_Name != null
+            ? { Agent_First_Name: fields.Agent_First_Name }
+            : {}),
+          ...(fields.Agent_Phone_Raw != null
+            ? { Agent_Phone_Raw: fields.Agent_Phone_Raw }
+            : {}),
+          Issue_Category: fields.Issue_Category,
+          Detected_Date: fields.Detected_Date,
+          Detected_By: fields.Detected_By,
+          Resolution_Status: fields.Resolution_Status ?? "pending",
+          ...(fields.Notes != null ? { Notes: fields.Notes } : {}),
+        },
+      },
+    ],
+  };
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${AIRTABLE_PAT}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    await audit({
+      agent: "airtable-write",
+      event: "manual_fix_queue_create_failed",
+      status: "confirmed_failure",
+      inputSummary: { address: fields.Address, issue: fields.Issue_Category },
+      outputSummary: { http: res.status },
+      error: errText,
+    });
+    throw new Error(`D3_Manual_Fix_Queue create error ${res.status}: ${errText}`);
+  }
+  const body = (await res.json()) as { records?: Array<{ id: string }> };
+  const recordId = body.records?.[0]?.id;
+  if (!recordId) {
+    throw new Error("D3_Manual_Fix_Queue create returned no record id");
+  }
+  return { recordId };
 }

@@ -15,6 +15,26 @@
     {
       "path": "/api/buyers/warmup-sequence",
       "schedule": "0 13 * * *"
+    },
+    {
+      "path": "/api/admin/recompute-agent-prior-counts",
+      "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/agents/pulse/scan",
+      "schedule": "0 12 * * *"
+    },
+    {
+      "path": "/api/cron/outreach-status-reconcile",
+      "schedule": "0 14 * * *"
+    },
+    {
+      "path": "/api/cron/rehab-vision-retry",
+      "schedule": "0 15 * * *"
+    },
+    {
+      "path": "/api/cron/data-federation-pull",
+      "schedule": "0 16 * * *"
     }
   ]
 }

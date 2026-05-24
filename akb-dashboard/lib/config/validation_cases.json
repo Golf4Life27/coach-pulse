@@ -1,0 +1,65 @@
+{
+  "$schema_note": "First-class validation anchors per Briefing §17 + §11. Highest weight in the truth hierarchy. When agent output diverges from these, the agent (or its config) is wrong, not the validation. Grows as deals close.",
+  "last_updated": "2026-05-12",
+  "source": "Briefing §11 + Bible v3 §9.2 + Refined Bible §11 (walked deal note)",
+  "version": 1,
+  "cases": [
+    {
+      "id": "highland",
+      "address": "1219 E Highland Blvd",
+      "city": "San Antonio",
+      "state": "TX",
+      "zip": "78210",
+      "status_note": "WALKED 4/30/2026. Used as math anchor only — no live outreach; on never-resurface list.",
+      "subject": {
+        "beds": 3,
+        "baths": 2,
+        "sqft": 1200,
+        "condition": "Fair"
+      },
+      "expectations": {
+        "arv_low": 200000,
+        "arv_mid": 215000,
+        "arv_high": 225000,
+        "rehab_low": 45000,
+        "rehab_mid": 55000,
+        "rehab_high": 65000,
+        "your_mao_target": 90000,
+        "your_mao_tolerance": 5000
+      }
+    },
+    {
+      "id": "sturtevant",
+      "address": "1973 Sturtevant St",
+      "city": "Detroit",
+      "state": "MI",
+      "zip": "48206",
+      "status_note": "Active negotiation (5/12). Dual-track validation: landlord track may exceed flipper track → creative-finance flag.",
+      "subject": {
+        "beds": 3,
+        "baths": 1,
+        "sqft": 1100,
+        "condition": "Poor"
+      },
+      "expectations": {
+        "dual_track_required": true,
+        "creative_finance_flag_expected_when_landlord_exceeds_flipper": true,
+        "arv_renovated_target": {
+          "_note": "Anchored to Briyana's $145K boots-on-ground renovated comp on Sturtevant St (5/12). Working tolerance ±10%. Alex's hand math: $51,548 + ($45K × 2.0) = $141,548 → 2.4% below anchor, lands inside band.",
+          "low": 130500,
+          "mid": 145000,
+          "high": 159500,
+          "expected_method": "uplift_model"
+        },
+        "harness_checks": {
+          "_note": "Phase 4A bimodal-uplift smoke checks added 5/12. Pre-existing Phase 4C qualitative checks below.",
+          "arv_renovated_lands_in_target_band": true,
+          "arv_uplift_path_fires_for_detroit": true,
+          "pricing_run_succeeds": true,
+          "both_tracks_compute_when_rent_available": true,
+          "creative_finance_flag_fires_when_delta_above_threshold": true
+        }
+      }
+    }
+  ]
+}

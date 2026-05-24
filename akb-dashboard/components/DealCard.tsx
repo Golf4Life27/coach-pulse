@@ -1,5 +1,6 @@
 import { Deal } from "@/lib/types";
 import { formatCurrency } from "@/lib/utils";
+import TwoTrackPricing from "./TwoTrackPricing";
 
 interface DealCardProps {
   deal: Deal;
@@ -75,6 +76,25 @@ export default function DealCard({ deal }: DealCardProps) {
           <div className="bg-emerald-500/10 border border-emerald-500/30 rounded px-3 py-1.5 text-xs text-emerald-400 font-semibold text-center">
             DISPO READY
           </div>
+        )}
+
+        {/* Two-Track buyer math — fetches /api/pricing-intelligence/[zip]
+            client-side. Component handles all empty/partial-data branches
+            internally (per Positive Confirmation Principle Rule 5 — never
+            silently hides). Renders only when we have at least an
+            address or city+state to anchor; the empty Closed card with
+            nothing populated is the one valid skip. */}
+        {(deal.propertyAddress || (deal.city && deal.state)) && (
+          <TwoTrackPricing
+            address={deal.propertyAddress}
+            city={deal.city}
+            state={deal.state}
+            beds={deal.beds}
+            baths={deal.baths}
+            sqft={deal.sqft}
+            arv_mid={deal.arv}
+            rehab_mid={deal.estimatedRepairs}
+          />
         )}
       </div>
     </div>

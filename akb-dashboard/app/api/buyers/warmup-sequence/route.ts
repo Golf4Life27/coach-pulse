@@ -2,12 +2,15 @@ import { NextResponse } from "next/server";
 import { listBuyersV2, updateBuyerV2, BUYER_V2_FIELDS } from "@/lib/buyers-v2";
 import { sendEmail } from "@/lib/gmail";
 import { buildJarvisSystemPrompt } from "@/lib/jarvis-system-prompt";
+import { synthesize } from "@/lib/maverick/synthesizer";
+import { VOICE_REGISTRY } from "@/lib/maverick/voice-registry";
 import type { BuyerRecord } from "@/types/jarvis";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-const ANTHROPIC_MODEL = "claude-sonnet-4-5-20250929";
+/** @deprecated Phase 10 / P.2 — model resolved via voice-registry.scout. */
+const ANTHROPIC_MODEL = VOICE_REGISTRY.scout.model;
 const DAILY_CAP = 25;
 
 interface DraftedEmail {
@@ -36,30 +39,18 @@ async function draftWithLLM(buyer: BuyerRecord, apiKey: string): Promise<Drafted
   const system = buildJarvisSystemPrompt({ context: "reply_draft", includeBuyerRules: true })
     + `\n\nYou are drafting Email 1 of a 3-step warmup sequence to a buyer pulled from InvestorBase. Tone: professional but conversational. 4-6 sentences max. Reference the buyer's last purchase (if known) or markets. Mention an "Off-market deals matching your buy box" pitch. Include a short CTA pointing them to the buyer intake form.`;
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: ANTHROPIC_MODEL,
-        max_tokens: 600,
-        system,
-        messages: [
-          {
-            role: "user",
-            content: `Draft email 1 for: ${buyer.name} <${buyer.email}>. Markets: ${(buyer.markets ?? []).join(", ")}. Last purchase: ${buyer.lastPurchaseAddress ?? "—"}${buyer.lastPurchasePrice ? ` for $${buyer.lastPurchasePrice}` : ""}. Buyer type: ${buyer.buyerType ?? "?"}. Volume tier: ${buyer.buyerVolumeTier ?? "?"}.
+    // Phase 10 / P.2 migration — routed through unified synthesizer.
+    const result = await synthesize({
+      agent: "scout",
+      system,
+      user: `Draft email 1 for: ${buyer.name} <${buyer.email}>. Markets: ${(buyer.markets ?? []).join(", ")}. Last purchase: ${buyer.lastPurchaseAddress ?? "—"}${buyer.lastPurchasePrice ? ` for $${buyer.lastPurchasePrice}` : ""}. Buyer type: ${buyer.buyerType ?? "?"}. Volume tier: ${buyer.buyerVolumeTier ?? "?"}.
 
 Output JSON only: { "subject": "...", "body": "..." }`,
-          },
-        ],
-      }),
+      max_tokens: 600,
+      apiKey,
+      event_label: "scout_warmup_drafted",
     });
-    if (!res.ok) return null;
-    const data = (await res.json()) as { content?: Array<{ type: string; text?: string }> };
-    const text = data.content?.find((b) => b.type === "text")?.text ?? "";
+    const text = result.text;
     const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
     const parsed = JSON.parse(cleaned) as DraftedEmail;
     if (typeof parsed.body === "string" && typeof parsed.subject === "string") return parsed;

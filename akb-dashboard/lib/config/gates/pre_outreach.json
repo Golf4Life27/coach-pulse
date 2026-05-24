@@ -1,0 +1,145 @@
+{
+  "$schema_note": "Pre-Outreach Gate (Gate 1) per AKB_Deal_Flow_Orchestrator_Spec §4. 14 items, mostly Airtable-field reads, no external API calls. Transitions verified → outreach_ready. Edit thresholds here without code changes; check functions in lib/orchestrator/pre-outreach-checks.ts read from this.",
+  "last_updated": "2026-05-13",
+  "source": "Orchestrator spec §4 Gate 1 + Briefing §3 hardcoded inviolable rules",
+  "version": 1,
+  "gate_id": "pre_outreach",
+  "stage_from": "verified",
+  "stage_to": "outreach_ready",
+  "config": {
+    "mls_status_blocked": ["Off Market", "Sold", "Pending", "Withdrawn", "Expired"],
+    "restricted_states": ["IL", "MO", "SC", "NC", "OK", "ND"],
+    "property_type_allowed": [
+      "Single Family Residence",
+      "Single Family",
+      "Single Family Detached",
+      "SFR",
+      "SF Detached",
+      "Residential"
+    ],
+    "toll_free_prefixes": ["800", "888", "877", "866", "855", "844", "833"],
+    "beds_min": 2,
+    "sqft_min": 500,
+    "sqft_max": 5000,
+    "list_price_min": 3500,
+    "list_price_max": 500000,
+    "flip_score_max": 4,
+    "live_verification_max_age_hours": 72,
+    "distress_dom_min": 60,
+    "distress_price_drop_min": 1
+  },
+  "items": [
+    {
+      "id": "PO-01",
+      "description": "Property has valid MLS_Status",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "MLS_Status is set AND not in mls_status_blocked",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PO-02",
+      "description": "Live_Status = Active AND verified within live_verification_max_age_hours",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "Live_Status = 'Active' AND Last_Verified is within 72hr of now",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PO-03",
+      "description": "Off_Market_Override is false",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "Off_Market_Override = false",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PO-04",
+      "description": "Address not on NEVER-list",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "Address does NOT match any entry in never_list.json (case-insensitive, trimmed)",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PO-05",
+      "description": "State not in restricted_states",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "State is NOT in restricted_states (IL/MO/SC/NC/OK/ND per Briefing §3)",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PO-06",
+      "description": "Property_Type is Single Family Residential",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "Property_Type matches one of property_type_allowed (case-insensitive)",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PO-07",
+      "description": "Beds >= beds_min",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "Bedrooms >= 2",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PO-08",
+      "description": "Building_SqFt present and in [sqft_min, sqft_max]",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "Building_SqFt is set AND 500 <= sqft <= 5000",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PO-09",
+      "description": "List_Price in [list_price_min, list_price_max]",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "List_Price is set AND 3500 <= price <= 500000",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PO-10",
+      "description": "Agent_Phone present and numeric (>= 10 digits)",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "Agent_Phone is set AND has >= 10 digits after stripping non-numeric",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PO-11",
+      "description": "Agent_Phone is not a toll-free number",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "First 3 digits of Agent_Phone (after country code) are NOT in toll_free_prefixes",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PO-12",
+      "description": "Flip_Score < flip_score_max (under Manual Review threshold)",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "Flip_Score < 4 (null treated as 0 — assume not flagged unless we have evidence)",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PO-13",
+      "description": "Distress signal present (DOM >= distress_dom_min OR Price_Drop_Count >= distress_price_drop_min)",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "DOM_Calc_V2 >= 60 OR Price_Drop_Count >= 1",
+      "failure_action": "warn",
+      "blocking": false
+    },
+    {
+      "id": "PO-14",
+      "description": "Do_Not_Text is false",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "Do_Not_Text = false",
+      "failure_action": "block",
+      "blocking": true
+    }
+  ]
+}

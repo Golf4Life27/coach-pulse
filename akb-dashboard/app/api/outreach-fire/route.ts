@@ -226,12 +226,25 @@ async function handleNewOutreach(
       await sendMessage(phone, message);
 
       const now = new Date().toISOString();
-      await updateListingRecord(listing.id, {
+      // Per Phase 20.2 v1.3 amendment (5/18) + Checklist 11.4: capture
+      // Outreach_Offer_Price + List_Price_At_Send at H2 send time.
+      // Door-opener semantics: Outreach_Offer_Price = 65% List Price
+      // rounded to nearest $250. STICKY — never overwritten once set
+      // (gate below). List_Price_At_Send = list price at the moment of
+      // outreach (snapshot — survives subsequent price drops). The
+      // separate Contract_Offer_Price is written later by the Pricing
+      // Agent at negotiation/DD stage.
+      const outreachUpdate: Record<string, unknown> = {
         [F.outreachStatus]: "Texted",
         [F.lastOutboundAt]: now,
         [F.lastOutreachDate]: now.split("T")[0],
         [F.notes]: appendNote(listing.notes, `Sent initial offer to ${listing.agentName ?? "agent"} at ${phone}. Offer: ${offer}.`),
-      });
+        List_Price_At_Send: listing.listPrice!,
+      };
+      if (!listing.outreachOfferPrice || listing.outreachOfferPrice <= 0) {
+        outreachUpdate.Outreach_Offer_Price = offerNum;
+      }
+      await updateListingRecord(listing.id, outreachUpdate);
 
       contactedPhones.add(cleanedPhone);
       results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer, status: "sent" });
@@ -298,12 +311,20 @@ async function handleMultiListing(
       await sendMessage(phone, message);
 
       const now = new Date().toISOString();
-      await updateListingRecord(listing.id, {
+      // Same Outreach_Offer_Price + List_Price_At_Send capture as the
+      // new-outreach handler. Sticky — gate Outreach_Offer_Price write
+      // on absence of an existing value (Phase 20.2 v1.3).
+      const multiUpdate: Record<string, unknown> = {
         [F.outreachStatus]: "Texted",
         [F.lastOutboundAt]: now,
         [F.lastOutreachDate]: now.split("T")[0],
         [F.notes]: appendNote(listing.notes, `Sent multi-listing follow-up to ${listing.agentName ?? "agent"} at ${phone}. Offer: ${offer}.`),
-      });
+        List_Price_At_Send: listing.listPrice!,
+      };
+      if (!listing.outreachOfferPrice || listing.outreachOfferPrice <= 0) {
+        multiUpdate.Outreach_Offer_Price = offerNum;
+      }
+      await updateListingRecord(listing.id, multiUpdate);
 
       results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer, status: "sent" });
       sent++;

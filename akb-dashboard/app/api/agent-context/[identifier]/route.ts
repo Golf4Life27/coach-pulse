@@ -3,6 +3,7 @@ import { getListings } from "@/lib/airtable";
 import { getMessagesForParticipant } from "@/lib/quo";
 import { getThreadsForEmail } from "@/lib/gmail";
 import { parseConversation } from "@/lib/notes";
+import { synthesize } from "@/lib/maverick/synthesizer";
 import type {
   AgentContext,
   AgentContextProperty,
@@ -42,26 +43,18 @@ async function inferTone(
   if (!apiKey || inboundBodies.length === 0) return "transactional";
   const sample = inboundBodies.slice(-5).join("\n---\n").slice(0, 4000);
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: "claude-haiku-4-5-20251001",
-        max_tokens: 16,
-        system:
-          "You classify a real-estate agent's writing tone in one word. Reply with EXACTLY one of: formal, casual, friendly, transactional. No punctuation, no other words.",
-        messages: [
-          { role: "user", content: `Last messages from agent:\n${sample}` },
-        ],
-      }),
+    // Phase 10 / P.2 migration — routed through the unified
+    // synthesizer. Registry locks the Haiku model; prompt preserved
+    // verbatim per refactor charter.
+    const result = await synthesize({
+      agent: "agent_context",
+      system:
+        "You classify a real-estate agent's writing tone in one word. Reply with EXACTLY one of: formal, casual, friendly, transactional. No punctuation, no other words.",
+      user: `Last messages from agent:\n${sample}`,
+      max_tokens: 16,
+      apiKey,
     });
-    if (!res.ok) return "transactional";
-    const data = (await res.json()) as { content?: Array<{ type: string; text?: string }> };
-    const text = data.content?.find((b) => b.type === "text")?.text?.trim().toLowerCase() ?? "";
+    const text = result.text.trim().toLowerCase();
     if (text === "formal" || text === "casual" || text === "friendly" || text === "transactional") {
       return text;
     }

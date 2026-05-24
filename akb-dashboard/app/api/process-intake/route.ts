@@ -25,6 +25,7 @@ const FIELD_MAP: Record<string, string> = {
   Execution_Path: "fldOrWvqKcc1g6Lka",
   Notes: "fldwKGxZly6O8qyPu",
   Restriction_Text: "fldapf2ZXpIWTZfSX",
+  Listing_Condition: "fldgWNINIBKmY6fM1",
 };
 
 // PropStream CSV column → Airtable field name
@@ -269,6 +270,15 @@ export async function POST(req: Request) {
     // Pass through Condition if present
     if (row.Condition) mapped.Condition = row.Condition.trim();
     if (row["Property Condition"]) mapped.Condition = row["Property Condition"].trim();
+    // Persist normalized condition to Airtable. Filter logic above still reads
+    // mapped.Condition; this parallel write preserves the raw signal per INV-002
+    // remediation (Listing_Condition_Audit_v1.md §5 Option A).
+    const normalizeCondition = (raw: string): string => {
+      const t = raw.trim();
+      if (!t) return "";
+      return t.charAt(0).toUpperCase() + t.slice(1).toLowerCase();
+    };
+    if (mapped.Condition) mapped.Listing_Condition = normalizeCondition(mapped.Condition);
     mappedRows.push(mapped);
   }
 

@@ -1,6 +1,7 @@
-import { getListing } from "@/lib/airtable";
+import { getListing, getListings } from "@/lib/airtable";
 import { getMessagesForParticipant } from "@/lib/quo";
 import { parseConversation } from "@/lib/notes";
+import { scorePropertyMatch, type SiblingRecord } from "@/lib/timeline-merge";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -38,6 +39,25 @@ export async function GET(
       return Response.json({ error: "Listing not found" }, { status: 404 });
     }
 
+    // INV-007 Step 1 attribution filter: pull sibling listings (same Agent_Phone)
+    // so we can attribute each Quo message to a specific property. Filter out
+    // messages that score to a sibling OR fall below the 0.6 confidence floor
+    // (same threshold the AMBIGUOUS banner uses in /api/deal-context/[id]).
+    // Step 2 (unified attribution layer at ingest) deferred to belt MVP sprint.
+    let siblings: SiblingRecord[] = [];
+    if (listing.agentPhone) {
+      try {
+        const all = await getListings();
+        const target = cleanPhone(listing.agentPhone);
+        siblings = all
+          .filter((l) => l.id !== id && l.agentPhone && cleanPhone(l.agentPhone) === target)
+          .map((l) => ({ recordId: l.id, address: l.address, listPrice: l.listPrice }));
+      } catch (err) {
+        console.error(`[conversations] Sibling lookup failed for ${id}:`, err);
+      }
+    }
+    const hasSiblings = siblings.length > 0;
+
     const messages: UnifiedMessage[] = [];
 
     // 1. Pull Quo SMS messages if agent phone exists
@@ -46,6 +66,21 @@ export async function GET(
         const phone = cleanPhone(listing.agentPhone);
         const quoMessages = await getMessagesForParticipant(phone, 60 * 24 * 90); // 90 days
         for (const msg of quoMessages) {
+          // Attribute via scorePropertyMatch when this agent holds multiple listings.
+          // match.recordId === "" means target won; empty fallback to current id.
+          // Sibling-attributed OR low-confidence (<0.6) messages are excluded from
+          // this property's thread. They remain visible via the AMBIGUOUS banner
+          // on /pipeline/[id] and the disambiguation queue.
+          if (hasSiblings) {
+            const match = scorePropertyMatch(
+              msg.body,
+              listing.address,
+              listing.listPrice,
+              siblings,
+            );
+            const attributedRecordId = match.recordId || id;
+            if (attributedRecordId !== id || match.confidence < 0.6) continue;
+          }
           messages.push({
             id: `quo-${msg.id}`,
             source: "quo",

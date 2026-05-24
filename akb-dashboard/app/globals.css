@@ -42,3 +42,20 @@ body {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/* Phase 9.6 — factory-floor agent room pulse.
+ * Fires when an agent's `by_agent` audit count increases between
+ * briefing polls (real state transition, not decoration). Subtle by
+ * design: brief glow + a 2% upward translation, ~1.6s. Disabled
+ * entirely under prefers-reduced-motion. */
+@keyframes maverick-agent-pulse {
+  0%   { transform: translateY(0);    box-shadow: 0 0 0 0 rgba(110, 231, 183, 0); }
+  20%  { transform: translateY(-2px); box-shadow: 0 0 0 4px rgba(110, 231, 183, 0.35); }
+  100% { transform: translateY(0);    box-shadow: 0 0 0 0 rgba(110, 231, 183, 0); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .maverick-agent-pulse {
+    animation: maverick-agent-pulse 1.6s ease-out;
+  }
+}

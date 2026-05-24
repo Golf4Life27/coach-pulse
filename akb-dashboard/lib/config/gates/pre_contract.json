@@ -1,0 +1,222 @@
+{
+  "$schema_note": "Pre-Contract Gate (Gate 4) per AKB_Deal_Flow_Orchestrator_Spec §4. 24 items. Highest-risk gate — runs when a PA arrives for signing, BEFORE Alex signs anything. This is the gate spec §13 Test 1 (Briyana 5/12) centers on: would have caught PC-08 blank EMD escrow, PC-20 sqft variance, PC-22 negative spread on PA-final numbers.\n\nPhase 1 scope: 6 items fire real (PC-16 TN check, PC-17 CMA, PC-20 partial sqft, PC-22 partial recompute, PC-23 buyer pipeline, PC-24 composite). Other 18 items return data_missing pending DocuSign MCP integration. The gate blocks on every PA until DocuSign wires in — that's the principle-correct default.\n\nPhase 2 (DocuSign integration): pa_document source dispatcher pulls envelope + form fields + attachments. Each PC-0X check reads from the parsed envelope. Inviolable items (PC-05 inspection contingency, PC-16 Memphis assignability) override-resistant per spec §7.",
+  "last_updated": "2026-05-13",
+  "source": "Orchestrator spec §4 Gate 4 + Briefing §3 hardcoded inviolable rules",
+  "version": 1,
+  "gate_id": "pre_contract",
+  "stage_from": "negotiating",
+  "stage_to": "under_contract",
+  "config": {
+    "inspection_period_min_days": 5,
+    "inspection_period_max_days": 10,
+    "closing_date_min_days_from_sign": 14,
+    "emd_max_pct_of_sale_price": 0.01,
+    "buyer_entity_required": "AKB Solutions LLC and/or assigns",
+    "buyer_entity_acceptable_variants": [
+      "AKB Solutions LLC and/or assigns",
+      "AKB Solutions LLC and assigns",
+      "AKB Solutions, LLC and/or assigns",
+      "AKB Solutions LLC or assigns"
+    ],
+    "lead_paint_disclosure_year_cutoff": 1978,
+    "sqft_variance_block_pct": 0.15,
+    "buyer_pipeline_min_in_zip": 3,
+    "tn_assignability_states": ["TN", "Tennessee"],
+    "confidence_recommend_sign_threshold": 80,
+    "confidence_human_review_threshold": 60
+  },
+  "items": [
+    {
+      "id": "PC-01",
+      "description": "Pull PA + all attached docs (disclosures, addenda)",
+      "data_sources": ["pa_document"],
+      "pass_criteria": "DocuSign envelope retrieved with all attachments enumerated. Phase 1: data_missing pending DocuSign MCP wire-in.",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PC-02",
+      "description": "Verify sale price matches negotiated agreement",
+      "data_sources": ["pa_document", "quo_thread", "gmail_thread"],
+      "pass_criteria": "PA sale_price field == agreed counter price from latest accepted-counter in negotiation thread. Phase 1: data_missing.",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PC-03",
+      "description": "Verify buyer entity = AKB Solutions LLC and/or assigns",
+      "data_sources": ["pa_document"],
+      "pass_criteria": "PA buyer_entity field matches one of buyer_entity_acceptable_variants. Phase 1: data_missing.",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PC-04",
+      "description": "Verify cash financing box checked",
+      "data_sources": ["pa_document"],
+      "pass_criteria": "PA financing_type = 'cash'. Phase 1: data_missing.",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PC-05",
+      "description": "Verify inspection contingency present (INVIOLABLE — never waived per Briefing §3)",
+      "data_sources": ["pa_document"],
+      "pass_criteria": "PA includes inspection contingency clause. Override is NOT permitted per spec §7. Phase 1: data_missing.",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PC-06",
+      "description": "Verify inspection period within [5, 10] days",
+      "data_sources": ["pa_document"],
+      "pass_criteria": "PA inspection_period_days within inspection_period_min_days..inspection_period_max_days. Phase 1: data_missing.",
+      "failure_action": "warn",
+      "blocking": false
+    },
+    {
+      "id": "PC-07",
+      "description": "Verify closing date ≥ 14 days from sign date",
+      "data_sources": ["pa_document"],
+      "pass_criteria": "PA closing_date - sign_date >= closing_date_min_days_from_sign. Phase 1: data_missing.",
+      "failure_action": "warn",
+      "blocking": false
+    },
+    {
+      "id": "PC-08",
+      "description": "Verify EMD escrow holder = title company (not broker)",
+      "data_sources": ["pa_document"],
+      "pass_criteria": "PA emd_escrow_holder is a title company, not a broker. Phase 1: data_missing.",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PC-09",
+      "description": "Verify EMD amount reasonable (≤1% sale price)",
+      "data_sources": ["pa_document"],
+      "pass_criteria": "PA emd_amount / sale_price <= emd_max_pct_of_sale_price. Phase 1: data_missing.",
+      "failure_action": "warn",
+      "blocking": false
+    },
+    {
+      "id": "PC-10",
+      "description": "Verify possession terms (at closing default)",
+      "data_sources": ["pa_document"],
+      "pass_criteria": "PA possession_terms == 'at_closing' or equivalent. Phase 1: data_missing.",
+      "failure_action": "warn",
+      "blocking": false
+    },
+    {
+      "id": "PC-11",
+      "description": "Verify lead paint disclosure if built pre-1978",
+      "data_sources": ["pa_document", "airtable_listing"],
+      "pass_criteria": "If listing.year_built < 1978, PA includes lead paint disclosure. Phase 1: data_missing.",
+      "failure_action": "warn",
+      "blocking": false
+    },
+    {
+      "id": "PC-12",
+      "description": "Verify all required attachments present",
+      "data_sources": ["pa_document"],
+      "pass_criteria": "Envelope includes PA + all state-required disclosures + any negotiated addenda. Phase 1: data_missing.",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PC-13",
+      "description": "Verify NO blank dollar fields in PA",
+      "data_sources": ["pa_document"],
+      "pass_criteria": "Every currency form field on the PA is filled in (no blanks). Phase 1: data_missing.",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PC-14",
+      "description": "Cross-reference PA terms vs negotiation thread",
+      "data_sources": ["pa_document", "quo_thread", "gmail_thread"],
+      "pass_criteria": "PA price, EMD, inspection period, closing date all match what was negotiated in thread. Phase 1: data_missing (PA side).",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PC-15",
+      "description": "Verify per-state assignment clause requirements",
+      "data_sources": ["pa_document", "airtable_listing"],
+      "pass_criteria": "PA includes state-required assignment language per listing.state. Phase 1: data_missing.",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PC-16",
+      "description": "Verify Memphis assignability check (if TN — INVIOLABLE per spec §7)",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "If listing.state in tn_assignability_states, surface 'PA must include Memphis-compliant assignment language' as informational requirement. Override NOT permitted.",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PC-17",
+      "description": "Pull current CMA for property",
+      "data_sources": ["airtable_listing", "cma"],
+      "pass_criteria": "RentCast returned >=1 comparable",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PC-18",
+      "description": "Verify ownership of record matches PA seller name",
+      "data_sources": ["pa_document"],
+      "pass_criteria": "PA seller_name matches county property records. Phase 1: data_missing (no records source + PA pending).",
+      "failure_action": "warn",
+      "blocking": false
+    },
+    {
+      "id": "PC-19",
+      "description": "Pull title prelim status (if available)",
+      "data_sources": ["title_prelim"],
+      "pass_criteria": "Title prelim ordered or in-progress. Phase 1: data_missing — title workflow is manual.",
+      "failure_action": "warn",
+      "blocking": false
+    },
+    {
+      "id": "PC-20",
+      "description": "Verify Sqft from CMA matches PA / our model",
+      "data_sources": ["airtable_listing", "cma", "pa_document"],
+      "pass_criteria": "|listing.buildingSqFt - median(comp.squareFootage)| / median <= sqft_variance_block_pct AND |PA.sqft - median| <= sqft_variance_block_pct. Phase 1: partial — listing vs CMA real, PA side data_missing.",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PC-21",
+      "description": "Flag any open liens > sale price",
+      "data_sources": ["title_prelim"],
+      "pass_criteria": "Open liens total <= sale price. Phase 1: data_missing — no lien source.",
+      "failure_action": "warn",
+      "blocking": false
+    },
+    {
+      "id": "PC-22",
+      "description": "Recompute end-buyer math with PA-final numbers",
+      "data_sources": ["airtable_listing", "pa_document"],
+      "pass_criteria": "Current Pricing Agent inputs produce non-negative spread + Your_MAO. Phase 1: partial — uses current listing inputs (PA-final data_missing).",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PC-23",
+      "description": "Buyer pipeline check: ≥3 active buyers in this ZIP",
+      "data_sources": ["airtable_listing", "buyer_pipeline"],
+      "pass_criteria": "Count of Buyers where Buyer_Active_Flag = true AND (listing.zip in preferred_zip_codes OR listing.city in preferred_cities) >= buyer_pipeline_min_in_zip",
+      "failure_action": "warn",
+      "blocking": false
+    },
+    {
+      "id": "PC-24",
+      "description": "Final confidence score — composite pass-route (≥80 recommend sign, 60-79 human review, <60 STOP)",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "Composite of all upstream checks. Phase 1: data_missing — most upstream checks pending DocuSign integration. Surface partial signal + 'do not sign until DocuSign wired'.",
+      "failure_action": "block",
+      "blocking": true
+    }
+  ]
+}
