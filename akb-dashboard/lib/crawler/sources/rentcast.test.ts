@@ -83,13 +83,8 @@ describe("mapListingToCandidate", () => {
     expect(c.listedDate).toBe("2026-05-01T00:00:00Z");
   });
 
-  it("derives distress from price-reduction history", () => {
-    expect(mapListingToCandidate(raw).hasDistressSignal).toBe(true);
-  });
-
-  it("no distress when no reduction", () => {
-    const c = mapListingToCandidate({ ...raw, history: [{ price: 185000 }] });
-    expect(c.hasDistressSignal).toBe(false);
+  it("does NOT set a distress field on the intake candidate (distress dropped from intake)", () => {
+    expect("hasDistressSignal" in mapListingToCandidate(raw)).toBe(false);
   });
 
   it("falls back to mlsNumber then address for sourceId", () => {

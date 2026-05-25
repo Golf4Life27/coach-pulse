@@ -41,10 +41,6 @@ describe("mapSnapshotToCandidate", () => {
     expect(c.listedDate).toBeNull();
   });
 
-  it("defaults hasDistressSignal false (events package not wired)", () => {
-    expect(mapSnapshotToCandidate(raw).hasDistressSignal).toBe(false);
-  });
-
   it("degrades gracefully on a sparse/empty property object", () => {
     const c = mapSnapshotToCandidate({});
     expect(c.address).toBeNull();

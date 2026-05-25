@@ -77,9 +77,6 @@ export function mapSnapshotToCandidate(p: AttomProperty): IntakeCandidate {
     // ATTOM listings/MLS endpoint is wired (open blocker).
     listPrice: null,
     listedDate: null,
-    // Distress: snapshot has no default foreclosure/lien flag. false
-    // until the events/assessment package is wired (open blocker).
-    hasDistressSignal: false,
   };
 }
 

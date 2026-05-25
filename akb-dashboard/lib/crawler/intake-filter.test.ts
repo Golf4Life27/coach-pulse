@@ -25,7 +25,6 @@ function cand(over: Partial<IntakeCandidate> = {}): IntakeCandidate {
     beds: 3,
     listPrice: 150000,
     listedDate: recent,
-    hasDistressSignal: true,
     ...over,
   };
 }
@@ -57,15 +56,18 @@ describe("evaluateIntakeCandidate", () => {
   it("rejects beds < 2", () => {
     expect(evaluateIntakeCandidate(cand({ beds: 1 }), NOW).reasons).toContain("beds_below_min");
   });
-  it("rejects price below band", () => {
-    expect(evaluateIntakeCandidate(cand({ listPrice: 50000 }), NOW).reasons).toContain("list_price_out_of_band");
+  it("rejects price below band ($20K floor)", () => {
+    expect(evaluateIntakeCandidate(cand({ listPrice: 15000 }), NOW).reasons).toContain("list_price_out_of_band");
   });
   it("rejects price above band", () => {
     expect(evaluateIntakeCandidate(cand({ listPrice: 500000 }), NOW).reasons).toContain("list_price_out_of_band");
   });
-  it("accepts price at band edges", () => {
-    expect(evaluateIntakeCandidate(cand({ listPrice: 75000 }), NOW).accept).toBe(true);
+  it("accepts price at band edges ($20K / $400K)", () => {
+    expect(evaluateIntakeCandidate(cand({ listPrice: 20000 }), NOW).accept).toBe(true);
     expect(evaluateIntakeCandidate(cand({ listPrice: 400000 }), NOW).accept).toBe(true);
+  });
+  it("accepts a sub-$75K listing (floor lowered to $20K)", () => {
+    expect(evaluateIntakeCandidate(cand({ listPrice: 45000 }), NOW).accept).toBe(true);
   });
   it("flags missing list price (the ATTOM snapshot blocker)", () => {
     expect(evaluateIntakeCandidate(cand({ listPrice: null }), NOW).reasons).toContain("list_price_missing");
@@ -76,8 +78,10 @@ describe("evaluateIntakeCandidate", () => {
   it("flags missing listed date", () => {
     expect(evaluateIntakeCandidate(cand({ listedDate: null }), NOW).reasons).toContain("listed_date_missing");
   });
-  it("rejects no distress signal", () => {
-    expect(evaluateIntakeCandidate(cand({ hasDistressSignal: false }), NOW).reasons).toContain("no_distress_signal");
+  it("accepts a band listing with NO distress signal (distress gate removed)", () => {
+    // First-contact fires on every active band listing — the 65% script is
+    // the door-opener; price-reduction is a downstream re-engagement trigger.
+    expect(evaluateIntakeCandidate(cand(), NOW).accept).toBe(true);
   });
   it("rejects excluded states", () => {
     for (const s of ["IL", "MO", "SC", "NC", "OK", "ND"]) {
@@ -93,12 +97,12 @@ describe("evaluateIntakeCandidate", () => {
   });
   it("collects ALL failing reasons (not short-circuit)", () => {
     const r = evaluateIntakeCandidate(
-      cand({ propertyType: "Condo", beds: 1, listPrice: 10000, hasDistressSignal: false, state: "IL" }),
+      cand({ propertyType: "Condo", beds: 1, listPrice: 10000, state: "IL" }),
       NOW,
     );
     expect(r.accept).toBe(false);
     expect(r.reasons).toEqual(
-      expect.arrayContaining(["not_sfr", "beds_below_min", "list_price_out_of_band", "no_distress_signal", "excluded_state"]),
+      expect.arrayContaining(["not_sfr", "beds_below_min", "list_price_out_of_band", "excluded_state"]),
     );
   });
 });

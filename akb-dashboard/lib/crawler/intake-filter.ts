@@ -6,13 +6,20 @@
 // adapter (e.g. lib/crawler/sources/attom.ts) maps vendor JSON → this
 // shape; the filter never sees vendor-specific fields.
 //
-// Established intake rules (locked 2026-05-25):
+// Established intake rules (locked 2026-05-25; distress dropped per
+// operator 2026-05-25):
 //   - propertyType = SFR (single-family residential)
 //   - beds >= 2
-//   - $75,000 <= listPrice <= $400,000
+//   - $20,000 <= listPrice <= $400,000 (flat band; floor lowered from
+//     $75K per operator 2026-05-25 — tune from dry-run output)
 //   - listedDate within last 90 days
-//   - distress signal present
 //   - State NOT IN {IL, MO, SC, NC, OK, ND} (wholesale-restrictive)
+//
+// NO distress-signal gate at intake: the 65%-of-list outreach script is
+// itself the door-opener, and first contact should fire on EVERY active
+// band listing (long-DOM deals are exactly where we want the first low
+// offer). Volume up substantially — intentional. Price-reduction detection
+// is a SEPARATE downstream re-engagement trigger (INV-030), NOT intake.
 
 export const EXCLUDED_STATES: ReadonlySet<string> = new Set([
   "IL", "MO", "SC", "NC", "OK", "ND",
@@ -20,7 +27,7 @@ export const EXCLUDED_STATES: ReadonlySet<string> = new Set([
 
 export const INTAKE_RULES = {
   minBeds: 2,
-  minListPrice: 75_000,
+  minListPrice: 20_000,
   maxListPrice: 400_000,
   maxListedAgeDays: 90,
 } as const;
@@ -38,9 +45,6 @@ export interface IntakeCandidate {
   listPrice: number | null;
   /** ISO date the listing went active. */
   listedDate: string | null;
-  /** Adapter-derived: any distress signal present (pre-foreclosure,
-   *  tax lien, vacant, high equity + long tenure, etc.). */
-  hasDistressSignal: boolean;
 }
 
 export type IntakeRejectReason =
@@ -50,7 +54,6 @@ export type IntakeRejectReason =
   | "list_price_missing"
   | "listed_date_missing"
   | "listed_date_too_old"
-  | "no_distress_signal"
   | "excluded_state"
   | "state_missing";
 
@@ -100,8 +103,6 @@ export function evaluateIntakeCandidate(
       reasons.push("listed_date_too_old");
     }
   }
-
-  if (!c.hasDistressSignal) reasons.push("no_distress_signal");
 
   if (!c.state) {
     reasons.push("state_missing");

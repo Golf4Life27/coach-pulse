@@ -59,9 +59,14 @@ interface RentCastListing {
   history?: Record<string, RentCastHistoryEvent> | RentCastHistoryEvent[];
 }
 
-/** Pure: detect a price reduction across the listing's history — the
- *  distress signal for active listings (motivated seller). RentCast
- *  history is keyed by date (object) or an array; handle both. */
+/** Pure: detect a price reduction across the listing's history. RentCast
+ *  history is keyed by date (object) or an array; handle both.
+ *
+ *  RESERVED FOR INV-030 (downstream re-engagement / price-reduction
+ *  detector) — NOT used by intake. Intake fires first contact on every
+ *  active band listing regardless of price history (operator 2026-05-25);
+ *  price drops are a separate Crier-2 re-engagement trigger. Kept exported
+ *  so the future re-engagement cron reuses this primitive. */
 export function detectPriceReduction(
   history: RentCastListing["history"],
   currentPrice: number | null | undefined,
@@ -113,7 +118,6 @@ export function mapListingToCandidate(l: RentCastListing): IntakeCandidate {
     beds: l.bedrooms ?? null,
     listPrice: l.price ?? null,
     listedDate: l.listedDate ?? null,
-    hasDistressSignal: detectPriceReduction(l.history, l.price),
   };
 }
 
