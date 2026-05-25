@@ -35,6 +35,10 @@
     {
       "path": "/api/cron/data-federation-pull",
       "schedule": "0 16 * * *"
+    },
+    {
+      "path": "/api/cron/attom-intake",
+      "schedule": "0 3 * * *"
     }
   ]
 }
