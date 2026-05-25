@@ -4,8 +4,14 @@
 // GET /api/cron/listings-intake[?dry_run=1]
 //
 // Daily 03:00 UTC. For each operator-configured target ZIP:
-//   RentCast /listings/sale → normalize → intake-filter → dedup vs
-//   Listings_V1 by address → (live) create / (dry) report.
+//   RentCast /listings/sale → normalize → intake-filter (price/beds/SFR/
+//   state/listed_date) → dedup vs Listings_V1 → Firecrawl verify (INV-028:
+//   exclude renovated/turnkey via portal-page scrape + still-Active check)
+//   → (live) create / (dry) report.
+//
+// Firecrawl verify runs AFTER dedup (never scrape a known address) and is
+// budget-gated (FIRECRAWL_MAX_SCRAPES_PER_RUN). New reject reasons:
+// firecrawl_renovated, firecrawl_inactive, firecrawl_url_unresolved.
 //
 // Source-neutral route name (RentCast today; pluggable later). ATTOM
 // adapter is retained for INV-023 Underwriter deep-math, not intake.
@@ -40,6 +46,7 @@ import {
 import { rentcastQuotaAllows, computeBurnRate } from "@/lib/maverick/rentcast-burn-rate";
 import { fetchExternalRentCastState } from "@/lib/maverick/sources/external-rentcast";
 import { fetchVercelKvAuditState } from "@/lib/maverick/sources/vercel-kv-audit";
+import { verifyListing } from "@/lib/crawler/sources/firecrawl";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -49,6 +56,10 @@ const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
 const LISTINGS_TABLE = "tbldMjKBgPiq45Jjs";
 
 const PER_RUN_CAP = Number(process.env.RENTCAST_INTAKE_MAX_CALLS_PER_RUN ?? "30");
+// Firecrawl verification budget — one /v2/search (inline scrape) per
+// accepted, non-duplicate candidate. Default 1000 covers the ~974 baseline
+// + headroom. Over budget → stop verifying + Spine-write.
+const FIRECRAWL_MAX_SCRAPES_PER_RUN = Number(process.env.FIRECRAWL_MAX_SCRAPES_PER_RUN ?? "1000");
 
 function readTargetZips(): string[] {
   return (process.env.CRAWLER_TARGET_ZIPS ?? "")
@@ -220,12 +231,22 @@ export async function GET(req: Request) {
     duplicates: 0,
     written: 0,
     per_zip: [] as Array<{ zip: string; raw: number; accepted: number }>,
-    would_write: [] as Array<{ sourceId: string; address: string | null; zip: string | null; listPrice: number | null }>,
+    would_write: [] as Array<{ sourceId: string; address: string | null; zip: string | null; listPrice: number | null; firecrawlUrl: string | null }>,
     reject_reason_counts: {} as Record<string, number>,
     per_zip_errors: [] as Array<{ zip: string; error: string }>,
     credentialed: true,
+    firecrawl: {
+      credentialed: true,
+      scrapes_used: 0,
+      credits_used: 0,
+      budget: FIRECRAWL_MAX_SCRAPES_PER_RUN,
+      budget_hit: false,
+    },
   };
   const now = new Date();
+  const bump = (reason: string) => {
+    summary.reject_reason_counts[reason] = (summary.reject_reason_counts[reason] ?? 0) + 1;
+  };
 
   for (const zip of zips) {
     const fetchResult = await fetchListingsByZip(zip);
@@ -243,22 +264,56 @@ export async function GET(req: Request) {
     const { accepted, rejected } = filterIntakeCandidates(fetchResult.candidates, now);
     summary.rejected += rejected.length;
     for (const r of rejected) {
-      for (const reason of r.reasons) {
-        summary.reject_reason_counts[reason] = (summary.reject_reason_counts[reason] ?? 0) + 1;
-      }
+      for (const reason of r.reasons) bump(reason);
     }
 
     let zipAccepted = 0;
     for (const c of accepted) {
+      // Dedup BEFORE Firecrawl — never spend a scrape on a known address.
       const key = normalizeAddressKey(c.address);
       if (key && existingKeys.has(key)) {
         summary.duplicates++;
         continue;
       }
+
+      // ── Firecrawl verify (renovation/turnkey exclusion + staleness) ──
+      if (summary.firecrawl.scrapes_used >= FIRECRAWL_MAX_SCRAPES_PER_RUN) {
+        summary.firecrawl.budget_hit = true;
+        bump("firecrawl_skipped_budget");
+        continue;
+      }
+      const fc = await verifyListing(c.address);
+      summary.firecrawl.scrapes_used++;
+      summary.firecrawl.credits_used += fc.creditsUsed;
+      if (!fc.credentialed) {
+        summary.firecrawl.credentialed = false;
+        summary.per_zip_errors.push({ zip, error: "FIRECRAWL_API_KEY not set" });
+        bump("firecrawl_not_configured");
+        continue;
+      }
+      if (fc.error) {
+        summary.per_zip_errors.push({ zip, error: `firecrawl ${c.sourceId}: ${fc.error}` });
+        bump("firecrawl_error");
+        continue;
+      }
+      if (!fc.resolved) {
+        bump("firecrawl_url_unresolved");
+        continue;
+      }
+      if (!fc.stillActive) {
+        bump("firecrawl_inactive");
+        continue;
+      }
+      if (fc.hasRenovatedLanguage) {
+        bump("firecrawl_renovated");
+        continue;
+      }
+
+      // Green: active + not renovated → intake.
       summary.accepted++;
       zipAccepted++;
       if (dryRun) {
-        summary.would_write.push({ sourceId: c.sourceId, address: c.address, zip: c.zip, listPrice: c.listPrice });
+        summary.would_write.push({ sourceId: c.sourceId, address: c.address, zip: c.zip, listPrice: c.listPrice, firecrawlUrl: fc.url });
       } else {
         try {
           await createIntakeListing(c);
@@ -275,6 +330,24 @@ export async function GET(req: Request) {
     summary.per_zip.push({ zip, raw: fetchResult.candidates.length, accepted: zipAccepted });
   }
 
+  // Firecrawl budget exceeded mid-run → Spine-write so operator raises cap.
+  if (summary.firecrawl.budget_hit) {
+    try {
+      await writeState({
+        event_type: "decision",
+        attribution_agent: "scout",
+        title: `Listings-intake hit Firecrawl scrape budget (${FIRECRAWL_MAX_SCRAPES_PER_RUN})`,
+        description:
+          `listings-intake exhausted its Firecrawl verification budget mid-run. ` +
+          `scrapes_used=${summary.firecrawl.scrapes_used}, credits_used=${summary.firecrawl.credits_used}. ` +
+          `Remaining accepted candidates were skipped (firecrawl_skipped_budget). ` +
+          `Raise FIRECRAWL_MAX_SCRAPES_PER_RUN or split the ZIP set across days.`,
+      });
+    } catch (err) {
+      console.error("[listings-intake] Spine write (firecrawl budget) failed:", err);
+    }
+  }
+
   await audit({
     agent: "scout",
     event: dryRun ? "listings_intake_dry_run" : "listings_intake_live",
@@ -287,6 +360,8 @@ export async function GET(req: Request) {
       duplicates: summary.duplicates,
       written: summary.written,
       reject_reasons: summary.reject_reason_counts,
+      firecrawl_scrapes: summary.firecrawl.scrapes_used,
+      firecrawl_credits: summary.firecrawl.credits_used,
       per_zip: summary.per_zip,
     },
     ms: Date.now() - t0,
