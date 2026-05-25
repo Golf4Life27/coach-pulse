@@ -60,7 +60,8 @@ export type DataSource =
   | "pricing_agent_run"
   | "audit_log"
   | "pa_document"
-  | "title_prelim";
+  | "title_prelim"
+  | "property_intel";
 
 export type FailureAction = "block" | "warn" | "surface_to_alex";
 
@@ -149,10 +150,23 @@ export interface PaDocumentSnapshot {
   // Phase 1 leaves them as generic formFields/raw envelope.
 }
 
+// Property_Intel snapshot (INV-022 federation table) — the subset the
+// Pre-EMD gate (INV-029) reads. Built by gate-runner from the raw
+// Airtable-name-keyed fields returned by findPropertyIntelRecordByListing.
+// null when no Property_Intel row exists for the record yet.
+export interface PropertyIntelSnapshot {
+  buyerMedianValue: number | null;
+  discrepancySeverityMax: string | null; // none | info | amber | red
+  hydrationStatus: string | null;
+  lastHydratedAt: string | null;
+}
+
 export interface GateContext {
   recordId: string;
   listing: Listing | null;
   auditLog?: AuditEntry[] | null;
+  // Gate 5 (Pre-EMD) source:
+  propertyIntel?: PropertyIntelSnapshot | null;
   // Gate 3 (Pre-Negotiation) sources:
   quoThread?: QuoMessage[] | null;
   gmailThread?: GmailMessage[] | null;

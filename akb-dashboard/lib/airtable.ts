@@ -78,6 +78,9 @@ const LISTING_FIELDS: Record<string, string> = {
   // Auxiliary to rehabConfidenceScore (numeric). Per Constitution Rule 3,
   // manual values are fallback-only — vision must fail first.
   fldhn2vxQipa3PVsX: "rehabSource",
+  // INV-029 — Pre-EMD Gate operator-verify flags (checkboxes).
+  fldZx12OwNJEXWbpQ: "memphisAssignmentVerified",
+  fldl8GIxjBS5KiMq4: "emdOperatorSignoff",
   fldoNZxSZqQsCLIW6: "realArvMedian",
   // Phase 4C.1 — RentCast AVM rent estimate, drives landlord-track MAO.
   fldrFB0owY6BnQewr: "estimatedMonthlyRent",
@@ -171,6 +174,8 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "Rehab_Line_Items_JSON": "rehabLineItemsJson",
   "Rehab_Red_Flags": "rehabRedFlags",
   "Rehab_Source": "rehabSource",
+  "Memphis_Assignment_Verified": "memphisAssignmentVerified",
+  "EMD_Operator_Signoff": "emdOperatorSignoff",
   "Photo_Confidence": "photoConfidence",
   "Line_Items_JSON": "lineItemsJson",
   "Red_Flags": "redFlags",

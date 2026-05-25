@@ -32,7 +32,9 @@ import type {
   GateRunResult,
   LiveListingSnapshot,
   PipelineStage,
+  PropertyIntelSnapshot,
 } from "./types";
+import { findPropertyIntelRecordByListing } from "@/lib/federation/property-intel-store";
 
 interface RunGateOpts {
   gate: Gate;
@@ -95,6 +97,7 @@ export async function runGate(opts: RunGateOpts): Promise<GateRunResult> {
     cma: (fetched.cma as GateContext["cma"] | undefined) ?? null,
     paDocument: (fetched.pa_document as GateContext["paDocument"] | undefined) ?? null,
     buyerPipeline: (fetched.buyer_pipeline as GateContext["buyerPipeline"] | undefined) ?? null,
+    propertyIntel: (fetched.property_intel as PropertyIntelSnapshot | undefined) ?? null,
   };
 
   // ── 4. Run checks ──────────────────────────────────────────────────
@@ -304,7 +307,26 @@ async function fetchSource(
       throw new Error(
         "pa_document source requires DocuSign JWT integration (Phase 12.7). lib/docusign.ts JWT client + briefing source landed in Commit G; live calls fire once DOCUSIGN_INTEGRATION_KEY / DOCUSIGN_USER_ID / DOCUSIGN_PRIVATE_KEY env are provisioned. Note: ab943441-29da-4bcb-8d3f-19efc0412d6c is Alex's DocuSign account_id, NOT an MCP server UUID — that conflation came from the 5/13 announcement notes and was corrected 5/18. The actual production path is REST-over-JWT, not MCP. Add per-envelope pa_document fetcher here when env lands.",
       );
-    // Future sources for Gate 5:
+    case "property_intel": {
+      // Gate 5 (Pre-EMD, INV-029). Reads the INV-022 federation row for
+      // this listing. null (no row yet) is a valid signal — the gate
+      // checks treat absent Buyer_Median / non-green severity as block.
+      const rec = await findPropertyIntelRecordByListing(recordId);
+      if (!rec) return null;
+      const f = rec.fields;
+      const num = (v: unknown): number | null =>
+        typeof v === "number" ? v : null;
+      const str = (v: unknown): string | null =>
+        typeof v === "string" && v.trim() !== "" ? v : null;
+      const snapshot: PropertyIntelSnapshot = {
+        buyerMedianValue: num(f["Buyer_Median_Value"]),
+        discrepancySeverityMax: str(f["Discrepancy_Severity_Max"]),
+        hydrationStatus: str(f["Hydration_Status"]),
+        lastHydratedAt: str(f["Last_Hydrated_At"]),
+      };
+      return snapshot;
+    }
+    // Future sources:
     case "airtable_deal":
     case "pricing_agent_run":
     case "title_prelim":

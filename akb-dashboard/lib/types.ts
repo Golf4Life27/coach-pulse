@@ -110,6 +110,11 @@ export interface Listing {
   // the persisted Est_Rehab came from the autonomous vision pipeline
   // or from the operator/partner fallback unlocked after vision failed.
   rehabSource?: "vision" | "manual_operator" | "manual_partner" | null;
+  // INV-029 — Pre-EMD Gate operator-verify flags. Memphis_Assignment_Verified:
+  // operator confirmed non-assignment language absent (required when State=TN).
+  // EMD_Operator_Signoff: final "Alex looked at this" gate before EMD wire.
+  memphisAssignmentVerified?: boolean;
+  emdOperatorSignoff?: boolean;
   photoConfidence?: number | null;
   lineItemsJson?: string | null;
   redFlags?: string[] | string | null;
