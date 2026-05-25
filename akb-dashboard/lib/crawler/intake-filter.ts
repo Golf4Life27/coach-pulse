@@ -139,3 +139,80 @@ export function normalizeAddressKey(address: string | null): string {
   if (!address) return "";
   return address.toLowerCase().replace(/[.,#]/g, "").replace(/\s+/g, " ").trim();
 }
+
+// ── Listing-content filters (operate on Firecrawl-scraped portal text) ──
+//
+// Run AFTER the Firecrawl renovation-keyword check passes, in order:
+//   1. wholesaler_excluded (hard reject) — agent stated buyer-type pref
+//   2. condition_signal_missing (hard reject) — vibe-copy with no condition
+//      or motivation signal can't justify a 65%-of-list offer
+//
+// Word-boundary matching (NOT substring): "structural" matches, but
+// "infrastructure" does not. The renovation filter (lib/.../firecrawl.ts)
+// keeps its substring match unchanged — no regression.
+
+export const WHOLESALER_EXCLUSION_KEYWORDS: readonly string[] = [
+  "no wholesalers", "no wholesaler", "no wholesaling",
+  "wholesalers need not", "wholesalers will not", "not for wholesalers",
+  "end users only", "end-users only", "end user only", "end-user only",
+  "owner occupants only", "owner-occupant only",
+  "no investors", "investors need not", "not for investors",
+  "no flippers", "no flipping",
+  "principals only", "principal buyers only", "direct buyers only",
+  "no assignments", "non-assignable", "not assignable",
+  "no daisy chain", "no daisy chains",
+];
+
+export const DISTRESS_CONDITION_KEYWORDS: readonly string[] = [
+  "as-is", "as is", "sold as-is", "sold as is",
+  "handyman special", "handyman",
+  "investor opportunity", "investor special",
+  "fixer", "fixer-upper", "fixer upper",
+  "needs work", "needs tlc", "tlc",
+  "needs repairs", "needs repair", "needs updating", "needs updates",
+  "foundation repair", "foundation issue",
+  "structural", "structural issue",
+  "cash only", "cash or hard money",
+  "won't qualify for financing", "will not qualify",
+  "estate sale", "probate", "inherited",
+  "motivated seller", "must sell",
+  "priced to sell", "bring offers",
+  "any offer considered", "below market",
+  "bring your contractor", "bring contractor",
+];
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Pure: keywords whose WORD-BOUNDARY match appears in text (distinct, in
+ *  list order). Case-insensitive. "structural" matches "structural issue"
+ *  but NOT "infrastructure". */
+export function matchKeywordsWordBoundary(
+  text: string | null | undefined,
+  keywords: readonly string[],
+): string[] {
+  if (!text) return [];
+  return keywords.filter((k) => new RegExp(`\\b${escapeRegex(k)}\\b`, "i").test(text));
+}
+
+export interface ListingContentEvaluation {
+  wholesalerExcluded: boolean;
+  matchedWholesalerKeywords: string[];
+  hasConditionSignal: boolean;
+  matchedDistressKeywords: string[];
+}
+
+/** Pure: evaluate scraped portal text for wholesaler-exclusion +
+ *  distress/condition signal. Caller applies the reject ordering
+ *  (wholesaler first, then condition-missing). */
+export function evaluateListingContent(text: string | null | undefined): ListingContentEvaluation {
+  const matchedWholesalerKeywords = matchKeywordsWordBoundary(text, WHOLESALER_EXCLUSION_KEYWORDS);
+  const matchedDistressKeywords = matchKeywordsWordBoundary(text, DISTRESS_CONDITION_KEYWORDS);
+  return {
+    wholesalerExcluded: matchedWholesalerKeywords.length > 0,
+    matchedWholesalerKeywords,
+    hasConditionSignal: matchedDistressKeywords.length > 0,
+    matchedDistressKeywords,
+  };
+}

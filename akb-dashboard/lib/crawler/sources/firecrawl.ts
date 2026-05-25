@@ -21,6 +21,8 @@
 // ⚠️ FIRECRAWL_API_KEY must be set in prod env (operator action) — the
 // adapter returns credentialed=false when absent.
 
+import { evaluateListingContent } from "@/lib/crawler/intake-filter";
+
 const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY;
 const FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v2/search";
 const SEARCH_LIMIT = 5;
@@ -137,6 +139,14 @@ export interface FirecrawlVerifyResult {
   stillActive: boolean;
   hasRenovatedLanguage: boolean;
   matchedKeywords: string[];
+  /** Listing-content checks on the scraped page text (run after renovation):
+   *  wholesalerExcluded = agent stated buyer-type preference (hard reject);
+   *  hasConditionSignal = page affirmatively shows distress/motivation/as-is
+   *  (absence → condition_signal_missing hard reject). */
+  wholesalerExcluded: boolean;
+  matchedWholesalerKeywords: string[];
+  hasConditionSignal: boolean;
+  matchedDistressKeywords: string[];
   creditsUsed: number;
   /** true when Firecrawl returned 429 even after exhausting retries —
    *  distinct from a generic error (caller → firecrawl_rate_limited). */
@@ -213,6 +223,10 @@ export async function verifyListing(
     stillActive: false,
     hasRenovatedLanguage: false,
     matchedKeywords: [],
+    wholesalerExcluded: false,
+    matchedWholesalerKeywords: [],
+    hasConditionSignal: false,
+    matchedDistressKeywords: [],
     creditsUsed: 0,
     rateLimited: false,
     error: null,
@@ -255,6 +269,7 @@ export async function verifyListing(
       return { ...base, creditsUsed, resolved: false };
     }
     const reno = detectRenovationLanguage(pick.markdown);
+    const content = evaluateListingContent(pick.markdown);
     return {
       credentialed: true,
       resolved: true,
@@ -262,6 +277,10 @@ export async function verifyListing(
       stillActive: detectStillActive(pick.markdown),
       hasRenovatedLanguage: reno.matched,
       matchedKeywords: reno.matchedKeywords,
+      wholesalerExcluded: content.wholesalerExcluded,
+      matchedWholesalerKeywords: content.matchedWholesalerKeywords,
+      hasConditionSignal: content.hasConditionSignal,
+      matchedDistressKeywords: content.matchedDistressKeywords,
       creditsUsed,
       rateLimited: false,
       error: null,

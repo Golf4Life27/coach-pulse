@@ -342,8 +342,21 @@ export async function GET(req: Request) {
         bump("firecrawl_renovated");
         continue;
       }
+      // Wholesaler-exclusion: agent stated buyer-type preference. Runs
+      // before the condition check (stronger, explicit signal).
+      if (fc.wholesalerExcluded) {
+        bump("wholesaler_excluded");
+        continue;
+      }
+      // Condition-signal-missing: vibe-copy with zero distress/motivation/
+      // as-is language can't justify a 65%-of-list offer.
+      if (!fc.hasConditionSignal) {
+        bump("condition_signal_missing");
+        continue;
+      }
 
-      // Green: active + not renovated → intake.
+      // Green: active + not renovated + not wholesaler-excluded + has a
+      // condition signal → intake.
       summary.accepted++;
       zipAccepted++;
       if (dryRun) {
