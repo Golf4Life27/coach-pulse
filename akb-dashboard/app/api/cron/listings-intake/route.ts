@@ -1,31 +1,29 @@
-// ATTOM auto-intake cron (Ship 2 — replaces PropStream intake path).
+// Listings auto-intake cron (Ship 2 — RentCast source).
 // @agent: scout
 //
-// GET /api/cron/attom-intake[?dry_run=1]
+// GET /api/cron/listings-intake[?dry_run=1]
 //
 // Daily 03:00 UTC. For each operator-configured target ZIP:
-//   fetch ATTOM snapshot → normalize → intake-filter → dedup vs
-//   Listings_V1 by address → (live) create new records / (dry) report.
+//   RentCast /listings/sale → normalize → intake-filter → dedup vs
+//   Listings_V1 by address → (live) create / (dry) report.
 //
-// SAFETY DEFAULTS (per ship order):
-//   - DRY RUN by default. Writes only when ATTOM_INTAKE_LIVE="true" AND
-//     the request does not pass ?dry_run=1. First execution is dry —
-//     operator reviews output before flipping ATTOM_INTAKE_LIVE.
-//   - ZIP list is operator-provided via ATTOM_TARGET_ZIPS (comma-sep).
-//     NOT autodiscovered. Empty → clean no-op that surfaces the blocker.
-//   - New live records get Outreach_Status="" (unset) so H2 Crier picks
-//     them up automatically.
+// Source-neutral route name (RentCast today; pluggable later). ATTOM
+// adapter is retained for INV-023 Underwriter deep-math, not intake.
 //
-// OPEN BLOCKERS (surfaced 2026-05-25 — cron is inert/zero-yield until
-// resolved): (a) ATTOM /property/snapshot lacks active list price +
-// listing date → intake filter rejects all candidates on
-// list_price_missing until the ATTOM listings/MLS endpoint is wired;
-// (b) ATTOM_TARGET_ZIPS not yet configured; (c) response field paths
-// need validation against a live dry-run.
+// Safety rails (per ship order):
+//   - DRY RUN by default; writes only when CRAWLER_INTAKE_LIVE="true"
+//     AND not ?dry_run=1. First execution is dry — operator reviews.
+//   - CRAWLER_TARGET_ZIPS (comma-sep) operator-provided; NOT
+//     autodiscovered. Empty → clean no-op surfacing the blocker.
+//   - RentCast quota gate (rentcastQuotaAllows): hard per-run cap +
+//     soft weekly-remaining estimate. Over budget → stall + Spine-write.
+//   - MAVERICK_CRON_ENABLED gate, dedup-by-address, Outreach_Status=""
+//     on live write so H2 Crier picks it up.
 
 import { NextResponse } from "next/server";
 import { getListings } from "@/lib/airtable";
 import { audit } from "@/lib/audit-log";
+import { writeState } from "@/lib/maverick/write-state";
 import {
   authenticate,
   hasDashboardSession,
@@ -33,12 +31,15 @@ import {
   readAuthHeaders,
 } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
-import { fetchListingsByZip } from "@/lib/crawler/sources/attom";
+import { fetchListingsByZip } from "@/lib/crawler/sources/rentcast";
 import {
   filterIntakeCandidates,
   normalizeAddressKey,
   type IntakeCandidate,
 } from "@/lib/crawler/intake-filter";
+import { rentcastQuotaAllows, computeBurnRate } from "@/lib/maverick/rentcast-burn-rate";
+import { fetchExternalRentCastState } from "@/lib/maverick/sources/external-rentcast";
+import { fetchVercelKvAuditState } from "@/lib/maverick/sources/vercel-kv-audit";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -47,16 +48,39 @@ const AIRTABLE_PAT = process.env.AIRTABLE_PAT;
 const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
 const LISTINGS_TABLE = "tbldMjKBgPiq45Jjs";
 
-/** Operator-provided target ZIPs (comma-separated). NOT autodiscovered. */
+const PER_RUN_CAP = Number(process.env.RENTCAST_INTAKE_MAX_CALLS_PER_RUN ?? "30");
+
 function readTargetZips(): string[] {
-  return (process.env.ATTOM_TARGET_ZIPS ?? "")
+  return (process.env.CRAWLER_TARGET_ZIPS ?? "")
     .split(",")
     .map((z) => z.trim())
     .filter((z) => /^\d{5}$/.test(z));
 }
 
-/** Live write of a new intake record. Outreach_Status="" so H2 Crier
- *  picks it up. Only called in live mode. */
+/** Best-effort estimate of remaining RentCast quota this cycle. Optimistic
+ *  (burn-rate consumed estimate counts pricing-agent events only) — used as
+ *  the SOFT gate; the per-run cap is the hard one. null on any failure. */
+async function estimateRentcastRemaining(): Promise<number | null> {
+  try {
+    const [rc, au] = await Promise.all([
+      fetchExternalRentCastState(),
+      fetchVercelKvAuditState(),
+    ]);
+    if (!rc.ok || !rc.data) return null;
+    const now = new Date();
+    const daysElapsedInCycle = now.getUTCDate(); // days into the month
+    const burn = computeBurnRate({
+      rentcast: rc.data,
+      audit: au.ok ? au.data : null,
+      windowHours: 24,
+      daysElapsedInCycle,
+    });
+    return burn.estimated_calls_remaining;
+  } catch {
+    return null;
+  }
+}
+
 async function createIntakeListing(c: IntakeCandidate): Promise<string> {
   if (!AIRTABLE_PAT) throw new Error("AIRTABLE_PAT not set");
   const url = `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}`;
@@ -66,7 +90,7 @@ async function createIntakeListing(c: IntakeCandidate): Promise<string> {
     State: c.state ?? "",
     Zip: c.zip ?? "",
     Outreach_Status: "",
-    Verification_Notes: `[${new Date().toISOString()}] ATTOM auto-intake (${c.sourceId}).`,
+    Verification_Notes: `[${new Date().toISOString()}] RentCast auto-intake (${c.sourceId}).`,
   };
   if (c.propertyType) fields["Property_Type"] = c.propertyType;
   if (c.beds != null) fields["Bedrooms"] = c.beds;
@@ -87,7 +111,7 @@ export async function GET(req: Request) {
   const t0 = Date.now();
   const url = new URL(req.url);
 
-  // ── Auth waterfall (mirrors data-federation-pull / rehab-vision-retry) ──
+  // ── Auth waterfall ──────────────────────────────────────────────
   const cookieHeader = req.headers.get("cookie");
   const isDashboard = hasDashboardSession(cookieHeader);
   let authKind: "dashboard_session" | "oauth" | "cron" | "bearer_dev" | "none" = "none";
@@ -109,32 +133,72 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "cron_disabled" }, { status: 503 });
   }
 
-  // ── Dry-run resolution: dry unless explicitly live AND not forced dry ──
-  const liveEnv = process.env.ATTOM_INTAKE_LIVE === "true";
+  const liveEnv = process.env.CRAWLER_INTAKE_LIVE === "true";
   const forcedDry = url.searchParams.get("dry_run") === "1";
   const dryRun = !liveEnv || forcedDry;
 
-  // ── ZIP gate (stall + surface if unconfigured) ──────────────────────
+  // ── ZIP gate ────────────────────────────────────────────────────
   const zips = readTargetZips();
   if (zips.length === 0) {
     await audit({
       agent: "scout",
-      event: "attom_intake_no_zips",
+      event: "listings_intake_no_zips",
       status: "uncertain",
       inputSummary: { auth_kind: authKind, dry_run: dryRun },
-      outputSummary: { blocker: "ATTOM_TARGET_ZIPS not configured", duration_ms: Date.now() - t0 },
+      outputSummary: { blocker: "CRAWLER_TARGET_ZIPS not configured", duration_ms: Date.now() - t0 },
     });
     return NextResponse.json({
       ok: true,
       blocked: "no_target_zips_configured",
-      detail: "Set ATTOM_TARGET_ZIPS (comma-separated SA ZIPs) to activate. NOT autodiscovered per ship order.",
+      detail: "Set CRAWLER_TARGET_ZIPS (comma-separated) to activate. NOT autodiscovered per ship order.",
       dry_run: dryRun,
       auth_kind: authKind,
       duration_ms: Date.now() - t0,
     });
   }
 
-  // ── Existing-address dedup set ──────────────────────────────────────
+  // ── RentCast quota gate (stall + Spine-write if would exceed) ───
+  const estimatedRemaining = await estimateRentcastRemaining();
+  const quota = rentcastQuotaAllows({
+    estimatedRemaining,
+    callsNeeded: zips.length,
+    perRunCap: PER_RUN_CAP,
+  });
+  if (!quota.allowed) {
+    await audit({
+      agent: "scout",
+      event: "listings_intake_quota_stall",
+      status: "uncertain",
+      inputSummary: { auth_kind: authKind, calls_needed: quota.callsNeeded, per_run_cap: quota.perRunCap },
+      outputSummary: { reason: quota.reason, estimated_remaining: estimatedRemaining, duration_ms: Date.now() - t0 },
+    });
+    try {
+      await writeState({
+        event_type: "decision",
+        attribution_agent: "scout",
+        title: `Listings-intake cron STALLED on RentCast quota (${quota.reason})`,
+        description:
+          `listings-intake aborted before spending RentCast quota. reason=${quota.reason}, ` +
+          `calls_needed=${quota.callsNeeded}, per_run_cap=${quota.perRunCap}, ` +
+          `estimated_weekly_remaining=${estimatedRemaining ?? "unknown"}. No ZIPs fetched. ` +
+          `Raise RENTCAST_INTAKE_MAX_CALLS_PER_RUN or wait for quota reset.`,
+      });
+    } catch (err) {
+      console.error("[listings-intake] Spine write (quota stall) failed:", err);
+    }
+    return NextResponse.json({
+      ok: true,
+      blocked: "rentcast_quota",
+      reason: quota.reason,
+      calls_needed: quota.callsNeeded,
+      per_run_cap: quota.perRunCap,
+      estimated_remaining: estimatedRemaining,
+      dry_run: dryRun,
+      duration_ms: Date.now() - t0,
+    });
+  }
+
+  // ── Existing-address dedup set ──────────────────────────────────
   let existingKeys: Set<string>;
   try {
     const listings = await getListings();
@@ -147,6 +211,7 @@ export async function GET(req: Request) {
   }
 
   const summary = {
+    source: "rentcast",
     dry_run: dryRun,
     zips_scanned: zips.length,
     raw_candidates: 0,
@@ -154,7 +219,8 @@ export async function GET(req: Request) {
     rejected: 0,
     duplicates: 0,
     written: 0,
-    would_write: [] as Array<{ sourceId: string; address: string | null; zip: string | null }>,
+    per_zip: [] as Array<{ zip: string; raw: number; accepted: number }>,
+    would_write: [] as Array<{ sourceId: string; address: string | null; zip: string | null; listPrice: number | null }>,
     reject_reason_counts: {} as Record<string, number>,
     per_zip_errors: [] as Array<{ zip: string; error: string }>,
     credentialed: true,
@@ -165,7 +231,7 @@ export async function GET(req: Request) {
     const fetchResult = await fetchListingsByZip(zip);
     if (!fetchResult.credentialed) {
       summary.credentialed = false;
-      summary.per_zip_errors.push({ zip, error: "ATTOM_API_KEY not set" });
+      summary.per_zip_errors.push({ zip, error: "RENTCAST_API_KEY not set" });
       continue;
     }
     if (fetchResult.error) {
@@ -182,6 +248,7 @@ export async function GET(req: Request) {
       }
     }
 
+    let zipAccepted = 0;
     for (const c of accepted) {
       const key = normalizeAddressKey(c.address);
       if (key && existingKeys.has(key)) {
@@ -189,13 +256,14 @@ export async function GET(req: Request) {
         continue;
       }
       summary.accepted++;
+      zipAccepted++;
       if (dryRun) {
-        summary.would_write.push({ sourceId: c.sourceId, address: c.address, zip: c.zip });
+        summary.would_write.push({ sourceId: c.sourceId, address: c.address, zip: c.zip, listPrice: c.listPrice });
       } else {
         try {
           await createIntakeListing(c);
           summary.written++;
-          if (key) existingKeys.add(key); // prevent intra-run dupes
+          if (key) existingKeys.add(key);
         } catch (err) {
           summary.per_zip_errors.push({
             zip,
@@ -204,21 +272,22 @@ export async function GET(req: Request) {
         }
       }
     }
+    summary.per_zip.push({ zip, raw: fetchResult.candidates.length, accepted: zipAccepted });
   }
 
   await audit({
     agent: "scout",
-    event: dryRun ? "attom_intake_dry_run" : "attom_intake_live",
+    event: dryRun ? "listings_intake_dry_run" : "listings_intake_live",
     status: summary.per_zip_errors.length > 0 ? "uncertain" : "confirmed_success",
-    inputSummary: { auth_kind: authKind, zips: zips.length, dry_run: dryRun },
+    inputSummary: { auth_kind: authKind, zips: zips.length, dry_run: dryRun, source: "rentcast" },
     outputSummary: {
       raw: summary.raw_candidates,
       accepted: summary.accepted,
       rejected: summary.rejected,
       duplicates: summary.duplicates,
       written: summary.written,
-      credentialed: summary.credentialed,
       reject_reasons: summary.reject_reason_counts,
+      per_zip: summary.per_zip,
     },
     ms: Date.now() - t0,
   });

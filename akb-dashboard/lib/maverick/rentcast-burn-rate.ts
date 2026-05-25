@@ -90,3 +90,47 @@ export function countPricingAgentCalls(audit: VercelKvAuditState | null): number
   }
   return total;
 }
+
+// ── Cron quota gate (Ship 2 — listings-intake) ──────────────────────
+//
+// Pure gate the listings-intake cron calls before spending RentCast
+// quota. Two checks:
+//   1. Hard per-run cap: a single run must not make more than perRunCap
+//      calls (it makes exactly one /listings/sale call per ZIP).
+//   2. Soft weekly-pool check: if a best-effort estimate of remaining
+//      quota is available and is below callsNeeded, deny.
+// estimatedRemaining is optimistic (the burn-rate consumed estimate only
+// counts pricing-agent events, not intake/federation/verify) — so it's a
+// soft guard; the per-run cap is the hard one. null = unknown (skip soft).
+
+export type RentcastQuotaReason =
+  | "ok"
+  | "exceeds_per_run_cap"
+  | "insufficient_weekly_remaining";
+
+export interface RentcastQuotaDecision {
+  allowed: boolean;
+  reason: RentcastQuotaReason;
+  callsNeeded: number;
+  perRunCap: number;
+  estimatedRemaining: number | null;
+}
+
+export function rentcastQuotaAllows(opts: {
+  estimatedRemaining: number | null;
+  callsNeeded: number;
+  perRunCap: number;
+}): RentcastQuotaDecision {
+  const { estimatedRemaining, callsNeeded, perRunCap } = opts;
+  let reason: RentcastQuotaReason = "ok";
+  if (callsNeeded > perRunCap) {
+    reason = "exceeds_per_run_cap";
+  } else if (
+    estimatedRemaining != null &&
+    Number.isFinite(estimatedRemaining) &&
+    estimatedRemaining < callsNeeded
+  ) {
+    reason = "insufficient_weekly_remaining";
+  }
+  return { allowed: reason === "ok", reason, callsNeeded, perRunCap, estimatedRemaining };
+}

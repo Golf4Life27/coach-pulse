@@ -37,7 +37,7 @@
       "schedule": "0 16 * * *"
     },
     {
-      "path": "/api/cron/attom-intake",
+      "path": "/api/cron/listings-intake",
       "schedule": "0 3 * * *"
     }
   ]
