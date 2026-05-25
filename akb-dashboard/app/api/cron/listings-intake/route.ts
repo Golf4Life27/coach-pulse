@@ -47,6 +47,7 @@ import { rentcastQuotaAllows, computeBurnRate } from "@/lib/maverick/rentcast-bu
 import { fetchExternalRentCastState } from "@/lib/maverick/sources/external-rentcast";
 import { fetchVercelKvAuditState } from "@/lib/maverick/sources/vercel-kv-audit";
 import { verifyListing, FIRECRAWL_RATE_LIMIT_PER_MINUTE } from "@/lib/crawler/sources/firecrawl";
+import { runAsyncPool, makeRateGate } from "@/lib/crawler/async-pool";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -58,17 +59,16 @@ const LISTINGS_TABLE = "tbldMjKBgPiq45Jjs";
 const PER_RUN_CAP = Number(process.env.RENTCAST_INTAKE_MAX_CALLS_PER_RUN ?? "30");
 // Firecrawl verification budget — one /v2/search (inline scrape) per
 // accepted, non-duplicate candidate. Default 1000 covers the ~974 baseline
-// + headroom. Over budget → stop verifying + Spine-write.
+// + headroom. Over budget → skip remainder + Spine-write.
 const FIRECRAWL_MAX_SCRAPES_PER_RUN = Number(process.env.FIRECRAWL_MAX_SCRAPES_PER_RUN ?? "1000");
-// Proactive throttle spacing between Firecrawl calls (stay under the
-// 100/min free-tier cap). 90/min → ~667ms.
-const FIRECRAWL_THROTTLE_MS = Math.ceil(60_000 / FIRECRAWL_RATE_LIMIT_PER_MINUTE);
-// Wall-clock guard: Vercel Hobby caps maxDuration at 300s. Stop verifying
-// at 270s so the run ends cleanly (audit + Spine) instead of being killed
-// mid-write. At ~667ms/call this caps one run at ~400 verifications — 974
-// will NOT complete in a single invocation (surfaced to operator).
+// Bounded concurrency for the Firecrawl verify pool. Default 20 stays under
+// the 50-browser Standard ceiling with headroom; raise if tier upgrades.
+const FIRECRAWL_MAX_CONCURRENT = Number(process.env.FIRECRAWL_MAX_CONCURRENT ?? "20");
+// Wall-clock guard: Vercel Hobby caps maxDuration at 300s. Stop DISPATCHING
+// new Firecrawl calls at 270s (in-flight calls finish); the run ends cleanly
+// instead of being killed mid-write. With ~20-way concurrency a single ZIP
+// (~50-135 candidates) finishes well inside this.
 const FIRECRAWL_TIME_BUDGET_MS = 270_000;
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /** Target ZIPs: a `?zips=` query override (comma-sep 5-digit) takes
  *  precedence for manual per-ZIP dry-run validation within the 300s lambda
@@ -259,13 +259,16 @@ export async function GET(req: Request) {
     },
   };
   const now = new Date();
-  const bump = (reason: string) => {
-    summary.reject_reason_counts[reason] = (summary.reject_reason_counts[reason] ?? 0) + 1;
+  const bump = (reason: string, n = 1) => {
+    summary.reject_reason_counts[reason] = (summary.reject_reason_counts[reason] ?? 0) + n;
   };
-  let timeBudgetHit = false;
 
+  // ── Phase 1: collect (sequential, fast) — RentCast + basic filter + dedup.
+  const perZipRaw = new Map<string, number>();
+  const perZipAccepted = new Map<string, number>();
+  const seenKeys = new Set<string>(); // intra-run dedup across overlapping ZIPs
+  const toVerify: Array<{ candidate: IntakeCandidate; zip: string }> = [];
   for (const zip of zips) {
-    if (timeBudgetHit) break; // wall-clock guard — stop pulling more ZIPs
     const fetchResult = await fetchListingsByZip(zip);
     if (!fetchResult.credentialed) {
       summary.credentialed = false;
@@ -277,104 +280,103 @@ export async function GET(req: Request) {
       continue;
     }
     summary.raw_candidates += fetchResult.candidates.length;
+    perZipRaw.set(zip, fetchResult.candidates.length);
 
     const { accepted, rejected } = filterIntakeCandidates(fetchResult.candidates, now);
     summary.rejected += rejected.length;
-    for (const r of rejected) {
-      for (const reason of r.reasons) bump(reason);
-    }
+    for (const r of rejected) for (const reason of r.reasons) bump(reason);
 
-    let zipAccepted = 0;
     for (const c of accepted) {
-      // Dedup BEFORE Firecrawl — never spend a scrape on a known address.
+      // Dedup BEFORE Firecrawl — never spend a scrape on a known/seen address.
       const key = normalizeAddressKey(c.address);
-      if (key && existingKeys.has(key)) {
+      if (key && (existingKeys.has(key) || seenKeys.has(key))) {
         summary.duplicates++;
         continue;
       }
+      if (key) seenKeys.add(key);
+      toVerify.push({ candidate: c, zip });
+    }
+  }
 
-      // ── Firecrawl verify (renovation/turnkey exclusion + staleness) ──
-      // Credit-budget cap.
-      if (summary.firecrawl.scrapes_used >= FIRECRAWL_MAX_SCRAPES_PER_RUN) {
-        summary.firecrawl.budget_hit = true;
-        bump("firecrawl_skipped_budget");
-        continue;
-      }
-      // Wall-clock guard — Vercel 300s ceiling. Stop verifying at 270s.
-      if (Date.now() - t0 > FIRECRAWL_TIME_BUDGET_MS) {
-        timeBudgetHit = true;
-        bump("firecrawl_skipped_time");
-        continue;
-      }
-      // Proactive throttle: space calls under the per-minute cap (skip the
-      // wait before the very first call).
-      if (summary.firecrawl.scrapes_used > 0) await sleep(FIRECRAWL_THROTTLE_MS);
+  // ── Budget split: dispatch up to the per-run Firecrawl scrape budget. ──
+  const dispatchable = toVerify.slice(0, FIRECRAWL_MAX_SCRAPES_PER_RUN);
+  const budgetSkipped = toVerify.slice(FIRECRAWL_MAX_SCRAPES_PER_RUN);
+  if (budgetSkipped.length > 0) {
+    summary.firecrawl.budget_hit = true;
+    bump("firecrawl_skipped_budget", budgetSkipped.length);
+  }
 
-      const fc = await verifyListing(c.address);
-      summary.firecrawl.scrapes_used++;
-      summary.firecrawl.credits_used += fc.creditsUsed;
-      if (!fc.credentialed) {
-        summary.firecrawl.credentialed = false;
-        summary.per_zip_errors.push({ zip, error: "FIRECRAWL_API_KEY not set" });
-        bump("firecrawl_not_configured");
-        continue;
-      }
-      if (fc.rateLimited) {
-        // 429 after retries exhausted — distinct from a generic error.
-        summary.per_zip_errors.push({ zip, error: `firecrawl rate-limited: ${c.sourceId}` });
-        bump("firecrawl_rate_limited");
-        continue;
-      }
-      if (fc.error) {
-        summary.per_zip_errors.push({ zip, error: `firecrawl ${c.sourceId}: ${fc.error}` });
-        bump("firecrawl_error");
-        continue;
-      }
-      if (!fc.resolved) {
-        bump("firecrawl_url_unresolved");
-        continue;
-      }
-      if (!fc.stillActive) {
-        bump("firecrawl_inactive");
-        continue;
-      }
-      if (fc.hasRenovatedLanguage) {
-        bump("firecrawl_renovated");
-        continue;
-      }
-      // Wholesaler-exclusion: agent stated buyer-type preference. Runs
-      // before the condition check (stronger, explicit signal).
-      if (fc.wholesalerExcluded) {
-        bump("wholesaler_excluded");
-        continue;
-      }
-      // Condition-signal-missing: vibe-copy with zero distress/motivation/
-      // as-is language can't justify a 65%-of-list offer.
-      if (!fc.hasConditionSignal) {
-        bump("condition_signal_missing");
-        continue;
-      }
+  // ── Phase 2: parallel Firecrawl verification — bounded concurrency +
+  // global rate gate + wall-clock guard. In-flight calls finish on stop;
+  // undispatched land in pool.skipped.
+  const rateGate = makeRateGate(FIRECRAWL_RATE_LIMIT_PER_MINUTE);
+  const pool = await runAsyncPool({
+    items: dispatchable,
+    concurrency: FIRECRAWL_MAX_CONCURRENT,
+    beforeDispatch: rateGate,
+    shouldStopDispatch: () => Date.now() - t0 > FIRECRAWL_TIME_BUDGET_MS,
+    worker: async (it) => verifyListing(it.candidate.address),
+  });
+  const timeBudgetHit = pool.skipped.length > 0;
+  if (timeBudgetHit) bump("firecrawl_skipped_time", pool.skipped.length);
 
-      // Green: active + not renovated + not wholesaler-excluded + has a
-      // condition signal → intake.
-      summary.accepted++;
-      zipAccepted++;
-      if (dryRun) {
-        summary.would_write.push({ sourceId: c.sourceId, address: c.address, zip: c.zip, listPrice: c.listPrice, firecrawlUrl: fc.url });
-      } else {
-        try {
-          await createIntakeListing(c);
-          summary.written++;
-          if (key) existingKeys.add(key);
-        } catch (err) {
-          summary.per_zip_errors.push({
-            zip,
-            error: `write ${c.sourceId}: ${err instanceof Error ? err.message : String(err)}`,
-          });
-        }
+  // ── Phase 3: classify completed results (sequential — accurate count
+  // aggregation regardless of non-deterministic completion order). ──
+  const acceptedToWrite: Array<{ candidate: IntakeCandidate; zip: string }> = [];
+  for (const { item, value: fc } of pool.results) {
+    const { candidate: c, zip } = item;
+    summary.firecrawl.scrapes_used++;
+    summary.firecrawl.credits_used += fc.creditsUsed;
+    if (!fc.credentialed) {
+      summary.firecrawl.credentialed = false;
+      summary.per_zip_errors.push({ zip, error: "FIRECRAWL_API_KEY not set" });
+      bump("firecrawl_not_configured");
+      continue;
+    }
+    if (fc.rateLimited) {
+      summary.per_zip_errors.push({ zip, error: `firecrawl rate-limited: ${c.sourceId}` });
+      bump("firecrawl_rate_limited");
+      continue;
+    }
+    if (fc.error) {
+      summary.per_zip_errors.push({ zip, error: `firecrawl ${c.sourceId}: ${fc.error}` });
+      bump("firecrawl_error");
+      continue;
+    }
+    if (!fc.resolved) { bump("firecrawl_url_unresolved"); continue; }
+    if (!fc.stillActive) { bump("firecrawl_inactive"); continue; }
+    if (fc.hasRenovatedLanguage) { bump("firecrawl_renovated"); continue; }
+    if (fc.wholesalerExcluded) { bump("wholesaler_excluded"); continue; }
+    if (!fc.hasConditionSignal) { bump("condition_signal_missing"); continue; }
+
+    // Green: active + not renovated + not wholesaler-excluded + has signal.
+    summary.accepted++;
+    perZipAccepted.set(zip, (perZipAccepted.get(zip) ?? 0) + 1);
+    if (dryRun) {
+      summary.would_write.push({ sourceId: c.sourceId, address: c.address, zip: c.zip, listPrice: c.listPrice, firecrawlUrl: fc.url });
+    } else {
+      acceptedToWrite.push({ candidate: c, zip });
+    }
+  }
+
+  // ── Phase 4: writes (live only; sequential, post-pool — no concurrent
+  // Airtable writes / intra-run dup races). ──
+  if (!dryRun) {
+    for (const { candidate: c, zip } of acceptedToWrite) {
+      try {
+        await createIntakeListing(c);
+        summary.written++;
+      } catch (err) {
+        summary.per_zip_errors.push({
+          zip,
+          error: `write ${c.sourceId}: ${err instanceof Error ? err.message : String(err)}`,
+        });
       }
     }
-    summary.per_zip.push({ zip, raw: fetchResult.candidates.length, accepted: zipAccepted });
+  }
+
+  for (const zip of zips) {
+    summary.per_zip.push({ zip, raw: perZipRaw.get(zip) ?? 0, accepted: perZipAccepted.get(zip) ?? 0 });
   }
 
   summary.firecrawl.time_budget_hit = timeBudgetHit;
