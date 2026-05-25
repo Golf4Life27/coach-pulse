@@ -25,6 +25,85 @@ const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY;
 const FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v2/search";
 const SEARCH_LIMIT = 5;
 
+/** Proactive throttle: max Firecrawl calls/minute. Default 90 stays under
+ *  the free-tier 100/min cap with margin. The cron paces its loop to this. */
+export const FIRECRAWL_RATE_LIMIT_PER_MINUTE = Number(
+  process.env.FIRECRAWL_RATE_LIMIT_PER_MINUTE ?? "90",
+);
+
+/** Reactive backoff: retries on 429 before giving up. */
+export const FIRECRAWL_MAX_RETRIES = Number(process.env.FIRECRAWL_MAX_RETRIES ?? "3");
+const FIRECRAWL_BASE_BACKOFF_MS = 1000;
+
+const realSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** Pure: parse a Retry-After header → ms. Supports delta-seconds and
+ *  HTTP-date forms. Returns null when absent/unparseable. */
+export function parseRetryAfterMs(
+  header: string | null | undefined,
+  now: Date = new Date(),
+): number | null {
+  if (!header) return null;
+  const trimmed = header.trim();
+  if (/^\d+$/.test(trimmed)) return Number(trimmed) * 1000; // delta-seconds
+  const dateMs = Date.parse(trimmed);
+  if (!Number.isNaN(dateMs)) return Math.max(0, dateMs - now.getTime());
+  return null;
+}
+
+/** Pure: delay before retry attempt N (0-indexed). Honors Retry-After when
+ *  present, else exponential backoff (base * 2^attempt). */
+export function computeRetryDelayMs(
+  attempt: number,
+  retryAfterMs: number | null,
+  baseDelayMs: number = FIRECRAWL_BASE_BACKOFF_MS,
+): number {
+  if (retryAfterMs != null && retryAfterMs >= 0) return retryAfterMs;
+  return baseDelayMs * Math.pow(2, attempt);
+}
+
+interface MinimalResponse {
+  status: number;
+  headers: { get(name: string): string | null };
+}
+
+export interface BackoffResult<R> {
+  response: R;
+  attempts: number; // total attempts made (1 = no retry)
+  retried429: number; // how many 429s were retried
+}
+
+/** Retry a fetch on 429 with Retry-After / exponential backoff. doFetch +
+ *  sleep are injected for testability. Returns the final response (which may
+ *  still be 429 after exhausting retries — caller decides). */
+export async function fetchWithBackoff<R extends MinimalResponse>(opts: {
+  doFetch: () => Promise<R>;
+  sleep?: (ms: number) => Promise<void>;
+  maxRetries?: number;
+  baseDelayMs?: number;
+  now?: () => Date;
+}): Promise<BackoffResult<R>> {
+  const sleep = opts.sleep ?? realSleep;
+  const maxRetries = opts.maxRetries ?? FIRECRAWL_MAX_RETRIES;
+  const baseDelayMs = opts.baseDelayMs ?? FIRECRAWL_BASE_BACKOFF_MS;
+  const now = opts.now ?? (() => new Date());
+
+  let attempts = 0;
+  let retried429 = 0;
+  let response = await opts.doFetch();
+  attempts++;
+
+  while (response.status === 429 && retried429 < maxRetries) {
+    const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"), now());
+    await sleep(computeRetryDelayMs(retried429, retryAfterMs, baseDelayMs));
+    retried429++;
+    response = await opts.doFetch();
+    attempts++;
+  }
+  return { response, attempts, retried429 };
+}
+
+
 /** Renovation / turnkey exclusion keywords. Exported CONST so the operator
  *  can tune without a deploy (edit + redeploy is still needed for code, but
  *  this is the single source of truth). Matched case-insensitively as
@@ -59,6 +138,9 @@ export interface FirecrawlVerifyResult {
   hasRenovatedLanguage: boolean;
   matchedKeywords: string[];
   creditsUsed: number;
+  /** true when Firecrawl returned 429 even after exhausting retries —
+   *  distinct from a generic error (caller → firecrawl_rate_limited). */
+  rateLimited: boolean;
   error: string | null;
 }
 
@@ -132,25 +214,34 @@ export async function verifyListing(
     hasRenovatedLanguage: false,
     matchedKeywords: [],
     creditsUsed: 0,
+    rateLimited: false,
     error: null,
   };
   if (!FIRECRAWL_API_KEY) {
     return { ...base, credentialed: false, error: "FIRECRAWL_API_KEY not set" };
   }
   try {
-    const res = await fetch(FIRECRAWL_SEARCH_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${FIRECRAWL_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        query: buildSearchQuery(formattedAddress),
-        limit: SEARCH_LIMIT,
-        scrapeOptions: { formats: [{ type: "markdown" }] },
-      }),
-      cache: "no-store",
+    // Retry 429s with Retry-After / exponential backoff before giving up.
+    const { response: res } = await fetchWithBackoff({
+      doFetch: () =>
+        fetch(FIRECRAWL_SEARCH_URL, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${FIRECRAWL_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            query: buildSearchQuery(formattedAddress),
+            limit: SEARCH_LIMIT,
+            scrapeOptions: { formats: [{ type: "markdown" }] },
+          }),
+          cache: "no-store",
+        }),
     });
+    if (res.status === 429) {
+      // Still rate-limited after exhausting retries — distinct signal.
+      return { ...base, rateLimited: true, error: "Firecrawl 429 after retries exhausted" };
+    }
     if (!res.ok) {
       return { ...base, error: `Firecrawl search ${res.status}: ${await res.text().catch(() => "")}`.slice(0, 300) };
     }
@@ -172,6 +263,7 @@ export async function verifyListing(
       hasRenovatedLanguage: reno.matched,
       matchedKeywords: reno.matchedKeywords,
       creditsUsed,
+      rateLimited: false,
       error: null,
     };
   } catch (err) {

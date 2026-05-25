@@ -46,7 +46,7 @@ import {
 import { rentcastQuotaAllows, computeBurnRate } from "@/lib/maverick/rentcast-burn-rate";
 import { fetchExternalRentCastState } from "@/lib/maverick/sources/external-rentcast";
 import { fetchVercelKvAuditState } from "@/lib/maverick/sources/vercel-kv-audit";
-import { verifyListing } from "@/lib/crawler/sources/firecrawl";
+import { verifyListing, FIRECRAWL_RATE_LIMIT_PER_MINUTE } from "@/lib/crawler/sources/firecrawl";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -60,9 +60,22 @@ const PER_RUN_CAP = Number(process.env.RENTCAST_INTAKE_MAX_CALLS_PER_RUN ?? "30"
 // accepted, non-duplicate candidate. Default 1000 covers the ~974 baseline
 // + headroom. Over budget → stop verifying + Spine-write.
 const FIRECRAWL_MAX_SCRAPES_PER_RUN = Number(process.env.FIRECRAWL_MAX_SCRAPES_PER_RUN ?? "1000");
+// Proactive throttle spacing between Firecrawl calls (stay under the
+// 100/min free-tier cap). 90/min → ~667ms.
+const FIRECRAWL_THROTTLE_MS = Math.ceil(60_000 / FIRECRAWL_RATE_LIMIT_PER_MINUTE);
+// Wall-clock guard: Vercel Hobby caps maxDuration at 300s. Stop verifying
+// at 270s so the run ends cleanly (audit + Spine) instead of being killed
+// mid-write. At ~667ms/call this caps one run at ~400 verifications — 974
+// will NOT complete in a single invocation (surfaced to operator).
+const FIRECRAWL_TIME_BUDGET_MS = 270_000;
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-function readTargetZips(): string[] {
-  return (process.env.CRAWLER_TARGET_ZIPS ?? "")
+/** Target ZIPs: a `?zips=` query override (comma-sep 5-digit) takes
+ *  precedence for manual per-ZIP dry-run validation within the 300s lambda
+ *  ceiling; otherwise the operator-provided CRAWLER_TARGET_ZIPS env. */
+function readTargetZips(override: string | null): string[] {
+  const raw = override && override.trim() !== "" ? override : (process.env.CRAWLER_TARGET_ZIPS ?? "");
+  return raw
     .split(",")
     .map((z) => z.trim())
     .filter((z) => /^\d{5}$/.test(z));
@@ -149,7 +162,7 @@ export async function GET(req: Request) {
   const dryRun = !liveEnv || forcedDry;
 
   // ── ZIP gate ────────────────────────────────────────────────────
-  const zips = readTargetZips();
+  const zips = readTargetZips(url.searchParams.get("zips"));
   if (zips.length === 0) {
     await audit({
       agent: "scout",
@@ -241,14 +254,18 @@ export async function GET(req: Request) {
       credits_used: 0,
       budget: FIRECRAWL_MAX_SCRAPES_PER_RUN,
       budget_hit: false,
+      time_budget_hit: false,
+      rate_limit_per_minute: FIRECRAWL_RATE_LIMIT_PER_MINUTE,
     },
   };
   const now = new Date();
   const bump = (reason: string) => {
     summary.reject_reason_counts[reason] = (summary.reject_reason_counts[reason] ?? 0) + 1;
   };
+  let timeBudgetHit = false;
 
   for (const zip of zips) {
+    if (timeBudgetHit) break; // wall-clock guard — stop pulling more ZIPs
     const fetchResult = await fetchListingsByZip(zip);
     if (!fetchResult.credentialed) {
       summary.credentialed = false;
@@ -277,11 +294,22 @@ export async function GET(req: Request) {
       }
 
       // ── Firecrawl verify (renovation/turnkey exclusion + staleness) ──
+      // Credit-budget cap.
       if (summary.firecrawl.scrapes_used >= FIRECRAWL_MAX_SCRAPES_PER_RUN) {
         summary.firecrawl.budget_hit = true;
         bump("firecrawl_skipped_budget");
         continue;
       }
+      // Wall-clock guard — Vercel 300s ceiling. Stop verifying at 270s.
+      if (Date.now() - t0 > FIRECRAWL_TIME_BUDGET_MS) {
+        timeBudgetHit = true;
+        bump("firecrawl_skipped_time");
+        continue;
+      }
+      // Proactive throttle: space calls under the per-minute cap (skip the
+      // wait before the very first call).
+      if (summary.firecrawl.scrapes_used > 0) await sleep(FIRECRAWL_THROTTLE_MS);
+
       const fc = await verifyListing(c.address);
       summary.firecrawl.scrapes_used++;
       summary.firecrawl.credits_used += fc.creditsUsed;
@@ -289,6 +317,12 @@ export async function GET(req: Request) {
         summary.firecrawl.credentialed = false;
         summary.per_zip_errors.push({ zip, error: "FIRECRAWL_API_KEY not set" });
         bump("firecrawl_not_configured");
+        continue;
+      }
+      if (fc.rateLimited) {
+        // 429 after retries exhausted — distinct from a generic error.
+        summary.per_zip_errors.push({ zip, error: `firecrawl rate-limited: ${c.sourceId}` });
+        bump("firecrawl_rate_limited");
         continue;
       }
       if (fc.error) {
@@ -330,21 +364,28 @@ export async function GET(req: Request) {
     summary.per_zip.push({ zip, raw: fetchResult.candidates.length, accepted: zipAccepted });
   }
 
-  // Firecrawl budget exceeded mid-run → Spine-write so operator raises cap.
-  if (summary.firecrawl.budget_hit) {
+  summary.firecrawl.time_budget_hit = timeBudgetHit;
+
+  // Firecrawl budget OR the 300s lambda wall-clock exceeded mid-run →
+  // Spine-write so the operator knows the run was partial.
+  if (summary.firecrawl.budget_hit || timeBudgetHit) {
+    const cause = timeBudgetHit ? "300s lambda wall-clock" : "Firecrawl credit budget";
     try {
       await writeState({
         event_type: "decision",
         attribution_agent: "scout",
-        title: `Listings-intake hit Firecrawl scrape budget (${FIRECRAWL_MAX_SCRAPES_PER_RUN})`,
+        title: `Listings-intake PARTIAL run — stopped on ${cause}`,
         description:
-          `listings-intake exhausted its Firecrawl verification budget mid-run. ` +
-          `scrapes_used=${summary.firecrawl.scrapes_used}, credits_used=${summary.firecrawl.credits_used}. ` +
-          `Remaining accepted candidates were skipped (firecrawl_skipped_budget). ` +
-          `Raise FIRECRAWL_MAX_SCRAPES_PER_RUN or split the ZIP set across days.`,
+          `listings-intake stopped mid-run. cause=${cause}. ` +
+          `firecrawl scrapes_used=${summary.firecrawl.scrapes_used} (budget ${FIRECRAWL_MAX_SCRAPES_PER_RUN}), ` +
+          `credits_used=${summary.firecrawl.credits_used}, accepted=${summary.accepted}. ` +
+          `Remaining candidates skipped (firecrawl_skipped_time / firecrawl_skipped_budget). ` +
+          `A single Vercel Hobby 300s invocation cannot verify the full ~974 set (per-call Firecrawl ` +
+          `latency × volume far exceeds 300s, independent of Firecrawl tier). To validate all 15 ZIPs, ` +
+          `run the dry-run per-ZIP via ?zips=<zip>; live intake chips through via daily runs + address dedup.`,
       });
     } catch (err) {
-      console.error("[listings-intake] Spine write (firecrawl budget) failed:", err);
+      console.error("[listings-intake] Spine write (partial-run) failed:", err);
     }
   }
 
