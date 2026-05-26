@@ -289,3 +289,31 @@ export async function verifyListing(
     return { ...base, error: err instanceof Error ? err.message : String(err) };
   }
 }
+
+// ── Verified-listing classification (pure; testable decision logic) ─────
+//
+// Decides the fate of a candidate from its Firecrawl verify result. Order:
+// infra errors → resolution/status → renovation (hard) → wholesaler (hard)
+// → condition-signal. Condition-signal-missing is a SOFT flag (2026-05-25):
+// it WRITES with Outreach_Status="Review" for operator spot-check rather
+// than being a hard reject — many genuine distress listings (terse-copy
+// markets like Memphis) carry no condition language.
+
+export type VerifiedOutcome =
+  | { outcome: "reject"; reason: string }
+  | { outcome: "accept"; outreachStatus: "" }
+  | { outcome: "review"; reason: "condition_signal_missing_flagged"; outreachStatus: "Review" };
+
+export function classifyVerifiedListing(fc: FirecrawlVerifyResult): VerifiedOutcome {
+  if (!fc.credentialed) return { outcome: "reject", reason: "firecrawl_not_configured" };
+  if (fc.rateLimited) return { outcome: "reject", reason: "firecrawl_rate_limited" };
+  if (fc.error) return { outcome: "reject", reason: "firecrawl_error" };
+  if (!fc.resolved) return { outcome: "reject", reason: "firecrawl_url_unresolved" };
+  if (!fc.stillActive) return { outcome: "reject", reason: "firecrawl_inactive" };
+  if (fc.hasRenovatedLanguage) return { outcome: "reject", reason: "firecrawl_renovated" };
+  if (fc.wholesalerExcluded) return { outcome: "reject", reason: "wholesaler_excluded" };
+  if (!fc.hasConditionSignal) {
+    return { outcome: "review", reason: "condition_signal_missing_flagged", outreachStatus: "Review" };
+  }
+  return { outcome: "accept", outreachStatus: "" };
+}

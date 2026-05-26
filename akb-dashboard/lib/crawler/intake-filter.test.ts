@@ -72,8 +72,27 @@ describe("evaluateIntakeCandidate", () => {
   it("flags missing list price (the ATTOM snapshot blocker)", () => {
     expect(evaluateIntakeCandidate(cand({ listPrice: null }), NOW).reasons).toContain("list_price_missing");
   });
-  it("rejects listing older than 90d", () => {
-    expect(evaluateIntakeCandidate(cand({ listedDate: old }), NOW).reasons).toContain("listed_date_too_old");
+  // Long-DOM = distress (inverted from the old too_old bug). NOW = 2026-05-25.
+  it("rejects a too-NEW listing (DOM 5d → agent still fresh)", () => {
+    const fiveDays = new Date("2026-05-20T00:00:00Z").toISOString();
+    expect(evaluateIntakeCandidate(cand({ listedDate: fiveDays }), NOW).reasons).toContain("listed_date_too_new");
+  });
+  it("passes a long-DOM listing (30d)", () => {
+    const thirtyDays = new Date("2026-04-25T00:00:00Z").toISOString();
+    expect(evaluateIntakeCandidate(cand({ listedDate: thirtyDays }), NOW).accept).toBe(true);
+  });
+  it("passes a very old listing when no DISTRESS_DOM_CAP set (144d)", () => {
+    expect(evaluateIntakeCandidate(cand({ listedDate: old }), NOW).accept).toBe(true);
+  });
+  it("boundary: exactly 14d DOM → passes (inclusive lower bound)", () => {
+    const fourteenDays = new Date("2026-05-11T00:00:00Z").toISOString();
+    const r = evaluateIntakeCandidate(cand({ listedDate: fourteenDays }), NOW);
+    expect(r.reasons).not.toContain("listed_date_too_new");
+    expect(r.accept).toBe(true);
+  });
+  it("boundary: 13d DOM → rejected too_new", () => {
+    const thirteenDays = new Date("2026-05-12T00:00:00Z").toISOString();
+    expect(evaluateIntakeCandidate(cand({ listedDate: thirteenDays }), NOW).reasons).toContain("listed_date_too_new");
   });
   it("flags missing listed date", () => {
     expect(evaluateIntakeCandidate(cand({ listedDate: null }), NOW).reasons).toContain("listed_date_missing");

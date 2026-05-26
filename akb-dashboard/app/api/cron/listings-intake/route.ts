@@ -46,7 +46,7 @@ import {
 import { rentcastQuotaAllows, computeBurnRate } from "@/lib/maverick/rentcast-burn-rate";
 import { fetchExternalRentCastState } from "@/lib/maverick/sources/external-rentcast";
 import { fetchVercelKvAuditState } from "@/lib/maverick/sources/vercel-kv-audit";
-import { verifyListing, FIRECRAWL_RATE_LIMIT_PER_MINUTE } from "@/lib/crawler/sources/firecrawl";
+import { verifyListing, classifyVerifiedListing, FIRECRAWL_RATE_LIMIT_PER_MINUTE } from "@/lib/crawler/sources/firecrawl";
 import { runAsyncPool, makeRateGate } from "@/lib/crawler/async-pool";
 
 export const runtime = "nodejs";
@@ -105,16 +105,18 @@ async function estimateRentcastRemaining(): Promise<number | null> {
   }
 }
 
-async function createIntakeListing(c: IntakeCandidate): Promise<string> {
+async function createIntakeListing(c: IntakeCandidate, outreachStatus: "" | "Review"): Promise<string> {
   if (!AIRTABLE_PAT) throw new Error("AIRTABLE_PAT not set");
   const url = `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}`;
+  // "" → H2 picks it up immediately. "Review" → operator spot-checks the
+  // Review queue, then flips to "" (fire) or "Skip" (drop).
   const fields: Record<string, unknown> = {
     Address: c.address ?? "",
     City: c.city ?? "",
     State: c.state ?? "",
     Zip: c.zip ?? "",
-    Outreach_Status: "",
-    Verification_Notes: `[${new Date().toISOString()}] RentCast auto-intake (${c.sourceId}).`,
+    Outreach_Status: outreachStatus,
+    Verification_Notes: `[${new Date().toISOString()}] RentCast auto-intake (${c.sourceId})${outreachStatus === "Review" ? " — flagged for review (no condition signal in copy)" : ""}.`,
   };
   if (c.propertyType) fields["Property_Type"] = c.propertyType;
   if (c.beds != null) fields["Bedrooms"] = c.beds;
@@ -240,11 +242,12 @@ export async function GET(req: Request) {
     zips_scanned: zips.length,
     raw_candidates: 0,
     accepted: 0,
+    flagged_review: 0,
     rejected: 0,
     duplicates: 0,
     written: 0,
-    per_zip: [] as Array<{ zip: string; raw: number; accepted: number }>,
-    would_write: [] as Array<{ sourceId: string; address: string | null; zip: string | null; listPrice: number | null; firecrawlUrl: string | null }>,
+    per_zip: [] as Array<{ zip: string; raw: number; accepted: number; review: number }>,
+    would_write: [] as Array<{ sourceId: string; address: string | null; zip: string | null; listPrice: number | null; firecrawlUrl: string | null; outreachStatus: "" | "Review" }>,
     reject_reason_counts: {} as Record<string, number>,
     per_zip_errors: [] as Array<{ zip: string; error: string }>,
     credentialed: true,
@@ -266,6 +269,7 @@ export async function GET(req: Request) {
   // ── Phase 1: collect (sequential, fast) — RentCast + basic filter + dedup.
   const perZipRaw = new Map<string, number>();
   const perZipAccepted = new Map<string, number>();
+  const perZipReview = new Map<string, number>();
   const seenKeys = new Set<string>(); // intra-run dedup across overlapping ZIPs
   const toVerify: Array<{ candidate: IntakeCandidate; zip: string }> = [];
   for (const zip of zips) {
@@ -322,49 +326,50 @@ export async function GET(req: Request) {
 
   // ── Phase 3: classify completed results (sequential — accurate count
   // aggregation regardless of non-deterministic completion order). ──
-  const acceptedToWrite: Array<{ candidate: IntakeCandidate; zip: string }> = [];
+  const toWrite: Array<{ candidate: IntakeCandidate; zip: string; status: "" | "Review" }> = [];
   for (const { item, value: fc } of pool.results) {
     const { candidate: c, zip } = item;
     summary.firecrawl.scrapes_used++;
     summary.firecrawl.credits_used += fc.creditsUsed;
-    if (!fc.credentialed) {
-      summary.firecrawl.credentialed = false;
-      summary.per_zip_errors.push({ zip, error: "FIRECRAWL_API_KEY not set" });
-      bump("firecrawl_not_configured");
-      continue;
-    }
-    if (fc.rateLimited) {
-      summary.per_zip_errors.push({ zip, error: `firecrawl rate-limited: ${c.sourceId}` });
-      bump("firecrawl_rate_limited");
-      continue;
-    }
-    if (fc.error) {
-      summary.per_zip_errors.push({ zip, error: `firecrawl ${c.sourceId}: ${fc.error}` });
-      bump("firecrawl_error");
-      continue;
-    }
-    if (!fc.resolved) { bump("firecrawl_url_unresolved"); continue; }
-    if (!fc.stillActive) { bump("firecrawl_inactive"); continue; }
-    if (fc.hasRenovatedLanguage) { bump("firecrawl_renovated"); continue; }
-    if (fc.wholesalerExcluded) { bump("wholesaler_excluded"); continue; }
-    if (!fc.hasConditionSignal) { bump("condition_signal_missing"); continue; }
 
-    // Green: active + not renovated + not wholesaler-excluded + has signal.
-    summary.accepted++;
-    perZipAccepted.set(zip, (perZipAccepted.get(zip) ?? 0) + 1);
-    if (dryRun) {
-      summary.would_write.push({ sourceId: c.sourceId, address: c.address, zip: c.zip, listPrice: c.listPrice, firecrawlUrl: fc.url });
+    const decision = classifyVerifiedListing(fc);
+    if (decision.outcome === "reject") {
+      bump(decision.reason);
+      // Surface infra-class failures into per_zip_errors for triage.
+      if (decision.reason === "firecrawl_not_configured") summary.firecrawl.credentialed = false;
+      if (
+        decision.reason === "firecrawl_not_configured" ||
+        decision.reason === "firecrawl_rate_limited" ||
+        decision.reason === "firecrawl_error"
+      ) {
+        summary.per_zip_errors.push({ zip, error: `${decision.reason}: ${c.sourceId}${fc.error ? ` (${fc.error})` : ""}` });
+      }
+      continue;
+    }
+
+    // accept (status="") or review (status="Review") — both WRITE.
+    const status = decision.outcome === "accept" ? "" : "Review";
+    if (decision.outcome === "review") {
+      bump("condition_signal_missing_flagged"); // audit tag — still writes
+      summary.flagged_review++;
+      perZipReview.set(zip, (perZipReview.get(zip) ?? 0) + 1);
     } else {
-      acceptedToWrite.push({ candidate: c, zip });
+      summary.accepted++;
+      perZipAccepted.set(zip, (perZipAccepted.get(zip) ?? 0) + 1);
+    }
+    if (dryRun) {
+      summary.would_write.push({ sourceId: c.sourceId, address: c.address, zip: c.zip, listPrice: c.listPrice, firecrawlUrl: fc.url, outreachStatus: status });
+    } else {
+      toWrite.push({ candidate: c, zip, status });
     }
   }
 
   // ── Phase 4: writes (live only; sequential, post-pool — no concurrent
   // Airtable writes / intra-run dup races). ──
   if (!dryRun) {
-    for (const { candidate: c, zip } of acceptedToWrite) {
+    for (const { candidate: c, zip, status } of toWrite) {
       try {
-        await createIntakeListing(c);
+        await createIntakeListing(c, status);
         summary.written++;
       } catch (err) {
         summary.per_zip_errors.push({
@@ -376,7 +381,7 @@ export async function GET(req: Request) {
   }
 
   for (const zip of zips) {
-    summary.per_zip.push({ zip, raw: perZipRaw.get(zip) ?? 0, accepted: perZipAccepted.get(zip) ?? 0 });
+    summary.per_zip.push({ zip, raw: perZipRaw.get(zip) ?? 0, accepted: perZipAccepted.get(zip) ?? 0, review: perZipReview.get(zip) ?? 0 });
   }
 
   summary.firecrawl.time_budget_hit = timeBudgetHit;
@@ -412,6 +417,7 @@ export async function GET(req: Request) {
     outputSummary: {
       raw: summary.raw_candidates,
       accepted: summary.accepted,
+      flagged_review: summary.flagged_review,
       rejected: summary.rejected,
       duplicates: summary.duplicates,
       written: summary.written,
