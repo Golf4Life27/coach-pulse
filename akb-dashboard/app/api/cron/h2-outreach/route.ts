@@ -1,0 +1,308 @@
+// H2 first-touch outreach loop — Vercel migration of Make scenario
+// `H2. Quo_Outreach_V1` (id 4724197). @agent: crier
+//
+// GET|POST /api/cron/h2-outreach
+//   ?dry_run=false   — actually send (default TRUE: identify + report only)
+//   ?limit=N         — cap records processed this run (default 50, max 200)
+//   ?record_id=rec…  — process ONLY this record (smoke test); bypasses the
+//                      eligibility filter but still checks eligibility inline
+//   ?send_delay_ms=N — inter-send throttle override (default 60000)
+//
+// SAFETY — three independent brakes, all must clear before an SMS fires:
+//   1. dry_run defaults TRUE. A send needs an explicit ?dry_run=false.
+//   2. H2_OUTREACH_LIVE env must equal "true". Even ?dry_run=false is
+//      forced back to dry mode when the env switch is off — the master
+//      kill switch the operator flips only after the smoke test passes.
+//   3. The eligibility filter + Outreach_Status idempotency: a record that
+//      was already texted is excluded, so re-runs don't re-text.
+//
+// Routing logic lives in lib/h2-outreach.ts (pure, fully unit-tested). This
+// route only does I/O: auth → read listings → plan → (live) send + write.
+//
+// DEVIATIONS from the INV-H2-VERCEL spec (all deliberate):
+//   - Prior-contact match is NORMALIZED phone, not raw string — see
+//     lib/h2-outreach.ts header. Raw match is Make's known undercount bug.
+//   - Reuses the existing QUO_PHONE_ID env (lib/quo.ts), not the spec's new
+//     QUO_PHONE_NUMBER_ID — same value (PNLosBI6fh), one source of truth.
+//   - No vercel.json cron added. The Vercel Hobby plan caps crons at once
+//     per day (AGENTS.md), so the spec's */2 * * * * is rejected at deploy.
+//     Steady-state cadence is an operator call (daily batch vs Pro upgrade);
+//     wire the cron after the smoke test, per the spec's own sequencing.
+//   - Existing app/api/outreach-fire fires the same selector manually; both
+//     gate on empty Outreach_Status so no record double-texts, but they are
+//     two senders. Consolidation flagged for the operator.
+
+import { NextResponse } from "next/server";
+import { getListings, getListing, updateListingRecord } from "@/lib/airtable";
+import { sendMessageWithId } from "@/lib/quo";
+import { audit } from "@/lib/audit-log";
+import {
+  authenticate,
+  hasDashboardSession,
+  readAuthEnv,
+  readAuthHeaders,
+} from "@/lib/maverick/oauth/auth-waterfall";
+import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
+import type { Listing } from "@/lib/types";
+import {
+  isH2Eligible,
+  selectH2Eligible,
+  buildPriorContactIndex,
+  planQueue,
+  buildSentNote,
+  buildStallNote,
+  buildQuarantineNote,
+  type H2Plan,
+} from "@/lib/h2-outreach";
+
+export const runtime = "nodejs";
+export const maxDuration = 300;
+
+const DEFAULT_LIMIT = 50;
+const MAX_LIMIT = 200;
+const DEFAULT_SEND_DELAY_MS = 60_000;
+// Stop starting NEW work this late into the 300s lambda so in-flight writes
+// finish cleanly instead of being killed. Remaining records roll to next run.
+const WALL_CLOCK_BUDGET_MS = 270_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+interface ProcessedRow {
+  record_id: string;
+  address: string;
+  agent_name: string | null;
+  agent_phone: string | null;
+  route: H2Plan["route"];
+  message: string | null;
+  sms_fired: boolean;
+  sms_message_id: string | null;
+  airtable_updated: boolean;
+  error: string | null;
+}
+
+/** Human-readable reason a record_id target fails the eligibility filter. */
+function ineligibleReason(l: Listing): string | null {
+  if (!(l.outreachStatus == null || l.outreachStatus.trim() === ""))
+    return `Outreach_Status already set ('${l.outreachStatus}')`;
+  if (l.liveStatus !== "Active") return `Live_Status is '${l.liveStatus}', not Active`;
+  if (l.executionPath !== "Auto Proceed") return `Execution_Path is '${l.executionPath}', not Auto Proceed`;
+  if (l.doNotText === true) return "Do_Not_Text is set";
+  if (!(l.agentPhone && l.agentPhone.trim() !== "")) return "Agent_Phone is empty";
+  return null;
+}
+
+async function handle(req: Request): Promise<Response> {
+  const t0 = Date.now();
+  const url = new URL(req.url);
+
+  // ── Auth waterfall (+ dashboard cookie) ──────────────────────────
+  const cookieHeader = req.headers.get("cookie");
+  let authKind: "dashboard_session" | "oauth" | "cron" | "bearer_dev" | "none" = "none";
+  if (hasDashboardSession(cookieHeader)) {
+    authKind = "dashboard_session";
+  } else {
+    const env = readAuthEnv();
+    const headers = readAuthHeaders(req);
+    const authRequired = kvConfigured() || env.cronSecret !== null || env.bearerDevToken !== null;
+    if (authRequired) {
+      const auth = await authenticate(headers, env, kvProd);
+      if (!auth.ok) {
+        return NextResponse.json({ error: "unauthorized", reason: auth.reason }, { status: 401 });
+      }
+      authKind = auth.kind;
+    }
+  }
+  if (authKind === "cron" && process.env.MAVERICK_CRON_ENABLED !== "true") {
+    return NextResponse.json({ error: "cron_disabled" }, { status: 503 });
+  }
+
+  // ── Params + the dry-run / live gate ─────────────────────────────
+  const liveEnv = process.env.H2_OUTREACH_LIVE === "true";
+  const dryRunParam = url.searchParams.get("dry_run") === "false" ? false : true;
+  const dryRun = !liveEnv || dryRunParam; // a send needs liveEnv AND ?dry_run=false
+
+  const limitRaw = Number(url.searchParams.get("limit"));
+  const limit = Number.isFinite(limitRaw) && limitRaw > 0
+    ? Math.min(MAX_LIMIT, Math.floor(limitRaw))
+    : DEFAULT_LIMIT;
+  const recordId = url.searchParams.get("record_id");
+  const sendDelayRaw = Number(url.searchParams.get("send_delay_ms"));
+  const sendDelayMs = Number.isFinite(sendDelayRaw) && sendDelayRaw >= 0
+    ? Math.floor(sendDelayRaw)
+    : DEFAULT_SEND_DELAY_MS;
+
+  // ── Read listings (full set — prior-contact index needs all rows) ─
+  let allListings: Listing[];
+  try {
+    allListings = await getListings();
+  } catch (err) {
+    return NextResponse.json(
+      { error: "listings_fetch_failed", message: err instanceof Error ? err.message : String(err) },
+      { status: 502 },
+    );
+  }
+
+  // ── Build the queue ──────────────────────────────────────────────
+  let queue: Listing[];
+  if (recordId) {
+    let target = allListings.find((l) => l.id === recordId) ?? null;
+    if (!target) {
+      // Not in the cached list (e.g. just created for a smoke test) — fetch direct.
+      try {
+        target = await getListing(recordId);
+      } catch {
+        target = null;
+      }
+    }
+    if (!target) {
+      return NextResponse.json({ error: "record_not_found", record_id: recordId }, { status: 404 });
+    }
+    const reason = ineligibleReason(target);
+    if (reason) {
+      return NextResponse.json({
+        mode: dryRun ? "dry_run" : "live",
+        record_id: recordId,
+        eligible_count: 0,
+        processed: [{
+          record_id: target.id,
+          address: target.address,
+          agent_name: target.agentName,
+          agent_phone: target.agentPhone,
+          route: "skipped",
+          message: null,
+          sms_fired: false,
+          sms_message_id: null,
+          airtable_updated: false,
+          error: `ineligible: ${reason}`,
+        }],
+        summary: { first_touch_sent: 0, prior_contact_stalled: 0, bad_phone_quarantined: 0, skipped: 1, errors: 0 },
+        auth_kind: authKind,
+        duration_ms: Date.now() - t0,
+      });
+    }
+    queue = [target];
+  } else {
+    queue = selectH2Eligible(allListings).slice(0, limit);
+  }
+
+  const eligibleCount = recordId ? queue.length : selectH2Eligible(allListings).length;
+  const priorIndex = buildPriorContactIndex(allListings);
+  const plans = planQueue(queue, priorIndex);
+  const notesById = new Map(queue.map((l) => [l.id, l.notes] as const));
+
+  const startedAt = new Date(t0).toISOString();
+  const processed: ProcessedRow[] = [];
+  const summary = {
+    first_touch_sent: 0,
+    prior_contact_stalled: 0,
+    bad_phone_quarantined: 0,
+    skipped: 0,
+    errors: 0,
+  };
+
+  for (const p of plans) {
+    const row: ProcessedRow = {
+      record_id: p.recordId,
+      address: p.address,
+      agent_name: p.agentName,
+      agent_phone: p.route === "first_touch" ? p.toE164 : p.agentPhoneRaw,
+      route: p.route,
+      message: p.message,
+      sms_fired: false,
+      sms_message_id: null,
+      airtable_updated: false,
+      error: null,
+    };
+    const iso = new Date().toISOString();
+    const existingNotes = notesById.get(p.recordId) ?? null;
+
+    // Dry run: report the intended action (incl. the full SMS body) — no I/O.
+    if (dryRun) {
+      if (p.route === "skipped") row.error = p.skipReason;
+      tally(summary, p.route);
+      processed.push(row);
+      continue;
+    }
+
+    // Wall-clock guard — stop starting new work; remaining roll to next run.
+    if (Date.now() - t0 > WALL_CLOCK_BUDGET_MS) {
+      row.error = "skipped: wall-clock budget reached";
+      processed.push(row);
+      continue;
+    }
+
+    try {
+      if (p.route === "bad_phone_quarantine") {
+        await updateListingRecord(p.recordId, {
+          Outreach_Status: "Dead",
+          Verification_Notes: buildQuarantineNote(existingNotes, iso, p.agentPhoneRaw),
+        });
+        row.airtable_updated = true;
+        summary.bad_phone_quarantined++;
+      } else if (p.route === "prior_contact_stall") {
+        await updateListingRecord(p.recordId, {
+          Outreach_Status: "Manual Review",
+          Verification_Notes: buildStallNote(existingNotes, iso, p.prior!),
+        });
+        row.airtable_updated = true;
+        summary.prior_contact_stalled++;
+      } else if (p.route === "skipped") {
+        row.error = p.skipReason;
+        summary.skipped++;
+      } else {
+        // first_touch — the only path that sends SMS.
+        const result = await sendMessageWithId(p.toE164!, p.message!);
+        row.sms_fired = true;
+        row.sms_message_id = result.id;
+        await updateListingRecord(p.recordId, {
+          Outreach_Status: "Texted",
+          Verification_Notes: buildSentNote(existingNotes, iso, result.id, p.message!),
+        });
+        row.airtable_updated = true;
+        summary.first_touch_sent++;
+        if (sendDelayMs > 0) await sleep(sendDelayMs); // throttle after a send only
+      }
+    } catch (err) {
+      row.error = err instanceof Error ? err.message : String(err);
+      summary.errors++;
+    }
+    processed.push(row);
+  }
+
+  await audit({
+    agent: "crier",
+    event: dryRun ? "h2_outreach_dry_run" : "h2_outreach_live",
+    status: summary.errors > 0 ? "uncertain" : "confirmed_success",
+    inputSummary: { auth_kind: authKind, dry_run: dryRun, limit, record_id: recordId, live_env: liveEnv },
+    outputSummary: { eligible_count: eligibleCount, processed: processed.length, ...summary },
+    ms: Date.now() - t0,
+  });
+
+  return NextResponse.json({
+    mode: dryRun ? "dry_run" : "live",
+    started_at: startedAt,
+    finished_at: new Date().toISOString(),
+    eligible_count: eligibleCount,
+    processed,
+    summary,
+    auth_kind: authKind,
+    duration_ms: Date.now() - t0,
+  });
+}
+
+function tally(summary: { first_touch_sent: number; prior_contact_stalled: number; bad_phone_quarantined: number; skipped: number }, route: H2Plan["route"]) {
+  if (route === "first_touch") summary.first_touch_sent++;
+  else if (route === "prior_contact_stall") summary.prior_contact_stalled++;
+  else if (route === "bad_phone_quarantine") summary.bad_phone_quarantined++;
+  else summary.skipped++;
+}
+
+export async function GET(req: Request) {
+  return handle(req);
+}
+
+export async function POST(req: Request) {
+  return handle(req);
+}
