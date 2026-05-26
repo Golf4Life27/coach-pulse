@@ -72,10 +72,18 @@ describe("evaluateIntakeCandidate", () => {
   it("flags missing list price (the ATTOM snapshot blocker)", () => {
     expect(evaluateIntakeCandidate(cand({ listPrice: null }), NOW).reasons).toContain("list_price_missing");
   });
-  // Long-DOM = distress (inverted from the old too_old bug). NOW = 2026-05-25.
-  it("rejects a too-NEW listing (DOM 5d → agent still fresh)", () => {
+  // No DOM lower floor (removed 2026-05-26): fire on EVERY active band
+  // listing regardless of age — a fresh-but-distress listing is exactly the
+  // first-low-offer target. NOW = 2026-05-25.
+  it("accepts a very-new listing (DOM 3d → no lower floor)", () => {
+    const threeDays = new Date("2026-05-22T00:00:00Z").toISOString();
+    const r = evaluateIntakeCandidate(cand({ listedDate: threeDays }), NOW);
+    expect(r.reasons).not.toContain("listed_date_too_new");
+    expect(r.accept).toBe(true);
+  });
+  it("accepts a 5d listing (no lower floor)", () => {
     const fiveDays = new Date("2026-05-20T00:00:00Z").toISOString();
-    expect(evaluateIntakeCandidate(cand({ listedDate: fiveDays }), NOW).reasons).toContain("listed_date_too_new");
+    expect(evaluateIntakeCandidate(cand({ listedDate: fiveDays }), NOW).accept).toBe(true);
   });
   it("passes a long-DOM listing (30d)", () => {
     const thirtyDays = new Date("2026-04-25T00:00:00Z").toISOString();
@@ -84,18 +92,10 @@ describe("evaluateIntakeCandidate", () => {
   it("passes a very old listing when no DISTRESS_DOM_CAP set (144d)", () => {
     expect(evaluateIntakeCandidate(cand({ listedDate: old }), NOW).accept).toBe(true);
   });
-  it("boundary: exactly 14d DOM → passes (inclusive lower bound)", () => {
-    const fourteenDays = new Date("2026-05-11T00:00:00Z").toISOString();
-    const r = evaluateIntakeCandidate(cand({ listedDate: fourteenDays }), NOW);
-    expect(r.reasons).not.toContain("listed_date_too_new");
+  it("accepts a missing listed date when no DISTRESS_DOM_CAP set", () => {
+    const r = evaluateIntakeCandidate(cand({ listedDate: null }), NOW);
+    expect(r.reasons).not.toContain("listed_date_missing");
     expect(r.accept).toBe(true);
-  });
-  it("boundary: 13d DOM → rejected too_new", () => {
-    const thirteenDays = new Date("2026-05-12T00:00:00Z").toISOString();
-    expect(evaluateIntakeCandidate(cand({ listedDate: thirteenDays }), NOW).reasons).toContain("listed_date_too_new");
-  });
-  it("flags missing listed date", () => {
-    expect(evaluateIntakeCandidate(cand({ listedDate: null }), NOW).reasons).toContain("listed_date_missing");
   });
   it("accepts a band listing with NO distress signal (distress gate removed)", () => {
     // First-contact fires on every active band listing — the 65% script is

@@ -47,11 +47,29 @@ describe("detectStillActive", () => {
   it("true for an active listing page", () => {
     expect(detectStillActive("For sale. $185,000. 3 bed 2 bath. Schedule a tour.")).toBe(true);
   });
-  it("false on inactive markers", () => {
+  it("false only on unambiguous removal markers", () => {
     expect(detectStillActive("This home is no longer available")).toBe(false);
-    expect(detectStillActive("Sale pending — accepting backups")).toBe(false);
-    expect(detectStillActive("Off market")).toBe(false);
-    expect(detectStillActive("This home sold on 4/1/2026")).toBe(false);
+    expect(detectStillActive("Listing removed by the agent")).toBe(false);
+    expect(detectStillActive("This property is no longer on the market")).toBe(false);
+  });
+  it("does NOT false-flag boilerplate-prone phrases (2026-05-26 regression)", () => {
+    // These appear in Zillow/Redfin nearby-homes, recently-sold, and
+    // pending-comps boilerplate on pages whose subject listing is active.
+    expect(detectStillActive("Sale pending — accepting backups")).toBe(true);
+    expect(detectStillActive("Off market")).toBe(true);
+    expect(detectStillActive("This home sold on 4/1/2026")).toBe(true);
+  });
+  it("stays active on a real listing page that contains comp boilerplate", () => {
+    // Active subject listing whose page also lists nearby homes that are
+    // off-market / recently sold — the full-page scan must not drop it.
+    const page = [
+      "For sale — $145,000. 3 bed 2 bath. Sold as-is, motivated seller.",
+      "Nearby homes:",
+      "412 Oak — Off market",
+      "418 Oak — Sold on 3/2/2026",
+      "424 Oak — Sale pending",
+    ].join("\n");
+    expect(detectStillActive(page)).toBe(true);
   });
   it("true (don't override RentCast) when no text", () => {
     expect(detectStillActive(null)).toBe(true);

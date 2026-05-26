@@ -124,12 +124,19 @@ export const RENOVATION_EXCLUSION_KEYWORDS: readonly string[] = [
 /** Portal domains we trust as listing-detail pages, ranked. */
 const PREFERRED_DOMAINS = ["redfin.com", "zillow.com", "realtor.com", "homes.com", "trulia.com"];
 
-/** Inactive-status markers — portal text that means the listing is no
- *  longer actively for sale (catches RentCast staleness). Conservative set
- *  to avoid false-inactives; a false drop is acceptable (we just skip it). */
+/** Inactive-status markers — portal text that means THIS listing is no
+ *  longer actively for sale. RentCast is the authoritative Active source;
+ *  this is only a staleness double-check, so the bar for overriding it is
+ *  HIGH. Only unambiguous "this listing was removed" phrasings belong here.
+ *
+ *  Deliberately EXCLUDED (2026-05-26 regression fix): "off market" /
+ *  "off-market" / "sale pending" / "sold on" / "this home sold" — these
+ *  appear in Zillow/Redfin nearby-homes, recently-sold, and pending-comps
+ *  boilerplate on pages whose subject listing is still active, and a
+ *  full-page substring scan false-flags them as inactive (dropped 3 live
+ *  distress listings, e.g. 3719 W Houston). */
 const INACTIVE_MARKERS = [
-  "no longer available", "off market", "off-market", "sale pending", "sold on",
-  "this home sold", "listing removed", "no longer on the market",
+  "no longer available", "listing removed", "no longer on the market",
 ];
 
 export interface FirecrawlVerifyResult {

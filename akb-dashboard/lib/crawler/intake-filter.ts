@@ -12,8 +12,11 @@
 //   - beds >= 2
 //   - $20,000 <= listPrice <= $400,000 (flat band; floor lowered from
 //     $75K per operator 2026-05-25 — tune from dry-run output)
-//   - DOM >= 14 days (long-DOM = distress; reject too-NEW listings where
-//     the agent is still fresh). Optional DISTRESS_DOM_CAP upper bound.
+//   - NO DOM lower floor (removed 2026-05-26): fire on EVERY active band
+//     listing regardless of age — fresh-but-distress listings (e.g. an
+//     "as-is" home 3 days on market) are exactly the first-low-offer
+//     targets and must not be dropped for being too new. Optional
+//     DISTRESS_DOM_CAP upper bound still drops stale market noise.
 //   - State NOT IN {IL, MO, SC, NC, OK, ND} (wholesale-restrictive)
 //
 // NO distress-signal gate at intake: the 65%-of-list outreach script is
@@ -30,10 +33,6 @@ export const INTAKE_RULES = {
   minBeds: 2,
   minListPrice: 20_000,
   maxListPrice: 400_000,
-  // Long-DOM IS the distress signal — agent fatigue + seller motivation grow
-  // with days unsold. Reject listings NEWER than this (agent still fresh).
-  // (Inverted 2026-05-25 from the prior maxListedAgeDays=90 bug.)
-  minListedAgeDays: 14,
 } as const;
 
 /** Optional upper bound on DOM to drop stale market noise. Unset → no cap.
@@ -64,7 +63,6 @@ export type IntakeRejectReason =
   | "list_price_out_of_band"
   | "list_price_missing"
   | "listed_date_missing"
-  | "listed_date_too_new"
   | "listed_date_too_old"
   | "excluded_state"
   | "state_missing";
@@ -105,19 +103,18 @@ export function evaluateIntakeCandidate(
     reasons.push("list_price_out_of_band");
   }
 
-  if (!c.listedDate) {
-    reasons.push("listed_date_missing");
-  } else {
-    const t = Date.parse(c.listedDate);
-    if (Number.isNaN(t)) {
+  // No DOM lower floor — every active band listing fires regardless of age.
+  // The optional DISTRESS_DOM_CAP upper bound is the ONLY date gate; when it
+  // is unset (default), listed-date is not evaluated at all and a missing
+  // date never blocks intake.
+  if (DISTRESS_DOM_CAP != null) {
+    if (!c.listedDate) {
       reasons.push("listed_date_missing");
     } else {
-      const domDays = (now.getTime() - t) / DAY_MS;
-      // Long-DOM = distress. Reject too-NEW (DOM < 14; inclusive at 14 → 14
-      // days passes). Optional DISTRESS_DOM_CAP rejects stale noise.
-      if (domDays < INTAKE_RULES.minListedAgeDays) {
-        reasons.push("listed_date_too_new");
-      } else if (DISTRESS_DOM_CAP != null && domDays > DISTRESS_DOM_CAP) {
+      const t = Date.parse(c.listedDate);
+      if (Number.isNaN(t)) {
+        reasons.push("listed_date_missing");
+      } else if ((now.getTime() - t) / DAY_MS > DISTRESS_DOM_CAP) {
         reasons.push("listed_date_too_old");
       }
     }
