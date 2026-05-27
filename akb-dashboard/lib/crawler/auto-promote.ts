@@ -7,11 +7,11 @@
 // so dry-run reporting can show what WOULD promote without writing it.
 //
 // Eligibility (ALL required):
-//   1. Firecrawl classified the listing "accept" — still-active, no
-//      renovation/wholesaler language, AND at least one distress signal
-//      (condition copy OR DOM ≥ threshold OR a price reduction). Listings with
-//      none of those land in the soft Review queue (accepted=false here), not
-//      auto-promote.
+//   1. Firecrawl classified the listing "accept" — still-active, non-wholesaler,
+//      with at least one distress signal (condition copy OR DOM ≥ threshold OR
+//      a price reduction). A distress signal overrides a renovation match.
+//      Listings with no distress signal land in the soft Review queue, or are
+//      rejected outright if renovated — either way accepted=false here.
 //   2. List_Price > 0 (so MAO_V1 computes).
 //   3. State NOT wholesale-restricted (IL/MO/SC/NC/OK/ND). In practice the
 //      intake filter already rejects these pre-Firecrawl, so this is

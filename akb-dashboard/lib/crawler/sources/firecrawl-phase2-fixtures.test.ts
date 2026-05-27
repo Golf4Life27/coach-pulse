@@ -6,6 +6,8 @@
 //                   killed by "Year Renovated: —" + a NEW CONSTRUCTION comp.
 //   1610 22nd     — "SOLD AS IS" subject copy; "renovated" only in the empty
 //                   facts field.
+//   1402 Mardell  — DOM 95, soft copy; inline "Year renovated —" its only reno
+//                   match. Accepts on DOM ≥ 60 (renovation overridden).
 //   915 Shearer   — motivated seller + fixer upper; killed by a 2025 "Listing
 //                   Removed" row in Sale & Tax History.
 //   942 W Lynwood — investor special + cash or hard money + fixer-upper (NOT a
@@ -15,9 +17,12 @@
 //
 // Markdown blocks are REPRESENTATIVE reconstructions of the portal pages (the
 // container has no Firecrawl key) modeling the exact noise the forensics
-// described: a comps sidebar with a $790K NEW CONSTRUCTION comp, an em-dash
-// "Year Renovated" facts row, and prior-year "Listing Removed" history rows.
-// The operator re-validates against the live dry-run.
+// described: a comps sidebar with a $790K NEW CONSTRUCTION comp, Redfin's
+// single-line facts table with an inline "Year renovated —" token, and
+// prior-year "Listing Removed" history rows. Each case also exercises the
+// post-Bug-1 precedence — a distress signal (condition copy / DOM ≥ 60 / price
+// cut) accepts even if renovation language survived. The operator re-validates
+// against the live dry-run.
 
 import { describe, it, expect } from "vitest";
 import {
@@ -64,8 +69,11 @@ const COMPS = [
   "- 12 Other Ave — fully renovated turnkey, move-in ready — $625,000",
 ].join("\n");
 
-// The em-dash facts row (em-dash = NOT renovated) that matched bare "renovated".
-const FACTS_EMPTY_RENO = ["## Home facts", "Year Renovated: —", "Lot Size: 7,200 sqft"].join("\n");
+// Redfin's facts table rendered as ONE multi-field line with "Year renovated —"
+// (em-dash = NOT renovated) embedded mid-line — the inline form the row-based
+// stripper missed and that matched bare "renovated". Verbatim forensics string.
+const REDFIN_FACTS_INLINE =
+  "Stories 1 Lot width 50 ft. Lot depth 120 ft. Lot size 7,560 Sq. Ft. Year renovated — Finished Sq. Ft. 1,044 Unfinished Sq. Ft. — Total Sq. Ft. 1,044 Year built 1940";
 
 // Prior-year history rows whose "Listing Removed" matched the inactive markers.
 const HISTORY_REMOVED = [
@@ -83,12 +91,12 @@ interface Case {
 
 const CASES: Case[] = [
   {
-    name: "1803 Mardell (DOM 167 + price cut; soft 'creative updates')",
+    name: "1803 Mardell (DOM 167 + price cut; soft 'creative updates', inline reno)",
     markdown: [
       "# 1803 Mardell Pl, San Antonio, TX 78201",
       "For sale — $145,000. 3 bed, 1 bath.",
       "Charming bungalow with creative updates throughout. Bring your vision.",
-      FACTS_EMPTY_RENO,
+      REDFIN_FACTS_INLINE,
       COMPS,
     ].join("\n"),
     signals: { daysOnMarket: 167, priceReduced: true },
@@ -96,37 +104,52 @@ const CASES: Case[] = [
     expect: { renovated: false, active: true, condition: false },
   },
   {
-    name: "1610 22nd (SOLD AS IS; reno only in empty facts field)",
+    name: "1610 22nd (SOLD AS IS; reno only in the inline empty facts field)",
     markdown: [
       "# 1610 22nd St, San Antonio, TX 78201",
       "For sale — $129,000. 2 bed, 1 bath.",
       "SOLD AS IS. Cash buyers welcome, no repairs by seller.",
-      FACTS_EMPTY_RENO,
+      REDFIN_FACTS_INLINE,
       COMPS,
     ].join("\n"),
     signals: { daysOnMarket: 12, priceReduced: false },
     expect: { renovated: false, active: true, condition: true },
   },
   {
-    name: "915 Shearer Blvd (motivated seller + fixer upper; 2025 Listing Removed)",
+    name: "1402 Mardell (DOM 95; soft copy, inline reno its only reno match)",
+    markdown: [
+      "# 1402 Mardell Pl, San Antonio, TX 78201",
+      "For sale — $139,000. 3 bed, 1 bath.",
+      "Great bones in a hot pocket. Tons of potential for the right buyer.",
+      REDFIN_FACTS_INLINE,
+      COMPS,
+    ].join("\n"),
+    signals: { daysOnMarket: 95, priceReduced: false },
+    // No condition copy — accepts on DOM ≥ 60 alone (renovation overridden).
+    expect: { renovated: false, active: true, condition: false },
+  },
+  {
+    name: "915 Shearer Blvd (DOM 11 + price cut + motivated seller; 2025 Listing Removed)",
     markdown: [
       "# 915 Shearer Blvd, San Antonio, TX 78201",
       "For sale — $140,000. 3 bed, 2 bath.",
       "Motivated seller! Fixer upper sold as-is — great investor opportunity.",
+      REDFIN_FACTS_INLINE,
       HISTORY_REMOVED,
       "## Schools",
       "Rated 5/10.",
       COMPS,
     ].join("\n"),
-    signals: { daysOnMarket: 30, priceReduced: false },
+    signals: { daysOnMarket: 11, priceReduced: true },
     expect: { renovated: false, active: true, condition: true },
   },
   {
-    name: "942 W Lynwood (investor special + cash or hard money; 2026 Listing Removed)",
+    name: "942 W Lynwood (DOM 8 + price cut + investor special / cash or hard money; 2026 Listing Removed)",
     markdown: [
       "# 942 W Lynwood Ave, San Antonio, TX 78201",
       "For sale — $118,000. 2 bed, 1 bath.",
       "Investor special. Cash or hard money. Fixer-upper with tons of potential.",
+      REDFIN_FACTS_INLINE,
       [
         "## Sale & Tax History",
         "| 1/08/2026 | Listing Removed | $125,000 |",
@@ -134,24 +157,24 @@ const CASES: Case[] = [
       ].join("\n"),
       COMPS,
     ].join("\n"),
-    signals: { daysOnMarket: 8, priceReduced: false },
+    signals: { daysOnMarket: 8, priceReduced: true },
     expect: { renovated: false, active: true, condition: true },
   },
   {
-    name: "1518 Waverly (sold as-is + needs updates; Year-Renovated dash)",
+    name: "1518 Waverly (DOM 162 + sold as-is + needs updates; inline Year-renovated dash)",
     markdown: [
       "# 1518 Waverly Ave, San Antonio, TX 78201",
       "For sale — $135,000. 3 bed, 1 bath.",
       "Sold as-is. Needs updates throughout — bring your contractor.",
-      FACTS_EMPTY_RENO,
+      REDFIN_FACTS_INLINE,
       COMPS,
     ].join("\n"),
-    signals: { daysOnMarket: 20, priceReduced: false },
+    signals: { daysOnMarket: 162, priceReduced: false },
     expect: { renovated: false, active: true, condition: true },
   },
 ];
 
-describe("Phase 2 fixtures — 5 false-rejected 78201 listings now classify ACCEPT", () => {
+describe("Phase 2 fixtures — false-rejected 78201 listings now classify ACCEPT", () => {
   for (const c of CASES) {
     it(`${c.name} → accept`, () => {
       const fc = verifyFromText(c.markdown);
