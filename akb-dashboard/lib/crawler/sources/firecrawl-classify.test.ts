@@ -16,6 +16,8 @@ function fc(over: Partial<FirecrawlVerifyResult> = {}): FirecrawlVerifyResult {
     matchedWholesalerKeywords: [],
     hasConditionSignal: true,
     matchedDistressKeywords: ["as-is"],
+    isNewConstruction: false,
+    matchedNewConstructionSignals: [],
     matchedInactiveMarkers: [],
     creditsUsed: 1,
     rateLimited: false,
@@ -145,5 +147,32 @@ describe("classifyVerifiedListing — Phase 2 multi-signal accept", () => {
       { daysOnMarket: 400, priceReduced: true },
     );
     expect(d).toEqual({ outcome: "reject", reason: "wholesaler_excluded" });
+  });
+});
+
+describe("classifyVerifiedListing — new construction is a HARD reject (no override)", () => {
+  it("new construction → reject new_construction_excluded", () => {
+    const d = classifyVerifiedListing(fc({ isNewConstruction: true }));
+    expect(d).toEqual({ outcome: "reject", reason: "new_construction_excluded" });
+  });
+
+  it("NO distress signal rescues new construction (condition + DOM + price all set)", () => {
+    const d = classifyVerifiedListing(
+      fc({ isNewConstruction: true, hasConditionSignal: true }),
+      { daysOnMarket: 400, priceReduced: true },
+    );
+    expect(d).toEqual({ outcome: "reject", reason: "new_construction_excluded" });
+  });
+
+  it("inactive is checked before new construction (both reject)", () => {
+    const d = classifyVerifiedListing(fc({ stillActive: false, isNewConstruction: true }));
+    expect(d).toEqual({ outcome: "reject", reason: "firecrawl_inactive" });
+  });
+
+  it("new construction beats wholesaler + renovation", () => {
+    const d = classifyVerifiedListing(
+      fc({ isNewConstruction: true, wholesalerExcluded: true, hasRenovatedLanguage: true }),
+    );
+    expect(d).toEqual({ outcome: "reject", reason: "new_construction_excluded" });
   });
 });

@@ -155,6 +155,10 @@ export interface FirecrawlVerifyResult {
   matchedWholesalerKeywords: string[];
   hasConditionSignal: boolean;
   matchedDistressKeywords: string[];
+  /** ACTUAL new construction — a HARD exclusion above the distress override
+   *  (classify → new_construction_excluded). */
+  isNewConstruction: boolean;
+  matchedNewConstructionSignals: string[];
   /** Matched inactive markers (the phrases behind stillActive=false). */
   matchedInactiveMarkers: string[];
   creditsUsed: number;
@@ -196,6 +200,41 @@ export function detectRenovationLanguage(text: string | null | undefined): {
   const lc = text.toLowerCase();
   const hits = RENOVATION_EXCLUSION_KEYWORDS.filter((k) => lc.includes(k));
   return { matched: hits.length > 0, matchedKeywords: hits };
+}
+
+/** How recent a year_built counts as new construction. now.year - 2 → e.g.
+ *  in 2026, anything built 2024+ is new. Operator-tunable without a deploy. */
+export const NEW_CONSTRUCTION_MAX_AGE_YEARS = Number(
+  process.env.NEW_CONSTRUCTION_MAX_AGE_YEARS ?? "2",
+);
+
+/** Pure: detect ACTUAL new construction from scraped portal text — a HARD
+ *  exclusion (a 65%-of-list offer on a new build is wrong, and unlike the soft
+ *  renovation bucket this must NOT be overridable by a distress signal). Three
+ *  STRONG signals only (operator 2026-05-27; unit numbers deliberately NOT a
+ *  signal — old duplexes/fourplexes carry them and are prime targets):
+ *    • Zillow facts "New construction: Yes"
+ *    • a "new construction" banner/label (Redfin). The ": No" facts form and
+ *      the comps sidebar are stripped upstream (scopeSubjectText), so a
+ *      surviving "new construction" here is the SUBJECT's own banner.
+ *    • year_built within the last NEW_CONSTRUCTION_MAX_AGE_YEARS calendar years.
+ *  Scan the SCOPED subject text, never the raw page. */
+export function detectNewConstruction(
+  text: string | null | undefined,
+  now: Date = new Date(),
+): { isNew: boolean; signals: string[] } {
+  if (!text) return { isNew: false, signals: [] };
+  const signals: string[] = [];
+  if (/\bnew\s+construction\s*:\s*yes\b/i.test(text)) signals.push("new_construction_yes");
+  else if (/\bnew construction\b/i.test(text)) signals.push("new_construction_banner");
+  const cutoff = now.getFullYear() - NEW_CONSTRUCTION_MAX_AGE_YEARS;
+  const yearMatch =
+    text.match(/\byear\s+built\s*:?\s*(\d{4})/i) ?? text.match(/\bbuilt\s+in\s+(\d{4})/i);
+  if (yearMatch) {
+    const yr = Number(yearMatch[1]);
+    if (yr >= cutoff && yr <= now.getFullYear() + 2) signals.push(`year_built_${yr}`);
+  }
+  return { isNew: signals.length > 0, signals };
 }
 
 /** Pure: matched inactive markers (distinct, in list order). Substring,
@@ -284,6 +323,8 @@ export async function verifyListing(
     matchedWholesalerKeywords: [],
     hasConditionSignal: false,
     matchedDistressKeywords: [],
+    isNewConstruction: false,
+    matchedNewConstructionSignals: [],
     matchedInactiveMarkers: [],
     creditsUsed: 0,
     rateLimited: false,
@@ -333,6 +374,7 @@ export async function verifyListing(
     const statusText = scopeStatusText(pick.markdown);
     const reno = detectRenovationLanguage(subjectText);
     const content = evaluateListingContent(subjectText);
+    const newConstruction = detectNewConstruction(subjectText);
     const inactiveMarkers = detectInactiveMarkers(statusText);
     return {
       credentialed: true,
@@ -345,6 +387,8 @@ export async function verifyListing(
       matchedWholesalerKeywords: content.matchedWholesalerKeywords,
       hasConditionSignal: content.hasConditionSignal,
       matchedDistressKeywords: content.matchedDistressKeywords,
+      isNewConstruction: newConstruction.isNew,
+      matchedNewConstructionSignals: newConstruction.signals,
       matchedInactiveMarkers: inactiveMarkers,
       creditsUsed,
       rateLimited: false,
@@ -357,6 +401,7 @@ export async function verifyListing(
             pageExcerpt: pick.markdown.replace(/\s+/g, " ").trim().slice(0, PAGE_EXCERPT_CHARS),
             debugContexts: [
               ...buildDebugContexts(subjectText, [
+                { category: "new_construction", phrases: newConstruction.isNew ? ["new construction"] : [] },
                 { category: "renovation", phrases: reno.matchedKeywords },
                 { category: "wholesaler", phrases: content.matchedWholesalerKeywords },
                 { category: "distress", phrases: content.matchedDistressKeywords },
@@ -379,20 +424,23 @@ export async function verifyListing(
 // candidate's RentCast distress signals. Precedence (top to bottom):
 //   1. infra errors / unresolved → reject (no usable page)
 //   2. inactive → reject
-//   3. wholesaler-excluded → reject
-//   4. ANY distress signal → ACCEPT — overrides a renovation match:
+//   3. NEW CONSTRUCTION → reject — HARD, above the distress override. A
+//      65%-of-list offer on an actual new build is wrong, so NO distress
+//      signal rescues it (unlike the soft renovation bucket below).
+//   4. wholesaler-excluded → reject
+//   5. ANY distress signal → ACCEPT — overrides a renovation match:
 //        • text condition signal (as-is / fixer / motivated / cash-only / …)
 //        • DOM ≥ DISTRESS_DOM_ACCEPT_THRESHOLD (long-on-market = soft distress)
 //        • a price reduction in the listing history
-//   5. renovation language (and NO distress signal) → reject
-//   6. else → SOFT "review" (writes Outreach_Status="Review" for spot-check).
+//   6. renovation language (and NO distress signal) → reject
+//   7. else → SOFT "review" (writes Outreach_Status="Review" for spot-check).
 //
-// Why renovation is LAST, not a veto: the renovation scan is noisy (it matches
-// facts-table labels and comps), so an explicit "fixer-upper" / "motivated
-// seller" / "sold as-is" listing — or one long-on-market with a price cut — is
-// a true distress deal, not a flip that happens to mention upgrades. Renovation
-// only decides the no-other-signal case. The 65%-of-list offer is the safety
-// net; a false reject is the unrecoverable cost, so the floor is write.
+// New construction vs renovation: actual new construction (Redfin banner /
+// Zillow "New construction: Yes" / year_built within the last 2 yrs) is a HARD
+// exclusion with no escape hatch — a recently-built, price-reduced listing must
+// NOT fire a low offer. Renovation, by contrast, is a noisy soft signal (facts
+// labels, comps) that a genuine distress signal overrides; it only decides the
+// no-other-signal case. The 65%-of-list offer is the safety net for the rest.
 
 /** Candidate-side distress signals (from RentCast), folded into the accept
  *  decision alongside the Firecrawl text-condition signal. */
@@ -421,6 +469,8 @@ export function classifyVerifiedListing(
   if (fc.error) return { outcome: "reject", reason: "firecrawl_error" };
   if (!fc.resolved) return { outcome: "reject", reason: "firecrawl_url_unresolved" };
   if (!fc.stillActive) return { outcome: "reject", reason: "firecrawl_inactive" };
+  // HARD exclusion — above the distress override. No escape hatch.
+  if (fc.isNewConstruction) return { outcome: "reject", reason: "new_construction_excluded" };
   if (fc.wholesalerExcluded) return { outcome: "reject", reason: "wholesaler_excluded" };
   // Distress signals override a (noisy, false-positive-prone) renovation match.
   const longDom =
