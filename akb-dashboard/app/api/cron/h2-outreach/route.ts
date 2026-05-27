@@ -54,6 +54,11 @@ import {
   buildQuarantineNote,
   type H2Plan,
 } from "@/lib/h2-outreach";
+import {
+  evaluateWorkingHours,
+  parseWorkingHoursConfig,
+  type WorkingHoursMeta,
+} from "@/lib/h2-working-hours";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -74,12 +79,13 @@ interface ProcessedRow {
   address: string;
   agent_name: string | null;
   agent_phone: string | null;
-  route: H2Plan["route"];
+  route: H2Plan["route"] | "outside_hours";
   message: string | null;
   sms_fired: boolean;
   sms_message_id: string | null;
   airtable_updated: boolean;
   error: string | null;
+  working_hours_meta: WorkingHoursMeta | null;
 }
 
 /** Human-readable reason a record_id target fails the eligibility filter. */
@@ -133,6 +139,15 @@ async function handle(req: Request): Promise<Response> {
     ? Math.floor(sendDelayRaw)
     : DEFAULT_SEND_DELAY_MS;
 
+  // Working-hours gate config (INV-H2-WORKING-HOURS). Defaults 8am–8pm,
+  // all 7 days, enabled — env-tunable without code changes.
+  const whConfig = parseWorkingHoursConfig({
+    enabled: process.env.H2_WORKING_HOURS_ENABLED,
+    start: process.env.H2_WORKING_HOURS_START,
+    end: process.env.H2_WORKING_HOURS_END,
+    days: process.env.H2_WORKING_HOURS_DAYS,
+  });
+
   // ── Read listings (full set — prior-contact index needs all rows) ─
   let allListings: Listing[];
   try {
@@ -177,7 +192,7 @@ async function handle(req: Request): Promise<Response> {
           airtable_updated: false,
           error: `ineligible: ${reason}`,
         }],
-        summary: { first_touch_sent: 0, prior_contact_stalled: 0, bad_phone_quarantined: 0, skipped: 1, errors: 0 },
+        summary: { first_touch_sent: 0, prior_contact_stalled: 0, bad_phone_quarantined: 0, outside_hours: 0, skipped: 1, errors: 0 },
         auth_kind: authKind,
         duration_ms: Date.now() - t0,
       });
@@ -190,7 +205,7 @@ async function handle(req: Request): Promise<Response> {
   const eligibleCount = recordId ? queue.length : selectH2Eligible(allListings).length;
   const priorIndex = buildPriorContactIndex(allListings);
   const plans = planQueue(queue, priorIndex);
-  const notesById = new Map(queue.map((l) => [l.id, l.notes] as const));
+  const byId = new Map(queue.map((l) => [l.id, l] as const));
 
   const startedAt = new Date(t0).toISOString();
   const processed: ProcessedRow[] = [];
@@ -198,6 +213,7 @@ async function handle(req: Request): Promise<Response> {
     first_touch_sent: 0,
     prior_contact_stalled: 0,
     bad_phone_quarantined: 0,
+    outside_hours: 0,
     skipped: 0,
     errors: 0,
   };
@@ -214,9 +230,35 @@ async function handle(req: Request): Promise<Response> {
       sms_message_id: null,
       airtable_updated: false,
       error: null,
+      working_hours_meta: null,
     };
     const iso = new Date().toISOString();
-    const existingNotes = notesById.get(p.recordId) ?? null;
+    const listing = byId.get(p.recordId);
+    const existingNotes = listing?.notes ?? null;
+
+    // Working-hours gate — first_touch ONLY. prior_contact_stall and
+    // bad_phone_quarantine don't send SMS, so their Airtable bookkeeping runs
+    // 24/7. Applies in BOTH dry and live so the reported route reflects reality.
+    if (p.route === "first_touch" && whConfig.enabled) {
+      const wh = evaluateWorkingHours(listing?.state ?? null, whConfig);
+      row.working_hours_meta = wh.meta;
+      if (wh.meta.tz_defaulted) {
+        console.warn(
+          `[h2-outreach][working-hours] no tz mapping for state '${listing?.state ?? ""}' — ` +
+          `defaulting to ${wh.meta.timezone} record=${p.recordId}`,
+        );
+      }
+      if (!wh.inside) {
+        row.route = "outside_hours";
+        summary.outside_hours++;
+        console.log(
+          `route=outside_hours record=${p.recordId} state=${wh.meta.state ?? ""} ` +
+          `tz=${wh.meta.timezone} local_hour=${wh.meta.local_hour} local_wday=${wh.meta.local_weekday}`,
+        );
+        processed.push(row);
+        continue; // no SMS, no Airtable write
+      }
+    }
 
     // Dry run: report the intended action (incl. the full SMS body) — no I/O.
     if (dryRun) {
