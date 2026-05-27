@@ -41,6 +41,7 @@ import { fetchListingsByZip } from "@/lib/crawler/sources/rentcast";
 import {
   filterIntakeCandidates,
   normalizeAddressKey,
+  daysOnMarketFrom,
   type IntakeCandidate,
 } from "@/lib/crawler/intake-filter";
 import { shouldAutoPromote, type AutoPromoteBlockReason } from "@/lib/crawler/auto-promote";
@@ -393,7 +394,11 @@ export async function GET(req: Request) {
     summary.firecrawl.scrapes_used++;
     summary.firecrawl.credits_used += fc.creditsUsed;
 
-    const decision = classifyVerifiedListing(fc);
+    // Phase-2 distress accept signals from the RentCast feed. DOM falls back
+    // to a listed-date derivation when the feed omits daysOnMarket.
+    const dom = c.daysOnMarket ?? daysOnMarketFrom(c.listedDate, now);
+    const priceReduced = c.priceReduced ?? false;
+    const decision = classifyVerifiedListing(fc, { daysOnMarket: dom, priceReduced });
     if (debug) {
       debugDecisions.push({
         sourceId: c.sourceId,
@@ -406,6 +411,8 @@ export async function GET(req: Request) {
         stillActive: fc.stillActive,
         hasRenovatedLanguage: fc.hasRenovatedLanguage,
         hasConditionSignal: fc.hasConditionSignal,
+        daysOnMarket: dom,
+        priceReduced,
         wholesalerExcluded: fc.wholesalerExcluded,
         matched: {
           renovation: fc.matchedKeywords,

@@ -22,6 +22,7 @@
 // adapter returns credentialed=false when absent.
 
 import { evaluateListingContent } from "@/lib/crawler/intake-filter";
+import { scopeSubjectText, scopeStatusText } from "@/lib/crawler/sources/listing-text-scope";
 
 const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY;
 const FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v2/search";
@@ -325,9 +326,14 @@ export async function verifyListing(
     if (!pick || !pick.markdown) {
       return { ...base, creditsUsed, resolved: false };
     }
-    const reno = detectRenovationLanguage(pick.markdown);
-    const content = evaluateListingContent(pick.markdown);
-    const inactiveMarkers = detectInactiveMarkers(pick.markdown);
+    // Scope to the subject listing before keyword scanning: comps sidebar +
+    // empty facts rows for renovation/content; comps + sale-history for the
+    // inactive check. Raw cross-listing noise was the 0%-accept root cause.
+    const subjectText = scopeSubjectText(pick.markdown);
+    const statusText = scopeStatusText(pick.markdown);
+    const reno = detectRenovationLanguage(subjectText);
+    const content = evaluateListingContent(subjectText);
+    const inactiveMarkers = detectInactiveMarkers(statusText);
     return {
       credentialed: true,
       resolved: true,
@@ -345,13 +351,20 @@ export async function verifyListing(
       error: null,
       ...(opts.debug
         ? {
+            // pageExcerpt stays RAW (shows what Firecrawl actually scraped);
+            // contexts come from the SCOPED text each category was scanned
+            // against, so a snippet reflects the real match site.
             pageExcerpt: pick.markdown.replace(/\s+/g, " ").trim().slice(0, PAGE_EXCERPT_CHARS),
-            debugContexts: buildDebugContexts(pick.markdown, [
-              { category: "renovation", phrases: reno.matchedKeywords },
-              { category: "inactive", phrases: inactiveMarkers },
-              { category: "wholesaler", phrases: content.matchedWholesalerKeywords },
-              { category: "distress", phrases: content.matchedDistressKeywords },
-            ]),
+            debugContexts: [
+              ...buildDebugContexts(subjectText, [
+                { category: "renovation", phrases: reno.matchedKeywords },
+                { category: "wholesaler", phrases: content.matchedWholesalerKeywords },
+                { category: "distress", phrases: content.matchedDistressKeywords },
+              ]),
+              ...buildDebugContexts(statusText, [
+                { category: "inactive", phrases: inactiveMarkers },
+              ]),
+            ],
           }
         : {}),
     };
@@ -362,19 +375,41 @@ export async function verifyListing(
 
 // ── Verified-listing classification (pure; testable decision logic) ─────
 //
-// Decides the fate of a candidate from its Firecrawl verify result. Order:
-// infra errors → resolution/status → renovation (hard) → wholesaler (hard)
-// → condition-signal. Condition-signal-missing is a SOFT flag (2026-05-25):
-// it WRITES with Outreach_Status="Review" for operator spot-check rather
-// than being a hard reject — many genuine distress listings (terse-copy
-// markets like Memphis) carry no condition language.
+// Decides the fate of a candidate from its Firecrawl verify result + the
+// candidate's RentCast distress signals. Order: infra errors →
+// resolution/status → renovation (hard) → wholesaler (hard) → accept-signal.
+//
+// Accept-signal (Phase 2 rebalance): a still-active, non-renovated,
+// non-wholesaler listing ACCEPTS on ANY ONE of —
+//   • text condition signal (as-is / fixer / motivated / cash-only / …), OR
+//   • DOM ≥ DISTRESS_DOM_ACCEPT_THRESHOLD (long-on-market = soft distress), OR
+//   • a price reduction in the listing history.
+// None of the three → SOFT "review" (writes with Outreach_Status="Review" for
+// operator spot-check, NOT a hard reject). The 65%-of-list offer script is the
+// safety net; a false reject is the unrecoverable cost, so the floor is write.
+
+/** Candidate-side distress signals (from RentCast), folded into the accept
+ *  decision alongside the Firecrawl text-condition signal. */
+export interface ListingDistressSignals {
+  daysOnMarket: number | null;
+  priceReduced: boolean;
+}
+
+/** DOM at/above which a listing is treated as soft distress on its own.
+ *  Operator-tunable without a code change (default 60). */
+export const DISTRESS_DOM_ACCEPT_THRESHOLD = Number(
+  process.env.DISTRESS_DOM_ACCEPT_THRESHOLD ?? "60",
+);
 
 export type VerifiedOutcome =
   | { outcome: "reject"; reason: string }
   | { outcome: "accept"; outreachStatus: "" }
   | { outcome: "review"; reason: "condition_signal_missing_flagged"; outreachStatus: "Review" };
 
-export function classifyVerifiedListing(fc: FirecrawlVerifyResult): VerifiedOutcome {
+export function classifyVerifiedListing(
+  fc: FirecrawlVerifyResult,
+  signals: ListingDistressSignals = { daysOnMarket: null, priceReduced: false },
+): VerifiedOutcome {
   if (!fc.credentialed) return { outcome: "reject", reason: "firecrawl_not_configured" };
   if (fc.rateLimited) return { outcome: "reject", reason: "firecrawl_rate_limited" };
   if (fc.error) return { outcome: "reject", reason: "firecrawl_error" };
@@ -382,8 +417,11 @@ export function classifyVerifiedListing(fc: FirecrawlVerifyResult): VerifiedOutc
   if (!fc.stillActive) return { outcome: "reject", reason: "firecrawl_inactive" };
   if (fc.hasRenovatedLanguage) return { outcome: "reject", reason: "firecrawl_renovated" };
   if (fc.wholesalerExcluded) return { outcome: "reject", reason: "wholesaler_excluded" };
-  if (!fc.hasConditionSignal) {
-    return { outcome: "review", reason: "condition_signal_missing_flagged", outreachStatus: "Review" };
+  const longDom =
+    signals.daysOnMarket != null && signals.daysOnMarket >= DISTRESS_DOM_ACCEPT_THRESHOLD;
+  if (fc.hasConditionSignal || longDom || signals.priceReduced) {
+    return { outcome: "accept", outreachStatus: "" };
   }
-  return { outcome: "accept", outreachStatus: "" };
+  // No distress signal of any kind — soft review, still writes.
+  return { outcome: "review", reason: "condition_signal_missing_flagged", outreachStatus: "Review" };
 }
