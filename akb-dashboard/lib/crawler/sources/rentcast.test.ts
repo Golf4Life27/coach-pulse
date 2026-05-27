@@ -87,6 +87,26 @@ describe("mapListingToCandidate", () => {
     expect("hasDistressSignal" in mapListingToCandidate(raw)).toBe(false);
   });
 
+  it("maps listingAgent / listingOffice contact fields (agent enrichment)", () => {
+    const c = mapListingToCandidate({
+      ...raw,
+      listingAgent: { name: "Jane Agent", phone: "(210) 555-1234", email: "jane@kw.com" },
+      listingOffice: { name: "Keller Williams Heritage" },
+    });
+    expect(c.agentName).toBe("Jane Agent");
+    expect(c.agentPhone).toBe("(210) 555-1234");
+    expect(c.agentEmail).toBe("jane@kw.com");
+    expect(c.brokerageName).toBe("Keller Williams Heritage");
+  });
+
+  it("leaves agent fields null when RentCast omits listingAgent", () => {
+    const c = mapListingToCandidate(raw);
+    expect(c.agentName).toBeNull();
+    expect(c.agentPhone).toBeNull();
+    expect(c.agentEmail).toBeNull();
+    expect(c.brokerageName).toBeNull();
+  });
+
   it("falls back to mlsNumber then address for sourceId", () => {
     expect(mapListingToCandidate({ mlsNumber: "99", formattedAddress: "x" }).sourceId).toBe("rentcast:mls:99");
     expect(mapListingToCandidate({ formattedAddress: "5 Oak St" }).sourceId).toBe("rentcast:5 Oak St");

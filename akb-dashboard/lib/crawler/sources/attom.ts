@@ -77,6 +77,12 @@ export function mapSnapshotToCandidate(p: AttomProperty): IntakeCandidate {
     // ATTOM listings/MLS endpoint is wired (open blocker).
     listPrice: null,
     listedDate: null,
+    // ATTOM /property/snapshot carries no listing-agent contact — null by
+    // design (ATTOM is retained for the Underwriter, not active-MLS intake).
+    agentName: null,
+    agentPhone: null,
+    agentEmail: null,
+    brokerageName: null,
   };
 }
 

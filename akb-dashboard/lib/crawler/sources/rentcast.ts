@@ -57,6 +57,10 @@ interface RentCastListing {
   mlsName?: string;
   mlsNumber?: string;
   history?: Record<string, RentCastHistoryEvent> | RentCastHistoryEvent[];
+  // Agent/office contact. RentCast returns these on most active listings;
+  // every sub-field is optional (defensive — never assume presence).
+  listingAgent?: { name?: string; phone?: string; email?: string };
+  listingOffice?: { name?: string };
 }
 
 /** Pure: detect a price reduction across the listing's history. RentCast
@@ -118,6 +122,10 @@ export function mapListingToCandidate(l: RentCastListing): IntakeCandidate {
     beds: l.bedrooms ?? null,
     listPrice: l.price ?? null,
     listedDate: l.listedDate ?? null,
+    agentName: l.listingAgent?.name ?? null,
+    agentPhone: l.listingAgent?.phone ?? null,
+    agentEmail: l.listingAgent?.email ?? null,
+    brokerageName: l.listingOffice?.name ?? null,
   };
 }
 
