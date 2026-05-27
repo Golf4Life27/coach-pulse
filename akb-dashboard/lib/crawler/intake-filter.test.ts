@@ -25,6 +25,10 @@ function cand(over: Partial<IntakeCandidate> = {}): IntakeCandidate {
     beds: 3,
     listPrice: 150000,
     listedDate: recent,
+    agentName: null,
+    agentPhone: null,
+    agentEmail: null,
+    brokerageName: null,
     ...over,
   };
 }

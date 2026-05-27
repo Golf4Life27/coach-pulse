@@ -43,6 +43,7 @@ import {
   normalizeAddressKey,
   type IntakeCandidate,
 } from "@/lib/crawler/intake-filter";
+import { shouldAutoPromote, type AutoPromoteBlockReason } from "@/lib/crawler/auto-promote";
 import { rentcastQuotaAllows, computeBurnRate } from "@/lib/maverick/rentcast-burn-rate";
 import { fetchExternalRentCastState } from "@/lib/maverick/sources/external-rentcast";
 import { fetchVercelKvAuditState } from "@/lib/maverick/sources/vercel-kv-audit";
@@ -105,22 +106,39 @@ async function estimateRentcastRemaining(): Promise<number | null> {
   }
 }
 
-async function createIntakeListing(c: IntakeCandidate, outreachStatus: "" | "Review"): Promise<string> {
+async function createIntakeListing(c: IntakeCandidate, promote: boolean): Promise<string> {
   if (!AIRTABLE_PAT) throw new Error("AIRTABLE_PAT not set");
   const url = `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}`;
-  // "" → H2 picks it up immediately. "Review" → operator spot-checks the
-  // Review queue, then flips to "" (fire) or "Skip" (drop).
+  const iso = new Date().toISOString();
+  // promote → written H2-ready (Outreach_Status empty + Auto Proceed + Active).
+  // !promote → Review queue for operator/Maverick triage (today's behavior).
   const fields: Record<string, unknown> = {
     Address: c.address ?? "",
     City: c.city ?? "",
     State: c.state ?? "",
     Zip: c.zip ?? "",
-    Outreach_Status: outreachStatus,
-    Verification_Notes: `[${new Date().toISOString()}] RentCast auto-intake (${c.sourceId})${outreachStatus === "Review" ? " — flagged for review (no condition signal in copy)" : ""}.`,
   };
   if (c.propertyType) fields["Property_Type"] = c.propertyType;
   if (c.beds != null) fields["Bedrooms"] = c.beds;
   if (c.listPrice != null) fields["List_Price"] = c.listPrice;
+  // Agent contact (INV-CRAWLER-AGENT-ENRICHMENT) — written as-is; H2 normalizes
+  // phone format. Set only when present; never synthesize.
+  if (c.agentName) fields["Agent_Name"] = c.agentName;
+  if (c.agentPhone) fields["Agent_Phone"] = c.agentPhone;
+  if (c.agentEmail) fields["Agent_Email"] = c.agentEmail;
+  if (promote) {
+    fields["Outreach_Status"] = ""; // empty → H2 eligibility filter picks it up
+    fields["Execution_Path"] = "Auto Proceed";
+    fields["Live_Status"] = "Active";
+    fields["Do_Not_Text"] = false;
+    fields["Stage_Calc"] = "Passed: Ready for Offer";
+    fields["Verification_Notes"] =
+      `[${iso}] RentCast auto-intake (${c.sourceId}) — auto-promoted to Auto Proceed (clean agent phone + math gate passed).`;
+  } else {
+    fields["Outreach_Status"] = "Review";
+    fields["Verification_Notes"] =
+      `[${iso}] RentCast auto-intake (${c.sourceId}) — queued for Review.`;
+  }
   const res = await fetch(url, {
     method: "POST",
     headers: { Authorization: `Bearer ${AIRTABLE_PAT}`, "Content-Type": "application/json" },
@@ -162,6 +180,13 @@ export async function GET(req: Request) {
   const liveEnv = process.env.CRAWLER_INTAKE_LIVE === "true";
   const forcedDry = url.searchParams.get("dry_run") === "1";
   const dryRun = !liveEnv || forcedDry;
+
+  // Auto-promote flags (INV-CRAWLER-AGENT-ENRICHMENT). Independent of the
+  // intake dry/live gate above: even on a live intake run, clean accepts only
+  // skip Review when LIVE is on AND DRY_RUN is off. Default (both unset) =
+  // today's behavior: everything → Review queue.
+  const autoPromoteLive = process.env.CRAWLER_AUTO_PROMOTE_LIVE === "true";
+  const autoPromoteDryRun = process.env.CRAWLER_AUTO_PROMOTE_DRY_RUN === "true";
 
   // ── ZIP gate ────────────────────────────────────────────────────
   const zips = readTargetZips(url.searchParams.get("zips"));
@@ -247,7 +272,20 @@ export async function GET(req: Request) {
     duplicates: 0,
     written: 0,
     per_zip: [] as Array<{ zip: string; raw: number; accepted: number; review: number }>,
-    would_write: [] as Array<{ sourceId: string; address: string | null; zip: string | null; listPrice: number | null; firecrawlUrl: string | null; outreachStatus: "" | "Review" }>,
+    // Auto-promote accounting (INV-CRAWLER-AGENT-ENRICHMENT). Counts span every
+    // record that reached the write stage; on a dry intake run they are the
+    // "would" figures. eligible = intrinsically promotable; promoted = actually
+    // (or would be) written H2-ready after the LIVE/DRY_RUN flags apply.
+    auto_promote: {
+      live: autoPromoteLive,
+      dry_run: autoPromoteDryRun,
+      eligible: 0,
+      promoted: 0,
+      review_queued: 0,
+      missing_agent_phone: 0,
+      reasons_blocked: {} as Record<string, number>,
+    },
+    would_write: [] as Array<{ sourceId: string; address: string | null; zip: string | null; listPrice: number | null; firecrawlUrl: string | null; outreachStatus: "" | "Review"; promote: boolean; agentPhonePresent: boolean }>,
     reject_reason_counts: {} as Record<string, number>,
     per_zip_errors: [] as Array<{ zip: string; error: string }>,
     credentialed: true,
@@ -326,7 +364,10 @@ export async function GET(req: Request) {
 
   // ── Phase 3: classify completed results (sequential — accurate count
   // aggregation regardless of non-deterministic completion order). ──
-  const toWrite: Array<{ candidate: IntakeCandidate; zip: string; status: "" | "Review" }> = [];
+  const toWrite: Array<{ candidate: IntakeCandidate; zip: string; promote: boolean }> = [];
+  const bumpBlocked = (reason: AutoPromoteBlockReason | "auto_promote_disabled" | "auto_promote_dry_run") => {
+    summary.auto_promote.reasons_blocked[reason] = (summary.auto_promote.reasons_blocked[reason] ?? 0) + 1;
+  };
   for (const { item, value: fc } of pool.results) {
     const { candidate: c, zip } = item;
     summary.firecrawl.scrapes_used++;
@@ -347,29 +388,58 @@ export async function GET(req: Request) {
       continue;
     }
 
-    // accept (status="") or review (status="Review") — both WRITE.
-    const status = decision.outcome === "accept" ? "" : "Review";
-    if (decision.outcome === "review") {
+    // accept or review (condition-missing) — both WRITE. Only accepts can
+    // auto-promote; reviews always land in the Review queue.
+    const accepted = decision.outcome === "accept";
+    if (accepted) {
+      summary.accepted++;
+      perZipAccepted.set(zip, (perZipAccepted.get(zip) ?? 0) + 1);
+    } else {
       bump("condition_signal_missing_flagged"); // audit tag — still writes
       summary.flagged_review++;
       perZipReview.set(zip, (perZipReview.get(zip) ?? 0) + 1);
-    } else {
-      summary.accepted++;
-      perZipAccepted.set(zip, (perZipAccepted.get(zip) ?? 0) + 1);
     }
+
+    // Intrinsic auto-promote eligibility, then layer the feature flags.
+    const ap = shouldAutoPromote({ accepted, agentPhone: c.agentPhone, state: c.state, listPrice: c.listPrice });
+    if (ap.promote) summary.auto_promote.eligible++;
+    if (accepted && !ap.promote && ap.reason) {
+      bumpBlocked(ap.reason);
+      if (ap.reason === "no_agent_phone") summary.auto_promote.missing_agent_phone++;
+    }
+    // A record actually writes H2-ready only when intrinsically eligible AND
+    // the master flag is on AND not in auto-promote dry-run.
+    let promote = ap.promote;
+    if (ap.promote && !autoPromoteLive) { promote = false; bumpBlocked("auto_promote_disabled"); }
+    else if (ap.promote && autoPromoteDryRun) { promote = false; bumpBlocked("auto_promote_dry_run"); }
+
+    if (promote) summary.auto_promote.promoted++;
+    else summary.auto_promote.review_queued++;
+
+    // One structured line per written record — operator reads the promote
+    // decision straight from Vercel logs without grep gymnastics.
+    console.log(
+      `[listings-intake][auto-promote] ${c.sourceId} accepted=${accepted} ` +
+      `promote=${promote} reason=${ap.reason ?? "-"} phone=${c.agentPhone ? "y" : "n"} state=${c.state ?? "?"}`,
+    );
+
     if (dryRun) {
-      summary.would_write.push({ sourceId: c.sourceId, address: c.address, zip: c.zip, listPrice: c.listPrice, firecrawlUrl: fc.url, outreachStatus: status });
+      summary.would_write.push({
+        sourceId: c.sourceId, address: c.address, zip: c.zip, listPrice: c.listPrice,
+        firecrawlUrl: fc.url, outreachStatus: promote ? "" : "Review",
+        promote, agentPhonePresent: !!c.agentPhone,
+      });
     } else {
-      toWrite.push({ candidate: c, zip, status });
+      toWrite.push({ candidate: c, zip, promote });
     }
   }
 
   // ── Phase 4: writes (live only; sequential, post-pool — no concurrent
   // Airtable writes / intra-run dup races). ──
   if (!dryRun) {
-    for (const { candidate: c, zip, status } of toWrite) {
+    for (const { candidate: c, zip, promote } of toWrite) {
       try {
-        await createIntakeListing(c, status);
+        await createIntakeListing(c, promote);
         summary.written++;
       } catch (err) {
         summary.per_zip_errors.push({
@@ -425,6 +495,7 @@ export async function GET(req: Request) {
       firecrawl_scrapes: summary.firecrawl.scrapes_used,
       firecrawl_credits: summary.firecrawl.credits_used,
       per_zip: summary.per_zip,
+      auto_promote: summary.auto_promote,
     },
     ms: Date.now() - t0,
   });

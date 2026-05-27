@@ -55,6 +55,15 @@ export interface IntakeCandidate {
   listPrice: number | null;
   /** ISO date the listing went active. */
   listedDate: string | null;
+  /** Listing agent contact (RentCast listingAgent.*). Written to Airtable
+   *  as-is — H2 phone normalization handles format variation. null when the
+   *  vendor omits the field; never synthesized. */
+  agentName: string | null;
+  agentPhone: string | null;
+  agentEmail: string | null;
+  /** Listing office name (RentCast listingOffice.name). Carried for future
+   *  use; not written to Airtable in v1 (no confirmed Brokerage_Name field). */
+  brokerageName: string | null;
 }
 
 export type IntakeRejectReason =
