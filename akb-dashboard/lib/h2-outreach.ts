@@ -125,14 +125,23 @@ export function buildPriorContactIndex(
   return index;
 }
 
-/** Pure: compose the first-touch SMS body (spec §Step 3). */
+/** Pure: extract the greeting first name from the combined Agent_Name field.
+ *  The Listings table has no first/last split — only one Agent_Name string —
+ *  so the first whitespace-delimited token is the first name. Empty/blank
+ *  falls back to "there". */
+export function firstNameOnly(agentName: string | null): string {
+  return (agentName ?? "").trim().split(/\s+/)[0] || "there";
+}
+
+/** Pure: compose the first-touch SMS body (spec §Step 3).
+ *  Greets on FIRST NAME ONLY per the proven outreach rule (5/8/2026). */
 export function buildH2Message(
   agentName: string | null,
   address: string,
   city: string | null,
   mao: number,
 ): string {
-  const name = (agentName ?? "").trim() || "there";
+  const name = firstNameOnly(agentName);
   const where = city && city.trim() !== "" ? `${address} in ${city.trim()}` : address;
   const offer = `$${Math.round(mao).toLocaleString("en-US")}`;
   return (
