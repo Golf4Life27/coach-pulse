@@ -4,10 +4,57 @@ import { describe, it, expect } from "vitest";
 import {
   detectRenovationLanguage,
   detectStillActive,
+  detectInactiveMarkers,
+  extractPhraseContext,
+  buildDebugContexts,
   buildSearchQuery,
   pickListingResult,
   RENOVATION_EXCLUSION_KEYWORDS,
 } from "./firecrawl";
+
+describe("detectInactiveMarkers / detectStillActive (INV debug)", () => {
+  it("returns the matched inactive marker phrases", () => {
+    expect(detectInactiveMarkers("This listing is no longer available as of today.")).toEqual(["no longer available"]);
+    expect(detectInactiveMarkers("Active 3/2 ranch, motivated seller.")).toEqual([]);
+  });
+  it("stays consistent with detectStillActive", () => {
+    expect(detectStillActive("listing removed by agent")).toBe(false);
+    expect(detectStillActive("great as-is opportunity")).toBe(true);
+    expect(detectStillActive(null)).toBe(true);
+  });
+});
+
+describe("extractPhraseContext (INV debug)", () => {
+  it("returns a trimmed, ellipsised snippet around the first match", () => {
+    const text = "A".repeat(200) + " fully renovated kitchen " + "B".repeat(200);
+    const snip = extractPhraseContext(text, "fully renovated", 20);
+    expect(snip).toContain("fully renovated");
+    expect(snip!.startsWith("…")).toBe(true);
+    expect(snip!.endsWith("…")).toBe(true);
+  });
+  it("is case-insensitive and collapses whitespace in the snippet; null when absent", () => {
+    // Matching is raw-substring (mirrors the classifiers' lc.includes); the
+    // snippet's own internal whitespace is collapsed for readability.
+    expect(extractPhraseContext("Move-In READY home", "move-in ready")).toBe("Move-In READY home");
+    expect(extractPhraseContext("a\n\nfully renovated\tkitchen", "fully renovated")).toBe("a fully renovated kitchen");
+    expect(extractPhraseContext("nothing here", "turnkey")).toBeNull();
+    expect(extractPhraseContext(null, "x")).toBeNull();
+  });
+});
+
+describe("buildDebugContexts (INV debug)", () => {
+  it("groups context snippets by category, skipping phrases not present", () => {
+    const md = "Charming as-is fixer. No wholesalers please. Recently fully renovated bath.";
+    const out = buildDebugContexts(md, [
+      { category: "renovation", phrases: ["fully renovated"] },
+      { category: "wholesaler", phrases: ["no wholesalers"] },
+      { category: "distress", phrases: ["as-is", "probate"] },
+    ]);
+    expect(out.map((c) => c.category)).toEqual(["renovation", "wholesaler", "distress"]);
+    expect(out.find((c) => c.category === "distress")!.phrase).toBe("as-is");
+    expect(out.every((c) => c.snippet.length > 0)).toBe(true);
+  });
+});
 
 describe("detectRenovationLanguage", () => {
   it("flags fully renovated", () => {

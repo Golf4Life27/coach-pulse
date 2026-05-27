@@ -154,11 +154,35 @@ export interface FirecrawlVerifyResult {
   matchedWholesalerKeywords: string[];
   hasConditionSignal: boolean;
   matchedDistressKeywords: string[];
+  /** Matched inactive markers (the phrases behind stillActive=false). */
+  matchedInactiveMarkers: string[];
   creditsUsed: number;
   /** true when Firecrawl returned 429 even after exhausting retries —
    *  distinct from a generic error (caller → firecrawl_rate_limited). */
   rateLimited: boolean;
   error: string | null;
+  /** Populated ONLY when verifyListing is called with { debug: true } — a
+   *  first-N-char excerpt of the scraped page + per-matched-phrase context
+   *  snippets. Investigation aid (INV ?debug=true); never used by filters. */
+  pageExcerpt?: string | null;
+  debugContexts?: Array<{ category: string; phrase: string; snippet: string }>;
+}
+
+const PAGE_EXCERPT_CHARS = 600;
+
+/** Pure: assemble the per-matched-phrase context list for debug output. */
+export function buildDebugContexts(
+  markdown: string,
+  groups: Array<{ category: string; phrases: string[] }>,
+): Array<{ category: string; phrase: string; snippet: string }> {
+  const out: Array<{ category: string; phrase: string; snippet: string }> = [];
+  for (const g of groups) {
+    for (const phrase of g.phrases) {
+      const snippet = extractPhraseContext(markdown, phrase);
+      if (snippet) out.push({ category: g.category, phrase, snippet });
+    }
+  }
+  return out;
 }
 
 /** Pure: full-page text → matched renovation keywords (distinct, in list
@@ -173,13 +197,37 @@ export function detectRenovationLanguage(text: string | null | undefined): {
   return { matched: hits.length > 0, matchedKeywords: hits };
 }
 
+/** Pure: matched inactive markers (distinct, in list order). Substring,
+ *  case-insensitive. Surfaced for debug + Phase-2 rebalancing. */
+export function detectInactiveMarkers(text: string | null | undefined): string[] {
+  if (!text) return [];
+  const lc = text.toLowerCase();
+  return INACTIVE_MARKERS.filter((m) => lc.includes(m));
+}
+
 /** Pure: heuristic still-active check from portal text. Returns false only
  *  on a strong inactive marker. Default true (RentCast already said Active;
  *  this is a staleness double-check). */
 export function detectStillActive(text: string | null | undefined): boolean {
   if (!text) return true; // no text → don't override RentCast's Active
-  const lc = text.toLowerCase();
-  return !INACTIVE_MARKERS.some((m) => lc.includes(m));
+  return detectInactiveMarkers(text).length === 0;
+}
+
+/** Pure: a context snippet around the FIRST case-insensitive occurrence of
+ *  `phrase` in `text` (±`radius` chars, single-lined, ellipsised). null when
+ *  the phrase is absent. Investigation aid — shows WHY a keyword matched. */
+export function extractPhraseContext(
+  text: string | null | undefined,
+  phrase: string,
+  radius = 80,
+): string | null {
+  if (!text || !phrase) return null;
+  const idx = text.toLowerCase().indexOf(phrase.toLowerCase());
+  if (idx === -1) return null;
+  const start = Math.max(0, idx - radius);
+  const end = Math.min(text.length, idx + phrase.length + radius);
+  const snippet = text.slice(start, end).replace(/\s+/g, " ").trim();
+  return `${start > 0 ? "…" : ""}${snippet}${end < text.length ? "…" : ""}`;
 }
 
 /** Pure: build the address search query. */
@@ -222,6 +270,7 @@ export function pickListingResult(
  *  /v2/search call (inline scrape). Throws are caught → error field. */
 export async function verifyListing(
   formattedAddress: string | null,
+  opts: { debug?: boolean } = {},
 ): Promise<FirecrawlVerifyResult> {
   const base: FirecrawlVerifyResult = {
     credentialed: true,
@@ -234,6 +283,7 @@ export async function verifyListing(
     matchedWholesalerKeywords: [],
     hasConditionSignal: false,
     matchedDistressKeywords: [],
+    matchedInactiveMarkers: [],
     creditsUsed: 0,
     rateLimited: false,
     error: null,
@@ -277,20 +327,33 @@ export async function verifyListing(
     }
     const reno = detectRenovationLanguage(pick.markdown);
     const content = evaluateListingContent(pick.markdown);
+    const inactiveMarkers = detectInactiveMarkers(pick.markdown);
     return {
       credentialed: true,
       resolved: true,
       url: pick.url ?? null,
-      stillActive: detectStillActive(pick.markdown),
+      stillActive: inactiveMarkers.length === 0,
       hasRenovatedLanguage: reno.matched,
       matchedKeywords: reno.matchedKeywords,
       wholesalerExcluded: content.wholesalerExcluded,
       matchedWholesalerKeywords: content.matchedWholesalerKeywords,
       hasConditionSignal: content.hasConditionSignal,
       matchedDistressKeywords: content.matchedDistressKeywords,
+      matchedInactiveMarkers: inactiveMarkers,
       creditsUsed,
       rateLimited: false,
       error: null,
+      ...(opts.debug
+        ? {
+            pageExcerpt: pick.markdown.replace(/\s+/g, " ").trim().slice(0, PAGE_EXCERPT_CHARS),
+            debugContexts: buildDebugContexts(pick.markdown, [
+              { category: "renovation", phrases: reno.matchedKeywords },
+              { category: "inactive", phrases: inactiveMarkers },
+              { category: "wholesaler", phrases: content.matchedWholesalerKeywords },
+              { category: "distress", phrases: content.matchedDistressKeywords },
+            ]),
+          }
+        : {}),
     };
   } catch (err) {
     return { ...base, error: err instanceof Error ? err.message : String(err) };

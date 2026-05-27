@@ -195,6 +195,15 @@ export async function GET(req: Request) {
   const autoPromoteLive = process.env.CRAWLER_AUTO_PROMOTE_LIVE === "true";
   const autoPromoteDryRun = process.env.CRAWLER_AUTO_PROMOTE_DRY_RUN === "true";
 
+  // ?debug=true — investigation only. Adds a per-record `debug` block to the
+  // response (basic-filter rejects, duplicates, and per-record Firecrawl
+  // decisions with matched phrases + surrounding page context). Changes NO
+  // filter behavior; just surfaces what each classifier decided and why.
+  const debug = url.searchParams.get("debug") === "true";
+  const debugBasicRejected: Array<{ sourceId: string; address: string | null; zip: string | null; reasons: string[] }> = [];
+  const debugDuplicates: Array<{ sourceId: string; address: string | null; zip: string | null }> = [];
+  const debugDecisions: Array<Record<string, unknown>> = [];
+
   // ── ZIP gate ────────────────────────────────────────────────────
   const zips = readTargetZips(url.searchParams.get("zips"));
   if (zips.length === 0) {
@@ -333,13 +342,17 @@ export async function GET(req: Request) {
 
     const { accepted, rejected } = filterIntakeCandidates(fetchResult.candidates, now);
     summary.rejected += rejected.length;
-    for (const r of rejected) for (const reason of r.reasons) bump(reason);
+    for (const r of rejected) {
+      for (const reason of r.reasons) bump(reason);
+      if (debug) debugBasicRejected.push({ sourceId: r.candidate.sourceId, address: r.candidate.address, zip: r.candidate.zip, reasons: r.reasons });
+    }
 
     for (const c of accepted) {
       // Dedup BEFORE Firecrawl — never spend a scrape on a known/seen address.
       const key = normalizeAddressKey(c.address);
       if (key && (existingKeys.has(key) || seenKeys.has(key))) {
         summary.duplicates++;
+        if (debug) debugDuplicates.push({ sourceId: c.sourceId, address: c.address, zip: c.zip });
         continue;
       }
       if (key) seenKeys.add(key);
@@ -364,7 +377,7 @@ export async function GET(req: Request) {
     concurrency: FIRECRAWL_MAX_CONCURRENT,
     beforeDispatch: rateGate,
     shouldStopDispatch: () => Date.now() - t0 > FIRECRAWL_TIME_BUDGET_MS,
-    worker: async (it) => verifyListing(it.candidate.address),
+    worker: async (it) => verifyListing(it.candidate.address, { debug }),
   });
   const timeBudgetHit = pool.skipped.length > 0;
   if (timeBudgetHit) bump("firecrawl_skipped_time", pool.skipped.length);
@@ -381,6 +394,29 @@ export async function GET(req: Request) {
     summary.firecrawl.credits_used += fc.creditsUsed;
 
     const decision = classifyVerifiedListing(fc);
+    if (debug) {
+      debugDecisions.push({
+        sourceId: c.sourceId,
+        address: c.address,
+        zip,
+        url: fc.url,
+        resolved: fc.resolved,
+        outcome: decision.outcome,
+        reason: "reason" in decision ? decision.reason : null,
+        stillActive: fc.stillActive,
+        hasRenovatedLanguage: fc.hasRenovatedLanguage,
+        hasConditionSignal: fc.hasConditionSignal,
+        wholesalerExcluded: fc.wholesalerExcluded,
+        matched: {
+          renovation: fc.matchedKeywords,
+          inactive: fc.matchedInactiveMarkers,
+          wholesaler: fc.matchedWholesalerKeywords,
+          distress: fc.matchedDistressKeywords,
+        },
+        contexts: fc.debugContexts ?? [],
+        page_excerpt: fc.pageExcerpt ?? null,
+      });
+    }
     if (decision.outcome === "reject") {
       bump(decision.reason);
       // Surface infra-class failures into per_zip_errors for triage.
@@ -507,5 +543,21 @@ export async function GET(req: Request) {
     ms: Date.now() - t0,
   });
 
-  return NextResponse.json({ ok: true, auth_kind: authKind, duration_ms: Date.now() - t0, ...summary });
+  return NextResponse.json({
+    ok: true,
+    auth_kind: authKind,
+    duration_ms: Date.now() - t0,
+    ...summary,
+    ...(debug
+      ? {
+          debug: {
+            basic_rejected: debugBasicRejected,
+            duplicates: debugDuplicates,
+            verify_decisions: debugDecisions,
+            time_skipped: pool.skipped.map((it) => ({ sourceId: it.candidate.sourceId, address: it.candidate.address, zip: it.zip })),
+            budget_skipped: budgetSkipped.map((it) => ({ sourceId: it.candidate.sourceId, address: it.candidate.address, zip: it.zip })),
+          },
+        }
+      : {}),
+  });
 }

@@ -16,6 +16,7 @@ function fc(over: Partial<FirecrawlVerifyResult> = {}): FirecrawlVerifyResult {
     matchedWholesalerKeywords: [],
     hasConditionSignal: true,
     matchedDistressKeywords: ["as-is"],
+    matchedInactiveMarkers: [],
     creditsUsed: 1,
     rateLimited: false,
     error: null,
