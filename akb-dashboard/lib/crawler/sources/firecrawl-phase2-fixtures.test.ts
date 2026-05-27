@@ -1,15 +1,26 @@
-// Phase 2 rebalance regression fixtures — the 5 addresses the live
-// ?debug=true forensics (78201) showed were FALSE-rejected at 0% accept, each
-// of which must now classify ACCEPT once scoping + the multi-signal accept land:
+// Phase 2 scoping regression fixtures — the 78201 addresses the live
+// ?debug=true forensics showed were FALSE-rejected at 0% accept. The scoping
+// fixes (strip comps sidebar / "Year Renovated —" / "New construction: No" /
+// removed-listing history) correctly clear their FALSE renovation + inactive
+// matches, so hasRenovatedLanguage / isNewConstruction / stillActive resolve
+// as asserted below.
+//
+// Outcome AFTER the 2026-05-27 renovation hard-veto amendment: with the
+// Phase-2 multi-signal accept removed, a clean listing accepts ONLY on a text
+// condition signal. The condition-copy cases (1610 22nd, 915 Shearer, 942 W
+// Lynwood, 1518 Waverly) accept; the DOM-only cases (1803 Mardell, 1402
+// Mardell, 1503 Edison) no longer accept on long-DOM/price-cut and route to
+// review instead. Each `signals` value is still passed to prove DOM/price no
+// longer change the outcome.
 //
 //   1803 Mardell  — DOM 167 + price cut; soft "creative updates" copy. Was
 //                   killed by "Year Renovated: —" + a NEW CONSTRUCTION comp.
 //   1610 22nd     — "SOLD AS IS" subject copy; "renovated" only in the empty
 //                   facts field.
 //   1402 Mardell  — DOM 95, soft copy; inline "Year renovated —" its only reno
-//                   match. Accepts on DOM ≥ 60 (renovation overridden).
+//                   match. No condition copy → review (DOM no longer accepts).
 //   1503 Edison   — Zillow "New construction: No" facts row matched "new
-//                   construction" as renovation. Stripped; accepts on DOM ≥ 60.
+//                   construction" as renovation. Stripped; no condition copy → review.
 //   915 Shearer   — motivated seller + fixer upper; killed by a 2025 "Listing
 //                   Removed" row in Sale & Tax History.
 //   942 W Lynwood — investor special + cash or hard money + fixer-upper (NOT a
@@ -21,10 +32,10 @@
 // container has no Firecrawl key) modeling the exact noise the forensics
 // described: a comps sidebar with a $790K NEW CONSTRUCTION comp, Redfin's
 // single-line facts table with an inline "Year renovated —" token, and
-// prior-year "Listing Removed" history rows. Each case also exercises the
-// post-Bug-1 precedence — a distress signal (condition copy / DOM ≥ 60 / price
-// cut) accepts even if renovation language survived. The operator re-validates
-// against the live dry-run.
+// prior-year "Listing Removed" history rows. Under the renovation hard-veto
+// amendment each case accepts ONLY on a text condition signal; DOM / price cut
+// are diagnostic and route no-condition listings to review. The operator
+// re-validates against the live dry-run.
 
 import { describe, it, expect } from "vitest";
 import {
@@ -114,7 +125,7 @@ const CASES: Case[] = [
       COMPS,
     ].join("\n"),
     signals: { daysOnMarket: 167, priceReduced: true },
-    // No text condition signal — accepts purely on DOM + price cut.
+    // No text condition signal — DOM + price cut are diagnostic only now → review.
     expect: { renovated: false, active: true, condition: false },
   },
   {
@@ -139,7 +150,7 @@ const CASES: Case[] = [
       COMPS,
     ].join("\n"),
     signals: { daysOnMarket: 95, priceReduced: false },
-    // No condition copy — accepts on DOM ≥ 60 alone (renovation overridden).
+    // No condition copy — DOM ≥ 60 no longer accepts on its own → review.
     expect: { renovated: false, active: true, condition: false },
   },
   {
@@ -185,7 +196,7 @@ const CASES: Case[] = [
       COMPS,
     ].join("\n"),
     signals: { daysOnMarket: 411, priceReduced: false },
-    // "New construction: No" must NOT count as renovation; accepts on DOM ≥ 60.
+    // "New construction: No" must NOT count as renovation; no condition copy → review.
     expect: { renovated: false, active: true, condition: false },
   },
   {
@@ -202,9 +213,15 @@ const CASES: Case[] = [
   },
 ];
 
-describe("Phase 2 fixtures — false-rejected 78201 listings now classify ACCEPT", () => {
+describe("Phase 2 fixtures — 78201 listings after the renovation hard-veto amendment", () => {
   for (const c of CASES) {
-    it(`${c.name} → accept`, () => {
+    // Post-amendment (2026-05-27): a clean (non-renovated, active,
+    // non-wholesaler) listing accepts ONLY on a text condition signal. DOM /
+    // price cut are diagnostic now and no longer rescue a no-condition-copy
+    // listing — those route to review. Passing c.signals (incl. DOM 411 etc.)
+    // proves the dropped override does not change the outcome.
+    const expected = c.expect.condition ? "accept" : "review";
+    it(`${c.name} → ${expected}`, () => {
       const fc = verifyFromText(c.markdown);
       expect(fc.hasRenovatedLanguage).toBe(c.expect.renovated);
       expect(fc.stillActive).toBe(c.expect.active);
@@ -213,8 +230,9 @@ describe("Phase 2 fixtures — false-rejected 78201 listings now classify ACCEPT
       expect(fc.isNewConstruction).toBe(false); // none are actual new builds
 
       const d = classifyVerifiedListing(fc, c.signals);
-      expect(d.outcome).toBe("accept");
+      expect(d.outcome).toBe(expected);
       if (d.outcome === "accept") expect(d.outreachStatus).toBe("");
+      if (d.outcome === "review") expect(d.outreachStatus).toBe("Review");
     });
   }
 });

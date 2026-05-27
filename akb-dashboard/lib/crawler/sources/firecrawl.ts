@@ -420,40 +420,37 @@ export async function verifyListing(
 
 // ── Verified-listing classification (pure; testable decision logic) ─────
 //
-// Decides the fate of a candidate from its Firecrawl verify result + the
-// candidate's RentCast distress signals. Precedence (top to bottom):
+// Precedence (top to bottom), locked by operator amendment 2026-05-27
+// (Spine rec6DhIgAIH50jkJT):
 //   1. infra errors / unresolved → reject (no usable page)
 //   2. inactive → reject
-//   3. NEW CONSTRUCTION → reject — HARD, above the distress override. A
-//      65%-of-list offer on an actual new build is wrong, so NO distress
-//      signal rescues it (unlike the soft renovation bucket below).
+//   3. NEW CONSTRUCTION → reject   ── HARD VETO
 //   4. wholesaler-excluded → reject
-//   5. ANY distress signal → ACCEPT — overrides a renovation match:
-//        • text condition signal (as-is / fixer / motivated / cash-only / …)
-//        • DOM ≥ DISTRESS_DOM_ACCEPT_THRESHOLD (long-on-market = soft distress)
-//        • a price reduction in the listing history
-//   6. renovation language (and NO distress signal) → reject
+//   5. RENOVATION language → reject   ── HARD VETO (same tier as #3)
+//   6. text condition signal → ACCEPT (genuine distress / motivation / as-is)
 //   7. else → SOFT "review" (writes Outreach_Status="Review" for spot-check).
 //
-// New construction vs renovation: actual new construction (Redfin banner /
-// Zillow "New construction: Yes" / year_built within the last 2 yrs) is a HARD
-// exclusion with no escape hatch — a recently-built, price-reduced listing must
-// NOT fire a low offer. Renovation, by contrast, is a noisy soft signal (facts
-// labels, comps) that a genuine distress signal overrides; it only decides the
-// no-other-signal case. The 65%-of-list offer is the safety net for the rest.
+// new_construction and renovation are the SAME hard-veto tier: a 65%-of-list
+// cash offer on a turnkey / new build is always wrong, so NOTHING rescues
+// them. The earlier Phase-2 "multi-signal accept" (PR #10/#11) let DOM ≥ N or
+// a price cut OVERRIDE a renovation match — that override is REMOVED here. It
+// false-accepted 1138 Santa Anna (a fully-remodeled turnkey, "remodeled" +
+// priceReduced + DOM 177) which then got texted in the first live H2 fire.
+// The asymmetry is the whole reason: a false-reject of a maybe-distress
+// listing is recoverable; a false-accept of a turnkey wastes the offer and
+// damages the brand in a launch market.
+//
+// DOM / priceReduced (ListingDistressSignals) are DIAGNOSTIC ONLY now — the
+// cron still surfaces them for audit / review routing, but they are NEVER an
+// accept trigger and NEVER override a hard veto.
 
-/** Candidate-side distress signals (from RentCast), folded into the accept
- *  decision alongside the Firecrawl text-condition signal. */
+/** Candidate-side signals (from RentCast). DIAGNOSTIC ONLY as of the
+ *  2026-05-27 amendment — surfaced for audit, never an accept trigger and
+ *  never an override of the renovation / new_construction hard vetoes. */
 export interface ListingDistressSignals {
   daysOnMarket: number | null;
   priceReduced: boolean;
 }
-
-/** DOM at/above which a listing is treated as soft distress on its own.
- *  Operator-tunable without a code change (default 60). */
-export const DISTRESS_DOM_ACCEPT_THRESHOLD = Number(
-  process.env.DISTRESS_DOM_ACCEPT_THRESHOLD ?? "60",
-);
 
 export type VerifiedOutcome =
   | { outcome: "reject"; reason: string }
@@ -462,23 +459,21 @@ export type VerifiedOutcome =
 
 export function classifyVerifiedListing(
   fc: FirecrawlVerifyResult,
-  signals: ListingDistressSignals = { daysOnMarket: null, priceReduced: false },
+  // Retained on the signature for audit parity and to regression-guard the
+  // removed override; deliberately NOT consulted (see precedence note above).
+  _signals: ListingDistressSignals = { daysOnMarket: null, priceReduced: false },
 ): VerifiedOutcome {
   if (!fc.credentialed) return { outcome: "reject", reason: "firecrawl_not_configured" };
   if (fc.rateLimited) return { outcome: "reject", reason: "firecrawl_rate_limited" };
   if (fc.error) return { outcome: "reject", reason: "firecrawl_error" };
   if (!fc.resolved) return { outcome: "reject", reason: "firecrawl_url_unresolved" };
   if (!fc.stillActive) return { outcome: "reject", reason: "firecrawl_inactive" };
-  // HARD exclusion — above the distress override. No escape hatch.
+  // ── HARD-VETO tier — new_construction and renovation, no override of any
+  //    kind (operator amendment 2026-05-27, Spine rec6DhIgAIH50jkJT).
   if (fc.isNewConstruction) return { outcome: "reject", reason: "new_construction_excluded" };
   if (fc.wholesalerExcluded) return { outcome: "reject", reason: "wholesaler_excluded" };
-  // Distress signals override a (noisy, false-positive-prone) renovation match.
-  const longDom =
-    signals.daysOnMarket != null && signals.daysOnMarket >= DISTRESS_DOM_ACCEPT_THRESHOLD;
-  if (fc.hasConditionSignal || longDom || signals.priceReduced) {
-    return { outcome: "accept", outreachStatus: "" };
-  }
-  // No distress signal of any kind — renovation language is now decisive.
   if (fc.hasRenovatedLanguage) return { outcome: "reject", reason: "firecrawl_renovated" };
+  // ── Distress accept: a genuine condition/motivation signal in the copy.
+  if (fc.hasConditionSignal) return { outcome: "accept", outreachStatus: "" };
   return { outcome: "review", reason: "condition_signal_missing_flagged", outreachStatus: "Review" };
 }
