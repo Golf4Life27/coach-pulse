@@ -40,21 +40,21 @@ describe("classifyVerifiedListing", () => {
     }
   });
 
-  it("renovated → hard reject (even if no condition signal)", () => {
+  it("renovated + NO distress signal → hard reject", () => {
     const d = classifyVerifiedListing(fc({ hasRenovatedLanguage: true, hasConditionSignal: false }));
     expect(d).toEqual({ outcome: "reject", reason: "firecrawl_renovated" });
   });
 
-  it("wholesaler-excluded → hard reject (before condition check)", () => {
+  it("wholesaler-excluded → hard reject (before the accept check)", () => {
     const d = classifyVerifiedListing(fc({ wholesalerExcluded: true, hasConditionSignal: false }));
     expect(d).toEqual({ outcome: "reject", reason: "wholesaler_excluded" });
   });
 
-  it("renovation beats wholesaler beats condition (ordering)", () => {
+  it("wholesaler beats renovation (both hard rejects; wholesaler first)", () => {
     const d = classifyVerifiedListing(
       fc({ hasRenovatedLanguage: true, wholesalerExcluded: true, hasConditionSignal: false }),
     );
-    expect(d).toEqual({ outcome: "reject", reason: "firecrawl_renovated" });
+    expect(d).toEqual({ outcome: "reject", reason: "wholesaler_excluded" });
   });
 
   it("infra failures reject with the right reason", () => {
@@ -102,19 +102,48 @@ describe("classifyVerifiedListing — Phase 2 multi-signal accept", () => {
     if (d.outcome === "review") expect(d.outreachStatus).toBe("Review");
   });
 
-  it("hard rejects still beat every accept signal (renovation + long DOM)", () => {
+  it("renovation is OVERRIDDEN by a text condition signal → accept", () => {
+    const d = classifyVerifiedListing(fc({ hasRenovatedLanguage: true }));
+    expect(d.outcome).toBe("accept");
+  });
+
+  it("renovation is OVERRIDDEN by long DOM (no condition) → accept", () => {
     const d = classifyVerifiedListing(
-      fc({ hasRenovatedLanguage: true }),
-      { daysOnMarket: 400, priceReduced: true },
+      fc({ hasRenovatedLanguage: true, hasConditionSignal: false }),
+      { daysOnMarket: 162, priceReduced: false },
+    );
+    expect(d.outcome).toBe("accept");
+  });
+
+  it("renovation is OVERRIDDEN by a price reduction (no condition) → accept", () => {
+    const d = classifyVerifiedListing(
+      fc({ hasRenovatedLanguage: true, hasConditionSignal: false }),
+      { daysOnMarket: 5, priceReduced: true },
+    );
+    expect(d.outcome).toBe("accept");
+  });
+
+  it("renovation + NO distress signal at all → reject (renovation is decisive)", () => {
+    const d = classifyVerifiedListing(
+      fc({ hasRenovatedLanguage: true, hasConditionSignal: false }),
+      { daysOnMarket: 5, priceReduced: false },
     );
     expect(d).toEqual({ outcome: "reject", reason: "firecrawl_renovated" });
   });
 
-  it("inactive still beats every accept signal", () => {
+  it("inactive STILL beats every accept signal (hard reject, before accept)", () => {
     const d = classifyVerifiedListing(
       fc({ stillActive: false }),
       { daysOnMarket: 400, priceReduced: true },
     );
     expect(d).toEqual({ outcome: "reject", reason: "firecrawl_inactive" });
+  });
+
+  it("wholesaler STILL beats every accept signal", () => {
+    const d = classifyVerifiedListing(
+      fc({ wholesalerExcluded: true }),
+      { daysOnMarket: 400, priceReduced: true },
+    );
+    expect(d).toEqual({ outcome: "reject", reason: "wholesaler_excluded" });
   });
 });

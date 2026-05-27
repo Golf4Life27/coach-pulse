@@ -122,6 +122,16 @@ export function stripEmptyFactsRows(md: string): string {
     .join("\n");
 }
 
+/** Pure: remove an INLINE empty "Year renovated —" facts token (em/en-dash or
+ *  bare hyphen = NOT renovated) so the bare word "renovated" can't match. The
+ *  row-based stripper misses this because Redfin renders the whole facts table
+ *  as one multi-field line: "… Lot size 7,560 Sq. Ft. Year renovated —
+ *  Finished Sq. Ft. 1,044 …". A populated "Year renovated 2015" is left intact
+ *  (a real renovation signal) via the no-following-digit lookahead. */
+export function stripInlineEmptyReno(md: string): string {
+  return md.replace(/\byear\s+renovated\s*[—–-]+(?!\s*\d)/gi, " ");
+}
+
 /** Pure: drop sale/tax/price history blocks — from a history-section header
  *  until the next (non-history) section heading or comps header. Top-of-page
  *  status (header / "OFF MARKET" banner) is preserved, so a genuinely inactive
@@ -151,7 +161,7 @@ export function stripHistorySection(md: string): string {
  *  comps sidebar + empty facts rows removed. */
 export function scopeSubjectText(md: string | null | undefined): string {
   if (!md) return "";
-  return stripEmptyFactsRows(stripCompsSection(md));
+  return stripInlineEmptyReno(stripEmptyFactsRows(stripCompsSection(md)));
 }
 
 /** Pure: text scanned for inactive markers — comps sidebar + sale/tax history

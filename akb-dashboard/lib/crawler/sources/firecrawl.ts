@@ -376,17 +376,23 @@ export async function verifyListing(
 // ── Verified-listing classification (pure; testable decision logic) ─────
 //
 // Decides the fate of a candidate from its Firecrawl verify result + the
-// candidate's RentCast distress signals. Order: infra errors →
-// resolution/status → renovation (hard) → wholesaler (hard) → accept-signal.
+// candidate's RentCast distress signals. Precedence (top to bottom):
+//   1. infra errors / unresolved → reject (no usable page)
+//   2. inactive → reject
+//   3. wholesaler-excluded → reject
+//   4. ANY distress signal → ACCEPT — overrides a renovation match:
+//        • text condition signal (as-is / fixer / motivated / cash-only / …)
+//        • DOM ≥ DISTRESS_DOM_ACCEPT_THRESHOLD (long-on-market = soft distress)
+//        • a price reduction in the listing history
+//   5. renovation language (and NO distress signal) → reject
+//   6. else → SOFT "review" (writes Outreach_Status="Review" for spot-check).
 //
-// Accept-signal (Phase 2 rebalance): a still-active, non-renovated,
-// non-wholesaler listing ACCEPTS on ANY ONE of —
-//   • text condition signal (as-is / fixer / motivated / cash-only / …), OR
-//   • DOM ≥ DISTRESS_DOM_ACCEPT_THRESHOLD (long-on-market = soft distress), OR
-//   • a price reduction in the listing history.
-// None of the three → SOFT "review" (writes with Outreach_Status="Review" for
-// operator spot-check, NOT a hard reject). The 65%-of-list offer script is the
-// safety net; a false reject is the unrecoverable cost, so the floor is write.
+// Why renovation is LAST, not a veto: the renovation scan is noisy (it matches
+// facts-table labels and comps), so an explicit "fixer-upper" / "motivated
+// seller" / "sold as-is" listing — or one long-on-market with a price cut — is
+// a true distress deal, not a flip that happens to mention upgrades. Renovation
+// only decides the no-other-signal case. The 65%-of-list offer is the safety
+// net; a false reject is the unrecoverable cost, so the floor is write.
 
 /** Candidate-side distress signals (from RentCast), folded into the accept
  *  decision alongside the Firecrawl text-condition signal. */
@@ -415,13 +421,14 @@ export function classifyVerifiedListing(
   if (fc.error) return { outcome: "reject", reason: "firecrawl_error" };
   if (!fc.resolved) return { outcome: "reject", reason: "firecrawl_url_unresolved" };
   if (!fc.stillActive) return { outcome: "reject", reason: "firecrawl_inactive" };
-  if (fc.hasRenovatedLanguage) return { outcome: "reject", reason: "firecrawl_renovated" };
   if (fc.wholesalerExcluded) return { outcome: "reject", reason: "wholesaler_excluded" };
+  // Distress signals override a (noisy, false-positive-prone) renovation match.
   const longDom =
     signals.daysOnMarket != null && signals.daysOnMarket >= DISTRESS_DOM_ACCEPT_THRESHOLD;
   if (fc.hasConditionSignal || longDom || signals.priceReduced) {
     return { outcome: "accept", outreachStatus: "" };
   }
-  // No distress signal of any kind — soft review, still writes.
+  // No distress signal of any kind — renovation language is now decisive.
+  if (fc.hasRenovatedLanguage) return { outcome: "reject", reason: "firecrawl_renovated" };
   return { outcome: "review", reason: "condition_signal_missing_flagged", outreachStatus: "Review" };
 }

@@ -5,10 +5,16 @@ import {
   stripCompsSection,
   stripEmptyFactsRows,
   stripHistorySection,
+  stripInlineEmptyReno,
   isEmptyFactsRow,
   scopeSubjectText,
   scopeStatusText,
 } from "./listing-text-scope";
+
+// Exact Redfin inline facts row from the live ?debug forensics — the whole
+// table is one multi-field line, with "Year renovated —" embedded mid-line.
+const REDFIN_FACTS_INLINE =
+  "Stories 1 Lot width 50 ft. Lot depth 120 ft. Lot size 7,560 Sq. Ft. Year renovated — Finished Sq. Ft. 1,044 Unfinished Sq. Ft. — Total Sq. Ft. 1,044 Year built 1940";
 
 describe("stripCompsSection", () => {
   it("drops everything from the 'Nearby similar homes' header onward", () => {
@@ -54,6 +60,32 @@ describe("isEmptyFactsRow / stripEmptyFactsRows", () => {
     const out = stripEmptyFactsRows(md);
     expect(out.toLowerCase()).not.toContain("renovated");
     expect(out).toContain("sold as-is");
+  });
+});
+
+describe("stripInlineEmptyReno", () => {
+  it("removes the inline 'Year renovated —' token from a Redfin facts line", () => {
+    const out = stripInlineEmptyReno(REDFIN_FACTS_INLINE);
+    expect(out.toLowerCase()).not.toContain("renovated");
+    // surrounding facts survive
+    expect(out).toContain("Lot size 7,560 Sq. Ft.");
+    expect(out).toContain("Finished Sq. Ft. 1,044");
+    expect(out).toContain("Year built 1940");
+  });
+
+  it("handles en-dash and bare hyphen empty values", () => {
+    expect(stripInlineEmptyReno("Year renovated – Finished").toLowerCase()).not.toContain("renovated");
+    expect(stripInlineEmptyReno("Year renovated - Finished").toLowerCase()).not.toContain("renovated");
+  });
+
+  it("leaves a POPULATED renovation year intact (real signal)", () => {
+    expect(stripInlineEmptyReno("Year renovated 2015 Finished")).toContain("renovated 2015");
+    expect(stripInlineEmptyReno("Year renovated - 2015")).toContain("2015");
+  });
+
+  it("leaves descriptive renovation copy untouched", () => {
+    const copy = "Fully renovated kitchen with new appliances.";
+    expect(stripInlineEmptyReno(copy)).toBe(copy);
   });
 });
 
