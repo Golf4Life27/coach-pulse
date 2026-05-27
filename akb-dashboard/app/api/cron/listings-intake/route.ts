@@ -3,11 +3,13 @@
 //
 // GET /api/cron/listings-intake[?dry_run=1]
 //
-// Daily 03:00 UTC. For each operator-configured target ZIP:
+// Daily 03:00 UTC. ZIPs come from ZIP_Registry (D1 — Market_Tier ∈
+// {launch, active} AND NOT Wholesale_Restricted); `?zips=` overrides for
+// manual runs. For each target ZIP:
 //   RentCast /listings/sale → normalize → intake-filter (price/beds/SFR/
 //   state/listed_date) → dedup vs Listings_V1 → Firecrawl verify (INV-028:
 //   exclude renovated/turnkey via portal-page scrape + still-Active check)
-//   → (live) create / (dry) report.
+//   → (live) create / (dry) report → ZIP_Registry per-ZIP stats write-back.
 //
 // Firecrawl verify runs AFTER dedup (never scrape a known address) and is
 // budget-gated (FIRECRAWL_MAX_SCRAPES_PER_RUN). New reject reasons:
@@ -19,8 +21,8 @@
 // Safety rails (per ship order):
 //   - DRY RUN by default; writes only when CRAWLER_INTAKE_LIVE="true"
 //     AND not ?dry_run=1. First execution is dry — operator reviews.
-//   - CRAWLER_TARGET_ZIPS (comma-sep) operator-provided; NOT
-//     autodiscovered. Empty → clean no-op surfacing the blocker.
+//   - ZIP_Registry is the ZIP source (D1, replaces CRAWLER_TARGET_ZIPS).
+//     No active registry rows → clean no-op surfacing the blocker.
 //   - RentCast quota gate (rentcastQuotaAllows): hard per-run cap +
 //     soft weekly-remaining estimate. Over budget → stall + Spine-write.
 //   - MAVERICK_CRON_ENABLED gate, dedup-by-address, Outreach_Status=""
@@ -51,6 +53,7 @@ import { fetchExternalRentCastState } from "@/lib/maverick/sources/external-rent
 import { fetchVercelKvAuditState } from "@/lib/maverick/sources/vercel-kv-audit";
 import { verifyListing, classifyVerifiedListing, FIRECRAWL_RATE_LIMIT_PER_MINUTE } from "@/lib/crawler/sources/firecrawl";
 import { runAsyncPool, makeRateGate } from "@/lib/crawler/async-pool";
+import { getActiveIntakeRows, updateZipStats } from "@/lib/zip-registry";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -73,11 +76,11 @@ const FIRECRAWL_MAX_CONCURRENT = Number(process.env.FIRECRAWL_MAX_CONCURRENT ?? 
 // (~50-135 candidates) finishes well inside this.
 const FIRECRAWL_TIME_BUDGET_MS = 270_000;
 
-/** Target ZIPs: a `?zips=` query override (comma-sep 5-digit) takes
- *  precedence for manual per-ZIP dry-run validation within the 300s lambda
- *  ceiling; otherwise the operator-provided CRAWLER_TARGET_ZIPS env. */
-function readTargetZips(override: string | null): string[] {
-  const raw = override && override.trim() !== "" ? override : (process.env.CRAWLER_TARGET_ZIPS ?? "");
+/** Manual ZIP override (comma-sep 5-digit) via `?zips=` or `?zip_override=`.
+ *  When present it BYPASSES ZIP_Registry — used for manual per-ZIP dry-run
+ *  validation within the lambda ceiling. Empty/absent → registry-driven. */
+function readZipOverride(url: URL): string[] {
+  const raw = url.searchParams.get("zips") ?? url.searchParams.get("zip_override") ?? "";
   return raw
     .split(",")
     .map((z) => z.trim())
@@ -205,20 +208,43 @@ export async function GET(req: Request) {
   const debugDuplicates: Array<{ sourceId: string; address: string | null; zip: string | null }> = [];
   const debugDecisions: Array<Record<string, unknown>> = [];
 
-  // ── ZIP gate ────────────────────────────────────────────────────
-  const zips = readTargetZips(url.searchParams.get("zips"));
+  // ── ZIP source: manual override bypasses the registry; otherwise
+  // read launch/active, non-wholesale-restricted ZIPs from ZIP_Registry
+  // (D1 — replaces the CRAWLER_TARGET_ZIPS env). zipToRecordId lets the
+  // post-run stats write-back find each ZIP's registry row. ───────────
+  const overrideZips = readZipOverride(url);
+  const overrideUsed = overrideZips.length > 0;
+  let zips: string[] = overrideZips;
+  const zipToRecordId = new Map<string, string>();
+  let zipSource: "override" | "registry" = "override";
+  if (!overrideUsed) {
+    zipSource = "registry";
+    try {
+      const rows = await getActiveIntakeRows();
+      zips = Array.from(new Set(rows.map((r) => r.zip))).sort();
+      for (const r of rows) if (!zipToRecordId.has(r.zip)) zipToRecordId.set(r.zip, r.recordId);
+    } catch (err) {
+      return NextResponse.json(
+        { error: "zip_registry_fetch_failed", message: err instanceof Error ? err.message : String(err) },
+        { status: 502 },
+      );
+    }
+  }
+
   if (zips.length === 0) {
     await audit({
       agent: "scout",
       event: "listings_intake_no_zips",
       status: "uncertain",
-      inputSummary: { auth_kind: authKind, dry_run: dryRun },
-      outputSummary: { blocker: "CRAWLER_TARGET_ZIPS not configured", duration_ms: Date.now() - t0 },
+      inputSummary: { auth_kind: authKind, dry_run: dryRun, zip_source: zipSource },
+      outputSummary: { blocker: "no active ZIPs in ZIP_Registry", duration_ms: Date.now() - t0 },
     });
     return NextResponse.json({
       ok: true,
-      blocked: "no_target_zips_configured",
-      detail: "Set CRAWLER_TARGET_ZIPS (comma-separated) to activate. NOT autodiscovered per ship order.",
+      blocked: "no_target_zips",
+      detail:
+        "No launch/active, non-wholesale-restricted ZIPs in ZIP_Registry. Add/activate ZIPs there, or pass ?zips=78201 for a manual run.",
+      zip_source: zipSource,
       dry_run: dryRun,
       auth_kind: authKind,
       duration_ms: Date.now() - t0,
@@ -321,43 +347,70 @@ export async function GET(req: Request) {
     summary.reject_reason_counts[reason] = (summary.reject_reason_counts[reason] ?? 0) + n;
   };
 
-  // ── Phase 1: collect (sequential, fast) — RentCast + basic filter + dedup.
+  // ── Phase 1: collect — RentCast fetch batched 3-concurrent (D1), then
+  // synchronous basic-filter + dedup per result. Only the network fetch
+  // runs in parallel; the dedup Sets are mutated synchronously after each
+  // batch resolves, so there are no intra-run dedup races.
+  const ZIP_FETCH_CONCURRENCY = 3;
   const perZipRaw = new Map<string, number>();
   const perZipAccepted = new Map<string, number>();
   const perZipReview = new Map<string, number>();
+  // D1 stats accumulators (per-ZIP) for the ZIP_Registry write-back.
+  const perZipConsidered = new Map<string, number>(); // classified (accept+review+reject)
+  const perZipIngested = new Map<string, number>(); // written (accept+review)
+  const perZipDom = new Map<string, { sum: number; n: number }>();
+  const perZipPrice = new Map<string, { sum: number; n: number }>();
+  const zipsProcessedOk = new Set<string>(); // RentCast fetch succeeded (incl. 0 candidates)
   const seenKeys = new Set<string>(); // intra-run dedup across overlapping ZIPs
   const toVerify: Array<{ candidate: IntakeCandidate; zip: string }> = [];
-  for (const zip of zips) {
-    const fetchResult = await fetchListingsByZip(zip);
-    if (!fetchResult.credentialed) {
-      summary.credentialed = false;
-      summary.per_zip_errors.push({ zip, error: "RENTCAST_API_KEY not set" });
-      continue;
-    }
-    if (fetchResult.error) {
-      summary.per_zip_errors.push({ zip, error: fetchResult.error });
-      continue;
-    }
-    summary.raw_candidates += fetchResult.candidates.length;
-    perZipRaw.set(zip, fetchResult.candidates.length);
 
-    const { accepted, rejected } = filterIntakeCandidates(fetchResult.candidates, now);
-    summary.rejected += rejected.length;
-    for (const r of rejected) {
-      for (const reason of r.reasons) bump(reason);
-      if (debug) debugBasicRejected.push({ sourceId: r.candidate.sourceId, address: r.candidate.address, zip: r.candidate.zip, reasons: r.reasons });
-    }
+  for (let i = 0; i < zips.length; i += ZIP_FETCH_CONCURRENCY) {
+    const chunk = zips.slice(i, i + ZIP_FETCH_CONCURRENCY);
+    const fetched = await Promise.all(
+      chunk.map((zip) =>
+        fetchListingsByZip(zip).then(
+          (r) => ({ zip, result: r as Awaited<ReturnType<typeof fetchListingsByZip>>, err: null as unknown }),
+          (err) => ({ zip, result: null, err }),
+        ),
+      ),
+    );
 
-    for (const c of accepted) {
-      // Dedup BEFORE Firecrawl — never spend a scrape on a known/seen address.
-      const key = normalizeAddressKey(c.address);
-      if (key && (existingKeys.has(key) || seenKeys.has(key))) {
-        summary.duplicates++;
-        if (debug) debugDuplicates.push({ sourceId: c.sourceId, address: c.address, zip: c.zip });
+    for (const { zip, result: fetchResult, err } of fetched) {
+      if (err || !fetchResult) {
+        summary.per_zip_errors.push({ zip, error: err instanceof Error ? err.message : String(err) });
         continue;
       }
-      if (key) seenKeys.add(key);
-      toVerify.push({ candidate: c, zip });
+      if (!fetchResult.credentialed) {
+        summary.credentialed = false;
+        summary.per_zip_errors.push({ zip, error: "RENTCAST_API_KEY not set" });
+        continue;
+      }
+      if (fetchResult.error) {
+        summary.per_zip_errors.push({ zip, error: fetchResult.error });
+        continue;
+      }
+      zipsProcessedOk.add(zip);
+      summary.raw_candidates += fetchResult.candidates.length;
+      perZipRaw.set(zip, fetchResult.candidates.length);
+
+      const { accepted, rejected } = filterIntakeCandidates(fetchResult.candidates, now);
+      summary.rejected += rejected.length;
+      for (const r of rejected) {
+        for (const reason of r.reasons) bump(reason);
+        if (debug) debugBasicRejected.push({ sourceId: r.candidate.sourceId, address: r.candidate.address, zip: r.candidate.zip, reasons: r.reasons });
+      }
+
+      for (const c of accepted) {
+        // Dedup BEFORE Firecrawl — never spend a scrape on a known/seen address.
+        const key = normalizeAddressKey(c.address);
+        if (key && (existingKeys.has(key) || seenKeys.has(key))) {
+          summary.duplicates++;
+          if (debug) debugDuplicates.push({ sourceId: c.sourceId, address: c.address, zip: c.zip });
+          continue;
+        }
+        if (key) seenKeys.add(key);
+        toVerify.push({ candidate: c, zip });
+      }
     }
   }
 
@@ -393,6 +446,9 @@ export async function GET(req: Request) {
     const { candidate: c, zip } = item;
     summary.firecrawl.scrapes_used++;
     summary.firecrawl.credits_used += fc.creditsUsed;
+    // D1: every verified candidate is "considered" for the per-ZIP
+    // classifier accept rate (denominator includes classifier rejects).
+    perZipConsidered.set(zip, (perZipConsidered.get(zip) ?? 0) + 1);
 
     // DOM / priceReduced are DIAGNOSTIC ONLY (operator amendment 2026-05-27) —
     // surfaced in the debug payload below, but no longer an input to the
@@ -453,6 +509,19 @@ export async function GET(req: Request) {
       summary.flagged_review++;
       perZipReview.set(zip, (perZipReview.get(zip) ?? 0) + 1);
     }
+    // D1 write-back accumulators: accepts + reviews both write to
+    // Listings_V1 (ingested volume); DOM/price means use accepted only.
+    perZipIngested.set(zip, (perZipIngested.get(zip) ?? 0) + 1);
+    if (accepted) {
+      if (typeof dom === "number" && Number.isFinite(dom)) {
+        const d = perZipDom.get(zip) ?? { sum: 0, n: 0 };
+        perZipDom.set(zip, { sum: d.sum + dom, n: d.n + 1 });
+      }
+      if (typeof c.listPrice === "number" && Number.isFinite(c.listPrice)) {
+        const p = perZipPrice.get(zip) ?? { sum: 0, n: 0 };
+        perZipPrice.set(zip, { sum: p.sum + c.listPrice, n: p.n + 1 });
+      }
+    }
 
     // Intrinsic auto-promote eligibility, then layer the feature flags.
     const ap = shouldAutoPromote({ accepted, agentPhone: c.agentPhone, state: c.state, listPrice: c.listPrice });
@@ -508,6 +577,40 @@ export async function GET(req: Request) {
     summary.per_zip.push({ zip, raw: perZipRaw.get(zip) ?? 0, accepted: perZipAccepted.get(zip) ?? 0, review: perZipReview.get(zip) ?? 0 });
   }
 
+  // ── Phase 4b: ZIP_Registry stats write-back (D1). Registry-driven live
+  // runs only — manual ?zips= overrides have no registry row, and dry runs
+  // never mutate. Writes the latest-run snapshot into the *_30d fields
+  // (see lib/zip-registry ZipStatsUpdate note: true 30d rolling lands with
+  // the saturation follow-up, the sole consumer of these fields).
+  const registryWriteback = { written: 0, skipped: false as boolean | string, errors: [] as string[] };
+  if (overrideUsed) {
+    registryWriteback.skipped = "manual_override";
+  } else if (dryRun) {
+    registryWriteback.skipped = "dry_run";
+  } else {
+    const nowIso = new Date().toISOString();
+    for (const zip of zipsProcessedOk) {
+      const recordId = zipToRecordId.get(zip);
+      if (!recordId) continue;
+      const considered = perZipConsidered.get(zip) ?? 0;
+      const accepted = perZipAccepted.get(zip) ?? 0;
+      const dom = perZipDom.get(zip);
+      const price = perZipPrice.get(zip);
+      try {
+        await updateZipStats(recordId, {
+          lastIngestedAt: nowIso,
+          acceptRate30d: considered > 0 ? accepted / considered : 0,
+          avgDom: dom && dom.n > 0 ? Math.round(dom.sum / dom.n) : null,
+          avgListPrice: price && price.n > 0 ? Math.round(price.sum / price.n) : null,
+          recordsIngested30d: perZipIngested.get(zip) ?? 0,
+        });
+        registryWriteback.written++;
+      } catch (err) {
+        registryWriteback.errors.push(`${zip}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+
   summary.firecrawl.time_budget_hit = timeBudgetHit;
 
   // Firecrawl budget OR the 300s lambda wall-clock exceeded mid-run →
@@ -558,6 +661,8 @@ export async function GET(req: Request) {
     ok: true,
     auth_kind: authKind,
     duration_ms: Date.now() - t0,
+    zip_source: zipSource,
+    registry: registryWriteback,
     ...summary,
     ...(debug
       ? {
