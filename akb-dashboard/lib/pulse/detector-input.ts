@@ -7,6 +7,7 @@
 
 import type { AuditEntry } from "@/lib/audit-log";
 import type { Listing } from "@/lib/types";
+import type { ZipRegistryRow } from "@/lib/zip-registry";
 
 export interface PulseDetectorInput {
   /** Recent audit events, newest first. Bounded by the runner
@@ -22,6 +23,10 @@ export interface PulseDetectorInput {
   /** Previous test count anchor from KV (set after a successful
    *  scan); null on first run. */
   previous_test_count: number | null;
+  /** ZIP_Registry rows for the zip-saturation detector. Optional —
+   *  populated by the scan route; detectors degrade to "no rows" when
+   *  absent (e.g. older callers / tests that don't inject it). */
+  zip_registry?: ZipRegistryRow[];
   /** Env vars for threshold overrides. Defaults to process.env in
    *  prod; tests inject. */
   env: Record<string, string | undefined>;

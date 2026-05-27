@@ -28,7 +28,8 @@ export type PulseDetectorId =
   | "stale_data_drift"
   | "voice_drift"
   | "outreach_volume_drop"
-  | "quo_quota_burn";
+  | "quo_quota_burn"
+  | "zip_saturation";
 
 export interface PulseDetection {
   /** Unique per-detection-fire ID; for steady-state detections this
