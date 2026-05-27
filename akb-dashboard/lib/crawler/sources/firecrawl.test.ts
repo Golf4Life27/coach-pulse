@@ -5,12 +5,41 @@ import {
   detectRenovationLanguage,
   detectStillActive,
   detectInactiveMarkers,
+  detectNewConstruction,
   extractPhraseContext,
   buildDebugContexts,
   buildSearchQuery,
   pickListingResult,
   RENOVATION_EXCLUSION_KEYWORDS,
 } from "./firecrawl";
+
+describe("detectNewConstruction (hard exclusion signals)", () => {
+  const NOW = new Date("2026-05-27T00:00:00Z");
+  it("Zillow 'New construction: Yes' → new", () => {
+    const r = detectNewConstruction("Pre-Owned: No - New construction: Yes - Year built: 2025", NOW);
+    expect(r.isNew).toBe(true);
+    expect(r.signals).toContain("new_construction_yes");
+  });
+  it("Redfin 'NEW CONSTRUCTION' banner → new", () => {
+    const r = detectNewConstruction("NEW CONSTRUCTION\n3 bed, 2 bath", NOW);
+    expect(r.isNew).toBe(true);
+    expect(r.signals).toContain("new_construction_banner");
+  });
+  it("year_built within last 2 years → new", () => {
+    expect(detectNewConstruction("Year built 2025", NOW).isNew).toBe(true);
+    expect(detectNewConstruction("Year built: 2024", NOW).isNew).toBe(true);
+    expect(detectNewConstruction("Built in 2026", NOW).isNew).toBe(true);
+  });
+  it("old year_built → NOT new", () => {
+    expect(detectNewConstruction("Year built 1949", NOW).isNew).toBe(false);
+    expect(detectNewConstruction("Year built: 2023", NOW).isNew).toBe(false);
+  });
+  it("no new-construction signal → NOT new", () => {
+    expect(detectNewConstruction("Charming 1940s bungalow, sold as-is.", NOW).isNew).toBe(false);
+    expect(detectNewConstruction("", NOW).isNew).toBe(false);
+    expect(detectNewConstruction(null, NOW).isNew).toBe(false);
+  });
+});
 
 describe("detectInactiveMarkers / detectStillActive (INV debug)", () => {
   it("returns the matched inactive marker phrases", () => {

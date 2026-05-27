@@ -41,6 +41,8 @@ function verifyFromText(markdown: string): FirecrawlVerifyResult {
     matchedWholesalerKeywords: content.matchedWholesalerKeywords,
     hasConditionSignal: content.hasConditionSignal,
     matchedDistressKeywords: content.matchedDistressKeywords,
+    isNewConstruction: false,
+    matchedNewConstructionSignals: [],
     matchedInactiveMarkers: [],
     creditsUsed: 1,
     rateLimited: false,

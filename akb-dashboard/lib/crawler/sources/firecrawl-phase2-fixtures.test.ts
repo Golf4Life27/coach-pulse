@@ -30,12 +30,16 @@ import { describe, it, expect } from "vitest";
 import {
   detectRenovationLanguage,
   detectInactiveMarkers,
+  detectNewConstruction,
   classifyVerifiedListing,
   type FirecrawlVerifyResult,
   type ListingDistressSignals,
 } from "./firecrawl";
 import { evaluateListingContent } from "../intake-filter";
 import { scopeSubjectText, scopeStatusText } from "./listing-text-scope";
+
+// Fixed "now" so year_built-based new-construction signals are deterministic.
+const NOW = new Date("2026-05-27T00:00:00Z");
 
 /** Build a verify result the same way verifyListing now does: scope the raw
  *  markdown, then run the pure detectors on the scoped views. */
@@ -44,6 +48,7 @@ function verifyFromText(markdown: string): FirecrawlVerifyResult {
   const statusText = scopeStatusText(markdown);
   const reno = detectRenovationLanguage(subjectText);
   const content = evaluateListingContent(subjectText);
+  const nc = detectNewConstruction(subjectText, NOW);
   const inactive = detectInactiveMarkers(statusText);
   return {
     credentialed: true,
@@ -56,6 +61,8 @@ function verifyFromText(markdown: string): FirecrawlVerifyResult {
     matchedWholesalerKeywords: content.matchedWholesalerKeywords,
     hasConditionSignal: content.hasConditionSignal,
     matchedDistressKeywords: content.matchedDistressKeywords,
+    isNewConstruction: nc.isNew,
+    matchedNewConstructionSignals: nc.signals,
     matchedInactiveMarkers: inactive,
     creditsUsed: 1,
     rateLimited: false,
@@ -203,10 +210,61 @@ describe("Phase 2 fixtures — false-rejected 78201 listings now classify ACCEPT
       expect(fc.stillActive).toBe(c.expect.active);
       expect(fc.hasConditionSignal).toBe(c.expect.condition);
       expect(fc.wholesalerExcluded).toBe(false);
+      expect(fc.isNewConstruction).toBe(false); // none are actual new builds
 
       const d = classifyVerifiedListing(fc, c.signals);
       expect(d.outcome).toBe("accept");
       if (d.outcome === "accept") expect(d.outreachStatus).toBe("");
+    });
+  }
+});
+
+// Actual new construction — HARD reject, no distress escape hatch (operator
+// 2026-05-27). Each carries a strong distress signal (price cut + long DOM +
+// condition copy) to prove the override does NOT rescue it.
+const NEW_CONSTRUCTION_CASES: Array<{ name: string; markdown: string; signal: string }> = [
+  {
+    name: "1735 W Gramercy Unit 201 (Zillow 'New construction: Yes')",
+    markdown: [
+      "# 1735 W Gramercy Pl Unit 201, San Antonio, TX 78201",
+      "For sale — $245,000. 2 bed, 2 bath. Motivated seller, priced to sell!",
+      "- Pre-Owned: No - New construction: Yes - Year built: 2025",
+      COMPS,
+    ].join("\n"),
+    signal: "new_construction_yes",
+  },
+  {
+    name: "1210 Gardina St (year_built 2025)",
+    markdown: [
+      "# 1210 Gardina St, San Antonio, TX 78201",
+      "For sale — $230,000. 3 bed, 2 bath. Bring all offers — must sell.",
+      "Lot size 6,000 Sq. Ft. Year built 2025 Stories 2",
+      COMPS,
+    ].join("\n"),
+    signal: "year_built_2025",
+  },
+  {
+    name: "3214 N Elmendorf Unit 102 (Redfin NEW CONSTRUCTION banner)",
+    markdown: [
+      "# 3214 N Elmendorf St Unit 102, San Antonio, TX 78201",
+      "NEW CONSTRUCTION",
+      "For sale — $219,000. 2 bed, 2 bath. Sold as-is, cash only.",
+      COMPS,
+    ].join("\n"),
+    signal: "new_construction_banner",
+  },
+];
+
+describe("Phase 2 fixtures — actual new construction is HARD rejected", () => {
+  for (const c of NEW_CONSTRUCTION_CASES) {
+    it(`${c.name} → reject new_construction_excluded`, () => {
+      const fc = verifyFromText(c.markdown);
+      expect(fc.isNewConstruction).toBe(true);
+      expect(fc.matchedNewConstructionSignals).toContain(c.signal);
+
+      // Even with the strongest distress signals, no override.
+      const d = classifyVerifiedListing(fc, { daysOnMarket: 400, priceReduced: true });
+      expect(d).toEqual({ outcome: "reject", reason: "new_construction_excluded" });
     });
   }
 });

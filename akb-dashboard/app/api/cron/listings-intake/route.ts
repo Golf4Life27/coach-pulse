@@ -410,11 +410,13 @@ export async function GET(req: Request) {
         reason: "reason" in decision ? decision.reason : null,
         stillActive: fc.stillActive,
         hasRenovatedLanguage: fc.hasRenovatedLanguage,
+        isNewConstruction: fc.isNewConstruction,
         hasConditionSignal: fc.hasConditionSignal,
         daysOnMarket: dom,
         priceReduced,
         wholesalerExcluded: fc.wholesalerExcluded,
         matched: {
+          new_construction: fc.matchedNewConstructionSignals,
           renovation: fc.matchedKeywords,
           inactive: fc.matchedInactiveMarkers,
           wholesaler: fc.matchedWholesalerKeywords,
