@@ -20,6 +20,10 @@ export interface KvClient {
   del(key: string): Promise<number>;
   /** GETDEL key. Atomic get + delete in one round-trip. Returns value or null. */
   getDel(key: string): Promise<string | null>;
+  /** SET key value NX EX ttl — atomic acquire. Returns true if the key was
+   *  absent (lock acquired), false if it already existed (lock held). The
+   *  cross-invocation lock primitive: strongly-consistent, no propagation lag. */
+  setNx(key: string, value: string, ttlSeconds: number): Promise<boolean>;
 }
 
 const KV_URL = process.env.KV_REST_API_URL;
@@ -85,6 +89,20 @@ export const kvProd: KvClient = {
     const data = (await res.json()) as { result: string | null };
     return data.result;
   },
+  async setNx(key, value, ttlSeconds) {
+    if (!KV_URL || !KV_TOKEN) throw new Error("KV not configured");
+    // SET <key> <value> NX EX <seconds> — Upstash returns "OK" when set,
+    // null when NX prevented the write (key already present).
+    const url = `${KV_URL}/set/${encodeURIComponent(key)}/${encodeURIComponent(value)}/nx/ex/${ttlSeconds}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${KV_TOKEN}` },
+      cache: "no-store",
+    });
+    if (!res.ok) throw new Error(`KV setNx failed: ${res.status}`);
+    const data = (await res.json()) as { result: string | null };
+    return data.result === "OK";
+  },
 };
 
 /**
@@ -129,6 +147,13 @@ export function makeMemoryKv(): KvClient {
       store.delete(key);
       if (isExpired(entry, now)) return null;
       return entry.value;
+    },
+    async setNx(key, value, ttlSeconds) {
+      const now = Date.now();
+      const entry = store.get(key);
+      if (entry && !isExpired(entry, now)) return false;
+      store.set(key, { value, expiresAt: now + ttlSeconds * 1000 });
+      return true;
     },
   };
 }

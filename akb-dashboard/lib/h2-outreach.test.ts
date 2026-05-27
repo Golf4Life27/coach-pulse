@@ -100,16 +100,19 @@ describe("planQueue — first_touch", () => {
     expect(p.toE164).toBe("+12105551234");
     expect(p.message).toContain("Hi Jane, this is Alex with AKB Solutions");
     expect(p.message).not.toContain("Jane Agent"); // first name only — 5/8 rule
-    expect(p.message).toContain("123 Main St in San Antonio");
+    expect(p.message).toContain("listing at 123 Main St. I would like");
     expect(p.message).toContain("$97,500");
   });
   it("falls back to 'there' when agent name is blank", () => {
     const [p] = plan([listing({ agentName: "" })]);
     expect(p.message).toContain("Hi there, this is Alex");
   });
-  it("omits the city clause when city is blank", () => {
-    const [p] = plan([listing({ city: "" })]);
-    expect(p.message).toContain("listing at 123 Main St. I would like");
+  it("uses the address verbatim — no redundant city clause appended", () => {
+    // Real RentCast addresses already carry city/state/zip; the old code
+    // appended " in {city}" → "…, San Antonio, TX 78201 in San Antonio".
+    const [p] = plan([listing({ address: "1138 Santa Anna, San Antonio, TX 78201", city: "San Antonio" })]);
+    expect(p.message).toContain("listing at 1138 Santa Anna, San Antonio, TX 78201. I would like");
+    expect(p.message).not.toContain("78201 in San Antonio");
   });
 });
 
@@ -178,7 +181,7 @@ describe("note builders", () => {
     );
   });
   it("formats MAO with thousands separators and no decimals", () => {
-    expect(buildH2Message("Sam", "9 Oak", "Austin", 71250.4)).toContain("$71,250");
+    expect(buildH2Message("Sam", "9 Oak", 71250.4)).toContain("$71,250");
   });
 });
 

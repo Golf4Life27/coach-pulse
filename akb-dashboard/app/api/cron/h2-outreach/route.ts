@@ -24,10 +24,14 @@
 //     lib/h2-outreach.ts header. Raw match is Make's known undercount bug.
 //   - Reuses the existing QUO_PHONE_ID env (lib/quo.ts), not the spec's new
 //     QUO_PHONE_NUMBER_ID — same value (PNLosBI6fh), one source of truth.
-//   - No vercel.json cron added. The Vercel Hobby plan caps crons at once
-//     per day (AGENTS.md), so the spec's */2 * * * * is rejected at deploy.
-//     Steady-state cadence is an operator call (daily batch vs Pro upgrade);
-//     wire the cron after the smoke test, per the spec's own sequencing.
+//   - Daily vercel.json cron (15:30 UTC = 10:30am Central, inside TX working
+//     hours) at limit=25 / send_delay_ms=10000 — the once-per-day Hobby cap.
+//     Live sends still gated by H2_OUTREACH_LIVE; the cron no-ops until set.
+//   - Idempotency: a KV run-mutex (no two overlapping runs) + a per-record KV
+//     claim acquired BEFORE Quo dispatch close the cross-invocation race that
+//     double-fired a batch on 2026-05-27 (Spine recWwIMc7V15p968k). The
+//     Airtable Outreach_Status gate alone was insufficient — it has write-
+//     propagation lag; KV is strongly-consistent.
 //   - Existing app/api/outreach-fire fires the same selector manually; both
 //     gate on empty Outreach_Status so no record double-texts, but they are
 //     two senders. Consolidation flagged for the operator.
@@ -70,6 +74,13 @@ const DEFAULT_SEND_DELAY_MS = 60_000;
 // Stop starting NEW work this late into the 300s lambda so in-flight writes
 // finish cleanly instead of being killed. Remaining records roll to next run.
 const WALL_CLOCK_BUDGET_MS = 270_000;
+
+// Idempotency locks (KV — strongly-consistent, unlike the Airtable status gate
+// which has write-propagation lag). See Spine recWwIMc7V15p968k.
+const RUN_LOCK_KEY = "h2:run:lock";
+const RUN_LOCK_TTL_S = 300; // == maxDuration ceiling; frees a killed run's lock
+const DISPATCH_CLAIM_TTL_S = 86_400; // per-record send claim; outlives status propagation
+const dispatchClaimKey = (recordId: string) => `h2:dispatch:${recordId}`;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -218,8 +229,31 @@ async function handle(req: Request): Promise<Response> {
     bad_phone_quarantined: 0,
     outside_hours: 0,
     skipped: 0,
+    idempotent_skipped: 0,
     errors: 0,
   };
+
+  // Run-mutex (live only) — two overlapping invocations both reading the same
+  // empty-status pool is what double-fired on 2026-05-27 (Spine
+  // recWwIMc7V15p968k). KV is strongly-consistent (no Airtable propagation
+  // lag); the TTL frees the lock if a run is killed mid-flight. Degrades to the
+  // Airtable status gate when KV is unconfigured.
+  const lockEnabled = !dryRun && kvConfigured();
+  let runLockHeld = false;
+  if (lockEnabled) {
+    runLockHeld = await kvProd.setNx(RUN_LOCK_KEY, startedAt, RUN_LOCK_TTL_S);
+    if (!runLockHeld) {
+      return NextResponse.json({
+        mode: "live",
+        skipped: "another_run_in_progress",
+        started_at: startedAt,
+        finished_at: new Date().toISOString(),
+        eligible_count: eligibleCount,
+        auth_kind: authKind,
+        duration_ms: Date.now() - t0,
+      });
+    }
+  }
 
   for (const p of plans) {
     const row: ProcessedRow = {
@@ -278,6 +312,8 @@ async function handle(req: Request): Promise<Response> {
       continue;
     }
 
+    const claimKey = dispatchClaimKey(p.recordId);
+    let claimAcquired = false;
     try {
       if (p.route === "bad_phone_quarantine") {
         await updateListingRecord(p.recordId, {
@@ -297,21 +333,39 @@ async function handle(req: Request): Promise<Response> {
         row.error = p.skipReason;
         summary.skipped++;
       } else {
-        // first_touch — the only path that sends SMS.
-        const result = await sendMessageWithId(p.toE164!, p.message!);
-        row.sms_fired = true;
-        row.sms_message_id = result.id;
-        await updateListingRecord(p.recordId, {
-          Outreach_Status: "Texted",
-          Verification_Notes: buildSentNote(existingNotes, iso, result.id, p.message!),
-        });
-        row.airtable_updated = true;
-        summary.first_touch_sent++;
-        if (sendDelayMs > 0) await sleep(sendDelayMs); // throttle after a send only
+        // first_touch — the only path that sends SMS. Claim the record in KV
+        // BEFORE dispatch: an overlapping run or a re-fire inside the Airtable
+        // status-propagation window then cannot re-text the same agent (the
+        // race that double-fired today — Spine recWwIMc7V15p968k).
+        if (lockEnabled) {
+          claimAcquired = await kvProd.setNx(claimKey, iso, DISPATCH_CLAIM_TTL_S);
+        }
+        if (lockEnabled && !claimAcquired) {
+          row.error = "idempotent_skip: dispatch already claimed";
+          summary.idempotent_skipped++;
+        } else {
+          const result = await sendMessageWithId(p.toE164!, p.message!);
+          row.sms_fired = true;
+          row.sms_message_id = result.id;
+          await updateListingRecord(p.recordId, {
+            Outreach_Status: "Texted",
+            Verification_Notes: buildSentNote(existingNotes, iso, result.id, p.message!),
+          });
+          row.airtable_updated = true;
+          summary.first_touch_sent++;
+          if (sendDelayMs > 0) await sleep(sendDelayMs); // throttle after a send only
+        }
       }
     } catch (err) {
       row.error = err instanceof Error ? err.message : String(err);
       summary.errors++;
+      // Release the claim ONLY if the SEND itself failed (no SMS went out), so
+      // a later run retries cleanly. If the send succeeded but the status write
+      // failed, KEEP the claim — a re-text is worse than a transiently-stale
+      // Outreach_Status (the reconcile cron repairs status).
+      if (claimAcquired && !row.sms_fired) {
+        await kvProd.del(claimKey).catch(() => {});
+      }
     }
     processed.push(row);
   }
@@ -324,6 +378,10 @@ async function handle(req: Request): Promise<Response> {
     outputSummary: { eligible_count: eligibleCount, processed: processed.length, ...summary },
     ms: Date.now() - t0,
   });
+
+  // Release the run-mutex on normal completion; the TTL is the backstop for the
+  // (record errors are caught per-record, so this path is the common exit).
+  if (runLockHeld) await kvProd.del(RUN_LOCK_KEY).catch(() => {});
 
   return NextResponse.json({
     mode: dryRun ? "dry_run" : "live",
