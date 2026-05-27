@@ -8,6 +8,8 @@
 //                   facts field.
 //   1402 Mardell  — DOM 95, soft copy; inline "Year renovated —" its only reno
 //                   match. Accepts on DOM ≥ 60 (renovation overridden).
+//   1503 Edison   — Zillow "New construction: No" facts row matched "new
+//                   construction" as renovation. Stripped; accepts on DOM ≥ 60.
 //   915 Shearer   — motivated seller + fixer upper; killed by a 2025 "Listing
 //                   Removed" row in Sale & Tax History.
 //   942 W Lynwood — investor special + cash or hard money + fixer-upper (NOT a
@@ -74,6 +76,11 @@ const COMPS = [
 // stripper missed and that matched bare "renovated". Verbatim forensics string.
 const REDFIN_FACTS_INLINE =
   "Stories 1 Lot width 50 ft. Lot depth 120 ft. Lot size 7,560 Sq. Ft. Year renovated — Finished Sq. Ft. 1,044 Unfinished Sq. Ft. — Total Sq. Ft. 1,044 Year built 1940";
+
+// Zillow "Facts & Features" row — "New construction: No" matched "new
+// construction" as renovation evidence despite explicitly stating otherwise.
+const ZILLOW_FACTS_NC_NO =
+  "- Stucco - Foundation: Slab - Roof: Composition ###### Condition - Pre-Owned - New construction: No - Year built: 1949";
 
 // Prior-year history rows whose "Listing Removed" matched the inactive markers.
 const HISTORY_REMOVED = [
@@ -159,6 +166,20 @@ const CASES: Case[] = [
     ].join("\n"),
     signals: { daysOnMarket: 8, priceReduced: true },
     expect: { renovated: false, active: true, condition: true },
+  },
+  {
+    name: "1503 Edison (DOM 411; Zillow 'New construction: No' its only reno match)",
+    markdown: [
+      "# 1503 Edison Dr, San Antonio, TX 78201",
+      "For sale — $155,000. 3 bed, 2 bath.",
+      "Solid home in a great location. Buyer to verify all info.",
+      "## Facts & Features",
+      ZILLOW_FACTS_NC_NO,
+      COMPS,
+    ].join("\n"),
+    signals: { daysOnMarket: 411, priceReduced: false },
+    // "New construction: No" must NOT count as renovation; accepts on DOM ≥ 60.
+    expect: { renovated: false, active: true, condition: false },
   },
   {
     name: "1518 Waverly (DOM 162 + sold as-is + needs updates; inline Year-renovated dash)",

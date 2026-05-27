@@ -132,6 +132,15 @@ export function stripInlineEmptyReno(md: string): string {
   return md.replace(/\byear\s+renovated\s*[—–-]+(?!\s*\d)/gi, " ");
 }
 
+/** Pure: remove a "New construction: No" facts token (Zillow's "Facts &
+ *  Features" row, e.g. "… Pre-Owned - New construction: No - Year built: 1949")
+ *  so the phrase "new construction" can't match as renovation evidence on a
+ *  listing that explicitly states it is NOT new construction. "New
+ *  construction: Yes" is left intact — that's a real positive signal. */
+export function stripInlineNewConstructionNo(md: string): string {
+  return md.replace(/\bnew\s+construction\s*:\s*no\b/gi, " ");
+}
+
 /** Pure: drop sale/tax/price history blocks — from a history-section header
  *  until the next (non-history) section heading or comps header. Top-of-page
  *  status (header / "OFF MARKET" banner) is preserved, so a genuinely inactive
@@ -161,7 +170,7 @@ export function stripHistorySection(md: string): string {
  *  comps sidebar + empty facts rows removed. */
 export function scopeSubjectText(md: string | null | undefined): string {
   if (!md) return "";
-  return stripInlineEmptyReno(stripEmptyFactsRows(stripCompsSection(md)));
+  return stripInlineNewConstructionNo(stripInlineEmptyReno(stripEmptyFactsRows(stripCompsSection(md))));
 }
 
 /** Pure: text scanned for inactive markers — comps sidebar + sale/tax history

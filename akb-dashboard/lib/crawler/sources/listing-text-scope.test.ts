@@ -6,10 +6,16 @@ import {
   stripEmptyFactsRows,
   stripHistorySection,
   stripInlineEmptyReno,
+  stripInlineNewConstructionNo,
   isEmptyFactsRow,
   scopeSubjectText,
   scopeStatusText,
 } from "./listing-text-scope";
+
+// Verbatim Zillow "Facts & Features" row from the forensics — "New
+// construction: No" embedded between dash separators.
+const ZILLOW_FACTS_NEW_CONSTRUCTION_NO =
+  "- Stucco - Foundation: Slab - Roof: Composition ###### Condition - Pre-Owned - New construction: No - Year built: 1949";
 
 // Exact Redfin inline facts row from the live ?debug forensics — the whole
 // table is one multi-field line, with "Year renovated —" embedded mid-line.
@@ -86,6 +92,30 @@ describe("stripInlineEmptyReno", () => {
   it("leaves descriptive renovation copy untouched", () => {
     const copy = "Fully renovated kitchen with new appliances.";
     expect(stripInlineEmptyReno(copy)).toBe(copy);
+  });
+});
+
+describe("stripInlineNewConstructionNo", () => {
+  it("removes 'New construction: No' from a Zillow facts row", () => {
+    const out = stripInlineNewConstructionNo(ZILLOW_FACTS_NEW_CONSTRUCTION_NO);
+    expect(out.toLowerCase()).not.toContain("new construction");
+    // surrounding facts survive
+    expect(out).toContain("Pre-Owned");
+    expect(out).toContain("Year built: 1949");
+  });
+
+  it("does NOT strip 'New construction: Yes' (real positive signal)", () => {
+    const out = stripInlineNewConstructionNo("Pre-Owned - New construction: Yes - Year built: 2025");
+    expect(out.toLowerCase()).toContain("new construction");
+  });
+
+  it("leaves descriptive 'new construction' copy untouched", () => {
+    const copy = "Brand new construction, never lived in.";
+    expect(stripInlineNewConstructionNo(copy)).toBe(copy);
+  });
+
+  it("scopeSubjectText kills the 'new construction' renovation match end-to-end", () => {
+    expect(scopeSubjectText(ZILLOW_FACTS_NEW_CONSTRUCTION_NO).toLowerCase()).not.toContain("new construction");
   });
 });
 
