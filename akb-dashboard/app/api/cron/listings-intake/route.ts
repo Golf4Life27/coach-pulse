@@ -131,7 +131,10 @@ async function createIntakeListing(c: IntakeCandidate, promote: boolean): Promis
     fields["Execution_Path"] = "Auto Proceed";
     fields["Live_Status"] = "Active";
     fields["Do_Not_Text"] = false;
-    fields["Stage_Calc"] = "Passed: Ready for Offer";
+    // NOTE: Stage_Calc (fldA8B9zOCneF0rjp) is a FORMULA field — writing it 422s
+    // the create. H2 eligibility never reads it (only Outreach_Status +
+    // Live_Status + Execution_Path + Do_Not_Text + Agent_Phone), so the promote
+    // state is fully expressed by the four writable fields above.
     fields["Verification_Notes"] =
       `[${iso}] RentCast auto-intake (${c.sourceId}) — auto-promoted to Auto Proceed (clean agent phone + math gate passed).`;
   } else {
