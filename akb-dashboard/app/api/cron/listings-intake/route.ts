@@ -394,11 +394,13 @@ export async function GET(req: Request) {
     summary.firecrawl.scrapes_used++;
     summary.firecrawl.credits_used += fc.creditsUsed;
 
-    // Phase-2 distress accept signals from the RentCast feed. DOM falls back
-    // to a listed-date derivation when the feed omits daysOnMarket.
+    // DOM / priceReduced are DIAGNOSTIC ONLY (operator amendment 2026-05-27) —
+    // surfaced in the debug payload below, but no longer an input to the
+    // classifier. DOM falls back to a listed-date derivation when the feed
+    // omits daysOnMarket.
     const dom = c.daysOnMarket ?? daysOnMarketFrom(c.listedDate, now);
     const priceReduced = c.priceReduced ?? false;
-    const decision = classifyVerifiedListing(fc, { daysOnMarket: dom, priceReduced });
+    const decision = classifyVerifiedListing(fc);
     if (debug) {
       debugDecisions.push({
         sourceId: c.sourceId,

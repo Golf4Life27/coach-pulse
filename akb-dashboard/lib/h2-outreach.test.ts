@@ -6,6 +6,7 @@ import {
   selectH2Eligible,
   buildPriorContactIndex,
   buildH2Message,
+  firstNameOnly,
   buildSentNote,
   buildStallNote,
   buildQuarantineNote,
@@ -97,7 +98,8 @@ describe("planQueue — first_touch", () => {
     const [p] = plan([listing()]);
     expect(p.route).toBe("first_touch");
     expect(p.toE164).toBe("+12105551234");
-    expect(p.message).toContain("Hi Jane Agent, this is Alex with AKB Solutions");
+    expect(p.message).toContain("Hi Jane, this is Alex with AKB Solutions");
+    expect(p.message).not.toContain("Jane Agent"); // first name only — 5/8 rule
     expect(p.message).toContain("123 Main St in San Antonio");
     expect(p.message).toContain("$97,500");
   });
@@ -177,5 +179,21 @@ describe("note builders", () => {
   });
   it("formats MAO with thousands separators and no decimals", () => {
     expect(buildH2Message("Sam", "9 Oak", "Austin", 71250.4)).toContain("$71,250");
+  });
+});
+
+describe("firstNameOnly — proven 5/8 outreach rule (greet on first name)", () => {
+  it("takes only the leading token from a combined Agent_Name", () => {
+    expect(firstNameOnly("Jane Smith")).toBe("Jane");
+    expect(firstNameOnly("Mary Jo Alvarez")).toBe("Mary");
+    expect(firstNameOnly("  Carlos   Reyes ")).toBe("Carlos");
+  });
+  it("passes through a name that is already first-only", () => {
+    expect(firstNameOnly("Jane")).toBe("Jane");
+  });
+  it("falls back to 'there' on null / empty / whitespace", () => {
+    expect(firstNameOnly(null)).toBe("there");
+    expect(firstNameOnly("")).toBe("there");
+    expect(firstNameOnly("   ")).toBe("there");
   });
 });
