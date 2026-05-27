@@ -44,6 +44,7 @@ import {
   type IntakeCandidate,
 } from "@/lib/crawler/intake-filter";
 import { shouldAutoPromote, type AutoPromoteBlockReason } from "@/lib/crawler/auto-promote";
+import { SOURCE_VERSION_FIELD_NAME, SOURCE_VERSION_V2 } from "@/lib/source-version";
 import { rentcastQuotaAllows, computeBurnRate } from "@/lib/maverick/rentcast-burn-rate";
 import { fetchExternalRentCastState } from "@/lib/maverick/sources/external-rentcast";
 import { fetchVercelKvAuditState } from "@/lib/maverick/sources/vercel-kv-audit";
@@ -117,6 +118,9 @@ async function createIntakeListing(c: IntakeCandidate, promote: boolean): Promis
     City: c.city ?? "",
     State: c.state ?? "",
     Zip: c.zip ?? "",
+    // Every crawler-written record is v2 (INV-LEGACY-BACKSTOP) — promoted,
+    // review-queued, all of them. Marks the active working surface.
+    [SOURCE_VERSION_FIELD_NAME]: SOURCE_VERSION_V2,
   };
   if (c.propertyType) fields["Property_Type"] = c.propertyType;
   if (c.beds != null) fields["Bedrooms"] = c.beds;

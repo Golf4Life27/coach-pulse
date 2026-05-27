@@ -83,6 +83,7 @@ function listing(overrides: Partial<Listing> = {}): Listing {
     ddChecklist: null,
     doNotText: false,
     state: "TX",
+    sourceVersion: null,
     actionHoldUntil: null,
     actionCardState: null,
     lastInboundAt: null,

@@ -293,6 +293,7 @@ describe("filterListings", () => {
       ddChecklist: null,
       doNotText: false,
       state: null,
+      sourceVersion: null,
       actionHoldUntil: null,
       actionCardState: null,
       lastInboundAt: null,
