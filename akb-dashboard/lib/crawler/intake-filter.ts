@@ -64,6 +64,13 @@ export interface IntakeCandidate {
   /** Listing office name (RentCast listingOffice.name). Carried for future
    *  use; not written to Airtable in v1 (no confirmed Brokerage_Name field). */
   brokerageName: string | null;
+  /** Days the listing has been active (RentCast daysOnMarket). Optional — not
+   *  every source provides it; the cron derives a fallback from listedDate.
+   *  Phase-2 distress accept signal (DOM ≥ threshold). */
+  daysOnMarket?: number | null;
+  /** A price reduction was detected in the listing history (RentCast).
+   *  Optional; defaults to false. Phase-2 distress accept signal. */
+  priceReduced?: boolean;
 }
 
 export type IntakeRejectReason =
@@ -82,6 +89,19 @@ export interface IntakeEvaluation {
 }
 
 const DAY_MS = 86_400_000;
+
+/** Pure: days-on-market derived from an ISO listed date. Fallback for sources
+ *  (or rows) lacking an explicit daysOnMarket. null when date is absent or
+ *  unparseable. Never negative (a future-dated listing → 0). */
+export function daysOnMarketFrom(
+  listedDate: string | null | undefined,
+  now: Date = new Date(),
+): number | null {
+  if (!listedDate) return null;
+  const t = Date.parse(listedDate);
+  if (Number.isNaN(t)) return null;
+  return Math.max(0, Math.floor((now.getTime() - t) / DAY_MS));
+}
 
 /** Pure: SFR detection across common vendor spellings. */
 export function isSingleFamily(propertyType: string | null): boolean {
@@ -167,10 +187,11 @@ export function normalizeAddressKey(address: string | null): string {
 
 // ── Listing-content filters (operate on Firecrawl-scraped portal text) ──
 //
-// Run AFTER the Firecrawl renovation-keyword check passes, in order:
+// Run AFTER the Firecrawl renovation-keyword check passes:
 //   1. wholesaler_excluded (hard reject) — agent stated buyer-type pref
-//   2. condition_signal_missing (hard reject) — vibe-copy with no condition
-//      or motivation signal can't justify a 65%-of-list offer
+//   2. hasConditionSignal — one input to the Phase-2 multi-signal accept
+//      (condition copy OR DOM ≥ threshold OR price cut). When NONE of the
+//      three are present the listing is soft-reviewed, never hard-rejected.
 //
 // Word-boundary matching (NOT substring): "structural" matches, but
 // "infrastructure" does not. The renovation filter (lib/.../firecrawl.ts)

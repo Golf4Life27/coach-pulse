@@ -72,3 +72,49 @@ describe("classifyVerifiedListing", () => {
     expect(d.outcome).not.toBe("reject");
   });
 });
+
+describe("classifyVerifiedListing — Phase 2 multi-signal accept", () => {
+  const noText = { hasConditionSignal: false, matchedDistressKeywords: [] as string[] };
+
+  it("no text condition but DOM ≥ 60 → accept", () => {
+    const d = classifyVerifiedListing(fc(noText), { daysOnMarket: 60, priceReduced: false });
+    expect(d.outcome).toBe("accept");
+  });
+
+  it("DOM just below threshold + no other signal → review", () => {
+    const d = classifyVerifiedListing(fc(noText), { daysOnMarket: 59, priceReduced: false });
+    expect(d.outcome).toBe("review");
+  });
+
+  it("no text condition but price reduced → accept", () => {
+    const d = classifyVerifiedListing(fc(noText), { daysOnMarket: 5, priceReduced: true });
+    expect(d.outcome).toBe("accept");
+  });
+
+  it("text condition alone still accepts regardless of DOM/price", () => {
+    const d = classifyVerifiedListing(fc(), { daysOnMarket: 1, priceReduced: false });
+    expect(d.outcome).toBe("accept");
+  });
+
+  it("none of the three signals → soft review", () => {
+    const d = classifyVerifiedListing(fc(noText), { daysOnMarket: 10, priceReduced: false });
+    expect(d.outcome).toBe("review");
+    if (d.outcome === "review") expect(d.outreachStatus).toBe("Review");
+  });
+
+  it("hard rejects still beat every accept signal (renovation + long DOM)", () => {
+    const d = classifyVerifiedListing(
+      fc({ hasRenovatedLanguage: true }),
+      { daysOnMarket: 400, priceReduced: true },
+    );
+    expect(d).toEqual({ outcome: "reject", reason: "firecrawl_renovated" });
+  });
+
+  it("inactive still beats every accept signal", () => {
+    const d = classifyVerifiedListing(
+      fc({ stillActive: false }),
+      { daysOnMarket: 400, priceReduced: true },
+    );
+    expect(d).toEqual({ outcome: "reject", reason: "firecrawl_inactive" });
+  });
+});
