@@ -1,6 +1,7 @@
 import { Listing, Deal, Buyer, ProspectiveBuyer } from "./types";
 import { auditWriteDrift, type FieldDrift } from "./airtable-verify";
 import { audit } from "./audit-log";
+import { SOURCE_VERSION_FIELD_ID, SOURCE_VERSION_V2 } from "./source-version";
 
 const AIRTABLE_PAT = process.env.AIRTABLE_PAT!;
 const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
@@ -41,6 +42,7 @@ const LISTING_FIELDS: Record<string, string> = {
   fldZVZT98A6cEmJB3: "ddChecklist",
   fldoXlPt9s6a1oopo: "doNotText",
   fldSlDQvgCyr0J8tI: "state",
+  [SOURCE_VERSION_FIELD_ID]: "sourceVersion",
   fldkYeP8onCHil0pd: "actionHoldUntil",
   fldiNKFpIBUYgg7el: "actionCardState",
   fld3IhR1DXzcVuq6F: "lastInboundAt",
@@ -144,6 +146,7 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "DD_Checklist": "ddChecklist",
   "Do_Not_Text": "doNotText",
   "State": "state",
+  "Source_Version": "sourceVersion",
   "Action_Hold_Until": "actionHoldUntil",
   "Action_Card_State": "actionCardState",
   "Last_Inbound_At": "lastInboundAt",
@@ -370,17 +373,24 @@ function mapRecordByName<T>(
   return mapped as T;
 }
 
-export async function getListings(): Promise<Listing[]> {
+// Default returns the FULL base (v1 legacy + v2) — data-layer callers
+// (dedupe, prior-contact counts, cleanup, reconcile) depend on seeing every
+// record. Pass { includeLegacy: false } to get the v2 active surface only
+// (INV-LEGACY-BACKSTOP); operator-facing display endpoints opt into that.
+export async function getListings(opts: { includeLegacy?: boolean } = {}): Promise<Listing[]> {
   const cacheKey = "listings";
-  const cached = getCached<Listing[]>(cacheKey);
-  if (cached) return cached;
-
-  const records = await fetchAllRecords(
-    LISTINGS_TABLE,
-    Object.keys(LISTING_FIELDS)
-  );
-  const listings = records.map((r) => mapRecord<Listing>(r, LISTING_FIELDS));
-  setCache(cacheKey, listings);
+  let listings = getCached<Listing[]>(cacheKey);
+  if (!listings) {
+    const records = await fetchAllRecords(
+      LISTINGS_TABLE,
+      Object.keys(LISTING_FIELDS)
+    );
+    listings = records.map((r) => mapRecord<Listing>(r, LISTING_FIELDS));
+    setCache(cacheKey, listings);
+  }
+  if (opts.includeLegacy === false) {
+    return listings.filter((l) => l.sourceVersion === SOURCE_VERSION_V2);
+  }
   return listings;
 }
 

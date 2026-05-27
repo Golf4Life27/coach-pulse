@@ -6,6 +6,7 @@
 
 import { NextResponse } from "next/server";
 import { getActiveListingsForBrief, getRecentlyDeadCandidates } from "@/lib/airtable";
+import { SOURCE_VERSION_V2 } from "@/lib/source-version";
 import { buildJarvisSystemPrompt, computeJarvisScore } from "@/lib/jarvis-system-prompt";
 import { getVolleyText } from "@/lib/dd-volley";
 import { applyResurrection, evaluateResurrection } from "@/lib/resurrection";
@@ -287,10 +288,18 @@ export async function GET(req: Request) {
     // cares about, avoiding the ~1,200-record full-table scan that was
     // tipping us past the 60s cap.
     const tFetch = Date.now();
-    const [active, deadCandidates] = await Promise.all([
+    // BroCards default to the v2 active surface (INV-LEGACY-BACKSTOP).
+    // ?include_legacy=true surfaces pre-v2 records (incl. legacy records in
+    // active conversation states) in the brief.
+    const includeLegacy = new URL(req.url).searchParams.get("include_legacy") === "true";
+    const v2Only = <T extends { sourceVersion: string | null }>(rows: T[]): T[] =>
+      includeLegacy ? rows : rows.filter((r) => r.sourceVersion === SOURCE_VERSION_V2);
+    const [activeRaw, deadCandidatesRaw] = await Promise.all([
       getActiveListingsForBrief({ recentDays: 7 }),
       getRecentlyDeadCandidates({ maxAgeDays: 30, cap: 50 }),
     ]);
+    const active = v2Only(activeRaw);
+    const deadCandidates = v2Only(deadCandidatesRaw);
     const fetchMs = Date.now() - tFetch;
     console.log(`[jarvis-brief] fetch=${fetchMs}ms active=${active.length} deadCandidates=${deadCandidates.length}`);
 

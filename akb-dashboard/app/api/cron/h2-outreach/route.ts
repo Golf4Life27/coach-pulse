@@ -59,6 +59,7 @@ import {
   parseWorkingHoursConfig,
   type WorkingHoursMeta,
 } from "@/lib/h2-working-hours";
+import { SOURCE_VERSION_V2 } from "@/lib/source-version";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -96,6 +97,8 @@ function ineligibleReason(l: Listing): string | null {
   if (l.executionPath !== "Auto Proceed") return `Execution_Path is '${l.executionPath}', not Auto Proceed`;
   if (l.doNotText === true) return "Do_Not_Text is set";
   if (!(l.agentPhone && l.agentPhone.trim() !== "")) return "Agent_Phone is empty";
+  if (l.sourceVersion !== SOURCE_VERSION_V2)
+    return `Source_Version is '${l.sourceVersion}', not ${SOURCE_VERSION_V2}`;
   return null;
 }
 

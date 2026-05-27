@@ -6,10 +6,12 @@ import { Briefing, BriefingGap } from "@/lib/types";
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
-export async function GET() {
+// Defaults to the v2 active surface (INV-LEGACY-BACKSTOP); ?include_legacy=true for the full base.
+export async function GET(req: Request) {
   try {
     // Two cached calls; everything else is computed in-memory.
-    const [listings, deals] = await Promise.all([getListings(), getDeals()]);
+    const includeLegacy = new URL(req.url).searchParams.get("include_legacy") === "true";
+    const [listings, deals] = await Promise.all([getListings({ includeLegacy }), getDeals()]);
     const queue = buildActionQueue(listings, deals);
 
     const countKind = (kind: "response" | "stale") =>

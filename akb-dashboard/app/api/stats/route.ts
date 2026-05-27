@@ -2,9 +2,12 @@ import { NextResponse } from "next/server";
 import { getListings } from "@/lib/airtable";
 import { DashboardStats } from "@/lib/types";
 
-export async function GET() {
+// Counters default to the v2 active surface (INV-LEGACY-BACKSTOP). Pass
+// ?include_legacy=true for whole-base totals.
+export async function GET(req: Request) {
   try {
-    const listings = await getListings();
+    const includeLegacy = new URL(req.url).searchParams.get("include_legacy") === "true";
+    const listings = await getListings({ includeLegacy });
 
     const stats: DashboardStats = {
       negotiating: listings.filter((l) => l.outreachStatus === "Negotiating").length,

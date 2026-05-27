@@ -33,6 +33,7 @@
 
 import type { Listing } from "@/lib/types";
 import { normalizePhone } from "@/lib/phone-normalize";
+import { SOURCE_VERSION_V2 } from "@/lib/source-version";
 
 export const AUTO_PROCEED = "Auto Proceed";
 export const LIVE_ACTIVE = "Active";
@@ -72,14 +73,18 @@ function agentPhonePresent(l: Listing): boolean {
   return !!l.agentPhone && l.agentPhone.trim() !== "";
 }
 
-/** Pure: the Airtable eligibility filter (spec §Eligibility). */
+/** Pure: the Airtable eligibility filter (spec §Eligibility). The
+ *  Source_Version gate (INV-LEGACY-BACKSTOP) is defense-in-depth — legacy
+ *  records are already excluded de facto (non-empty Outreach_Status or
+ *  Execution_Path != "Auto Proceed"), but this hard-stops any that slip through. */
 export function isH2Eligible(l: Listing): boolean {
   return (
     outreachStatusEmpty(l) &&
     l.liveStatus === LIVE_ACTIVE &&
     l.executionPath === AUTO_PROCEED &&
     l.doNotText !== true &&
-    agentPhonePresent(l)
+    agentPhonePresent(l) &&
+    l.sourceVersion === SOURCE_VERSION_V2
   );
 }
 

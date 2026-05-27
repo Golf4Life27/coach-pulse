@@ -49,6 +49,7 @@ function listing(over: Partial<Listing> & { id: string }): Listing {
     ddChecklist: null,
     doNotText: false,
     state: null,
+    sourceVersion: null,
     actionHoldUntil: null,
     actionCardState: null,
     lastInboundAt: null,

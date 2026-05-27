@@ -101,9 +101,11 @@ function toBriefingItem(l: {
   };
 }
 
-export async function GET() {
+// Defaults to the v2 active surface (INV-LEGACY-BACKSTOP); ?include_legacy=true for the full base.
+export async function GET(req: Request) {
   try {
-    const [listings] = await Promise.all([getListings()]);
+    const includeLegacy = new URL(req.url).searchParams.get("include_legacy") === "true";
+    const [listings] = await Promise.all([getListings({ includeLegacy })]);
 
     // Filter out dead/rejected/cleared
     const active = listings.filter(

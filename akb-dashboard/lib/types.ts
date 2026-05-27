@@ -29,6 +29,8 @@ export interface Listing {
   ddChecklist: string[] | null;
   doNotText: boolean;
   state: string | null;
+  /** v1_legacy | v2_post_2026-05-26 | null (INV-LEGACY-BACKSTOP). */
+  sourceVersion: string | null;
   actionHoldUntil: string | null;
   actionCardState: "Open" | "Held" | "Cleared" | null;
   lastInboundAt: string | null;

@@ -45,6 +45,7 @@ function listing(over: Partial<Listing> = {}): Listing {
     ddChecklist: null,
     doNotText: false,
     state: "TX",
+    sourceVersion: "v2_post_2026-05-26",
     actionHoldUntil: null,
     actionCardState: null,
     lastInboundAt: null,
@@ -74,6 +75,11 @@ describe("isH2Eligible", () => {
     expect(isH2Eligible(listing({ doNotText: true }))).toBe(false);
     expect(isH2Eligible(listing({ agentPhone: "" }))).toBe(false);
     expect(isH2Eligible(listing({ agentPhone: null }))).toBe(false);
+  });
+  it("excludes legacy / unversioned records (INV-LEGACY-BACKSTOP defense-in-depth)", () => {
+    expect(isH2Eligible(listing({ sourceVersion: "v1_legacy" }))).toBe(false);
+    expect(isH2Eligible(listing({ sourceVersion: null }))).toBe(false);
+    expect(isH2Eligible(listing({ sourceVersion: "v2_post_2026-05-26" }))).toBe(true);
   });
   it("selectH2Eligible filters a mixed set", () => {
     const set = [
