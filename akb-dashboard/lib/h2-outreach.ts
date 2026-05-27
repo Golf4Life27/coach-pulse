@@ -134,19 +134,20 @@ export function firstNameOnly(agentName: string | null): string {
 }
 
 /** Pure: compose the first-touch SMS body (spec §Step 3).
- *  Greets on FIRST NAME ONLY per the proven outreach rule (5/8/2026). */
+ *  Greets on FIRST NAME ONLY per the proven outreach rule (5/8/2026). The
+ *  RentCast address already carries city/state/zip ("1138 Santa Anna, San
+ *  Antonio, TX 78201"), so it is used verbatim — no city clause is appended
+ *  (that produced the "…, San Antonio, TX 78201 in San Antonio" redundancy). */
 export function buildH2Message(
   agentName: string | null,
   address: string,
-  city: string | null,
   mao: number,
 ): string {
   const name = firstNameOnly(agentName);
-  const where = city && city.trim() !== "" ? `${address} in ${city.trim()}` : address;
   const offer = `$${Math.round(mao).toLocaleString("en-US")}`;
   return (
     `Hi ${name}, this is Alex with AKB Solutions. I am interested in your ` +
-    `listing at ${where}. I would like to make a cash offer at ${offer} ` +
+    `listing at ${address}. I would like to make a cash offer at ${offer} ` +
     `with a quick close. Is the seller open to offers in that range?`
   );
 }
@@ -252,7 +253,7 @@ export function planQueue(
       ...base,
       route: "first_touch",
       toE164: e164,
-      message: buildH2Message(l.agentName, l.address, l.city, l.mao),
+      message: buildH2Message(l.agentName, l.address, l.mao),
     });
   }
 
