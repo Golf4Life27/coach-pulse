@@ -46,7 +46,7 @@ export interface BuildStateSection {
   deploy: {
     id: string | null;
     url: string | null;
-    state: VercelDeployState["latest_deploy_state"];
+    state: VercelDeployState["production_deploy_state"];
     sha: string | null;
     short_sha: string | null;
     branch: string | null;
@@ -254,13 +254,13 @@ export const EMPTY_QUO: QuoState = {
 
 export const EMPTY_VERCEL: VercelDeployState = {
   api_token_configured: false,
-  latest_deploy_id: null,
-  latest_deploy_url: null,
-  latest_deploy_state: "UNKNOWN",
-  latest_deploy_sha: null,
-  latest_deploy_short_sha: null,
-  latest_deploy_branch: null,
-  latest_deploy_ready_at: null,
-  latest_deploy_created_at: null,
+  production_deploy_id: null,
+  production_deploy_url: null,
+  production_deploy_state: "UNKNOWN",
+  production_deploy_sha: null,
+  production_deploy_short_sha: null,
+  production_deploy_branch: null,
+  production_deploy_ready_at: null,
+  production_deploy_created_at: null,
   active_branch_observed: "",
 };

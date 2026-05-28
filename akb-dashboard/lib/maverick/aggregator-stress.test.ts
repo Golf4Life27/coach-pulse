@@ -179,13 +179,13 @@ function happyDefaults() {
   mocks.vercel.mockResolvedValue(
     ok("external_vercel", {
       api_token_configured: true,
-      latest_deploy_id: "dpl_x",
-      latest_deploy_url: "https://x.vercel.app",
-      latest_deploy_state: "READY",
-      latest_deploy_sha: "abc123",
-      latest_deploy_short_sha: "abc123",
-      latest_deploy_branch: "claude/build-akb-inevitable-week1-uG6xD",
-      latest_deploy_ready_at: "2026-05-15T22:00:00Z",
+      production_deploy_id: "dpl_x",
+      production_deploy_url: "https://x.vercel.app",
+      production_deploy_state: "READY",
+      production_deploy_sha: "abc123",
+      production_deploy_short_sha: "abc123",
+      production_deploy_branch: "claude/build-akb-inevitable-week1-uG6xD",
+      production_deploy_ready_at: "2026-05-15T22:00:00Z",
     }),
   );
   mocks.synth.mockResolvedValue({

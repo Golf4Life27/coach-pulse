@@ -1,9 +1,19 @@
-// Maverick source — Vercel deploy state.
+// Maverick source — Vercel PRODUCTION deploy state.
 // @agent: maverick
 //
-// Latest deployment on the active branch — SHA, state, ready time.
-// Lets the briefing surface "production is N minutes behind HEAD"
-// when code is queued but not yet deployed.
+// What is *actually serving production* — SHA, state, ready time —
+// queried by target, never by recency. Lets the briefing surface
+// "production is N commits behind HEAD" when code is merged to main
+// but not yet live.
+//
+// HISTORY (Spine recwkHvBMTjeMLECp): this previously queried
+// `target=""` (any target) limit=1 and took [0] — the single most
+// recent deployment of ANY branch/target. When the newest push was a
+// PR preview, that preview leaked into the briefing under the literal
+// label "Production deploy" (template.ts). The fix asks Vercel the
+// right question: target=production & state=READY. The old code also
+// carried a comment claiming a client-side branch filter that was
+// never implemented; it is gone.
 //
 // Budget: 3s. One Vercel REST GET.
 // Spec v1.1 §5 Step 1.
@@ -16,24 +26,62 @@ const DEFAULT_TIMEOUT_MS = 3_000;
 const VERCEL_API_TOKEN = process.env.VERCEL_API_TOKEN;
 const VERCEL_PROJECT_ID = process.env.VERCEL_PROJECT_ID || "prj_X1pCuqzRml74iOKfNhTo4ZMG9K87";
 const VERCEL_TEAM_ID = process.env.VERCEL_TEAM_ID || "team_zwFAlAQ8CyjGYcxyk7Sn6ww0";
-const ACTIVE_BRANCH = process.env.MAVERICK_ACTIVE_BRANCH || "claude/build-akb-inevitable-week1-uG6xD";
+// Production is served from main. Surfaced via the (currently unread)
+// active_branch_observed field only — the production query below is by
+// target, not branch, so this no longer gates selection.
+const ACTIVE_BRANCH = process.env.MAVERICK_ACTIVE_BRANCH || "main";
 
 export type DeployState = "READY" | "BUILDING" | "ERROR" | "CANCELED" | "QUEUED" | "INITIALIZING" | "UNKNOWN";
 
 export interface VercelDeployState {
   api_token_configured: boolean;
-  latest_deploy_id: string | null;
-  latest_deploy_url: string | null;
-  latest_deploy_state: DeployState;
-  latest_deploy_sha: string | null;
-  latest_deploy_short_sha: string | null;
-  latest_deploy_branch: string | null;
-  latest_deploy_ready_at: string | null;
-  latest_deploy_created_at: string | null;
-  // For the briefing's "production is N minutes behind HEAD" signal.
+  production_deploy_id: string | null;
+  production_deploy_url: string | null;
+  production_deploy_state: DeployState;
+  production_deploy_sha: string | null;
+  production_deploy_short_sha: string | null;
+  production_deploy_branch: string | null;
+  production_deploy_ready_at: string | null;
+  production_deploy_created_at: string | null;
+  // For the briefing's "production is N behind HEAD" signal.
   // Computed by the aggregator against git source's latest SHA; the
   // fetcher surfaces only the deploy-side data.
   active_branch_observed: string;
+}
+
+/**
+ * Pure: build the Vercel deployments query URL for the CURRENT
+ * production deployment. The `target=production` + `state=READY`
+ * constraint is the heart of the deploy-truth fix — it makes Vercel
+ * return only live production deploys, so [0] can never be a preview.
+ * Exported so the contract is unit-tested without network or env.
+ */
+export function buildProductionDeploymentsUrl(
+  projectId: string = VERCEL_PROJECT_ID,
+  teamId: string = VERCEL_TEAM_ID,
+): string {
+  const url = new URL("https://api.vercel.com/v6/deployments");
+  url.searchParams.set("projectId", projectId);
+  url.searchParams.set("teamId", teamId);
+  url.searchParams.set("limit", "1");
+  url.searchParams.set("target", "production");
+  url.searchParams.set("state", "READY");
+  return url.toString();
+}
+
+function emptyState(apiConfigured: boolean): VercelDeployState {
+  return {
+    api_token_configured: apiConfigured,
+    production_deploy_id: null,
+    production_deploy_url: null,
+    production_deploy_state: "UNKNOWN",
+    production_deploy_sha: null,
+    production_deploy_short_sha: null,
+    production_deploy_branch: null,
+    production_deploy_ready_at: null,
+    production_deploy_created_at: null,
+    active_branch_observed: ACTIVE_BRANCH,
+  };
 }
 
 export async function fetchExternalVercelState(
@@ -43,31 +91,10 @@ export async function fetchExternalVercelState(
     { source: "external_vercel", timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS },
     async (signal) => {
       if (!VERCEL_API_TOKEN) {
-        return {
-          api_token_configured: false,
-          latest_deploy_id: null,
-          latest_deploy_url: null,
-          latest_deploy_state: "UNKNOWN" as DeployState,
-          latest_deploy_sha: null,
-          latest_deploy_short_sha: null,
-          latest_deploy_branch: null,
-          latest_deploy_ready_at: null,
-          latest_deploy_created_at: null,
-          active_branch_observed: ACTIVE_BRANCH,
-        };
+        return emptyState(false);
       }
 
-      const url = new URL("https://api.vercel.com/v6/deployments");
-      url.searchParams.set("projectId", VERCEL_PROJECT_ID);
-      url.searchParams.set("teamId", VERCEL_TEAM_ID);
-      url.searchParams.set("limit", "1");
-      url.searchParams.set("target", ""); // any target
-      // Filter to the active branch via meta-key matching (Vercel
-      // does NOT support direct branch query on v6/deployments; the
-      // server returns the project's most recent regardless of
-      // branch, so we filter client-side).
-
-      const res = await fetch(url.toString(), {
+      const res = await fetch(buildProductionDeploymentsUrl(), {
         headers: { Authorization: `Bearer ${VERCEL_API_TOKEN}` },
         signal,
       });
@@ -94,7 +121,9 @@ export async function fetchExternalVercelState(
 }
 
 /**
- * Pure summarizer.
+ * Pure summarizer. Maps a single Vercel deployment record (already
+ * constrained to target=production READY by the query) into the
+ * production-deploy state surfaced to the briefing.
  */
 export function summarizeDeployment(
   deploy?: {
@@ -110,30 +139,19 @@ export function summarizeDeployment(
   },
 ): VercelDeployState {
   if (!deploy) {
-    return {
-      api_token_configured: true,
-      latest_deploy_id: null,
-      latest_deploy_url: null,
-      latest_deploy_state: "UNKNOWN",
-      latest_deploy_sha: null,
-      latest_deploy_short_sha: null,
-      latest_deploy_branch: null,
-      latest_deploy_ready_at: null,
-      latest_deploy_created_at: null,
-      active_branch_observed: ACTIVE_BRANCH,
-    };
+    return emptyState(true);
   }
   const sha = deploy.meta?.githubCommitSha ?? null;
   return {
     api_token_configured: true,
-    latest_deploy_id: deploy.uid ?? null,
-    latest_deploy_url: deploy.url ?? null,
-    latest_deploy_state: normalizeState(deploy.state),
-    latest_deploy_sha: sha,
-    latest_deploy_short_sha: sha ? sha.slice(0, 7) : null,
-    latest_deploy_branch: deploy.meta?.githubCommitRef ?? null,
-    latest_deploy_ready_at: deploy.ready ? new Date(deploy.ready).toISOString() : null,
-    latest_deploy_created_at: deploy.created ? new Date(deploy.created).toISOString() : null,
+    production_deploy_id: deploy.uid ?? null,
+    production_deploy_url: deploy.url ?? null,
+    production_deploy_state: normalizeState(deploy.state),
+    production_deploy_sha: sha,
+    production_deploy_short_sha: sha ? sha.slice(0, 7) : null,
+    production_deploy_branch: deploy.meta?.githubCommitRef ?? null,
+    production_deploy_ready_at: deploy.ready ? new Date(deploy.ready).toISOString() : null,
+    production_deploy_created_at: deploy.created ? new Date(deploy.created).toISOString() : null,
     active_branch_observed: ACTIVE_BRANCH,
   };
 }
