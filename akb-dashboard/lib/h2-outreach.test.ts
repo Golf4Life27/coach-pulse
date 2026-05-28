@@ -11,8 +11,38 @@ import {
   buildStallNote,
   buildQuarantineNote,
   planQueue,
+  resolveRunLimit,
+  DEFAULT_LIMIT_PER_RUN,
+  MAX_RUN_LIMIT,
 } from "./h2-outreach";
 import type { Listing } from "@/lib/types";
+
+describe("resolveRunLimit (Brief 4a ramp knob)", () => {
+  it("defaults to DEFAULT_LIMIT_PER_RUN when nothing is supplied", () => {
+    expect(resolveRunLimit({})).toBe(DEFAULT_LIMIT_PER_RUN);
+    expect(resolveRunLimit({ queryLimit: null, envLimit: undefined })).toBe(DEFAULT_LIMIT_PER_RUN);
+  });
+
+  it("uses the env limit when no query override is present", () => {
+    expect(resolveRunLimit({ envLimit: "25" })).toBe(25);
+    expect(resolveRunLimit({ envLimit: 50 })).toBe(50);
+  });
+
+  it("prefers an explicit query limit over the env (manual smoke override)", () => {
+    expect(resolveRunLimit({ queryLimit: "3", envLimit: "25" })).toBe(3);
+  });
+
+  it("clamps to MAX_RUN_LIMIT", () => {
+    expect(resolveRunLimit({ queryLimit: "9999" })).toBe(MAX_RUN_LIMIT);
+    expect(resolveRunLimit({ envLimit: "9999" })).toBe(MAX_RUN_LIMIT);
+  });
+
+  it("ignores non-finite / non-positive values and falls through", () => {
+    expect(resolveRunLimit({ queryLimit: "abc", envLimit: "25" })).toBe(25);
+    expect(resolveRunLimit({ queryLimit: "0", envLimit: "-5" })).toBe(DEFAULT_LIMIT_PER_RUN);
+    expect(resolveRunLimit({ queryLimit: "12.9" })).toBe(12); // floored
+  });
+});
 
 function listing(over: Partial<Listing> = {}): Listing {
   return {

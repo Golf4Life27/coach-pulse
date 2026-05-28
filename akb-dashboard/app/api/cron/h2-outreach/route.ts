@@ -56,6 +56,7 @@ import {
   buildSentNote,
   buildStallNote,
   buildQuarantineNote,
+  resolveRunLimit,
   type H2Plan,
 } from "@/lib/h2-outreach";
 import {
@@ -68,8 +69,6 @@ import { SOURCE_VERSION_V2 } from "@/lib/source-version";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-const DEFAULT_LIMIT = 50;
-const MAX_LIMIT = 200;
 const DEFAULT_SEND_DELAY_MS = 60_000;
 // Stop starting NEW work this late into the 300s lambda so in-flight writes
 // finish cleanly instead of being killed. Remaining records roll to next run.
@@ -143,10 +142,13 @@ async function handle(req: Request): Promise<Response> {
   const dryRunParam = url.searchParams.get("dry_run") === "false" ? false : true;
   const dryRun = !liveEnv || dryRunParam; // a send needs liveEnv AND ?dry_run=false
 
-  const limitRaw = Number(url.searchParams.get("limit"));
-  const limit = Number.isFinite(limitRaw) && limitRaw > 0
-    ? Math.min(MAX_LIMIT, Math.floor(limitRaw))
-    : DEFAULT_LIMIT;
+  // Per-run cap: ?limit= (manual override) > H2_DAILY_LIMIT_PER_RUN env
+  // (the Brief 4a ramp knob) > default 12. The 4×/day cron carries no
+  // ?limit, so the env alone drives daily volume — no route redeploy to ramp.
+  const limit = resolveRunLimit({
+    queryLimit: url.searchParams.get("limit"),
+    envLimit: process.env.H2_DAILY_LIMIT_PER_RUN,
+  });
   const recordId = url.searchParams.get("record_id");
   const sendDelayRaw = Number(url.searchParams.get("send_delay_ms"));
   const sendDelayMs = Number.isFinite(sendDelayRaw) && sendDelayRaw >= 0

@@ -38,6 +38,31 @@ import { SOURCE_VERSION_V2 } from "@/lib/source-version";
 export const AUTO_PROCEED = "Auto Proceed";
 export const LIVE_ACTIVE = "Active";
 
+// Per-run send cap (Brief 4a — H2 multi-run staggered cadence). The cron
+// fires 4×/day; per-run cap × runs = daily volume. The ramp is driven by the
+// H2_DAILY_LIMIT_PER_RUN env (flip in Vercel, no route redeploy): week 1 = 12
+// (~50/day), week 2 = 25 (~100/day) gated on deliverability. NOTE: the real
+// ceiling is the Quo/10DLC campaign's provisioned daily + per-minute
+// throughput — confirm in the Quo/TCR console (see AGENTS.md); this cap must
+// stay at or under it.
+export const DEFAULT_LIMIT_PER_RUN = 12;
+export const MAX_RUN_LIMIT = 200;
+
+/** Resolve the per-run send cap. Precedence: an explicit ?limit= (manual
+ *  smoke-test override) > the H2_DAILY_LIMIT_PER_RUN env (the config-driven
+ *  ramp knob) > DEFAULT_LIMIT_PER_RUN. Clamped to MAX_RUN_LIMIT; ignores
+ *  non-finite / non-positive inputs. */
+export function resolveRunLimit(opts: {
+  queryLimit?: string | number | null;
+  envLimit?: string | number | null;
+}): number {
+  const q = Number(opts.queryLimit);
+  if (Number.isFinite(q) && q > 0) return Math.min(MAX_RUN_LIMIT, Math.floor(q));
+  const e = Number(opts.envLimit);
+  if (Number.isFinite(e) && e > 0) return Math.min(MAX_RUN_LIMIT, Math.floor(e));
+  return DEFAULT_LIMIT_PER_RUN;
+}
+
 // See deviation note above. Toggle only to restore Make's raw-match parity.
 const MATCH_NORMALIZED = true;
 

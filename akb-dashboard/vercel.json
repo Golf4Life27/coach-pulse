@@ -45,8 +45,20 @@
       "schedule": "0 4 * * *"
     },
     {
-      "path": "/api/cron/h2-outreach?dry_run=false&limit=25&send_delay_ms=10000",
+      "path": "/api/cron/h2-outreach?dry_run=false&send_delay_ms=10000",
       "schedule": "30 15 * * *"
+    },
+    {
+      "path": "/api/cron/h2-outreach?dry_run=false&send_delay_ms=10000",
+      "schedule": "0 18 * * *"
+    },
+    {
+      "path": "/api/cron/h2-outreach?dry_run=false&send_delay_ms=10000",
+      "schedule": "0 21 * * *"
+    },
+    {
+      "path": "/api/cron/h2-outreach?dry_run=false&send_delay_ms=10000",
+      "schedule": "30 23 * * *"
     },
     {
       "path": "/api/cron/zip-approval-reply-scan",
