@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getListing, updateListingRecord } from "@/lib/airtable";
 import { getBuyerV2, updateBuyerV2, BUYER_V2_FIELDS } from "@/lib/buyers-v2";
 import { sendMessage } from "@/lib/quo";
+import { tryAcquireThrottle } from "@/lib/quo-throttle";
 import { sendEmail } from "@/lib/gmail";
 import type { BuyerBlastResult, BuyerDraft } from "@/types/jarvis";
 
@@ -66,6 +67,14 @@ export async function POST(
         const phone = d.buyerPhone ?? buyer.phonePrimary;
         if (!phone) throw new Error("No phone");
         if (!process.env.QUO_API_KEY) throw new Error("QUO_API_KEY not set");
+        const gate = await tryAcquireThrottle({ caller: "fire-blast", listing_id: d.buyerId });
+        if (!gate.ok) {
+          // continue (not break): batch is mixed SMS+email — skip throttled
+          // SMS but let remaining email drafts go through.
+          results.push({ buyerId: d.buyerId, success: false, error: `rate_limit_skipped: ${gate.status.sends_in_window}/${gate.status.limit}/hr` });
+          failed++;
+          continue;
+        }
         await sendMessage(cleanPhone(phone), d.body);
         results.push({ buyerId: d.buyerId, success: true });
       } else {

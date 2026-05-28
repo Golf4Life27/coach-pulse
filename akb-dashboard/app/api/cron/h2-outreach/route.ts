@@ -39,6 +39,7 @@
 import { NextResponse } from "next/server";
 import { getListings, getListing, updateListingRecord } from "@/lib/airtable";
 import { sendMessageWithId } from "@/lib/quo";
+import { tryAcquireThrottle } from "@/lib/quo-throttle";
 import { audit } from "@/lib/audit-log";
 import {
   authenticate,
@@ -346,6 +347,17 @@ async function handle(req: Request): Promise<Response> {
           row.error = "idempotent_skip: dispatch already claimed";
           summary.idempotent_skipped++;
         } else {
+          // Throttle backstop (Checklist 24.7). Once the rolling-hour cap
+          // is hit, every subsequent send in this run will also skip —
+          // release the claim, mark the row, and break out of the queue.
+          const gate = await tryAcquireThrottle({ caller: "h2-outreach", listing_id: p.recordId });
+          if (!gate.ok) {
+            if (claimAcquired) await kvProd.del(claimKey).catch(() => {});
+            row.error = `rate_limit_skipped: ${gate.status.sends_in_window}/${gate.status.limit}/hr`;
+            summary.skipped++;
+            processed.push(row);
+            break;
+          }
           const result = await sendMessageWithId(p.toE164!, p.message!);
           row.sms_fired = true;
           row.sms_message_id = result.id;

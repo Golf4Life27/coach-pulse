@@ -1,5 +1,6 @@
 import { getListings, updateListingRecord } from "@/lib/airtable";
 import { sendMessage } from "@/lib/quo";
+import { tryAcquireThrottle } from "@/lib/quo-throttle";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -222,6 +223,13 @@ async function handleNewOutreach(
       continue;
     }
 
+    const gate = await tryAcquireThrottle({ caller: "outreach-fire/new", listing_id: listing.id });
+    if (!gate.ok) {
+      results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer, status: "skipped", error: `rate_limit_skipped: ${gate.status.sends_in_window}/${gate.status.limit}/hr` });
+      skipped++;
+      break;
+    }
+
     try {
       await sendMessage(phone, message);
 
@@ -305,6 +313,13 @@ async function handleMultiListing(
       results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer, status: "skipped", error: `Dry run — message: "${message}"` });
       skipped++;
       continue;
+    }
+
+    const gate = await tryAcquireThrottle({ caller: "outreach-fire/multi", listing_id: listing.id });
+    if (!gate.ok) {
+      results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer, status: "skipped", error: `rate_limit_skipped: ${gate.status.sends_in_window}/${gate.status.limit}/hr` });
+      skipped++;
+      break;
     }
 
     try {

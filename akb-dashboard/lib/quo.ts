@@ -1,3 +1,5 @@
+import { audit } from "./audit-log";
+
 const QUO_API_KEY = process.env.QUO_API_KEY!;
 const QUO_PHONE_ID = process.env.QUO_PHONE_ID || "PNLosBI6fh";
 
@@ -123,6 +125,7 @@ export async function sendMessageWithId(
   if (!QUO_API_KEY) {
     throw new Error("QUO_API_KEY not set");
   }
+  const t0 = Date.now();
   const res = await fetch("https://api.openphone.com/v1/messages", {
     method: "POST",
     headers: {
@@ -139,18 +142,41 @@ export async function sendMessageWithId(
   const raw = await res.json().catch(() => null);
 
   if (!res.ok) {
-    throw new Error(
-      `Quo send error ${res.status}: ${JSON.stringify(raw) || "(no body)"}`,
-    );
+    const errMsg = `Quo send error ${res.status}: ${JSON.stringify(raw) || "(no body)"}`;
+    // Audit the failed attempt so quo-throttle counts it (carrier-side
+    // throughput is consumed regardless of our HTTP outcome) and so the
+    // PS-12 Quo health check has signal. See lib/quo-throttle.ts header.
+    await audit({
+      agent: "quo",
+      event: "send_attempt",
+      status: "confirmed_failure",
+      inputSummary: { content_len: content.length, httpStatus: res.status },
+      error: errMsg,
+      ms: Date.now() - t0,
+    });
+    throw new Error(errMsg);
   }
 
   const data = (raw as { data?: Record<string, unknown> } | null)?.data ?? null;
   const id = typeof data?.id === "string" ? data.id : null;
   const statusRaw = typeof data?.status === "string" ? data.status : "unknown";
+  const normalized = normalizeStatus(statusRaw);
+
+  // Positive Confirmation Principle: 2xx with queued/sending is NOT
+  // success — only delivered counts. Anything else is "uncertain" until
+  // getMessageStatus() resolves it.
+  await audit({
+    agent: "quo",
+    event: "send_attempt",
+    status: normalized === "delivered" ? "confirmed_success" : "uncertain",
+    inputSummary: { content_len: content.length, httpStatus: res.status, quo_status: normalized },
+    externalId: id ?? undefined,
+    ms: Date.now() - t0,
+  });
 
   return {
     id,
-    status: normalizeStatus(statusRaw),
+    status: normalized,
     httpStatus: res.status,
     raw,
   };
