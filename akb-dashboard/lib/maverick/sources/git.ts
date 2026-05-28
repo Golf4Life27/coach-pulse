@@ -16,9 +16,38 @@ const DEFAULT_TIMEOUT_MS = 5_000;
 const GITHUB_OWNER = "Golf4Life27";
 const GITHUB_REPO = "coach-pulse";
 const GITHUB_PAT = process.env.GITHUB_PAT;
-// Active build branch — overridable via env for future Maverick
-// branches (e.g., claude/maverick-aggregator).
-const ACTIVE_BRANCH = process.env.MAVERICK_ACTIVE_BRANCH || "claude/build-akb-inevitable-week1-uG6xD";
+// Branch whose commits Maverick reports as "the build." Defaults to `main`
+// — the canonical/production branch — overridable via env for a Maverick
+// session working a feature branch.
+//
+// HISTORY (Spine recwkHvBMTjeMLECp, sibling of the external-vercel deploy-
+// truth fix): this defaulted to `claude/build-akb-inevitable-week1-uG6xD`,
+// which has since been deleted from origin. Absent the env override, the
+// /commits?sha=<dead-branch> call 404s → blank git data + branch_resolved
+// false → behind_head silently null. MAVERICK_ACTIVE_BRANCH=main was set in
+// prod as interim mitigation; defaulting to `main` removes the dependency
+// on that env being present.
+const ACTIVE_BRANCH = process.env.MAVERICK_ACTIVE_BRANCH || "main";
+
+/**
+ * Pure: build the GitHub /commits query URL for the active branch since a
+ * timestamp. The `sha=<branch>` param is what selects the branch — a dead
+ * default here is exactly what silently blanked git data (see HISTORY
+ * above). Exported so the contract (sha defaults to `main`) is unit-tested
+ * without network or env, mirroring external-vercel's buildProductionDeploymentsUrl.
+ */
+export function buildCommitsUrl(
+  sinceIso: string,
+  branch: string = ACTIVE_BRANCH,
+  owner: string = GITHUB_OWNER,
+  repo: string = GITHUB_REPO,
+): string {
+  const url = new URL(`https://api.github.com/repos/${owner}/${repo}/commits`);
+  url.searchParams.set("sha", branch);
+  url.searchParams.set("since", sinceIso);
+  url.searchParams.set("per_page", "30");
+  return url.toString();
+}
 
 export interface GitCommit {
   sha: string;
@@ -56,14 +85,7 @@ export async function fetchGitState(
       const since = opts.since ?? new Date(Date.now() - 24 * 60 * 60_000);
       const sinceIso = since.toISOString();
 
-      const commitsUrl = new URL(
-        `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/commits`,
-      );
-      commitsUrl.searchParams.set("sha", ACTIVE_BRANCH);
-      commitsUrl.searchParams.set("since", sinceIso);
-      commitsUrl.searchParams.set("per_page", "30");
-
-      const res = await fetch(commitsUrl.toString(), {
+      const res = await fetch(buildCommitsUrl(sinceIso), {
         headers: {
           Authorization: `Bearer ${GITHUB_PAT}`,
           Accept: "application/vnd.github+json",
