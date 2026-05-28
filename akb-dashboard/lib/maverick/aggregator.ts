@@ -250,7 +250,7 @@ export async function rebuildBriefing(opts: BuildBriefingOpts): Promise<Briefing
   });
 
   // Cross-source synthesis: deploy-behind-HEAD comparison.
-  const behind_head = computeDeployBehindHead(git.latest_commit?.sha, vercel.latest_deploy_sha);
+  const behind_head = computeDeployBehindHead(git.latest_commit?.sha, vercel.production_deploy_sha);
 
   // Compose the build_state section.
   const build_state: BuildStateSection = {
@@ -267,13 +267,13 @@ export async function rebuildBriefing(opts: BuildBriefingOpts): Promise<Briefing
       ci_sha: codebase.latest_ci_sha,
     },
     deploy: {
-      id: vercel.latest_deploy_id,
-      url: vercel.latest_deploy_url,
-      state: vercel.latest_deploy_state,
-      sha: vercel.latest_deploy_sha,
-      short_sha: vercel.latest_deploy_short_sha,
-      branch: vercel.latest_deploy_branch,
-      ready_at: vercel.latest_deploy_ready_at,
+      id: vercel.production_deploy_id,
+      url: vercel.production_deploy_url,
+      state: vercel.production_deploy_state,
+      sha: vercel.production_deploy_sha,
+      short_sha: vercel.production_deploy_short_sha,
+      branch: vercel.production_deploy_branch,
+      ready_at: vercel.production_deploy_ready_at,
       behind_head,
     },
     package_name: codebase.package_name,

@@ -175,7 +175,7 @@ export function renderTemplate(b: StructuredBriefing): string {
     `  Quo: ${ext.quo.api_responsive ? "up" : "down"}, ${ext.quo.messages_last_24h} messages in window`,
   );
   extLines.push(
-    `  Vercel: latest deploy ${ext.vercel.latest_deploy_state}${ext.vercel.latest_deploy_short_sha ? ` (${ext.vercel.latest_deploy_short_sha})` : ""}${ext.vercel.latest_deploy_branch ? ` on ${ext.vercel.latest_deploy_branch}` : ""}`,
+    `  Vercel: production deploy ${ext.vercel.production_deploy_state}${ext.vercel.production_deploy_short_sha ? ` (${ext.vercel.production_deploy_short_sha})` : ""}${ext.vercel.production_deploy_branch ? ` on ${ext.vercel.production_deploy_branch}` : ""}`,
   );
   sections.push(extLines.join("\n"));
 
