@@ -4,15 +4,15 @@ import { describe, it, expect } from "vitest";
 import { QuoThrottleError, classifyThrottle } from "./quo-throttle";
 
 describe("classifyThrottle", () => {
-  it("under limit → not at_limit, remaining > 0", () => {
+  it("under limit → not at_limit, remaining > 0 (default 20)", () => {
     const status = classifyThrottle({ recent_send_count: 10 });
     expect(status.at_limit).toBe(false);
-    expect(status.remaining).toBe(5);
-    expect(status.limit).toBe(15);
+    expect(status.remaining).toBe(10);
+    expect(status.limit).toBe(20);
   });
 
   it("at limit → at_limit true, remaining 0", () => {
-    const status = classifyThrottle({ recent_send_count: 15 });
+    const status = classifyThrottle({ recent_send_count: 15, limit: 15 });
     expect(status.at_limit).toBe(true);
     expect(status.remaining).toBe(0);
   });

@@ -22,6 +22,29 @@ H2 first-touch outreach (`/api/cron/h2-outreach`, Crier) sends from a single Quo
 
 > **Provisioned ceiling: TBD — confirm in Quo/TCR console.** Daily cap: `?`. Per-minute (MPS) cap: `?`. The H2 ramp (below) must stay at or under both.
 
-- **Per-run cap is env-driven (Brief 4a):** `H2_DAILY_LIMIT_PER_RUN` (default **12**). The cron fires 4×/day (`30 15`, `0 18`, `0 21`, `30 23` UTC), so daily volume = cap × 4. Ramp: week 1 = 12 (~50/day) → week 2 = 25 (~100/day) **gated on** failed-send <2%, opt-out <3%, no Quo throughput warnings. Flip the env in Vercel to ramp — no route redeploy.
+- **Per-run cap is env-driven (Brief 4a):** `H2_DAILY_LIMIT_PER_RUN` (default **12**). The cron fires 4×/day (`30 15`, `0 18`, `0 21`, `30 23` UTC), so daily volume = cap × 4. Ramp: week 1 = 12 (~50/day) → week 2 = 25 (~100/day) **gated on** failed-send <2%, opt-out <3%, no Quo throughput warnings **AND the provisioned ceiling above being confirmed and recorded**. Flip the env in Vercel to ramp — no route redeploy.
 - **Pacing, not just volume:** `send_delay_ms=10000` spaces sends within a run; staggering the 4 runs across the day avoids burst-pattern spam flags. Burst-shape and total-volume are independent carrier-safety axes — manage both.
-- **Latent throttle:** `lib/quo-throttle.ts` encodes a 15-sends/hour cap but is **not currently wired into the send path**. Decide: wire it as a real backstop (it would cap any single run at 15, so it must be raised in lockstep with the ramp past 15/run) or retire it.
+
+### Throttle backstop (`lib/quo-throttle.ts` — WIRED per Checklist 24.7)
+
+Rolling-hour cap on Quo sends, env-tunable via **`QUO_THROTTLE_LIMIT_PER_HOUR`** (default **20**). Counted via `quo:send_attempt` audit entries written by `lib/quo.ts` (every send path's attempts count, including interactive ones — see table). When the cap is hit, the gate skips the send, audits `rate_limit_skipped`, and the caller stops the batch.
+
+**Wired-vs-unwired send paths (intentional split):**
+
+| Path | Wired? | Why |
+|---|---|---|
+| `cron/h2-outreach` | ✅ | Batch cron — the H2 ramp target. Break on skip. |
+| `outreach-fire` (new + multi) | ✅ | Batch loop. Break on skip. |
+| `buyers/fire-blast` | ✅ (SMS branch only) | Mixed SMS+email batch. `continue` on skip so emails still go through. |
+| `cron/h2-outreach`, `outreach-fire`, `fire-blast` audit | n/a | Counts via `lib/quo.ts` send_attempt entry. |
+| `jarvis-send`, `deal-action`, `dd-volley-send` | ❌ (intentional) | Single user-initiated SMS. Blocking a human action is worse than letting it through; their sends still **count** toward the rolling window via the audit write. |
+| `zip-approval/notify` | ❌ (intentional) | Operator notification, not customer-facing. |
+| `maverick/sms-escalation` | ❌ (deliberate) | Has its own KV daily-cap + cooldown logic AND a test-injection contract (`opts.send`/`opts.recordAudit`); wiring would bypass the injection. |
+
+**Ramp coordination — MUST rise in lockstep with `H2_DAILY_LIMIT_PER_RUN`:**
+
+| H2 ramp tier | `H2_DAILY_LIMIT_PER_RUN` | `QUO_THROTTLE_LIMIT_PER_HOUR` minimum |
+|---|---|---|
+| Week 1 (default) | 12 | 20 (current default — 8-send accidental-burst buffer) |
+| Week 2 | 25 | **must be raised to ≥30 BEFORE flipping the H2 env** |
+| Week 3+ | tune on data | tune in lockstep, always ≥ run cap + buffer |
