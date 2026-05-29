@@ -251,4 +251,24 @@ describe("planQueue — normalized-address dedupe (same property, different phon
     expect(plans[0].route).toBe("first_touch");
     expect(plans[1].route).toBe("first_touch");
   });
+
+  it("does NOT stall a relist or a dedup-survivor against a Dead address (Dead is excluded from the address index)", () => {
+    // Real cases from the pre-merge verification:
+    //   - the 1610 canonical I kept vs its retired-twin (Dead) — must still text
+    //   - a fresh listing whose prior owner was a Dead lead at the same address
+    // Phone-axis still catches same-agent Dead prior (that's correct: an agent
+    // who turned us down shouldn't be re-texted at another property).
+    const liveRelist = listing({ id: "live", address: "105 Dunning Ave, San Antonio, TX 78210", agentPhone: "(210) 520-7343" });
+    const deadPrior = listing({ id: "dead", address: "105 Dunning Ave, San Antonio, TX 78210", agentPhone: "(210) 999-9999", outreachStatus: "Dead" });
+    const [p] = plan([liveRelist], [liveRelist, deadPrior]);
+    expect(p.route).toBe("first_touch");
+  });
+
+  it("still stalls when the prior record at the same address is in-progress (Texted/Negotiating/etc.)", () => {
+    const trigger = listing({ id: "new", address: "1803 Mardell, San Antonio, TX 78201", agentPhone: "(210) 286-7264" });
+    const inProgress = listing({ id: "old", address: "1803 Mardell St, San Antonio, TX 78201", agentPhone: "(210) 999-9999", outreachStatus: "Negotiating" });
+    const [p] = plan([trigger], [trigger, inProgress]);
+    expect(p.route).toBe("prior_contact_stall");
+    expect(p.prior?.status).toBe("Negotiating");
+  });
 });

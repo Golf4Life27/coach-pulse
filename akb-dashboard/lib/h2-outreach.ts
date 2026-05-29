@@ -151,11 +151,22 @@ export function buildPriorContactIndex(
   const index = new Map<string, { recordId: string; address: string; status: string }>();
   for (const l of listings) {
     if (outreachStatusEmpty(l)) continue;
-    const rec = { recordId: l.id, address: l.address, status: (l.outreachStatus ?? "").trim() };
+    const status = (l.outreachStatus ?? "").trim();
+    const rec = { recordId: l.id, address: l.address, status };
     // Index by phone (same-agent) AND by normalized address (same-property),
     // independently — a record with a bad phone still contributes its address.
+    //
+    // The PHONE axis indexes any non-empty status, including Dead: same agent
+    // marked Dead at one property means we shouldn't text them at another
+    // (they already turned us down).
+    //
+    // The ADDRESS axis EXCLUDES Dead: a dead lead — or a retired dedup twin —
+    // at an address must not block a live listing later at that same address
+    // (relist + dedup-survivor cases). The within-run address dedupe still
+    // catches the same-batch dups (1803/1610) regardless.
     const pKey = phoneKey(l.agentPhone);
     if (pKey && !index.has(pKey)) index.set(pKey, rec);
+    if (status.toLowerCase() === "dead") continue;
     const aKey = addressKey(l.address);
     if (aKey) {
       const k = ADDR_PREFIX + aKey;
