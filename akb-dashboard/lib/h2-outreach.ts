@@ -99,6 +99,45 @@ function phoneKey(raw: string | null | undefined): string | null {
   return v === "" ? null : v;
 }
 
+// Street-type suffixes + directionals dropped when building the address key.
+// Dropping directionals is deliberate: it lets "1610 22nd" match "1610 NW
+// 22nd St" (the real same-property/two-phone dup that slipped phone-only
+// dedupe — Spine recwkHvBMTjeMLECp, 1803 Mardell + 1610 22nd). The cost is
+// an occasional over-merge (e.g. "100 N Main" vs "100 S Main") — acceptable
+// because the dedupe ACTION is prior_contact_stall → Manual Review (a human
+// decides), never a silent kill or a wrong text.
+const STREET_SUFFIXES = new Set([
+  "st", "street", "ave", "avenue", "dr", "drive", "rd", "road", "ln", "lane",
+  "blvd", "boulevard", "ct", "court", "cir", "circle", "pl", "place", "way",
+  "ter", "terrace", "trl", "trail", "pkwy", "parkway", "hwy", "highway", "sq",
+  "loop", "run", "path", "pass", "cv", "cove", "row", "walk",
+]);
+const DIRECTIONALS = new Set([
+  "n", "s", "e", "w", "ne", "nw", "se", "sw",
+  "north", "south", "east", "west", "northeast", "northwest", "southeast", "southwest",
+]);
+
+/** Pure: normalize a street address to a dedupe key — house number + street
+ *  core, dropping the city/state/zip tail, punctuation, directionals, and
+ *  street-type suffixes. Returns null when there's not enough to match safely
+ *  (so a blank/number-only address never collides). See STREET_SUFFIXES note.
+ *  "1610 22nd, San Antonio, TX 78201"     → "1610|22nd"
+ *  "1610 Nw 22nd St, San Antonio, TX ..." → "1610|22nd"
+ *  "1803 Mardell St" / "1803 Mardell"     → "1803|mardell" */
+export function addressKey(address: string | null | undefined): string | null {
+  if (!address) return null;
+  const head = address.toLowerCase().split(",")[0];
+  const tokens = head.replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter(Boolean);
+  if (tokens.length < 2) return null;
+  const num = tokens[0];
+  const rest = tokens.slice(1).filter((t) => !DIRECTIONALS.has(t) && !STREET_SUFFIXES.has(t));
+  if (rest.length === 0) return null;
+  return `${num}|${rest.join(" ")}`;
+}
+
+/** Prefix so address keys never collide with phone keys in the shared index. */
+const ADDR_PREFIX = "addr:";
+
 /**
  * Pure: build the prior-contact index from the FULL listing set — the set
  * of agent-phone keys that already carry a non-empty Outreach_Status, each
@@ -112,14 +151,26 @@ export function buildPriorContactIndex(
   const index = new Map<string, { recordId: string; address: string; status: string }>();
   for (const l of listings) {
     if (outreachStatusEmpty(l)) continue;
-    const key = phoneKey(l.agentPhone);
-    if (!key) continue;
-    if (!index.has(key)) {
-      index.set(key, {
-        recordId: l.id,
-        address: l.address,
-        status: (l.outreachStatus ?? "").trim(),
-      });
+    const status = (l.outreachStatus ?? "").trim();
+    const rec = { recordId: l.id, address: l.address, status };
+    // Index by phone (same-agent) AND by normalized address (same-property),
+    // independently — a record with a bad phone still contributes its address.
+    //
+    // The PHONE axis indexes any non-empty status, including Dead: same agent
+    // marked Dead at one property means we shouldn't text them at another
+    // (they already turned us down).
+    //
+    // The ADDRESS axis EXCLUDES Dead: a dead lead — or a retired dedup twin —
+    // at an address must not block a live listing later at that same address
+    // (relist + dedup-survivor cases). The within-run address dedupe still
+    // catches the same-batch dups (1803/1610) regardless.
+    const pKey = phoneKey(l.agentPhone);
+    if (pKey && !index.has(pKey)) index.set(pKey, rec);
+    if (status.toLowerCase() === "dead") continue;
+    const aKey = addressKey(l.address);
+    if (aKey) {
+      const k = ADDR_PREFIX + aKey;
+      if (!index.has(k)) index.set(k, rec);
     }
   }
   return index;
@@ -200,6 +251,7 @@ export function planQueue(
   priorIndex: Map<string, { recordId: string; address: string; status: string }>,
 ): H2Plan[] {
   const seenThisRun = new Map<string, { recordId: string; address: string }>();
+  const seenAddrThisRun = new Map<string, { recordId: string; address: string }>();
   const plans: H2Plan[] = [];
 
   for (const l of queue) {
@@ -224,11 +276,21 @@ export function planQueue(
     }
 
     const key = phoneKey(l.agentPhone)!;
+    const aKey = addressKey(l.address);
 
-    // Step 2 — prior contact (other runs/statuses, then within this run).
+    // Step 2 — prior contact. Two independent dedupe axes, both → stall:
+    //   (a) same AGENT phone, (b) same PROPERTY address. The address axis
+    //   closes the same-property/two-phone gap that let 1803 Mardell + 1610
+    //   22nd both first-touch (Spine recwkHvBMTjeMLECp). Prior-run/other-status
+    //   hits first, then within-this-run hits.
     const priorHit = priorIndex.get(key);
     if (priorHit && priorHit.recordId !== l.id) {
       plans.push({ ...base, route: "prior_contact_stall", prior: priorHit });
+      continue;
+    }
+    const priorAddrHit = aKey ? priorIndex.get(ADDR_PREFIX + aKey) : undefined;
+    if (priorAddrHit && priorAddrHit.recordId !== l.id) {
+      plans.push({ ...base, route: "prior_contact_stall", prior: priorAddrHit });
       continue;
     }
     const runHit = seenThisRun.get(key);
@@ -237,6 +299,15 @@ export function planQueue(
         ...base,
         route: "prior_contact_stall",
         prior: { recordId: runHit.recordId, address: runHit.address, status: "Texted (this run)" },
+      });
+      continue;
+    }
+    const runAddrHit = aKey ? seenAddrThisRun.get(aKey) : undefined;
+    if (runAddrHit) {
+      plans.push({
+        ...base,
+        route: "prior_contact_stall",
+        prior: { recordId: runAddrHit.recordId, address: runAddrHit.address, status: "Texted (this run)" },
       });
       continue;
     }
@@ -249,6 +320,7 @@ export function planQueue(
 
     // Step 4 — first touch.
     seenThisRun.set(key, { recordId: l.id, address: l.address });
+    if (aKey) seenAddrThisRun.set(aKey, { recordId: l.id, address: l.address });
     plans.push({
       ...base,
       route: "first_touch",
