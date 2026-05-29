@@ -11,6 +11,7 @@ import {
   buildStallNote,
   buildQuarantineNote,
   planQueue,
+  addressKey,
 } from "./h2-outreach";
 import type { Listing } from "@/lib/types";
 
@@ -198,5 +199,56 @@ describe("firstNameOnly — proven 5/8 outreach rule (greet on first name)", () 
     expect(firstNameOnly(null)).toBe("there");
     expect(firstNameOnly("")).toBe("there");
     expect(firstNameOnly("   ")).toBe("there");
+  });
+});
+
+describe("addressKey — normalized same-property key (Spine recwkHvBMTjeMLECp)", () => {
+  it("matches the truncated vs directional+suffix forms (the 1610 dup)", () => {
+    expect(addressKey("1610 22nd, San Antonio, TX 78201"))
+      .toBe(addressKey("1610 Nw 22nd St, San Antonio, TX 78201"));
+  });
+  it("matches suffix-present vs suffix-absent (the 1803 Mardell dup)", () => {
+    expect(addressKey("1803 Mardell St, San Antonio, TX 78201"))
+      .toBe(addressKey("1803 Mardell, San Antonio, TX 78201"));
+  });
+  it("does NOT merge different house numbers on the same street", () => {
+    expect(addressKey("1610 22nd")).not.toBe(addressKey("1612 22nd"));
+  });
+  it("returns null when there's not enough to match safely", () => {
+    expect(addressKey(null)).toBeNull();
+    expect(addressKey("")).toBeNull();
+    expect(addressKey("1610")).toBeNull();        // number only
+    expect(addressKey("1610 NW")).toBeNull();     // number + directional only
+  });
+});
+
+describe("planQueue — normalized-address dedupe (same property, different phones)", () => {
+  it("stalls the 2nd same-address record within a run even when phones differ (1610/1803 class)", () => {
+    // The exact gap that double-texted: one agent, two phone numbers, one
+    // property. Phone-keyed dedupe alone let both first-touch.
+    const a = listing({ id: "a", address: "1610 22nd, San Antonio, TX 78201", agentPhone: "(210) 387-1336" });
+    const b = listing({ id: "b", address: "1610 Nw 22nd St, San Antonio, TX 78201", agentPhone: "(210) 434-5974" });
+    const plans = plan([a, b]);
+    expect(plans[0].route).toBe("first_touch");
+    expect(plans[1].route).toBe("prior_contact_stall");
+    expect(plans[1].prior?.recordId).toBe("a");
+    expect(plans[1].prior?.status).toBe("Texted (this run)");
+  });
+
+  it("stalls an eligible record whose address was already contacted under a different phone", () => {
+    const trigger = listing({ id: "new", address: "1803 Mardell, San Antonio, TX 78201", agentPhone: "(210) 286-7264" });
+    const prior = listing({ id: "old", address: "1803 Mardell St, San Antonio, TX 78201", agentPhone: "+12103259807", outreachStatus: "Texted" });
+    const [p] = plan([trigger], [trigger, prior]);
+    expect(p.route).toBe("prior_contact_stall");
+    expect(p.prior?.recordId).toBe("old");
+    expect(p.prior?.status).toBe("Texted");
+  });
+
+  it("still first-touches genuinely distinct properties (no false merge)", () => {
+    const a = listing({ id: "a", address: "1610 22nd, San Antonio, TX 78201", agentPhone: "(210) 111-1111" });
+    const b = listing({ id: "b", address: "1612 22nd, San Antonio, TX 78201", agentPhone: "(210) 222-2222" });
+    const plans = plan([a, b]);
+    expect(plans[0].route).toBe("first_touch");
+    expect(plans[1].route).toBe("first_touch");
   });
 });
