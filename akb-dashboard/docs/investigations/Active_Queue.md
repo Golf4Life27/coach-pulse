@@ -11,6 +11,8 @@ Distinct from the INV-series (forensic investigations) so the two
 numbering schemes can't collide. Co-exists with the master checklist
 Insertion log per Rule 10.
 
+- **[A2] Pipeline_State model (status source-of-truth)** — **MODEL LOCKED 2026-05-31, build in progress on `claude/pipeline-state-model`.** Repo-grounded audit found property status spread across seven contradicting surfaces — the tangle that mislabels under-contract/mid-negotiation deals (23 Fields Ave) as stale/dead in the briefing, corrupting Maverick's active-deal counts (hence A-series: continuity-layer integrity). Operator ratified single source of truth = the existing `Pipeline_Stage` field (`fldJt2pSCHiXqBxwj`, currently 0-populated), +`responded` stage, derive/backfill as a separate operator-reviewed dry-run, stage-based `isUnderContract`. Spec: `docs/specs/Pipeline_State_Spec_v1.md`. Next: Vercel-native transition-engine worker as the sole writer; Make scenarios coexist, retire per-scenario. No records migrated yet.
+
 - **[A1] System Facts vault** — COMPLETED 2026-05-31 → **LIVE on `main` 2026-05-31 (merge `d36f26c`)**. Canonical record
   at `akb-dashboard/docs/system/SYSTEM_FACTS.md`. Wired into Maverick
   `load_state` as the FIRST section of every structured briefing
