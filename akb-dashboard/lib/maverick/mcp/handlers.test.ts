@@ -15,7 +15,7 @@ import {
   runRecall,
   type HandlerDeps,
 } from "./handlers";
-import { EMPTY_PULSE, type Briefing } from "../briefing";
+import { EMPTY_PULSE, EMPTY_SYSTEM_FACTS, type Briefing } from "../briefing";
 import {
   JSON_RPC_METHOD_NOT_FOUND,
   JSON_RPC_INVALID_PARAMS,
@@ -35,6 +35,7 @@ function stubBriefing(over: Partial<Briefing> = {}): Briefing {
       generated_at: "2026-05-15T18:00:00Z",
       duration_ms: 12340,
       since: "2026-05-14T18:00:00Z",
+      system_facts: EMPTY_SYSTEM_FACTS,
       build_state: {
         branch: "test",
         branch_resolved: true,

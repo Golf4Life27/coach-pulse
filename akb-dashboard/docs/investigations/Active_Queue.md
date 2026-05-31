@@ -3,6 +3,28 @@
 Status: parallel-track to belt build
 Discipline: each line = a discrete forensic investigation, briefed to Code separately. Findings discovered during one investigation that aren't in scope of THAT investigation are added to "Discovered during prior investigations" — they do NOT get worked silently.
 
+## Build discipline (A-series)
+
+The A-series is the build-discipline lane — work that defends the
+system from session-drift / continuity-loss / re-derivation churn.
+Distinct from the INV-series (forensic investigations) so the two
+numbering schemes can't collide. Co-exists with the master checklist
+Insertion log per Rule 10.
+
+- **[A1] System Facts vault** — COMPLETED 2026-05-31. Canonical record
+  at `akb-dashboard/docs/system/SYSTEM_FACTS.md`. Wired into Maverick
+  `load_state` as the FIRST section of every structured briefing
+  (synthesizer Rule 0 + template lead-section). Closes the
+  "no canonical System Facts" gap Maverick has flagged at session-open
+  for multiple sessions; the Vercel-plan (Pro, not Hobby) question
+  alone re-derived incorrectly twice before this. Authority rule:
+  vault wins over code, AGENTS.md, Spine recall, and prior training
+  when they contradict. Paired build_event written to Spine this
+  commit cycle (Rule 9). See Master Checklist Insertion log row
+  2026-05-31 for full ship detail. **Stale-info flagged for next
+  edit:** `akb-dashboard/AGENTS.md` still says "Vercel Hobby plan";
+  vault supersedes but file itself should be amended on next touch.
+
 ## Active
 
 1. **[INV-001] Distress_Pass evaluation integrity** — COMPLETED 2026-05-20 → `docs/investigations/Distress_Pass_Audit_v1.md` → REMEDIATION SHIPPED (Option α, Spine `rece3J2f0TbHXOuE2`)

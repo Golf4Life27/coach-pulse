@@ -6,13 +6,14 @@
 
 import { describe, it, expect } from "vitest";
 import { renderTemplate } from "./template";
-import { EMPTY_PULSE, type StructuredBriefing } from "./briefing";
+import { EMPTY_PULSE, EMPTY_SYSTEM_FACTS, type StructuredBriefing } from "./briefing";
 
 function minimalBriefing(over: Partial<StructuredBriefing> = {}): StructuredBriefing {
   return {
     generated_at: "2026-05-15T18:00:00Z",
     duration_ms: 12340,
     since: "2026-05-14T18:00:00Z",
+    system_facts: EMPTY_SYSTEM_FACTS,
     build_state: {
       branch: "claude/maverick-aggregator",
       branch_resolved: true,
@@ -111,6 +112,31 @@ describe("renderTemplate — deterministic-fact preservation", () => {
   it("includes the branch name verbatim", () => {
     const out = renderTemplate(minimalBriefing());
     expect(out).toContain("claude/maverick-aggregator");
+  });
+
+  it("renders System Facts FIRST (immediately after the welcome line) when present", () => {
+    const out = renderTemplate(
+      minimalBriefing({
+        system_facts: {
+          markdown: "# System Facts\n\nVercel plan: Pro (team_zwFAlAQ8CyjGYcxyk7Sn6ww0).",
+          error: null,
+        },
+      }),
+    );
+    const welcomeIdx = out.indexOf("Welcome back");
+    const factsIdx = out.indexOf("## SYSTEM FACTS");
+    const buildIdx = out.indexOf("## CURRENT BUILD STATE");
+    expect(welcomeIdx).toBeGreaterThanOrEqual(0);
+    expect(factsIdx).toBeGreaterThan(welcomeIdx);
+    expect(factsIdx).toBeLessThan(buildIdx);
+    expect(out).toContain("Vercel plan: Pro (team_zwFAlAQ8CyjGYcxyk7Sn6ww0).");
+  });
+
+  it("omits the System Facts section entirely when markdown is null (file unreachable)", () => {
+    // Aggregator path: read error → markdown null + staleness warning.
+    // The narrative should not render an empty header.
+    const out = renderTemplate(minimalBriefing());
+    expect(out).not.toContain("## SYSTEM FACTS");
   });
 
   it("includes the latest commit short SHA + message verbatim", () => {

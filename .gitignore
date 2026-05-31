@@ -12,3 +12,10 @@
 # never source.
 **/__pycache__/
 *.py[cod]
+
+# Obsidian — local-only vault metadata when System Facts /
+# investigation notes are browsed in Obsidian. Per-user config
+# (workspace layout, plugins, hotkeys) is not source of truth and
+# should never collide across machines or with CI's checkout.
+.obsidian/
+**/.obsidian/

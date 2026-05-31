@@ -13,6 +13,7 @@
 // All cross-source synthesis (RentCast burn-rate, deploy-behind-HEAD)
 // happens here, not in any individual fetcher.
 
+import { loadSystemFacts } from "./sources/system-facts";
 import { fetchGitState } from "./sources/git";
 import { fetchAirtableListingsState } from "./sources/airtable-listings";
 import { fetchAirtableSpineState } from "./sources/airtable-spine";
@@ -182,6 +183,12 @@ export async function rebuildBriefing(opts: BuildBriefingOpts): Promise<Briefing
   // state (no Pulse signals).
   const pulsePromise = readPulseState().catch(() => null);
 
+  // System Facts vault (A1, 2026-05-31) — leads the briefing.
+  // Local disk read; runs in parallel with everything else but
+  // typically resolves first (<5ms). Read failure produces a
+  // staleness warning rather than blocking the briefing.
+  const systemFactsPromise = loadSystemFacts();
+
   // Parallel-fetch every source. Promise.allSettled guarantees one
   // bad fetcher can't crash the briefing. Order preserved so the
   // destructuring below stays correct.
@@ -325,15 +332,26 @@ export async function rebuildBriefing(opts: BuildBriefingOpts): Promise<Briefing
     test_count_anchor: pulseStateResolved?.test_count_anchor ?? null,
   };
 
+  // Resolve System Facts before composing the briefing — local disk
+  // read, already in flight since the top of rebuildBriefing. Read
+  // errors become a staleness warning so the operator sees the gap.
+  const system_facts = await systemFactsPromise;
+
   // Staleness warnings: surface any source where ok=false OR
   // staleness exceeds a per-source threshold.
   const staleness_warnings = buildStalenessWarnings(source_health);
+  if (system_facts.error) {
+    staleness_warnings.unshift(`system_facts: ${system_facts.error}`);
+  }
 
   const generated_at = new Date().toISOString();
   const structured: StructuredBriefing = {
     generated_at,
     duration_ms: 0, // filled in below after synthesis completes
     since: sinceDate.toISOString(),
+    // System Facts FIRST — anchor every reader on canonical truths
+    // before any source-fetched data. Per A1 (2026-05-31).
+    system_facts,
     build_state,
     active_deals: listings.active_deals,
     pipeline_counts: listings.pipeline_counts,

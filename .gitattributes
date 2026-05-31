@@ -1,0 +1,16 @@
+# Repository-wide line-ending discipline.
+#
+# Markdown is checked in with LF endings on every platform so System
+# Facts / checklists / briefs are diff-stable across the operator's
+# machines, CI checkouts, and the remote Claude execution environment.
+# Without this, an editor on a Windows checkout could rewrite every
+# .md file to CRLF on first save and produce a 600-line phantom diff.
+#
+# No pre-existing .editorconfig or .gitattributes to reconcile with
+# (verified 2026-05-31 on `claude/bold-meitner-l1VGm`); this is the
+# first declaration of EOL policy in the repo. If an .editorconfig
+# is added later, mirror `end_of_line = lf` for `*.md` there too —
+# Git's policy here normalizes the working tree; .editorconfig
+# normalizes the editor.
+
+*.md text eol=lf

@@ -120,10 +120,43 @@ export interface PulseSection {
   test_count_anchor: number | null;
 }
 
+/**
+ * System Facts vault (A1, 2026-05-31).
+ *
+ * The canonical record of load-bearing facts about the AKB Inevitable
+ * system, read from `akb-dashboard/docs/system/SYSTEM_FACTS.md` on
+ * every briefing rebuild. The aggregator places this FIRST in the
+ * structured briefing so it leads every session-open: the
+ * synthesizer (and any other reader) anchors on these facts before
+ * any source-fetched data. When code/AGENTS.md/Spine recall
+ * contradicts a fact in `markdown`, the file wins.
+ *
+ * `markdown` is the verbatim file contents. `error` is non-null only
+ * when the file is missing or unreadable (defensive — a Vercel
+ * deploy with stripped docs/, a tampered file mode). The aggregator
+ * still produces a briefing in that case; `error` surfaces to
+ * staleness_warnings so the session sees the gap.
+ */
+export interface SystemFactsSection {
+  markdown: string | null;
+  error: string | null;
+}
+
+export const EMPTY_SYSTEM_FACTS: SystemFactsSection = {
+  markdown: null,
+  error: null,
+};
+
 export interface StructuredBriefing {
   generated_at: string;
   duration_ms: number;
   since: string; // ISO of the "since" anchor the briefing was computed against
+  /**
+   * System Facts vault — leads the briefing (A1, 2026-05-31). See
+   * `docs/system/SYSTEM_FACTS.md`. Always present; `markdown: null`
+   * + `error: "..."` only if the file is unreachable.
+   */
+  system_facts: SystemFactsSection;
   build_state: BuildStateSection;
   active_deals: ListingsActiveDeal[];
   pipeline_counts: Record<string, number>;
