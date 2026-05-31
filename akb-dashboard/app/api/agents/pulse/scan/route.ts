@@ -24,6 +24,7 @@ import { getActiveListingsForBrief } from "@/lib/airtable";
 import { fetchCodebaseMetadataState } from "@/lib/maverick/sources/codebase-metadata";
 import { readPulseState } from "@/lib/pulse/active-store";
 import { runPulseScan } from "@/lib/pulse/runner";
+import { getAllRegistryRows } from "@/lib/zip-registry";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -35,11 +36,12 @@ export async function GET() {
   try {
     // I/O fan-out in parallel to keep the scan within the lambda
     // budget. Each source is independent.
-    const [audit, listings, metadata, previousState] = await Promise.all([
+    const [audit, listings, metadata, previousState, zipRegistry] = await Promise.all([
       readRecentFromKv(DEFAULT_AUDIT_LIMIT),
       getActiveListingsForBrief({ recentDays: 14 }),
       fetchCodebaseMetadataState({ timeoutMs: 3_000 }).catch(() => null),
       readPulseState(),
+      getAllRegistryRows().catch(() => []),
     ]);
 
     const testCount =
@@ -50,6 +52,7 @@ export async function GET() {
       listings,
       test_count: testCount,
       previous_test_count: previousState.test_count_anchor,
+      zip_registry: zipRegistry,
       env: process.env as Record<string, string | undefined>,
       now: () => new Date(),
     });
@@ -59,6 +62,7 @@ export async function GET() {
       elapsed_ms: Date.now() - t0,
       audit_log_size: audit.length,
       listings_examined: listings.length,
+      zip_registry_examined: zipRegistry.length,
       test_count: testCount,
       previous_test_count: previousState.test_count_anchor,
       transitions: {

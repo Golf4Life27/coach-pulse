@@ -54,6 +54,7 @@ import { fetchVercelKvAuditState } from "@/lib/maverick/sources/vercel-kv-audit"
 import { verifyListing, classifyVerifiedListing, FIRECRAWL_RATE_LIMIT_PER_MINUTE } from "@/lib/crawler/sources/firecrawl";
 import { runAsyncPool, makeRateGate } from "@/lib/crawler/async-pool";
 import { getActiveIntakeRows, updateZipStats } from "@/lib/zip-registry";
+import { appendDailyStats, type DailyStatInput } from "@/lib/zip-daily-stats";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -577,38 +578,57 @@ export async function GET(req: Request) {
     summary.per_zip.push({ zip, raw: perZipRaw.get(zip) ?? 0, accepted: perZipAccepted.get(zip) ?? 0, review: perZipReview.get(zip) ?? 0 });
   }
 
-  // ── Phase 4b: ZIP_Registry stats write-back (D1). Registry-driven live
-  // runs only — manual ?zips= overrides have no registry row, and dry runs
-  // never mutate. Writes the latest-run snapshot into the *_30d fields
-  // (see lib/zip-registry ZipStatsUpdate note: true 30d rolling lands with
-  // the saturation follow-up, the sole consumer of these fields).
-  const registryWriteback = { written: 0, skipped: false as boolean | string, errors: [] as string[] };
+  // ── Phase 4b: ZIP_Daily_Stats append + Last_Ingested_At stamp (D1/24.5).
+  // Registry-driven live runs only — manual ?zips= overrides have no registry
+  // row, and dry runs never mutate. Each processed ZIP gets one upsertable
+  // daily-stats row (Sample_Key = {zip}_{day}); the rolling *_30d figures are
+  // NO LONGER written here — the zip-saturation-check cron derives them from
+  // these rows (the sole consumer). Rejected = Considered − Ingested (the
+  // verified candidates the classifier didn't write).
+  const registryWriteback = {
+    daily_stats_upserted: 0,
+    last_ingested_stamped: 0,
+    skipped: false as boolean | string,
+    errors: [] as string[],
+  };
   if (overrideUsed) {
     registryWriteback.skipped = "manual_override";
   } else if (dryRun) {
     registryWriteback.skipped = "dry_run";
   } else {
-    const nowIso = new Date().toISOString();
+    const now2 = new Date();
+    const nowIso = now2.toISOString();
+    const statInputs: DailyStatInput[] = [];
     for (const zip of zipsProcessedOk) {
       const recordId = zipToRecordId.get(zip);
       if (!recordId) continue;
       const considered = perZipConsidered.get(zip) ?? 0;
-      const accepted = perZipAccepted.get(zip) ?? 0;
+      const ingested = perZipIngested.get(zip) ?? 0;
       const dom = perZipDom.get(zip);
       const price = perZipPrice.get(zip);
+      statInputs.push({
+        zip,
+        date: now2,
+        considered,
+        accepted: perZipAccepted.get(zip) ?? 0,
+        rejected: Math.max(0, considered - ingested),
+        ingested,
+        domSum: dom?.sum ?? 0,
+        domCount: dom?.n ?? 0,
+        priceSum: price?.sum ?? 0,
+        priceCount: price?.n ?? 0,
+        runAt: nowIso,
+      });
       try {
-        await updateZipStats(recordId, {
-          lastIngestedAt: nowIso,
-          acceptRate30d: considered > 0 ? accepted / considered : 0,
-          avgDom: dom && dom.n > 0 ? Math.round(dom.sum / dom.n) : null,
-          avgListPrice: price && price.n > 0 ? Math.round(price.sum / price.n) : null,
-          recordsIngested30d: perZipIngested.get(zip) ?? 0,
-        });
-        registryWriteback.written++;
+        await updateZipStats(recordId, { lastIngestedAt: nowIso });
+        registryWriteback.last_ingested_stamped++;
       } catch (err) {
-        registryWriteback.errors.push(`${zip}: ${err instanceof Error ? err.message : String(err)}`);
+        registryWriteback.errors.push(`${zip} last_ingested: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
+    const append = await appendDailyStats(statInputs);
+    registryWriteback.daily_stats_upserted = append.upserted;
+    for (const e of append.errors) registryWriteback.errors.push(`daily_stats ${e}`);
   }
 
   summary.firecrawl.time_budget_hit = timeBudgetHit;

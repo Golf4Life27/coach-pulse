@@ -33,6 +33,7 @@ export const ZR = {
   avgListPrice: "fld9rI8eLezEgUnUm",
   recordsIngested30d: "fldTDRbvWlur4BRnk",
   saturationThreshold: "fldAbZeSBgbihf4wf",
+  belowThresholdStreakDays: "fldrRvTum8fEvIpvV",
   approvalRequestedAt: "fldRcbHsnUiDpDSRF",
   approvalNotifiedChannels: "fldVKgqMFoF3Sx5Ru",
   approvedBy: "fldmFfEGD0u5teM9e",
@@ -66,6 +67,7 @@ export interface ZipRegistryRow {
   avgListPrice: number | null;
   recordsIngested30d: number | null;
   saturationThreshold: number | null;
+  belowThresholdStreakDays: number | null;
   approvalRequestedAt: string | null;
   approvalNotifiedChannels: NotifyChannel[];
   approvedBy: string | null;
@@ -127,6 +129,10 @@ function mapRow(rec: { id: string; fields: Record<string, unknown> }): ZipRegist
       typeof f[ZR.recordsIngested30d] === "number" ? (f[ZR.recordsIngested30d] as number) : null,
     saturationThreshold:
       typeof f[ZR.saturationThreshold] === "number" ? (f[ZR.saturationThreshold] as number) : null,
+    belowThresholdStreakDays:
+      typeof f[ZR.belowThresholdStreakDays] === "number"
+        ? (f[ZR.belowThresholdStreakDays] as number)
+        : null,
     approvalRequestedAt: (f[ZR.approvalRequestedAt] as string) ?? null,
     approvalNotifiedChannels: channels,
     approvedBy: (f[ZR.approvedBy] as string) ?? null,
@@ -197,27 +203,48 @@ export async function getApprovalPendingRows(): Promise<ZipRegistryRow[]> {
   return fetchRows("{Market_Tier}='approval_pending'");
 }
 
-// Per-ZIP stats write-back after a successful intake run.
-//
-// NOTE on semantics: v1 writes the LATEST successful run's snapshot into
-// the *_30d fields. A true 30-day rolling aggregation is owned by the
-// saturation-detection follow-up (Master Checklist 14.5), which is the
-// sole consumer of these fields. Until then these are best-available
-// per-run figures, refreshed daily.
+// Every registry row, all tiers. Used by the Pulse zip-saturation detector,
+// which needs `saturated` rows (excluded by getActiveIntakeRows) to surface
+// the expansion suggestion.
+export async function getAllRegistryRows(): Promise<ZipRegistryRow[]> {
+  return fetchRows();
+}
+
+// Stamp Last_Ingested_At after a successful intake run (24.5). The intake
+// cron owns this per-run timestamp; the rolling *_30d figures are no longer
+// written here — they're derived by the zip-saturation-check cron from the
+// ZIP_Daily_Stats append-log (see writeRollingStats + lib/zip-daily-stats).
 export interface ZipStatsUpdate {
   lastIngestedAt: string; // ISO
-  acceptRate30d?: number | null; // fraction 0..1
-  avgDom?: number | null;
-  avgListPrice?: number | null;
-  recordsIngested30d?: number | null;
 }
 
 export async function updateZipStats(recordId: string, stats: ZipStatsUpdate): Promise<void> {
-  const fields: Record<string, unknown> = { [ZR.lastIngestedAt]: stats.lastIngestedAt };
-  if (stats.acceptRate30d != null) fields[ZR.acceptRate30d] = stats.acceptRate30d;
-  if (stats.avgDom != null) fields[ZR.avgDom] = stats.avgDom;
-  if (stats.avgListPrice != null) fields[ZR.avgListPrice] = stats.avgListPrice;
-  if (stats.recordsIngested30d != null) fields[ZR.recordsIngested30d] = stats.recordsIngested30d;
+  await patchRow(recordId, { [ZR.lastIngestedAt]: stats.lastIngestedAt });
+}
+
+// True 30-day rolling stats write-back (24.5). The zip-saturation-check cron
+// is the SOLE writer of these fields: it sums the trailing-window
+// ZIP_Daily_Stats rows, writes the rolling figures + the below-threshold
+// streak, and — when an active ZIP crosses the streak threshold — flips
+// Market_Tier to `saturated` in the same patch.
+export interface RollingStatsUpdate {
+  acceptRate30d: number | null; // fraction 0..1
+  avgDom: number | null;
+  avgListPrice: number | null;
+  recordsIngested30d: number;
+  belowThresholdStreakDays: number;
+  marketTier?: MarketTier; // set only when flipping to `saturated`
+}
+
+export async function writeRollingStats(recordId: string, u: RollingStatsUpdate): Promise<void> {
+  const fields: Record<string, unknown> = {
+    [ZR.acceptRate30d]: u.acceptRate30d,
+    [ZR.avgDom]: u.avgDom,
+    [ZR.avgListPrice]: u.avgListPrice,
+    [ZR.recordsIngested30d]: u.recordsIngested30d,
+    [ZR.belowThresholdStreakDays]: u.belowThresholdStreakDays,
+  };
+  if (u.marketTier) fields[ZR.marketTier] = u.marketTier;
   await patchRow(recordId, fields);
 }
 
