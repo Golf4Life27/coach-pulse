@@ -8,13 +8,14 @@
 
 import { describe, it, expect } from "vitest";
 import { buildRequestBody } from "./synthesize";
-import { EMPTY_PULSE, type StructuredBriefing } from "./briefing";
+import { EMPTY_PULSE, EMPTY_SYSTEM_FACTS, type StructuredBriefing } from "./briefing";
 
 function structured(over: Partial<StructuredBriefing> = {}): StructuredBriefing {
   return {
     generated_at: "2026-05-15T18:00:00Z",
     duration_ms: 0,
     since: "2026-05-14T18:00:00Z",
+    system_facts: EMPTY_SYSTEM_FACTS,
     build_state: {
       branch: "x",
       branch_resolved: true,

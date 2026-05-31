@@ -27,6 +27,18 @@ export function renderTemplate(b: StructuredBriefing): string {
     `Welcome back. Last session window: last ${hoursSince}h (since ${b.since.slice(0, 16).replace("T", " ")}Z).`,
   );
 
+  // SYSTEM FACTS — leads the briefing per A1 (2026-05-31). The vault
+  // file is the canonical record of load-bearing facts (Vercel plan,
+  // team/project IDs, branch defaults, table IDs, etc.). Reading
+  // these first prevents the re-derivation churn that burned earlier
+  // sessions. When the file is unreachable a parallel staleness
+  // warning is emitted by the aggregator; this section stays silent.
+  if (b.system_facts.markdown) {
+    sections.push(
+      `## SYSTEM FACTS (authoritative — \`docs/system/SYSTEM_FACTS.md\`)\n\n${b.system_facts.markdown.trim()}`,
+    );
+  }
+
   // CURRENT BUILD STATE
   const bs = b.build_state;
   const buildLines = [
