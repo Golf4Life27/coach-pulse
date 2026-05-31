@@ -1,7 +1,33 @@
 // @agent: maverick — git summarizer tests.
 
 import { describe, it, expect } from "vitest";
-import { summarizeCommits } from "./git";
+import { summarizeCommits, buildCommitsUrl } from "./git";
+
+describe("git buildCommitsUrl — branch-truth contract (Spine recwkHvBMTjeMLECp)", () => {
+  // The git-source truth bug: ACTIVE_BRANCH defaulted to a now-deleted
+  // branch, so /commits?sha=<dead-branch> 404'd → blank git data +
+  // branch_resolved:false → behind_head silently null. The fix defaults the
+  // sha to `main`. This is the anti-regression guard — revert the default
+  // and it fails here. (Tests run with MAVERICK_ACTIVE_BRANCH unset.)
+  it("defaults sha to `main` when no branch override is supplied", () => {
+    const url = new URL(buildCommitsUrl("2026-05-28T00:00:00.000Z"));
+    expect(url.searchParams.get("sha")).toBe("main");
+    // The bug was a now-deleted feature branch. Assert it is NOT that.
+    expect(url.searchParams.get("sha")).not.toBe("claude/build-akb-inevitable-week1-uG6xD");
+  });
+
+  it("carries the since timestamp + per_page, and points at the coach-pulse repo", () => {
+    const url = new URL(buildCommitsUrl("2026-05-28T00:00:00.000Z"));
+    expect(url.searchParams.get("since")).toBe("2026-05-28T00:00:00.000Z");
+    expect(url.searchParams.get("per_page")).toBe("30");
+    expect(url.pathname).toBe("/repos/Golf4Life27/coach-pulse/commits");
+  });
+
+  it("honors an explicit branch override (the env-driven feature-branch case)", () => {
+    const url = new URL(buildCommitsUrl("2026-05-28T00:00:00.000Z", "claude/some-feature"));
+    expect(url.searchParams.get("sha")).toBe("claude/some-feature");
+  });
+});
 
 describe("git summarizeCommits", () => {
   it("maps the GitHub commits response to typed entries with short SHA", () => {
