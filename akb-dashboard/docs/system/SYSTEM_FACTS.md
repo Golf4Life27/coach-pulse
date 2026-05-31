@@ -2,7 +2,7 @@
 
 **Status:** authoritative. **Owner:** Alex Balog (operator).
 **Updated:** 2026-05-31.
-**Spine:** paired build_event written on creation (A1 commit cycle).
+**Spine:** paired build_event `recpLB1yC1SaDTqff` (A1 commit cycle, 2026-05-31).
 
 This is the canonical record of the load-bearing facts about the AKB
 Inevitable system. Every Claude session reads it first via
