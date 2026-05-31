@@ -11,7 +11,7 @@ Distinct from the INV-series (forensic investigations) so the two
 numbering schemes can't collide. Co-exists with the master checklist
 Insertion log per Rule 10.
 
-- **[A1] System Facts vault** — COMPLETED 2026-05-31. Canonical record
+- **[A1] System Facts vault** — COMPLETED 2026-05-31 → **LIVE on `main` 2026-05-31 (merge `d36f26c`)**. Canonical record
   at `akb-dashboard/docs/system/SYSTEM_FACTS.md`. Wired into Maverick
   `load_state` as the FIRST section of every structured briefing
   (synthesizer Rule 0 + template lead-section). Closes the
