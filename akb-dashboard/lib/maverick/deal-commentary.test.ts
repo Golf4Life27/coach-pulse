@@ -334,17 +334,41 @@ describe("inferDealCommentary — ordering", () => {
   });
 });
 
-describe("isUnderContract — Phase 11.4 INV-004 guard", () => {
-  it("returns true when envelopeId is a non-empty string", () => {
-    expect(isUnderContract({ envelopeId: "abc-123-guid" })).toBe(true);
+describe("isUnderContract — Phase 11.4 INV-004 guard + Pipeline_State Spec v1 decision #4 generalization", () => {
+  it("returns true when envelopeId is a non-empty string (legacy fallback path)", () => {
+    expect(isUnderContract({ envelopeId: "abc-123-guid", pipelineStage: null })).toBe(true);
   });
 
-  it("returns false when envelopeId is null", () => {
-    expect(isUnderContract({ envelopeId: null })).toBe(false);
+  it("returns false when envelopeId is null AND pipelineStage is below under_contract", () => {
+    expect(isUnderContract({ envelopeId: null, pipelineStage: null })).toBe(false);
+    expect(isUnderContract({ envelopeId: null, pipelineStage: "negotiating" })).toBe(false);
   });
 
-  it("returns false when envelopeId is an empty string", () => {
-    expect(isUnderContract({ envelopeId: "" })).toBe(false);
+  it("returns false when envelopeId is an empty string AND no stage signal", () => {
+    expect(isUnderContract({ envelopeId: "", pipelineStage: null })).toBe(false);
+  });
+
+  // Pipeline_State Spec v1 decision #4 — stage-based primary signal.
+  it("returns true when pipelineStage is `under_contract` (no envelopeId needed)", () => {
+    expect(isUnderContract({ envelopeId: null, pipelineStage: "under_contract" })).toBe(true);
+  });
+
+  it("returns true for any stage at-or-past under_contract (dispo_active / assignment_signed / closed)", () => {
+    expect(isUnderContract({ envelopeId: null, pipelineStage: "dispo_active" })).toBe(true);
+    expect(isUnderContract({ envelopeId: null, pipelineStage: "assignment_signed" })).toBe(true);
+    expect(isUnderContract({ envelopeId: null, pipelineStage: "closed" })).toBe(true);
+  });
+
+  it("returns false for stages before under_contract even with no envelopeId", () => {
+    expect(isUnderContract({ envelopeId: null, pipelineStage: "offer_drafted" })).toBe(false);
+    expect(isUnderContract({ envelopeId: null, pipelineStage: "responded" })).toBe(false);
+    expect(isUnderContract({ envelopeId: null, pipelineStage: "outreach_sent" })).toBe(false);
+  });
+
+  it("returns true when pipelineStage is `dead` only if envelopeId is also set (dead is not under contract)", () => {
+    expect(isUnderContract({ envelopeId: null, pipelineStage: "dead" })).toBe(false);
+    // Edge case: envelope was created then deal died — fallback still fires.
+    expect(isUnderContract({ envelopeId: "stale-env", pipelineStage: "dead" })).toBe(true);
   });
 });
 

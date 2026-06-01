@@ -52,7 +52,14 @@ export interface DealCommentaryListing {
    * on the Crier silence rule — contract-in-flight deals bypass silence
    * signals because Negotiating/Response Received during contract
    * execution is legitimate, not the outreach-silence failure mode.
+   *
+   * Pipeline_State Spec v1 (LOCKED 2026-05-31, decision #4) generalizes
+   * `isUnderContract` to be stage-based. envelopeId remains a fallback
+   * for records that haven't been backfilled to Pipeline_Stage yet.
    */
+  /** Pipeline_Stage value from Listings_V1; stage-based primary signal for
+   *  isUnderContract per decision #4. Optional/nullable until backfill lands. */
+  pipelineStage?: string | null;
   envelopeId: string | null;
 }
 
@@ -114,8 +121,18 @@ const CRIER_SILENCE_TIER_1_DAYS = 7;
  * Pure. Deterministic. No I/O.
  */
 export function isUnderContract(
-  listing: Pick<DealCommentaryListing, "envelopeId">,
+  listing: Pick<DealCommentaryListing, "envelopeId" | "pipelineStage">,
 ): boolean {
+  // Pipeline_State Spec v1 (LOCKED 2026-05-31, decision #4): generalize to
+  // stage-based. A deal at-or-past `under_contract` is under contract by
+  // definition. envelopeId remains a transitional fallback for records that
+  // haven't been backfilled to Pipeline_Stage yet (mass backfill is a
+  // separate operator-reviewed dry-run step). Once backfill lands and every
+  // record has Pipeline_Stage populated, the envelopeId fallback can retire.
+  const stage = listing.pipelineStage;
+  if (stage && (stage === "under_contract" || stage === "dispo_active" || stage === "assignment_signed" || stage === "closed")) {
+    return true;
+  }
   return Boolean(listing.envelopeId);
 }
 

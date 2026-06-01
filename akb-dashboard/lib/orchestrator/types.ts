@@ -20,34 +20,16 @@ import type { QuoMessage } from "@/lib/quo";
 import type { GmailMessage } from "@/lib/gmail";
 import type { RentCastSaleComp } from "@/lib/rentcast";
 
-export type PipelineStage =
-  | "intake"
-  | "verified"
-  | "priced"
-  | "outreach_ready"
-  | "outreach_sent"
-  | "negotiating"
-  | "offer_drafted"
-  | "under_contract"
-  | "dispo_active"
-  | "assignment_signed"
-  | "closed"
-  | "dead";
-
-export const ALL_PIPELINE_STAGES: PipelineStage[] = [
-  "intake",
-  "verified",
-  "priced",
-  "outreach_ready",
-  "outreach_sent",
-  "negotiating",
-  "offer_drafted",
-  "under_contract",
-  "dispo_active",
-  "assignment_signed",
-  "closed",
-  "dead",
-];
+// Pipeline_Stage canonical declaration moved to lib/pipeline-state/stages.ts
+// per Pipeline_State Spec v1 (LOCKED 2026-05-31). Re-exported so all existing
+// imports from `@/lib/orchestrator/types` keep working unchanged. The locked
+// spec added a `responded` stage between `outreach_sent` and `negotiating`;
+// that value is now part of this union automatically.
+export {
+  ALL_PIPELINE_STAGES,
+  type PipelineStage,
+} from "@/lib/pipeline-state/stages";
+import type { PipelineStage } from "@/lib/pipeline-state/stages";
 
 export type DataSource =
   | "airtable_listing"

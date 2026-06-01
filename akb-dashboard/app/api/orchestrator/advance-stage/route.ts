@@ -12,11 +12,18 @@
 //   - PC-05 inspection contingency (Gate 4)
 //   - PC-16 Memphis assignability (Gate 4)
 // These rules block even with an override_reason.
+//
+// Pipeline_State Spec v1 (LOCKED 2026-05-31) — this route routes ALL
+// Pipeline_Stage writes through `lib/pipeline-state/engine.transitionStage`,
+// which adds a legal-edge guard (forward-one-step + kill + resurrection)
+// the previous direct-write implementation lacked. Override bypasses the
+// GATE; it does NOT bypass legal-edge rules — to skip multiple stages,
+// the operator must advance one step at a time (preserves audit trail).
 
 import { NextResponse } from "next/server";
-import { updateListingRecord } from "@/lib/airtable";
 import { audit } from "@/lib/audit-log";
 import { runGate } from "@/lib/orchestrator/gate-runner";
+import { transitionStage } from "@/lib/pipeline-state/engine";
 import {
   PRE_OUTREACH_GATE,
   PRE_OUTREACH_CHECKS,
@@ -163,13 +170,19 @@ async function executeAdvance(opts: {
         { status: 400 },
       );
     }
-    const drift = await updateListingRecord(recordId, {
-      Pipeline_Stage: stage,
+    const txn = await transitionStage({
+      recordId,
+      to: stage,
+      reason: `manual_override: ${override_reason}`,
+      attribution: "sentry",
+      triggered_by: "operator",
     });
+    // The engine handles its own audit; we add the operational-context audit
+    // (gate result snapshot) on top because override semantics matter to Pulse.
     await audit({
       agent: "sentry",
       event: "advance_stage_override",
-      status: "uncertain", // override means we bypassed normal gate — flag for review
+      status: txn.ok ? "uncertain" : "confirmed_failure", // override flagged for review on success; failure if engine refused
       recordId,
       inputSummary: { target_stage: stage, override_reason },
       outputSummary: {
@@ -177,18 +190,35 @@ async function executeAdvance(opts: {
         blockers: gateResult.blockers,
         warnings: gateResult.warnings,
         data_missing: gateResult.data_missing,
-        airtable_drift_count: drift.length,
+        engine_outcome: txn.outcome,
+        engine_legality_reason: txn.legality.reason,
+        airtable_drift_count: txn.airtable_drift.length,
       },
-      decision: "manual_override",
+      decision: txn.ok ? "manual_override" : `refused_${txn.outcome}`,
       ms: Date.now() - t0,
     });
+    if (!txn.ok) {
+      // Engine refused — almost certainly an illegal-edge skip. Surface
+      // precisely so the operator knows to step through.
+      return NextResponse.json(
+        {
+          advanced: false,
+          reason: txn.outcome,
+          message: `Override bypassed the gate but the legal-edge guard refused: ${txn.message}. Advance one step at a time.`,
+          engine_legality: txn.legality,
+          gate_result: gateResult,
+        },
+        { status: 409 },
+      );
+    }
     return NextResponse.json({
       advanced: true,
       new_stage: stage,
       via_override: true,
       override_reason,
       gate_result: gateResult,
-      airtable_drift: drift,
+      airtable_drift: txn.airtable_drift,
+      engine_legality: txn.legality,
     });
   }
 
@@ -204,26 +234,47 @@ async function executeAdvance(opts: {
       { status: 409 },
     );
   }
-  const drift = await updateListingRecord(recordId, { Pipeline_Stage: stage });
+  const txn = await transitionStage({
+    recordId,
+    to: stage,
+    reason: `gate_passed:${entry.gate.id}`,
+    attribution: "sentry",
+    triggered_by: "orchestrator",
+  });
   await audit({
     agent: "sentry",
     event: "advance_stage",
-    status: "confirmed_success",
+    status: txn.ok ? "confirmed_success" : "confirmed_failure",
     recordId,
     inputSummary: { target_stage: stage },
     outputSummary: {
       gate_overall_status: gateResult.overall_status,
-      airtable_drift_count: drift.length,
+      engine_outcome: txn.outcome,
+      engine_legality_reason: txn.legality.reason,
+      airtable_drift_count: txn.airtable_drift.length,
     },
-    decision: "advanced",
+    decision: txn.ok ? "advanced" : `refused_${txn.outcome}`,
     ms: Date.now() - t0,
   });
+  if (!txn.ok) {
+    return NextResponse.json(
+      {
+        advanced: false,
+        reason: txn.outcome,
+        message: `Gate passed but the legal-edge guard refused: ${txn.message}. Advance one step at a time.`,
+        engine_legality: txn.legality,
+        gate_result: gateResult,
+      },
+      { status: 409 },
+    );
+  }
   return NextResponse.json({
     advanced: true,
     new_stage: stage,
     via_override: false,
     gate_result: gateResult,
-    airtable_drift: drift,
+    airtable_drift: txn.airtable_drift,
+    engine_legality: txn.legality,
   });
 }
 
