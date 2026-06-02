@@ -184,6 +184,33 @@ async function handle(req: Request, params: SweepParams) {
     for (const [outcome, n] of Object.entries(run.summary.by_outcome)) {
       console.log("SWEEP.outcome_" + outcome + "=" + n);
     }
+
+    // Cumulative state of EVERY record in Listings_V1 — the deliverable for
+    // the operator's "report the cumulative summary" ask. Reuses the cached
+    // listings (no additional fetch). Emits one line per stage so the
+    // truncated log preview shows the full value.
+    try {
+      const { getListings } = await import("@/lib/airtable");
+      const listings = await getListings();
+      const totalCum = listings.length;
+      let emptyCum = 0;
+      const cumByStage: Record<string, number> = {};
+      for (const l of listings) {
+        const stage = (l.pipelineStage ?? "").trim();
+        if (!stage) {
+          emptyCum++;
+          continue;
+        }
+        cumByStage[stage] = (cumByStage[stage] ?? 0) + 1;
+      }
+      console.log("CUM.total=" + totalCum);
+      console.log("CUM.empty=" + emptyCum);
+      for (const [stage, n] of Object.entries(cumByStage)) {
+        console.log("CUM.stage_" + stage + "=" + n);
+      }
+    } catch (e) {
+      console.log("CUM.error=" + (e instanceof Error ? e.message : String(e)));
+    }
     return NextResponse.json({
       ok: run.ok,
       caller: "cron_sweep",
