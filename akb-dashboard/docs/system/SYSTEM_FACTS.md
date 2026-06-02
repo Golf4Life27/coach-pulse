@@ -145,6 +145,43 @@ The system speaks in named agents:
 
 When in doubt, **refuse and surface** is the lane.
 
+### Operational vs. decisional work — STANDING RULE (2026-06-01)
+
+Operational, execution, and diagnostic work belongs to Code, not Alex.
+That includes:
+
+- **Hitting endpoints** (curl, POST/GET requests, dry-runs, applies).
+- **Console commands** (browser devtools, `fetch()` from a logged-in tab).
+- **Retries** after a transient failure (a 500-by-timeout, a 401 on a
+  stale cookie, an Airtable rate-limit, a GitHub Actions hiccup).
+- **Reading logs + diagnosing failures** (Vercel build/runtime logs,
+  audit log entries, GitHub Actions step output).
+- **Re-pointing connectors, re-authing, re-deploying** the build
+  container's own MCP / tooling state.
+
+Code's job is to find or build the path so it can self-drive the work
+without paste-the-secret-in-chat or copy-the-cookie ergonomics. The
+sweep route + GitHub Actions trigger (2026-06-01, decision §1's
+companion) is the canonical pattern: server-side execution gated by
+Vercel-side env secrets, Code triggers via GitHub Actions, no operator
+touches a console.
+
+Alex's job is to:
+
+- **Approve decisions** (locked-and-loaded calls, scope changes,
+  irreversible commits).
+- **Perform Type 2B actions personally** (DocuSign signing, EMD wire,
+  contract execution — anything where a human signature or money move
+  is on the line; Constitution Rule 3 §8 above is the canon).
+- **Re-point integrations only when Code cannot** (MCP connector URLs
+  that live in operator-account integration-settings; one-time secret
+  installs into GitHub repo secrets or Vercel env).
+
+If Code is about to ask the operator to run a curl, hit a URL in their
+browser, or paste a secret — stop, find the server-side path, build it
+if it doesn't exist, and run it from there. Asking the operator to
+operate is the default-failure mode this rule exists to prevent.
+
 ## 9. Mission constants
 
 These do not change without a Bible amendment.
