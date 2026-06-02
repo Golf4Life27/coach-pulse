@@ -149,6 +149,22 @@ async function handle(req: Request, params: SweepParams) {
       triggered_by_label: "server_side_sweep",
       audit_context: { caller: "cron_sweep", auth_kind: auth.kind },
     });
+    // Structured log line — surfaces the summary in Vercel runtime logs so a
+    // cron-fired invocation can be observed without dashboard / audit-log
+    // access. Single-line JSON for grep-friendliness. Sole purpose is
+    // operator-visibility, not a replacement for the audit entry the runner
+    // already wrote.
+    console.log(
+      "[pipeline_state_backfill_sweep]",
+      JSON.stringify({
+        ok: run.ok,
+        caller: "cron_sweep",
+        auth_kind: auth.kind,
+        summary: run.summary,
+        remaining_eligible_estimate: run.remaining_eligible_estimate,
+        total_wall_ms: run.total_wall_ms,
+      }),
+    );
     return NextResponse.json({
       ok: run.ok,
       caller: "cron_sweep",
