@@ -79,23 +79,6 @@ async function handle(req: Request, params: SweepParams) {
   const headers = readAuthHeaders(req);
   const auth = await authenticate(headers, env, kvProd);
   if (!auth.ok) {
-    // TEMP diagnostic (2026-06-02): every prod cron is 401'ing even after the
-    // CRON_SECRET fix + redeploy. Vercel's runtime-log table truncates each
-    // line's preview at ~30 chars, so log each fact as its own short line —
-    // every line stays grep-able + value-visible. NO secret values logged.
-    const authzHeader = req.headers.get("authorization");
-    const xvc = req.headers.get("x-vercel-cron");
-    const tokenLen = authzHeader && authzHeader.startsWith("Bearer ")
-      ? authzHeader.slice(7).length
-      : 0;
-    const envLen = typeof process.env.CRON_SECRET === "string"
-      ? process.env.CRON_SECRET.length
-      : -1;
-    console.warn("AUTH_DIAG.reason=" + auth.reason);
-    console.warn("AUTH_DIAG.envLen=" + envLen);
-    console.warn("AUTH_DIAG.authz=" + Boolean(authzHeader) + ":bearer=" + (authzHeader?.startsWith("Bearer ") ?? false) + ":tokLen=" + tokenLen);
-    console.warn("AUTH_DIAG.xvc=" + (xvc ?? "null"));
-    console.warn("AUTH_DIAG.kv=" + kvConfigured());
     return NextResponse.json(
       {
         error: "unauthorized",
@@ -166,51 +149,23 @@ async function handle(req: Request, params: SweepParams) {
       triggered_by_label: "server_side_sweep",
       audit_context: { caller: "cron_sweep", auth_kind: auth.kind },
     });
-    // Split-line summary log — Vercel runtime-log table truncates each row's
-    // message preview at ~30 chars, so write each summary fact as its own
-    // short line. Every line stays grep-able AND fully readable.
-    console.log("SWEEP.remaining=" + run.remaining_eligible_estimate);
-    console.log("SWEEP.processed=" + run.summary.processed);
-    console.log("SWEEP.errors=" + run.summary.errors_count);
-    console.log("SWEEP.blacklist=" + run.summary.blacklist_overrides_applied);
-    console.log("SWEEP.illegal=" + run.summary.illegal_rejections_count);
-    console.log("SWEEP.wall_ms=" + run.summary.wall_clock_ms);
-    console.log("SWEEP.total_cands=" + run.summary.total_candidates);
-    // Per-stage applied counts — one short line per stage actually written.
-    for (const [stage, n] of Object.entries(run.summary.by_applied_stage)) {
-      console.log("SWEEP.applied_" + stage + "=" + n);
-    }
-    // Outcome tally too (skipped_already_populated dominates on re-runs).
-    for (const [outcome, n] of Object.entries(run.summary.by_outcome)) {
-      console.log("SWEEP.outcome_" + outcome + "=" + n);
-    }
-
-    // Cumulative state of EVERY record in Listings_V1 — the deliverable for
-    // the operator's "report the cumulative summary" ask. Reuses the cached
-    // listings (no additional fetch). Emits one line per stage so the
-    // truncated log preview shows the full value.
-    try {
-      const { getListings } = await import("@/lib/airtable");
-      const listings = await getListings();
-      const totalCum = listings.length;
-      let emptyCum = 0;
-      const cumByStage: Record<string, number> = {};
-      for (const l of listings) {
-        const stage = (l.pipelineStage ?? "").trim();
-        if (!stage) {
-          emptyCum++;
-          continue;
-        }
-        cumByStage[stage] = (cumByStage[stage] ?? 0) + 1;
-      }
-      console.log("CUM.total=" + totalCum);
-      console.log("CUM.empty=" + emptyCum);
-      for (const [stage, n] of Object.entries(cumByStage)) {
-        console.log("CUM.stage_" + stage + "=" + n);
-      }
-    } catch (e) {
-      console.log("CUM.error=" + (e instanceof Error ? e.message : String(e)));
-    }
+    // Structured one-line summary log — surfaces the per-run summary in
+    // Vercel runtime logs. Vercel's log-table preview truncates at ~30
+    // chars but the full payload is still in the log entry; ops can
+    // expand the row or use the `vercel logs` CLI to read it. Sole
+    // purpose is operator-visibility; not a replacement for the audit
+    // entry the runner already wrote.
+    console.log(
+      "[pipeline_state_backfill_sweep]",
+      JSON.stringify({
+        ok: run.ok,
+        caller: "cron_sweep",
+        auth_kind: auth.kind,
+        summary: run.summary,
+        remaining_eligible_estimate: run.remaining_eligible_estimate,
+        total_wall_ms: run.total_wall_ms,
+      }),
+    );
     return NextResponse.json({
       ok: run.ok,
       caller: "cron_sweep",
