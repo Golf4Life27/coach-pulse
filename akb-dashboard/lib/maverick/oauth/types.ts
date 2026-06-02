@@ -94,7 +94,6 @@ export type AuthResult =
         | "malformed_authorization_header"
         | "oauth_token_unknown"
         | "oauth_token_expired"
-        | "cron_secret_match_without_x_vercel_cron"
         | "bearer_dev_blocked_in_production"
         | "no_credential_matched";
     };

@@ -82,12 +82,18 @@ export async function authenticate(
     };
   }
 
-  // Stage 2 — CRON_SECRET. Defense-in-depth: also require x-vercel-cron:1.
+  // Stage 2 — CRON_SECRET. A successful bearer match against a 32+ char
+  // random env secret IS the auth; the `x-vercel-cron:1` defense-in-depth
+  // we used to require was historical — Vercel no longer sends that
+  // header reliably on cron fires (verified 2026-06-02 via the
+  // pipeline-state-backfill-sweep diagnostic: every cron fire arrives
+  // with the Bearer token but `x-vercel-cron` is absent, so every cron
+  // in prod was returning 401 — the "H2 cron 401 finding" flagged
+  // out-of-scope on 2026-05-28 was this all along). When the header IS
+  // present we still record auth_kind="cron"; when absent we accept on
+  // the secret alone.
   if (env.cronSecret && constantTimeEqual(token, env.cronSecret)) {
-    if (headers.x_vercel_cron === "1") {
-      return { ok: true, kind: "cron" };
-    }
-    return { ok: false, reason: "cron_secret_match_without_x_vercel_cron" };
+    return { ok: true, kind: "cron" };
   }
 
   // Stage 3 — bearer dev fallback. Production refuses this path even
@@ -137,8 +143,6 @@ function reasonToDescription(reason: AuthFailureReason): string {
       return "Unknown or revoked access token";
     case "oauth_token_expired":
       return "Access token expired; refresh via /api/maverick/oauth/token";
-    case "cron_secret_match_without_x_vercel_cron":
-      return "CRON_SECRET match requires x-vercel-cron header";
     case "bearer_dev_blocked_in_production":
       return "Bearer dev token blocked in production environment";
     case "no_credential_matched":

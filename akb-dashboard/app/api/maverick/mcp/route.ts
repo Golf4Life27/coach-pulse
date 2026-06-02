@@ -70,16 +70,10 @@ export async function POST(req: Request) {
     const auth = await authenticate(headers, env, kvProd);
     if (!auth.ok) {
       const origin = resolveOrigin(req);
-      // Audit the CRON_SECRET-without-header case so leakage is detectable.
-      if (auth.reason === "cron_secret_match_without_x_vercel_cron") {
-        await audit({
-          agent: "maverick",
-          event: "mcp_internal_auth_rejected",
-          status: "confirmed_failure",
-          inputSummary: { reason: auth.reason },
-          outputSummary: { duration_ms: Date.now() - t0 },
-        });
-      }
+      // (Historical: there used to be an "audit the CRON_SECRET-without-
+      // x-vercel-cron-header case" branch here; that reason code retired
+      // 2026-06-02 when the auth waterfall stopped requiring the header
+      // — Vercel cron no longer sends it reliably.)
       return new NextResponse(
         JSON.stringify(buildError(null, MCP_UNAUTHORIZED, auth.reason)),
         {

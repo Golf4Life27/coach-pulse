@@ -116,14 +116,14 @@ describe("authenticate — stage 2: CRON_SECRET", () => {
     expect(r.kind).toBe("cron");
   });
 
-  it("rejects when CRON_SECRET matches BUT x-vercel-cron header is missing", async () => {
+  it("ACCEPTS when CRON_SECRET matches even without x-vercel-cron header (2026-06-02: Vercel no longer sends it reliably; secret match IS auth)", async () => {
     const r = await authenticate(
       headers({ authorization: "Bearer cron-secret-value" }),
       envOver({ cronSecret: "cron-secret-value" }),
       makeMemoryKv(),
     );
-    if (r.ok) throw new Error("expected fail");
-    expect(r.reason).toBe("cron_secret_match_without_x_vercel_cron");
+    if (!r.ok) throw new Error("expected ok");
+    expect(r.kind).toBe("cron");
   });
 
   it("rejects when CRON_SECRET is unset (skipped)", async () => {
