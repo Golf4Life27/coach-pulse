@@ -166,22 +166,24 @@ async function handle(req: Request, params: SweepParams) {
       triggered_by_label: "server_side_sweep",
       audit_context: { caller: "cron_sweep", auth_kind: auth.kind },
     });
-    // Structured log line — surfaces the summary in Vercel runtime logs so a
-    // cron-fired invocation can be observed without dashboard / audit-log
-    // access. Single-line JSON for grep-friendliness. Sole purpose is
-    // operator-visibility, not a replacement for the audit entry the runner
-    // already wrote.
-    console.log(
-      "[pipeline_state_backfill_sweep]",
-      JSON.stringify({
-        ok: run.ok,
-        caller: "cron_sweep",
-        auth_kind: auth.kind,
-        summary: run.summary,
-        remaining_eligible_estimate: run.remaining_eligible_estimate,
-        total_wall_ms: run.total_wall_ms,
-      }),
-    );
+    // Split-line summary log — Vercel runtime-log table truncates each row's
+    // message preview at ~30 chars, so write each summary fact as its own
+    // short line. Every line stays grep-able AND fully readable.
+    console.log("SWEEP.remaining=" + run.remaining_eligible_estimate);
+    console.log("SWEEP.processed=" + run.summary.processed);
+    console.log("SWEEP.errors=" + run.summary.errors_count);
+    console.log("SWEEP.blacklist=" + run.summary.blacklist_overrides_applied);
+    console.log("SWEEP.illegal=" + run.summary.illegal_rejections_count);
+    console.log("SWEEP.wall_ms=" + run.summary.wall_clock_ms);
+    console.log("SWEEP.total_cands=" + run.summary.total_candidates);
+    // Per-stage applied counts — one short line per stage actually written.
+    for (const [stage, n] of Object.entries(run.summary.by_applied_stage)) {
+      console.log("SWEEP.applied_" + stage + "=" + n);
+    }
+    // Outcome tally too (skipped_already_populated dominates on re-runs).
+    for (const [outcome, n] of Object.entries(run.summary.by_outcome)) {
+      console.log("SWEEP.outcome_" + outcome + "=" + n);
+    }
     return NextResponse.json({
       ok: run.ok,
       caller: "cron_sweep",
