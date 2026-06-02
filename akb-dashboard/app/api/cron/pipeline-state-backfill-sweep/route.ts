@@ -79,6 +79,29 @@ async function handle(req: Request, params: SweepParams) {
   const headers = readAuthHeaders(req);
   const auth = await authenticate(headers, env, kvProd);
   if (!auth.ok) {
+    // TEMP diagnostic (2026-06-02): every prod cron is 401'ing even after the
+    // CRON_SECRET fix + redeploy. Surface the waterfall reason + presence
+    // (NOT values) of the inputs so we can see which stage is rejecting.
+    // Removed in the same commit cycle that closes the backfill.
+    const authzHeader = req.headers.get("authorization");
+    const xvc = req.headers.get("x-vercel-cron");
+    const tokenLen = authzHeader && authzHeader.startsWith("Bearer ")
+      ? authzHeader.slice(7).length
+      : 0;
+    console.log(
+      "[pipeline_state_backfill_sweep_auth_diag]",
+      JSON.stringify({
+        reason: auth.reason,
+        env_cron_secret_present: typeof process.env.CRON_SECRET === "string" && process.env.CRON_SECRET.length > 0,
+        env_cron_secret_length:
+          typeof process.env.CRON_SECRET === "string" ? process.env.CRON_SECRET.length : 0,
+        authorization_header_present: Boolean(authzHeader),
+        authorization_starts_with_bearer: authzHeader?.startsWith("Bearer ") ?? false,
+        bearer_token_length: tokenLen,
+        x_vercel_cron_header: xvc,
+        kv_configured: kvConfigured(),
+      }),
+    );
     return NextResponse.json(
       {
         error: "unauthorized",
