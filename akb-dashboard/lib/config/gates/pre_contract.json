@@ -217,6 +217,30 @@
       "pass_criteria": "Composite of all upstream checks. Phase 1: data_missing — most upstream checks pending DocuSign integration. Surface partial signal + 'do not sign until DocuSign wired'.",
       "failure_action": "block",
       "blocking": true
+    },
+    {
+      "id": "PC-25",
+      "description": "INV-023 math gate: CMA fresh (arvValidatedAt ≤ threshold)",
+      "data_sources": ["airtable_listing"],
+      "pass_criteria": "Listing.arvValidatedAt is set AND within cma_staleness_days (default 7). Missing/stale → data_missing HOLD per Constitution Rule 3 (autonomous retry, no operator surface). No override path.",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PC-26",
+      "description": "INV-023 math gate: Buyer_Median present (Property_Intel)",
+      "data_sources": ["airtable_listing", "property_intel"],
+      "pass_criteria": "Property_Intel.Buyer_Median_Value populated and > 0 (V2.1 floor truth signal — no theoretical fallback per Decision Preconditions Rule 1). Missing → data_missing HOLD, INV-022 hydration retries autonomously. No override path.",
+      "failure_action": "block",
+      "blocking": true
+    },
+    {
+      "id": "PC-27",
+      "description": "INV-023 math gate: Contract_Offer_Price ≤ Your_MAO (Investor_MAO = Buyer_Median − Est_Rehab; Your_MAO = Investor_MAO − Wholesale_Fee)",
+      "data_sources": ["airtable_listing", "property_intel"],
+      "pass_criteria": "Computed Your_MAO > 0 AND Contract_Offer_Price ≤ Your_MAO. Decisive math failure (spread negative or contract > Your_MAO) → block / Type 2C surface; NO OVERRIDE PATH (operator can't sign a structurally underwater deal). Missing inputs → data_missing HOLD.",
+      "failure_action": "block",
+      "blocking": true
     }
   ]
 }

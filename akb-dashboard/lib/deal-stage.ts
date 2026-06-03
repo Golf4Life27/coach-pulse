@@ -1,4 +1,5 @@
 import type { DealStage, TimelineEntry } from "@/types/jarvis";
+import { pipelineStageToDealStage } from "@/lib/pipeline-state/pipeline-stage-to-deal-stage";
 
 const PA_PATTERNS = [
   /\bname\s+(?:on|for)\s+(?:the\s+)?(?:pa|purchase\s+agreement|offer\s+letter|contract)\b/i,
@@ -75,12 +76,44 @@ export function detectStageSignals(timeline: TimelineEntry[]): DealStageSignals 
 }
 
 export interface InferStageInput {
+  /** Pipeline_Stage from Listings_V1 (`fldJt2pSCHiXqBxwj`). Primary
+   *  source of truth per Spine recUS0oHqXLtEM3lG Track B re-point.
+   *  Optional/nullable until every consumer feeds it through; legacy
+   *  outreachStatus-derived logic stays as a fallback for records
+   *  that somehow lost their stage. After the 2026-06-02 backfill
+   *  every Listings_V1 record carries one. */
+  pipelineStage?: string | null;
   outreachStatus: string | null;
   timeline: TimelineEntry[];
   signals: DealStageSignals;
 }
 
 export function inferDealStage(input: InferStageInput): DealStage {
+  // Pipeline_Stage as source of truth (Track B). Inspection signal still
+  // overrides because it's a timeline-derived state that the lifecycle
+  // doesn't model — `under_contract → inspection` is a sub-state of the
+  // dashboard display, not a Pipeline_Stage transition.
+  const stage = pipelineStageToDealStage(input.pipelineStage);
+  if (stage !== null) {
+    // Inspection overlay: a live inspection signal beats a static stage
+    // mapping for the dashboard's display intent.
+    if (input.signals.inspectionStarted && stage !== "dead" && stage !== "won") {
+      return "inspection";
+    }
+    // Accept-pattern overlay: the seller said yes mid-negotiating → escalate.
+    if (stage === "negotiating") {
+      const lastInbound = [...input.timeline].reverse().find((e) => e.direction === "in" && e.channel !== "system");
+      if (lastInbound && anyMatch(ACCEPT_PATTERNS, lastInbound.body ?? "")) {
+        return "accepted_pending_pa";
+      }
+    }
+    return stage;
+  }
+
+  // Fallback: legacy outreachStatus-derived logic for records without
+  // a Pipeline_Stage (post-backfill this branch is empty). Behavior
+  // preserved verbatim so nothing visible to the operator changes for
+  // pre-backfill records.
   const status = (input.outreachStatus ?? "").trim();
   if (status === "Dead" || status === "Walked" || status === "Terminated" || status === "No Response") return "dead";
   if (status === "Won" || status === "Closed") return "won";
@@ -90,7 +123,6 @@ export function inferDealStage(input: InferStageInput): DealStage {
   if (status === "Offer Accepted") return "accepted_pending_pa";
 
   if (status === "Negotiating") {
-    // If the seller's last move accepted, escalate to accepted_pending_pa.
     const lastInbound = [...input.timeline].reverse().find((e) => e.direction === "in" && e.channel !== "system");
     if (lastInbound && anyMatch(ACCEPT_PATTERNS, lastInbound.body ?? "")) {
       return "accepted_pending_pa";
