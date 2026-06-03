@@ -85,12 +85,24 @@ const STAGE_GATE_MAP: Partial<Record<PipelineStage, {
 };
 
 // Inviolable item IDs — fail-block even when override_reason is supplied.
-// Per spec §7 Override Protocol — these rules CANNOT be bypassed.
+// Per spec §7 Override Protocol — these rules CANNOT be bypassed on
+// status="fail". (Original cohort: hardcoded business-rule violations.)
 const INVIOLABLE_ITEM_IDS = new Set<string>([
   "PO-04", // NEVER-list match
   "PO-05", // restricted state (IL/MO/SC/NC/OK/ND)
   "PC-05", // inspection contingency present
   "PC-16", // Memphis assignability (TN)
+]);
+
+// INV-023 math gate items (Spine recUS0oHqXLtEM3lG): stricter inviolable
+// — fail-block AND data_missing-block even when override_reason is
+// supplied. "Missing data holds, no override path" per the V1 build
+// authorization. Override can bypass the gate's non-INV-023 failures
+// (e.g. a PC-23 buyer-pipeline warning) but never the math floor.
+const INV023_NO_OVERRIDE_ITEM_IDS = new Set<string>([
+  "PC-25", // CMA fresh
+  "PC-26", // Buyer_Median present
+  "PC-27", // Contract ≤ Your_MAO (Investor_MAO − Wholesale_Fee)
 ]);
 
 async function executeAdvance(opts: {
@@ -134,10 +146,20 @@ async function executeAdvance(opts: {
   });
 
   // ── Inviolable check ───────────────────────────────────────────────
-  const inviolableFails = gateResult.results.filter(
-    (r) => r.status === "fail" && INVIOLABLE_ITEM_IDS.has(r.item_id),
-  );
+  // Two cohorts, intentionally different semantics:
+  //   • INVIOLABLE_ITEM_IDS — refuse when status === "fail" (original).
+  //   • INV023_NO_OVERRIDE_ITEM_IDS — refuse on status "fail" OR
+  //     "data_missing" (Spine recUS0oHqXLtEM3lG: "missing data holds,
+  //     no override path"). The math floor cannot be bypassed by an
+  //     operator typing an override_reason; if Buyer_Median / CMA isn't
+  //     hydrated yet, the gate holds — the deal waits.
+  const inviolableFails = gateResult.results.filter((r) => {
+    if (INVIOLABLE_ITEM_IDS.has(r.item_id) && r.status === "fail") return true;
+    if (INV023_NO_OVERRIDE_ITEM_IDS.has(r.item_id) && (r.status === "fail" || r.status === "data_missing")) return true;
+    return false;
+  });
   if (inviolableFails.length > 0) {
+    const inv023Hits = inviolableFails.filter((r) => INV023_NO_OVERRIDE_ITEM_IDS.has(r.item_id));
     await audit({
       agent: "sentry",
       event: "advance_stage_refused",
@@ -146,16 +168,21 @@ async function executeAdvance(opts: {
       inputSummary: { target_stage: stage, override_reason },
       outputSummary: {
         reason: "inviolable_block",
-        inviolable_blockers: inviolableFails.map((r) => r.item_id),
+        inviolable_blockers: inviolableFails.map((r) => ({ id: r.item_id, status: r.status })),
+        inv023_block_count: inv023Hits.length,
       },
       decision: "refused_inviolable",
       ms: Date.now() - t0,
     });
+    const breakdown = inviolableFails.map((r) => `${r.item_id}:${r.status}`).join(", ");
+    const inv023Suffix = inv023Hits.length > 0
+      ? ` (INV-023 math gate: ${inv023Hits.map((r) => r.item_id).join(", ")} — missing data holds, no override path)`
+      : "";
     return NextResponse.json(
       {
         advanced: false,
         reason: "inviolable_block",
-        message: `Cannot advance — inviolable items failed: ${inviolableFails.map((r) => r.item_id).join(", ")}. Override is NOT permitted.`,
+        message: `Cannot advance — inviolable items refused: ${breakdown}. Override is NOT permitted${inv023Suffix}.`,
         gate_result: gateResult,
       },
       { status: 409 },

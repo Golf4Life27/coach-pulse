@@ -13,9 +13,13 @@
 // Pure helpers + a single-call gate evaluator. The orchestrator wires
 // this into Gate 4 (pre-contract) as PC-25/PC-26/PC-27.
 
-/** Default wholesale fee in dollars. Matches the Bible v3 §9 / V2.1 default
- *  also used by `lib/appraiser/mao-range.ts:DEFAULT_WHOLESALE_FEE`. */
-export const DEFAULT_WHOLESALE_FEE = 15_000;
+/** Default wholesale fee in dollars. Operator-locked 2026-06-03 (Spine
+ *  `rec937cFJthvCZzBM`) — reduced from $15K to $5K to match the actual
+ *  fee-per-deal target. Other modules that need a fee default (e.g.
+ *  `lib/appraiser/mao-range.ts:DEFAULT_WHOLESALE_FEE`) still carry the
+ *  legacy $15K bible-default; those are out-of-scope for this cycle and
+ *  flagged for follow-up reconciliation. */
+export const DEFAULT_WHOLESALE_FEE = 5_000;
 
 /** Default CMA freshness threshold in days. Matches the existing
  *  Gate 5 (PE-01) staleness rule. */
