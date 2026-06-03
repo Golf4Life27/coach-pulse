@@ -107,13 +107,18 @@ export async function GET(req: Request) {
     const includeLegacy = new URL(req.url).searchParams.get("include_legacy") === "true";
     const [listings] = await Promise.all([getListings({ includeLegacy })]);
 
-    // Filter out dead/rejected/cleared
-    const active = listings.filter(
-      (l) =>
-        !DEAD_STATUSES.has(l.outreachStatus ?? "") &&
-        !REJECTED_PATHS.has(l.executionPath ?? "") &&
-        l.actionCardState !== "Cleared"
-    );
+    // Filter out dead/rejected/cleared. Pipeline_Stage is the source of
+    // truth (Spine recUS0oHqXLtEM3lG Track B, 2026-06-02) — when set,
+    // `pipelineStage === "dead"` is the authoritative dead signal. The
+    // legacy outreachStatus/executionPath exclusions stay as a
+    // transitional fallback for any record that somehow lost its stage.
+    const active = listings.filter((l) => {
+      if ((l.pipelineStage ?? "").trim() === "dead") return false;
+      if (DEAD_STATUSES.has(l.outreachStatus ?? "")) return false;
+      if (REJECTED_PATHS.has(l.executionPath ?? "")) return false;
+      if (l.actionCardState === "Cleared") return false;
+      return true;
+    });
 
     const signNow: BriefingItem[] = [];
     const respondToday: BriefingItem[] = [];

@@ -103,6 +103,10 @@ export async function GET(
 
     const stageSignals = detectStageSignals(timeline);
     const dealStage = inferDealStage({
+      // Pipeline_Stage is the source of truth (Spine recUS0oHqXLtEM3lG
+      // Track B). outreachStatus stays threaded as the transitional
+      // fallback for pre-backfill records.
+      pipelineStage: listing.pipelineStage,
       outreachStatus: listing.outreachStatus,
       timeline,
       signals: stageSignals,

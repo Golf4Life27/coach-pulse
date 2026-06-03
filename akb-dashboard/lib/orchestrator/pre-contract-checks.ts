@@ -28,6 +28,7 @@
 
 import preContractConfig from "@/lib/config/gates/pre_contract.json";
 import type { CheckFn, CheckResult, ChecklistItem, Gate } from "./types";
+import { evaluatePreContractMath } from "@/lib/pre-contract-math";
 
 export const PRE_CONTRACT_GATE: Gate = {
   id: preContractConfig.gate_id,
@@ -390,4 +391,75 @@ export const PRE_CONTRACT_CHECKS: Record<string, CheckFn> = {
   "PC-22": PC_22_recompute_math,
   "PC-23": PC_23_buyer_pipeline,
   "PC-24": PC_24_final_confidence,
+  // INV-023 math gate — Spine recUS0oHqXLtEM3lG Track A (2026-06-02).
+  // Three new hard-block checks: CMA fresh, Buyer_Median present, MAO
+  // math (Investor_MAO = Buyer_Median − Est_Rehab; Your_MAO = Investor_MAO
+  // − Wholesale_Fee; contract ≤ Your_MAO). All gated by the same pure
+  // `evaluatePreContractMath` helper so no signal can drift between
+  // checks. Definitions below the map (TS hoists `function` decls).
+  "PC-25": (ctx, cfg) => PC_25_inv023_cma(ctx, cfg),
+  "PC-26": (ctx, cfg) => PC_26_inv023_buyer_median(ctx, cfg),
+  "PC-27": (ctx, cfg) => PC_27_inv023_mao(ctx, cfg),
+};
+
+// ── INV-023 pre-contract math gate (PC-25 / PC-26 / PC-27) ───────────
+// Per the operator's V1 build authorization (Spine recUS0oHqXLtEM3lG):
+// hard-block advancement to under_contract until CMA + Buyer_Median +
+// MAO clear. Missing data → data_missing (HOLD). No override path —
+// failure_action="block" on every item.
+
+function inv023Inputs(ctx: Parameters<CheckFn>[0]) {
+  return {
+    contractOfferPrice: ctx.listing?.contractOfferPrice ?? null,
+    buyerMedian: ctx.propertyIntel?.buyerMedianValue ?? null,
+    estRehab: ctx.listing?.estRehabMid ?? ctx.listing?.estRehab ?? null,
+    wholesaleFee: ctx.listing?.wholesaleFeeTarget ?? undefined,
+    cmaValidatedAt: ctx.listing?.arvValidatedAt ?? null,
+  };
+}
+
+const PC_25_inv023_cma: CheckFn = (ctx) => {
+  const r = evaluatePreContractMath(inv023Inputs(ctx));
+  const data_examined = {
+    arv_validated_at: ctx.listing?.arvValidatedAt ?? null,
+    recordId: ctx.recordId,
+  };
+  if (r.cma.status === "pass") {
+    return { item_id: "PC-25", status: "pass", reasoning: r.cma.reason, data_examined, failure_action: "block" };
+  }
+  // CMA hold = data_missing (retry-able, no operator surface per Rule 3).
+  return { item_id: "PC-25", status: "data_missing", reasoning: r.cma.reason, data_examined: { ...data_examined, missing_data_source: "cma_validated_at" }, failure_action: "block" };
+};
+
+const PC_26_inv023_buyer_median: CheckFn = (ctx) => {
+  const r = evaluatePreContractMath(inv023Inputs(ctx));
+  const data_examined = {
+    buyer_median_value: ctx.propertyIntel?.buyerMedianValue ?? null,
+    recordId: ctx.recordId,
+  };
+  if (r.buyerMedian.status === "pass") {
+    return { item_id: "PC-26", status: "pass", reasoning: r.buyerMedian.reason, data_examined, failure_action: "block" };
+  }
+  return { item_id: "PC-26", status: "data_missing", reasoning: r.buyerMedian.reason, data_examined: { ...data_examined, missing_data_source: "property_intel.Buyer_Median_Value" }, failure_action: "block" };
+};
+
+const PC_27_inv023_mao: CheckFn = (ctx) => {
+  const r = evaluatePreContractMath(inv023Inputs(ctx));
+  const data_examined = {
+    contract_offer_price: ctx.listing?.contractOfferPrice ?? null,
+    buyer_median_value: ctx.propertyIntel?.buyerMedianValue ?? null,
+    est_rehab: ctx.listing?.estRehabMid ?? ctx.listing?.estRehab ?? null,
+    wholesale_fee_used: r.wholesaleFeeUsed,
+    investor_mao: r.investorMao,
+    your_mao: r.yourMao,
+    recordId: ctx.recordId,
+  };
+  if (r.mao.status === "pass") {
+    return { item_id: "PC-27", status: "pass", reasoning: r.mao.reason, data_examined, failure_action: "block" };
+  }
+  if (r.mao.status === "hold") {
+    return { item_id: "PC-27", status: "data_missing", reasoning: r.mao.reason, data_examined, failure_action: "block" };
+  }
+  // status === "block" — decisive math failure (Type 2C, no override).
+  return { item_id: "PC-27", status: "fail", reasoning: r.mao.reason, data_examined, failure_action: "block" };
 };
