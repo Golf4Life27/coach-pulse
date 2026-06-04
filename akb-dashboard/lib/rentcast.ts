@@ -254,6 +254,142 @@ export async function getSubjectFacts(input: {
   return empty;
 }
 
+/**
+ * Probe + extract listing photo URLs from RentCast. Tries the active
+ * sale-listing endpoint first (the listing payload is most likely to
+ * carry portal-uploaded photos), then falls back to the property record.
+ *
+ * Returns a structured result so callers can see WHICH endpoint
+ * responded, what HTTP status it returned, how many photos came back,
+ * and (in debug mode) which top-level keys looked photo-shaped. The
+ * caller decides how to use it — collectPhotos uses .photos directly;
+ * the appraiser-readiness probe surfaces the full breakdown.
+ *
+ * Never throws — caller-side photo collection is "best-effort, fall
+ * through on failure" by design.
+ */
+export interface RentCastPhotoResult {
+  keyPresent: boolean;
+  photos: string[];
+  listingsSaleStatus: number | null;
+  listingsSalePhotoCount: number | null;
+  propertiesStatus: number | null;
+  propertiesPhotoCount: number | null;
+  source: "listings_sale" | "properties" | null;
+  /** Top-level keys on the FIRST record that contain "photo"/"image"/
+   *  "media" — investigation aid. Populated only when debug=true. */
+  photoFieldKeys: string[];
+  error: string | null;
+}
+
+/** Pure: pull a photo-URL array off a RentCast record. RentCast docs
+ *  don't lock the field name; we look at the obvious candidates and
+ *  unwrap nested {url} / {originalUrl} shapes. Empty array when nothing
+ *  photo-shaped is present. */
+export function extractPhotoUrls(rec: Record<string, unknown> | undefined): string[] {
+  if (!rec) return [];
+  const candidates: unknown[] = [];
+  for (const key of ["photos", "images", "media", "photoUrls", "imageUrls"]) {
+    const v = rec[key];
+    if (Array.isArray(v)) candidates.push(...v);
+  }
+  const urls: string[] = [];
+  for (const c of candidates) {
+    if (typeof c === "string" && /^https?:\/\//.test(c)) urls.push(c);
+    else if (c && typeof c === "object") {
+      const obj = c as Record<string, unknown>;
+      for (const k of ["url", "originalUrl", "src", "href"]) {
+        const v = obj[k];
+        if (typeof v === "string" && /^https?:\/\//.test(v)) {
+          urls.push(v);
+          break;
+        }
+      }
+    }
+  }
+  return Array.from(new Set(urls));
+}
+
+/** Pure: top-level keys on a record whose name suggests photos/images/
+ *  media — investigation aid for the probe. */
+export function findPhotoFieldKeys(rec: Record<string, unknown> | undefined): string[] {
+  if (!rec) return [];
+  return Object.keys(rec).filter((k) => /photo|image|media/i.test(k));
+}
+
+export async function getListingPhotosFromRentCast(
+  input: { address: string; city: string; state: string; zip: string },
+  opts: { debug?: boolean } = {},
+): Promise<RentCastPhotoResult> {
+  const empty: RentCastPhotoResult = {
+    keyPresent: Boolean(RENTCAST_API_KEY),
+    photos: [],
+    listingsSaleStatus: null,
+    listingsSalePhotoCount: null,
+    propertiesStatus: null,
+    propertiesPhotoCount: null,
+    source: null,
+    photoFieldKeys: [],
+    error: null,
+  };
+  if (!RENTCAST_API_KEY) {
+    return { ...empty, error: "RENTCAST_API_KEY not set" };
+  }
+
+  const qp = new URLSearchParams({
+    address: input.address,
+    city: input.city,
+    state: input.state,
+    zipCode: input.zip,
+  });
+
+  const debugKeys: string[] = [];
+
+  // 1. Active sale listing.
+  try {
+    const res = await fetch(`${BASE}/listings/sale?${qp.toString()}&status=active`, {
+      headers: { "X-Api-Key": RENTCAST_API_KEY },
+      cache: "no-store",
+    });
+    empty.listingsSaleStatus = res.status;
+    if (res.ok) {
+      const body = (await res.json()) as unknown;
+      const rec = Array.isArray(body) ? (body[0] as Record<string, unknown> | undefined) : undefined;
+      const urls = extractPhotoUrls(rec);
+      empty.listingsSalePhotoCount = urls.length;
+      if (opts.debug) debugKeys.push(...findPhotoFieldKeys(rec).map((k) => `listings_sale.${k}`));
+      if (urls.length > 0) {
+        return { ...empty, photos: urls, source: "listings_sale", photoFieldKeys: debugKeys };
+      }
+    }
+  } catch (err) {
+    empty.error = String(err).slice(0, 200);
+  }
+
+  // 2. Property record.
+  try {
+    const res = await fetch(`${BASE}/properties?${qp.toString()}`, {
+      headers: { "X-Api-Key": RENTCAST_API_KEY },
+      cache: "no-store",
+    });
+    empty.propertiesStatus = res.status;
+    if (res.ok) {
+      const body = (await res.json()) as unknown;
+      const rec = Array.isArray(body) ? (body[0] as Record<string, unknown> | undefined) : undefined;
+      const urls = extractPhotoUrls(rec);
+      empty.propertiesPhotoCount = urls.length;
+      if (opts.debug) debugKeys.push(...findPhotoFieldKeys(rec).map((k) => `properties.${k}`));
+      if (urls.length > 0) {
+        return { ...empty, photos: urls, source: "properties", photoFieldKeys: debugKeys };
+      }
+    }
+  } catch (err) {
+    empty.error = (empty.error ?? "") + " | " + String(err).slice(0, 200);
+  }
+
+  return { ...empty, photoFieldKeys: debugKeys };
+}
+
 /** Pure: pull structural facts off a RentCast property/listing record. */
 export function extractFacts(rec: Record<string, unknown> | undefined): Omit<SubjectFacts, "source"> {
   if (!rec) return { squareFootage: null, bedrooms: null, bathrooms: null, yearBuilt: null };
