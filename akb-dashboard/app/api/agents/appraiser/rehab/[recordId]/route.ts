@@ -227,9 +227,9 @@ export async function GET(
   if (!skipWrite && range.rehab_mid != null) {
     const fieldsToWrite: Record<string, unknown> = {
       Est_Rehab: range.rehab_mid,
-      Est_Rehab_Low: range.rehab_low,
+      Rehab_Est_Low: range.rehab_low,
       Est_Rehab_Mid: range.rehab_mid,
-      Est_Rehab_High: range.rehab_high,
+      Rehab_Est_High: range.rehab_high,
       Rehab_Confidence_Score: vision.confidence,
       Rehab_Line_Items_JSON: JSON.stringify({
         bbc_tier: bbcTier,
