@@ -235,14 +235,38 @@ export function extractRedfinListingId(url: string): string | null {
 }
 
 /** Rank Redfin photo-resolution tags so we prefer larger when the same
- *  index appears in multiple sizes. */
+ *  photo appears in multiple sizes. */
 function redfinResolutionRank(url: string): number {
   const lc = url.toLowerCase();
-  if (lc.includes("genislnoresize")) return 4;
-  if (lc.includes("islnoresize")) return 3;
+  if (lc.includes("genislnoresize") || lc.includes("islnoresize")) return 4;
+  if (lc.includes("islphoto")) return 3;
   if (lc.includes("bigphoto")) return 2;
-  if (lc.includes("mbphoto")) return 1;
+  if (lc.includes("mbpaddedwide") || lc.includes("mbphoto") || lc.includes("genmid")) return 1;
   return 0;
+}
+
+/** Pure: a resolution-invariant identity key for a Redfin photo URL, so
+ *  variant dedup can collapse the SAME photo served at multiple sizes
+ *  WITHOUT collapsing different photos (or a subject photo against a
+ *  comp photo that happens to share a photo index).
+ *
+ *  The key is the filename (last path segment) with the leading
+ *  resolution-descriptor prefix stripped (e.g. `genIslnoResize.`,
+ *  `genMid.`). What remains is `<listingId>_<idx>.jpg` (or
+ *  `<listingId>_<idx>_<n>.jpg`) — which embeds the listing id, so two
+ *  DIFFERENT listings never collide even when both have an `_0` photo.
+ *  Falls back to the full URL when the filename doesn't carry a
+ *  recognizable id_idx shape (no accidental dedup of unknown formats). */
+export function photoIdentityKey(url: string): string {
+  const filename = url.split("/").pop() ?? url;
+  // Strip a leading `word.` resolution-descriptor prefix if present
+  // (e.g. genIslnoResize.32118136_0.jpg → 32118136_0.jpg).
+  const stripped = filename.replace(/^[a-z]+\./i, "");
+  // Only trust the stripped key when it carries the <digits>_<digits>
+  // identity shape; otherwise key on the full URL (fail safe — no
+  // accidental collapse).
+  if (/^\d{4,}_\d+/.test(stripped)) return stripped.toLowerCase();
+  return url.toLowerCase();
 }
 
 export function filterPropertyPhotos(
@@ -269,7 +293,31 @@ export function filterPropertyPhotos(
     }
   }
 
-  // Pass 2: cluster by listing id.
+  // Pass 2: comp-cluster drop — FAIL OPEN.
+  //
+  // Redfin listing pages embed comps + "nearby homes" + "recommended"
+  // carousels using the same CDN. IF we can confidently identify the
+  // subject's own photo cluster, dropping the others removes comp
+  // contamination. But the photo-URL listing-id format is not stable
+  // across Redfin's CDN variants (observed 2026-06-04: only ~1 of 69
+  // matches on 924 Sunnyside clustered to the subject id from the
+  // /home/<id> URL — the rest were unparseable). A fail-CLOSED filter
+  // collapsed the set to 1 photo, dropping ~all genuine subject
+  // photos — exactly the opposite of the instruction ("KEEP every
+  // genuine photo, interior AND exterior").
+  //
+  // So this pass only drops comps when it is CONFIDENT, and otherwise
+  // keeps every non-chrome photo:
+  //   - Confident = the subject listing-id (from the /home/<id> source
+  //     URL) is present among the clustered photos AND its cluster is
+  //     the largest. Then other clusters are comps → drop them; keep
+  //     subject cluster + any unclustered (noId) photos (which are
+  //     almost always subject photos in a CDN variant our regex
+  //     doesn't parse — we must NOT drop those).
+  //   - Not confident (subject id absent from clusters, or another
+  //     cluster is bigger, or no clusters at all) = KEEP everything
+  //     non-chrome. Over-including a few comps is acceptable; dropping
+  //     real subject photos is not.
   const clusters = new Map<string, string[]>();
   const noId: string[] = [];
   for (const url of afterChrome) {
@@ -286,45 +334,32 @@ export function filterPropertyPhotos(
     result.cluster_sizes[id] = arr.length;
   }
 
-  let subjectCluster: string[];
-  if (result.subject_listing_id && clusters.has(result.subject_listing_id)) {
-    subjectCluster = clusters.get(result.subject_listing_id)!;
-    // Everything else is off-cluster (comps / recommended listings).
+  const subjId = result.subject_listing_id;
+  const subjArr = subjId ? clusters.get(subjId) : undefined;
+  const largestClusterSize = Math.max(0, ...Array.from(clusters.values(), (a) => a.length));
+  const subjectIsLargest = subjArr != null && subjArr.length === largestClusterSize;
+
+  let preDedupe: string[];
+  if (subjArr && subjectIsLargest && clusters.size > 1) {
+    // CONFIDENT comp drop: keep subject cluster + unclustered photos
+    // (noId), drop the other (smaller) id clusters as comps.
+    preDedupe = [...subjArr, ...noId];
     for (const [id, arr] of clusters) {
-      if (id !== result.subject_listing_id) {
-        result.dropped_offcluster += arr.length;
-      }
+      if (id !== subjId) result.dropped_offcluster += arr.length;
     }
-    result.dropped_offcluster += noId.length;
-  } else if (clusters.size > 0) {
-    // No subject listing-id known — pick the LARGEST cluster on the
-    // page. Subject normally has the most photos; comps show 1-3 each.
-    let best: { id: string; arr: string[] } | null = null;
-    for (const [id, arr] of clusters) {
-      if (!best || arr.length > best.arr.length) best = { id, arr };
-    }
-    subjectCluster = best!.arr;
-    result.subject_listing_id = best!.id;
-    for (const [id, arr] of clusters) {
-      if (id !== best!.id) {
-        result.dropped_offcluster += arr.length;
-      }
-    }
-    result.dropped_offcluster += noId.length;
   } else {
-    // No clusters at all — fall back to anything not flagged as chrome.
-    // Rare; means the regex matched URLs without a Redfin listing-id
-    // shape (other portals or edge cases).
-    subjectCluster = noId;
+    // FAIL OPEN: keep every non-chrome photo. We can't confidently
+    // separate subject from comps, so we don't risk dropping the
+    // subject. (dropped_offcluster stays 0.)
+    preDedupe = afterChrome;
   }
 
   // Pass 3: dedupe variants of the same photo index (Redfin serves the
   // same photo at multiple resolutions). Index lives at the tail:
   // `_<idx>.jpg`. Within an index, keep the highest-resolution variant.
   const byIndex = new Map<string, string>();
-  for (const url of subjectCluster) {
-    const idxMatch = url.match(/_(\d+)\.jpg/i);
-    const key = idxMatch ? idxMatch[1] : url;
+  for (const url of preDedupe) {
+    const key = photoIdentityKey(url);
     const existing = byIndex.get(key);
     if (!existing) {
       byIndex.set(key, url);

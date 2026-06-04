@@ -15,6 +15,7 @@ import { describe, it, expect } from "vitest";
 import {
   filterPropertyPhotos,
   extractRedfinListingId,
+  photoIdentityKey,
   FIRECRAWL_PHOTO_DENY_PATTERNS,
 } from "./photo-sources";
 
@@ -99,8 +100,8 @@ describe("filterPropertyPhotos — chrome / UI assets", () => {
   });
 });
 
-describe("filterPropertyPhotos — comp / cluster filtering", () => {
-  it("keeps only the subject's listing-id cluster when source URL known", () => {
+describe("filterPropertyPhotos — comp / cluster filtering (FAIL OPEN)", () => {
+  it("drops comps only when the subject cluster is confidently the largest", () => {
     const urls = [
       subjectPhoto(0),
       subjectPhoto(1),
@@ -111,23 +112,60 @@ describe("filterPropertyPhotos — comp / cluster filtering", () => {
     ];
     const out = filterPropertyPhotos(urls, SUBJECT_PAGE);
     expect(out.subject_listing_id).toBe("32118136");
+    // Subject cluster (3) is largest → comps (99999999 x2, 88888888 x1)
+    // dropped.
     expect(out.kept).toEqual([subjectPhoto(0), subjectPhoto(1), subjectPhoto(2)]);
     expect(out.dropped_offcluster).toBe(3);
   });
 
-  it("falls back to the largest cluster when source URL has no id", () => {
+  it("FAIL OPEN: keeps everything non-chrome when subject cluster is NOT the largest", () => {
+    // Regression for the 924 Sunnyside 69→1 collapse: a comp cluster
+    // is bigger than the (mis-parsed) subject cluster. We must NOT drop
+    // the subject's photos — keep all non-chrome.
+    const urls = [
+      subjectPhoto(0), // only 1 subject photo parsed to the subject id
+      compPhoto("99999999", 0),
+      compPhoto("99999999", 1),
+      compPhoto("99999999", 2),
+    ];
+    const out = filterPropertyPhotos(urls, SUBJECT_PAGE);
+    expect(out.kept.length).toBe(4); // nothing dropped as off-cluster
+    expect(out.dropped_offcluster).toBe(0);
+  });
+
+  it("FAIL OPEN: keeps unclustered (noId) photos alongside the subject cluster", () => {
+    // The real 924 Sunnyside failure mode: most subject photos are in a
+    // CDN format our id regex can't parse (noId), with the subject id
+    // appearing on only a couple. noId photos are almost always subject
+    // photos — they must be KEPT, not dropped.
+    const noIdPhoto = (n: number) =>
+      `https://ssl.cdn-redfin.com/photo/72/bigphoto/genMidShot.${n}.jpg`;
+    const urls = [
+      subjectPhoto(0),
+      subjectPhoto(1),
+      subjectPhoto(2),
+      noIdPhoto(1),
+      noIdPhoto(2),
+      compPhoto("99999999", 0),
+    ];
+    const out = filterPropertyPhotos(urls, SUBJECT_PAGE);
+    // Subject cluster (3) is largest id-cluster → confident drop of the
+    // comp, but noId photos are KEPT (joined to subject).
+    expect(out.kept).toContain(noIdPhoto(1));
+    expect(out.kept).toContain(noIdPhoto(2));
+    expect(out.kept).not.toContain(compPhoto("99999999", 0));
+  });
+
+  it("FAIL OPEN: no source id → keep everything non-chrome (no largest-cluster guess)", () => {
     const urls = [
       compPhoto("11111111", 0),
       compPhoto("22222222", 0),
       compPhoto("22222222", 1),
-      compPhoto("22222222", 2),
-      compPhoto("22222222", 3),
       compPhoto("33333333", 0),
     ];
     const out = filterPropertyPhotos(urls, null);
-    expect(out.subject_listing_id).toBe("22222222");
     expect(out.kept.length).toBe(4);
-    expect(out.dropped_offcluster).toBe(2);
+    expect(out.dropped_offcluster).toBe(0);
   });
 
   it("reports cluster sizes for operator audit", () => {
@@ -139,6 +177,32 @@ describe("filterPropertyPhotos — comp / cluster filtering", () => {
     const out = filterPropertyPhotos(urls, SUBJECT_PAGE);
     expect(out.cluster_sizes["32118136"]).toBe(2);
     expect(out.cluster_sizes["99999999"]).toBe(1);
+  });
+});
+
+describe("photoIdentityKey", () => {
+  it("collapses resolution variants of the same photo", () => {
+    const big = "https://ssl.cdn-redfin.com/photo/72/bigphoto/136/32118136_0.jpg";
+    const isl = "https://ssl.cdn-redfin.com/photo/72/islphoto/136/genIslnoResize.32118136_0.jpg";
+    expect(photoIdentityKey(big)).toBe(photoIdentityKey(isl));
+  });
+
+  it("does NOT collapse different photos of the same listing", () => {
+    const p0 = "https://ssl.cdn-redfin.com/photo/72/bigphoto/136/32118136_0.jpg";
+    const p1 = "https://ssl.cdn-redfin.com/photo/72/bigphoto/136/32118136_1.jpg";
+    expect(photoIdentityKey(p0)).not.toBe(photoIdentityKey(p1));
+  });
+
+  it("does NOT collapse the same photo index across DIFFERENT listings (subject vs comp)", () => {
+    const subj = "https://ssl.cdn-redfin.com/photo/72/bigphoto/136/32118136_0.jpg";
+    const comp = "https://ssl.cdn-redfin.com/photo/72/bigphoto/999/99999999_0.jpg";
+    expect(photoIdentityKey(subj)).not.toBe(photoIdentityKey(comp));
+  });
+
+  it("falls back to full URL for unrecognized filename shapes (no accidental collapse)", () => {
+    const a = "https://ssl.cdn-redfin.com/photo/72/bigphoto/genMidShot.a.jpg";
+    const b = "https://ssl.cdn-redfin.com/photo/72/bigphoto/genMidShot.b.jpg";
+    expect(photoIdentityKey(a)).not.toBe(photoIdentityKey(b));
   });
 });
 
