@@ -49,7 +49,7 @@
       "schedule": "*/15 * * * *"
     },
     {
-      "path": "/api/admin/appraiser-backfill?apply=1&limit=3",
+      "path": "/api/admin/appraiser-backfill?apply=1&limit=6",
       "schedule": "*/5 * * * *"
     }
   ]
