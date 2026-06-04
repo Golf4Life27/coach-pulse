@@ -151,11 +151,30 @@ export async function GET(req: Request) {
       }),
     });
   }
-  // SUMMARY FIRST — Vercel's runtime-log indexer collapses each request
-  // to its first console.log line; everything after is invisible to the
-  // MCP query tool. So we emit the condensed JSON summary HERE (before
-  // any other console output) and rely on the response body + audit log
-  // for the un-truncated form.
+  // SUMMARY FIRST — Vercel's runtime-log indexer surfaces ONLY the first
+  // console.log per request and truncates the message column to ~30
+  // chars. Tight encoding so the verdict fits the visible window:
+  //   P924 R{src}+{ls}/{prop} F{http}+{matches} S{http}+{matches}
+  // R src codes: 0=none/null, L=listings_sale, P=properties.
+  // 0=null/no-result, dashes mean errored.
+  const firstProbe = probes[0];
+  const firstRc = rentcastProbes[0]?.rentcast;
+  const rcSrcCode =
+    firstRc?.source === "listings_sale"
+      ? "L"
+      : firstRc?.source === "properties"
+        ? "P"
+        : "0";
+  const tight =
+    `P924 R${rcSrcCode}+${firstRc?.listings_sale_photo_count ?? "-"}/${firstRc?.properties_photo_count ?? "-"}` +
+    ` F${firstProbe?.firecrawl.scrape_status ?? "-"}+${firstProbe?.firecrawl.img_match_count ?? "-"}` +
+    ` S${firstProbe?.probe.scraperapi_http_status ?? "-"}+${firstProbe?.probe.regex_match_count ?? "-"}`;
+  console.log(tight);
+
+  // Longer-form summary AFTER — used by the response body + audit row.
+  // Not surfaced by the runtime-log MCP (tool only returns first log per
+  // request), but the operator can read it from the JSON response when
+  // hitting the endpoint with dashboard auth.
   const summary = {
     fc_url: probes.map((p) => ({
       key: p.firecrawl.firecrawl_key_present,
