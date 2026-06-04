@@ -167,7 +167,7 @@ export async function GET(req: Request) {
         : "0";
   const tight =
     `P924 R${rcSrcCode}+${firstRc?.listings_sale_photo_count ?? "-"}/${firstRc?.properties_photo_count ?? "-"}` +
-    ` F${firstProbe?.firecrawl.scrape_status ?? "-"}+${firstProbe?.firecrawl.img_match_count ?? "-"}` +
+    ` F${firstProbe?.firecrawl.scrape_status ?? "-"}+${firstProbe?.firecrawl.img_match_count ?? "-"}/${firstProbe?.firecrawl.filtered_count ?? "-"}` +
     ` S${firstProbe?.probe.scraperapi_http_status ?? "-"}+${firstProbe?.probe.regex_match_count ?? "-"}`;
   console.log(tight);
 
