@@ -117,17 +117,6 @@ export async function GET(req: Request) {
     const p = await probeListingPhotos(t.url);
     const fc = await probeFirecrawlPhotos(t.url);
     probes.push({ ...t, probe: p, firecrawl: fc });
-    console.log(`PROBE.${t.recordId ?? "url"}.scraper_key=${p.scraper_key_present}`);
-    console.log(`PROBE.${t.recordId ?? "url"}.google_key=${p.google_key_present}`);
-    console.log(`PROBE.${t.recordId ?? "url"}.http=${p.scraperapi_http_status}`);
-    console.log(`PROBE.${t.recordId ?? "url"}.html_len=${p.html_length}`);
-    console.log(`PROBE.${t.recordId ?? "url"}.matches=${p.regex_match_count}`);
-    console.log(`PROBE.${t.recordId ?? "url"}.err=${p.error ?? "none"}`);
-    console.log(`FC.${t.recordId ?? "url"}.key=${fc.firecrawl_key_present}`);
-    console.log(`FC.${t.recordId ?? "url"}.http=${fc.scrape_status}`);
-    console.log(`FC.${t.recordId ?? "url"}.html_len=${fc.html_length}`);
-    console.log(`FC.${t.recordId ?? "url"}.matches=${fc.img_match_count}`);
-    console.log(`FC.${t.recordId ?? "url"}.err=${fc.error ?? "none"}`);
   }
 
   // ── RentCast photo probe (priority 1) ────────────────────────────
@@ -162,16 +151,41 @@ export async function GET(req: Request) {
       }),
     });
   }
-  for (const rp of rentcastProbes) {
-    const r = rp.rentcast;
-    console.log(`RC.${rp.recordId ?? "default"}.key=${r.rentcast_key_present}`);
-    console.log(`RC.${rp.recordId ?? "default"}.ls_status=${r.listings_sale_status}`);
-    console.log(`RC.${rp.recordId ?? "default"}.ls_photos=${r.listings_sale_photo_count}`);
-    console.log(`RC.${rp.recordId ?? "default"}.props_status=${r.properties_status}`);
-    console.log(`RC.${rp.recordId ?? "default"}.props_photos=${r.properties_photo_count}`);
-    console.log(`RC.${rp.recordId ?? "default"}.source=${r.source ?? "none"}`);
-    console.log(`RC.${rp.recordId ?? "default"}.fields=${r.photo_field_keys.join("|") || "none"}`);
-  }
+  // SUMMARY FIRST — Vercel's runtime-log indexer collapses each request
+  // to its first console.log line; everything after is invisible to the
+  // MCP query tool. So we emit the condensed JSON summary HERE (before
+  // any other console output) and rely on the response body + audit log
+  // for the un-truncated form.
+  const summary = {
+    fc_url: probes.map((p) => ({
+      key: p.firecrawl.firecrawl_key_present,
+      http: p.firecrawl.scrape_status,
+      html: p.firecrawl.html_length,
+      md: p.firecrawl.markdown_length,
+      matches: p.firecrawl.img_match_count,
+      sample: p.firecrawl.sample_match?.slice(0, 100) ?? null,
+      err: p.firecrawl.error,
+    })),
+    sa_url: probes.map((p) => ({
+      key: p.probe.scraper_key_present,
+      http: p.probe.scraperapi_http_status,
+      matches: p.probe.regex_match_count,
+      err: p.probe.error,
+    })),
+    rc: rentcastProbes.map((rp) => ({
+      addr: rp.address,
+      key: rp.rentcast.rentcast_key_present,
+      ls_status: rp.rentcast.listings_sale_status,
+      ls_photos: rp.rentcast.listings_sale_photo_count,
+      props_status: rp.rentcast.properties_status,
+      props_photos: rp.rentcast.properties_photo_count,
+      source: rp.rentcast.source,
+      sample: rp.rentcast.sample_photo?.slice(0, 100) ?? null,
+      fields: rp.rentcast.photo_field_keys,
+      err: rp.rentcast.error,
+    })),
+  };
+  console.log(`SUMMARY ${JSON.stringify(summary)}`);
 
   // ── Building_SqFt backfill (apply mode) ──────────────────────────
   const sqftWrites: Array<{ recordId: string; address: string; written: number | null; source: string | null; error: string | null }> = [];
@@ -204,41 +218,6 @@ export async function GET(req: Request) {
   console.log(`SQFT.missing_both=${missingBoth.length}`);
   console.log(`SQFT.applied=${applySqft}`);
   console.log(`SQFT.written=${sqftWritten}`);
-
-  // SUMMARY — single-line condensed dump of every photo-source probe so
-  // the Vercel runtime-log indexer (which collapses to one line per
-  // request) surfaces the verdict in one row. Format: JSON-stringified.
-  const summary = {
-    fc_url: probes.map((p) => ({
-      key: p.firecrawl.firecrawl_key_present,
-      http: p.firecrawl.scrape_status,
-      html: p.firecrawl.html_length,
-      md: p.firecrawl.markdown_length,
-      matches: p.firecrawl.img_match_count,
-      sample: p.firecrawl.sample_match?.slice(0, 120) ?? null,
-      err: p.firecrawl.error,
-    })),
-    sa_url: probes.map((p) => ({
-      key: p.probe.scraper_key_present,
-      http: p.probe.scraperapi_http_status,
-      matches: p.probe.regex_match_count,
-      sample: p.probe.sample_match?.slice(0, 120) ?? null,
-      err: p.probe.error,
-    })),
-    rc: rentcastProbes.map((rp) => ({
-      addr: rp.address,
-      key: rp.rentcast.rentcast_key_present,
-      ls_status: rp.rentcast.listings_sale_status,
-      ls_photos: rp.rentcast.listings_sale_photo_count,
-      props_status: rp.rentcast.properties_status,
-      props_photos: rp.rentcast.properties_photo_count,
-      source: rp.rentcast.source,
-      sample: rp.rentcast.sample_photo?.slice(0, 120) ?? null,
-      fields: rp.rentcast.photo_field_keys,
-      err: rp.rentcast.error,
-    })),
-  };
-  console.log(`SUMMARY ${JSON.stringify(summary)}`);
 
   await audit({
     agent: "appraiser",
