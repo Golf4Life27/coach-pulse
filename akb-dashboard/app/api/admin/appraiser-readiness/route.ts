@@ -32,7 +32,11 @@ import {
   readAuthHeaders,
 } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
-import { probeListingPhotos } from "@/lib/photo-sources";
+import {
+  probeListingPhotos,
+  probeFirecrawlPhotos,
+  probeRentCastPhotos,
+} from "@/lib/photo-sources";
 import { getSubjectFacts } from "@/lib/rentcast";
 import type { Listing } from "@/lib/types";
 
@@ -111,13 +115,62 @@ export async function GET(req: Request) {
   const probes = [];
   for (const t of probeTargets) {
     const p = await probeListingPhotos(t.url);
-    probes.push({ ...t, probe: p });
+    const fc = await probeFirecrawlPhotos(t.url);
+    probes.push({ ...t, probe: p, firecrawl: fc });
     console.log(`PROBE.${t.recordId ?? "url"}.scraper_key=${p.scraper_key_present}`);
     console.log(`PROBE.${t.recordId ?? "url"}.google_key=${p.google_key_present}`);
     console.log(`PROBE.${t.recordId ?? "url"}.http=${p.scraperapi_http_status}`);
     console.log(`PROBE.${t.recordId ?? "url"}.html_len=${p.html_length}`);
     console.log(`PROBE.${t.recordId ?? "url"}.matches=${p.regex_match_count}`);
     console.log(`PROBE.${t.recordId ?? "url"}.err=${p.error ?? "none"}`);
+    console.log(`FC.${t.recordId ?? "url"}.key=${fc.firecrawl_key_present}`);
+    console.log(`FC.${t.recordId ?? "url"}.http=${fc.scrape_status}`);
+    console.log(`FC.${t.recordId ?? "url"}.html_len=${fc.html_length}`);
+    console.log(`FC.${t.recordId ?? "url"}.matches=${fc.img_match_count}`);
+    console.log(`FC.${t.recordId ?? "url"}.err=${fc.error ?? "none"}`);
+  }
+
+  // ── RentCast photo probe (priority 1) ────────────────────────────
+  // Probes per-record (uses the listing's address). For the default
+  // probe (924 Sunnyside) we hard-code the address. The probe reports
+  // whether RentCast's listings/sale or properties payload carries
+  // photo URLs at all — if yes, we skip scraping entirely for those
+  // records.
+  const rentcastProbes = [];
+  // Default probe: 924 Sunnyside Ave, Dallas, TX 75211.
+  rentcastProbes.push({
+    recordId: null as string | null,
+    address: "924 Sunnyside Ave (default)",
+    rentcast: await probeRentCastPhotos({
+      address: "924 Sunnyside Ave",
+      city: "Dallas",
+      state: "TX",
+      zip: "75211",
+    }),
+  });
+  // Plus the first N active records with URL (gauge breadth).
+  for (const l of active.filter(hasUrl).slice(0, DEFAULT_PROBE_RECORDS)) {
+    if (!l.city || !l.state || !l.zip) continue;
+    rentcastProbes.push({
+      recordId: l.id,
+      address: l.address,
+      rentcast: await probeRentCastPhotos({
+        address: l.address,
+        city: l.city,
+        state: l.state,
+        zip: l.zip,
+      }),
+    });
+  }
+  for (const rp of rentcastProbes) {
+    const r = rp.rentcast;
+    console.log(`RC.${rp.recordId ?? "default"}.key=${r.rentcast_key_present}`);
+    console.log(`RC.${rp.recordId ?? "default"}.ls_status=${r.listings_sale_status}`);
+    console.log(`RC.${rp.recordId ?? "default"}.ls_photos=${r.listings_sale_photo_count}`);
+    console.log(`RC.${rp.recordId ?? "default"}.props_status=${r.properties_status}`);
+    console.log(`RC.${rp.recordId ?? "default"}.props_photos=${r.properties_photo_count}`);
+    console.log(`RC.${rp.recordId ?? "default"}.source=${r.source ?? "none"}`);
+    console.log(`RC.${rp.recordId ?? "default"}.fields=${r.photo_field_keys.join("|") || "none"}`);
   }
 
   // ── Building_SqFt backfill (apply mode) ──────────────────────────
@@ -180,6 +233,7 @@ export async function GET(req: Request) {
     },
     sqft_backfill: { applied: applySqft, written: sqftWritten, results: sqftWrites },
     photo_probes: probes,
+    rentcast_photo_probes: rentcastProbes,
     duration_ms: Date.now() - t0,
   });
 }

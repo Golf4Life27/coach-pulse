@@ -227,6 +227,31 @@ Rules:
 - Estimates are rehab cost in USD pre-multiplier. The caller multiplies by the market factor.`;
 }
 
+/** Fetch an image URL server-side and return base64-encoded data + the
+ *  Content-Type media type for the Anthropic vision API. Anthropic
+ *  refuses any URL whose origin disallows it via robots.txt (Street View
+ *  AND Redfin/Firecrawl CDN both trip this — observed 2026-06-04). The
+ *  base64 path bypasses the robots-fetch entirely; we hand Anthropic the
+ *  bytes directly. Throws on non-2xx so the caller surfaces a real
+ *  error rather than silently dropping an image. */
+export async function fetchImageAsBase64(
+  url: string,
+): Promise<{ data: string; media_type: string }> {
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) {
+    throw new Error(`fetch image ${res.status} for ${url.slice(0, 200)}`);
+  }
+  const contentType = res.headers.get("content-type") ?? "image/jpeg";
+  // Anthropic accepts image/jpeg, image/png, image/gif, image/webp.
+  // Normalize anything else (or a missing/odd header) to jpeg, which
+  // matches the .jpg extension we extracted from Redfin/Firecrawl.
+  const media_type = /image\/(jpeg|png|gif|webp)/.test(contentType)
+    ? contentType.split(";")[0].trim()
+    : "image/jpeg";
+  const buf = Buffer.from(await res.arrayBuffer());
+  return { data: buf.toString("base64"), media_type };
+}
+
 export async function callRehabVision(
   input: RehabCalibrationInput,
   apiKey: string,
@@ -239,15 +264,47 @@ export async function callRehabVision(
     throw new Error("photos_urls empty — Phase 4B needs at least one image");
   }
 
+  // Fetch each URL → base64 server-side. Anthropic's vision API refuses
+  // any URL whose host disallows it via robots.txt (Street View, Redfin
+  // CDN, Firecrawl-resolved CDN), so the URL path is dead in prod. The
+  // bytes path always works. We fetch in parallel and only drop an
+  // individual photo on fetch failure (logged via notes); we throw
+  // outright only when EVERY photo failed.
+  const photoBlocks: Array<{
+    type: "image";
+    source: { type: "base64"; media_type: string; data: string };
+  }> = [];
+  const photoFailures: string[] = [];
+  await Promise.all(
+    input.photos_urls.slice(0, 10).map(async (url) => {
+      try {
+        const { data, media_type } = await fetchImageAsBase64(url);
+        photoBlocks.push({
+          type: "image",
+          source: { type: "base64", media_type, data },
+        });
+      } catch (err) {
+        photoFailures.push(`${url.slice(0, 80)} → ${String(err).slice(0, 120)}`);
+      }
+    }),
+  );
+  if (photoBlocks.length === 0) {
+    throw new Error(
+      `all ${input.photos_urls.length} photos failed to fetch; first=${photoFailures[0] ?? "unknown"}`,
+    );
+  }
+  if (photoFailures.length > 0) {
+    notes.push(
+      `${photoFailures.length}/${input.photos_urls.length} photos failed fetch (vision used ${photoBlocks.length}).`,
+    );
+  }
+
   const userContent: Array<
     | { type: "text"; text: string }
-    | { type: "image"; source: { type: "url"; url: string } }
+    | { type: "image"; source: { type: "base64"; media_type: string; data: string } }
   > = [
     { type: "text", text: buildVisionPrompt(input, market, multiplier) },
-    ...input.photos_urls.slice(0, 10).map((url) => ({
-      type: "image" as const,
-      source: { type: "url" as const, url },
-    })),
+    ...photoBlocks,
   ];
 
   // Phase 10 / P.2 migration — routed through the unified synthesizer.
@@ -297,7 +354,7 @@ export async function callRehabVision(
     confidence: parsed.confidence,
     line_items,
     red_flags: parsed.red_flags,
-    photo_count: input.photos_urls.length,
+    photo_count: photoBlocks.length,
     anchor_rate_per_sqft: anchor,
     vision_model: ANTHROPIC_MODEL,
     methodology_notes: notes,

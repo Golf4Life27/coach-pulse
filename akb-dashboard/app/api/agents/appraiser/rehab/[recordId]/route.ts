@@ -146,6 +146,10 @@ export async function GET(
     photos = await collectPhotos({
       verificationUrl: listing.verificationUrl,
       fullAddress,
+      address: listing.address,
+      city: listing.city,
+      state: listing.state,
+      zip: listing.zip,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
