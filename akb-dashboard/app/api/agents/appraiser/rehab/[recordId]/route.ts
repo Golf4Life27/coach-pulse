@@ -137,6 +137,42 @@ export async function GET(
     );
   }
 
+  // ── INV-023 follow-on: refuse rehab vision when the photo path
+  // can't deliver a reliable subject-property photo set.
+  //
+  // 2026-06-04 finding (operator catch): the cron sweep produced
+  // rehab estimates for 4 records, of which (a) 3 had NO
+  // Verification_URL — Firecrawl couldn't fire, so only Street View's
+  // single exterior shot was passed to vision; (b) 1 was Live_Status=
+  // "Off Market" — Redfin keeps the URL accessible but the page mixes
+  // stale subject photos with comps + recommended-listings + Redfin
+  // chrome, so the regex pulled 69 URLs that aren't reliably the
+  // subject. Either case produces a confident-LOOKING estimate from
+  // an unreliable input set; the existing low-confidence gate catches
+  // it after the fact, but spending the Anthropic vision call is
+  // wasteful and the bad write pollutes Airtable until cleared. So
+  // we now refuse upstream:
+  //
+  //   - Live_Status != "Active" → 422 listing_not_actively_listed
+  //     (off-market deals stay in the negotiating cluster but their
+  //     scrape is unreliable; rehab estimate must wait for fresh
+  //     photos / manual fallback path).
+  //   - No Verification_URL AND no RentCast photos → vision would
+  //     get only a Street View exterior, which the operator policy
+  //     refuses to pass. Surface explicitly so the manual fallback
+  //     UI is the only path forward.
+  const liveStatus = (listing.liveStatus ?? "").trim().toLowerCase();
+  if (liveStatus !== "active") {
+    return NextResponse.json(
+      {
+        error: "listing_not_actively_listed",
+        reason: `Live_Status="${listing.liveStatus}" — rehab vision refuses to scrape off-market / unverified URLs (subject-photo reliability gate)`,
+        recordId,
+      },
+      { status: 422 },
+    );
+  }
+
   // ── Collect photos ──────────────────────────────────────────────
   const fullAddress = [listing.address, listing.city, listing.state, listing.zip]
     .filter(Boolean)
@@ -172,6 +208,23 @@ export async function GET(
       {
         error: "no_photos_available",
         reason: "listing scrape + Street View fallback both empty",
+        recordId,
+      },
+      { status: 422 },
+    );
+  }
+  // Street-View-only is INSUFFICIENT for rehab vision — a single
+  // exterior shot produces a confident-looking number that the model
+  // anchors at the lowest tier (Cosmetic $15/sqft) by default. Per
+  // the gate posture ("HOLD on Street-View-only / low-confidence"),
+  // refuse before burning the Anthropic vision call. The manual
+  // fallback path (POST /manual) is the route forward.
+  if (photos.every((p) => p.source === "streetview")) {
+    return NextResponse.json(
+      {
+        error: "street_view_only_insufficient",
+        reason: "no listing photos available (RentCast empty + Firecrawl/ScraperAPI returned 0); Street View alone is not a sufficient rehab signal",
+        photo_count: photos.length,
         recordId,
       },
       { status: 422 },

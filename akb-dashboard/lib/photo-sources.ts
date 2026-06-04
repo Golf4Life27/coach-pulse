@@ -148,6 +148,198 @@ export async function probeListingPhotos(
 
 const FIRECRAWL_HTML_IMG_RE = /https:\/\/[^"'\s)]*?(?:ssl\.cdn-redfin|redfin|zillow|homescom)[^"'\s)]*?\.jpg/gi;
 
+/** Substrings that indicate a URL is portal chrome / UI asset / agent
+ *  headshot / brand logo / static asset — NOT a subject-property photo.
+ *  Keep this list narrow: it must NOT exclude any genuine listing photo,
+ *  interior or exterior. Exterior shots are critical rehab signal
+ *  (roof, siding, foundation are among the highest-cost line items).
+ *  Operator-tunable without a deploy is preferred, but for now compile-
+ *  time is fine — there's no env-config story for the photo path yet. */
+export const FIRECRAWL_PHOTO_DENY_PATTERNS: readonly string[] = [
+  // Static asset / UI chrome paths.
+  "/static/",
+  "/assets/",
+  "/sprites/",
+  "/sprite/",
+  "/icons/",
+  "/mediacdn/",
+  // Agent / brokerage / brand assets.
+  "/agent",
+  "/headshot",
+  "/avatar",
+  "/profile-image",
+  "/profile_image",
+  "/brokerage",
+  "/brand",
+  "/logo",
+  // Map tiles / Google chrome (Firecrawl sometimes inlines an embedded map).
+  "/staticmap",
+  "/maps.googleapis",
+  "/map-tile",
+  // Placeholders / loading shims.
+  "/loading.",
+  "/placeholder",
+  "/blank.",
+  "/spacer.",
+  // Redfin "nearby homes" / "recommended" carousels are surfaced via the
+  // same /photo/ CDN path so we CAN'T denylist by path alone — comp
+  // dedup happens at the regex level by trusting that the FIRST cluster
+  // of CDN photo URLs for a given listing-id-prefix is the subject.
+  // (See filterPropertyPhotos comment block.)
+];
+
+/** Pure: filter a list of Firecrawl-matched image URLs down to ones that
+ *  are plausibly the subject property's listing photos. Two passes:
+ *
+ *  1. Drop URLs whose path matches a chrome / icon / agent / map / brand
+ *     pattern (see FIRECRAWL_PHOTO_DENY_PATTERNS).
+ *  2. Cluster surviving URLs by Redfin's listing-id convention
+ *     (`.../<listingId>/<idx>_<resolutionTag>.jpg`). The SUBJECT'S
+ *     listing photos all share one numeric listing-id prefix; comps
+ *     and recommended-listings use different ids. Keep the cluster
+ *     belonging to the URL we scraped (passed in as `subjectListingId`
+ *     when known) — if no id can be extracted from the source URL,
+ *     fall back to the LARGEST cluster (subject usually has the most
+ *     photos on the page since comps only show 1-3 hero shots each).
+ *  3. Within the subject cluster, dedupe variants of the same photo
+ *     index. Redfin serves the same photo at multiple sizes
+ *     (bigphoto / mbphoto / islnoresize / genIslnoResize). Prefer
+ *     the largest available so Anthropic vision sees full resolution.
+ *
+ *  Returns dropped + kept counts so the caller can audit the filter's
+ *  selectivity. */
+export interface FirecrawlPhotoFilterResult {
+  kept: string[];
+  dropped_chrome: number;
+  dropped_offcluster: number;
+  dropped_variant_dedup: number;
+  subject_listing_id: string | null;
+  cluster_sizes: Record<string, number>;
+}
+
+/** Extract a Redfin listing-id from a Redfin URL or CDN photo URL.
+ *  Listing URLs end in `/home/<listingId>` (numeric). Photo URLs put
+ *  the listing-id partway through the path (the LAST numeric segment
+ *  before `_<idx>.jpg` is the listing id). null when no id present. */
+export function extractRedfinListingId(url: string): string | null {
+  if (!url) return null;
+  // Listing-page URL: .../home/12345678 (or .../home/12345678?...)
+  const fromPage = url.match(/\/home\/(\d{4,})(?:[/?#]|$)/);
+  if (fromPage) return fromPage[1];
+  // CDN photo URL: .../<listingId>/<filename>_<idx>.jpg OR
+  // .../<listingId>_<idx>.jpg (both shapes occur in different
+  // Redfin photo CDN variants).
+  const fromPhoto = url.match(/\/(\d{6,})(?:\/[^/]*?)?_\d+\.jpg/i);
+  if (fromPhoto) return fromPhoto[1];
+  return null;
+}
+
+/** Rank Redfin photo-resolution tags so we prefer larger when the same
+ *  index appears in multiple sizes. */
+function redfinResolutionRank(url: string): number {
+  const lc = url.toLowerCase();
+  if (lc.includes("genislnoresize")) return 4;
+  if (lc.includes("islnoresize")) return 3;
+  if (lc.includes("bigphoto")) return 2;
+  if (lc.includes("mbphoto")) return 1;
+  return 0;
+}
+
+export function filterPropertyPhotos(
+  urls: string[],
+  sourceUrl: string | null,
+): FirecrawlPhotoFilterResult {
+  const result: FirecrawlPhotoFilterResult = {
+    kept: [],
+    dropped_chrome: 0,
+    dropped_offcluster: 0,
+    dropped_variant_dedup: 0,
+    subject_listing_id: extractRedfinListingId(sourceUrl ?? ""),
+    cluster_sizes: {},
+  };
+
+  // Pass 1: drop chrome / UI / agent / brand.
+  const afterChrome: string[] = [];
+  for (const url of urls) {
+    const lc = url.toLowerCase();
+    if (FIRECRAWL_PHOTO_DENY_PATTERNS.some((p) => lc.includes(p))) {
+      result.dropped_chrome++;
+    } else {
+      afterChrome.push(url);
+    }
+  }
+
+  // Pass 2: cluster by listing id.
+  const clusters = new Map<string, string[]>();
+  const noId: string[] = [];
+  for (const url of afterChrome) {
+    const id = extractRedfinListingId(url);
+    if (id) {
+      const arr = clusters.get(id) ?? [];
+      arr.push(url);
+      clusters.set(id, arr);
+    } else {
+      noId.push(url);
+    }
+  }
+  for (const [id, arr] of clusters) {
+    result.cluster_sizes[id] = arr.length;
+  }
+
+  let subjectCluster: string[];
+  if (result.subject_listing_id && clusters.has(result.subject_listing_id)) {
+    subjectCluster = clusters.get(result.subject_listing_id)!;
+    // Everything else is off-cluster (comps / recommended listings).
+    for (const [id, arr] of clusters) {
+      if (id !== result.subject_listing_id) {
+        result.dropped_offcluster += arr.length;
+      }
+    }
+    result.dropped_offcluster += noId.length;
+  } else if (clusters.size > 0) {
+    // No subject listing-id known — pick the LARGEST cluster on the
+    // page. Subject normally has the most photos; comps show 1-3 each.
+    let best: { id: string; arr: string[] } | null = null;
+    for (const [id, arr] of clusters) {
+      if (!best || arr.length > best.arr.length) best = { id, arr };
+    }
+    subjectCluster = best!.arr;
+    result.subject_listing_id = best!.id;
+    for (const [id, arr] of clusters) {
+      if (id !== best!.id) {
+        result.dropped_offcluster += arr.length;
+      }
+    }
+    result.dropped_offcluster += noId.length;
+  } else {
+    // No clusters at all — fall back to anything not flagged as chrome.
+    // Rare; means the regex matched URLs without a Redfin listing-id
+    // shape (other portals or edge cases).
+    subjectCluster = noId;
+  }
+
+  // Pass 3: dedupe variants of the same photo index (Redfin serves the
+  // same photo at multiple resolutions). Index lives at the tail:
+  // `_<idx>.jpg`. Within an index, keep the highest-resolution variant.
+  const byIndex = new Map<string, string>();
+  for (const url of subjectCluster) {
+    const idxMatch = url.match(/_(\d+)\.jpg/i);
+    const key = idxMatch ? idxMatch[1] : url;
+    const existing = byIndex.get(key);
+    if (!existing) {
+      byIndex.set(key, url);
+    } else if (redfinResolutionRank(url) > redfinResolutionRank(existing)) {
+      byIndex.set(key, url);
+      result.dropped_variant_dedup++;
+    } else {
+      result.dropped_variant_dedup++;
+    }
+  }
+
+  result.kept = Array.from(byIndex.values());
+  return result;
+}
+
 export async function scrapeListingPhotosFirecrawl(
   verificationUrl: string,
   maxPhotos = 6,
@@ -171,8 +363,10 @@ export async function scrapeListingPhotosFirecrawl(
       data?: { html?: string; markdown?: string };
     };
     const haystack = `${body.data?.html ?? ""}\n${body.data?.markdown ?? ""}`;
-    const matches = haystack.match(FIRECRAWL_HTML_IMG_RE) ?? [];
-    return Array.from(new Set(matches)).slice(0, maxPhotos);
+    const raw = haystack.match(FIRECRAWL_HTML_IMG_RE) ?? [];
+    const deduped = Array.from(new Set(raw));
+    const filtered = filterPropertyPhotos(deduped, verificationUrl);
+    return filtered.kept.slice(0, maxPhotos);
   } catch {
     return [];
   }
@@ -183,7 +377,18 @@ export interface FirecrawlPhotoProbeResult {
   scrape_status: number | null;
   html_length: number | null;
   markdown_length: number | null;
+  /** Raw regex match count BEFORE filterPropertyPhotos — useful when
+   *  diagnosing whether Firecrawl is returning anything at all. */
   img_match_count: number | null;
+  /** Post-filter count — chrome/agent/brand removed + clustered to
+   *  the subject's listing-id + variants deduped. This is the count
+   *  that actually gets passed to vision. */
+  filtered_count: number | null;
+  /** Counts breakdown from filterPropertyPhotos, for debugging. */
+  dropped_chrome: number | null;
+  dropped_offcluster: number | null;
+  dropped_variant_dedup: number | null;
+  subject_listing_id: string | null;
   sample_match: string | null;
   error: string | null;
 }
@@ -197,6 +402,11 @@ export async function probeFirecrawlPhotos(
     html_length: null,
     markdown_length: null,
     img_match_count: null,
+    filtered_count: null,
+    dropped_chrome: null,
+    dropped_offcluster: null,
+    dropped_variant_dedup: null,
+    subject_listing_id: null,
     sample_match: null,
     error: null,
   };
@@ -232,7 +442,13 @@ export async function probeFirecrawlPhotos(
     const matches = `${html}\n${markdown}`.match(FIRECRAWL_HTML_IMG_RE) ?? [];
     const unique = Array.from(new Set(matches));
     result.img_match_count = unique.length;
-    result.sample_match = unique[0] ?? null;
+    const filtered = filterPropertyPhotos(unique, verificationUrl);
+    result.filtered_count = filtered.kept.length;
+    result.dropped_chrome = filtered.dropped_chrome;
+    result.dropped_offcluster = filtered.dropped_offcluster;
+    result.dropped_variant_dedup = filtered.dropped_variant_dedup;
+    result.subject_listing_id = filtered.subject_listing_id;
+    result.sample_match = filtered.kept[0] ?? unique[0] ?? null;
     if (!res.ok) result.error = `Firecrawl HTTP ${res.status}`;
     return result;
   } catch (err) {
