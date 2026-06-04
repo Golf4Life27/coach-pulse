@@ -58,11 +58,22 @@ async function callEndpoint(
   origin: string,
   path: string,
   cookie: string | null,
+  authorization: string | null = null,
+  xVercelCron: string | null = null,
 ): Promise<BackfillEndpointOutcome> {
   const t = Date.now();
   try {
     const headers: Record<string, string> = {};
+    // Forward dashboard cookie (original operator-driven path) AND any
+    // bearer Authorization + x-vercel-cron header the caller arrived
+    // with. The agent endpoints share the same auth waterfall as this
+    // route, so a CRON_SECRET fire (Vercel cron) flows through to the
+    // sub-requests cleanly. Spine rec6e6hYLuOpaLANf reconciliation —
+    // 2026-06-04: before this, CRON_SECRET callers got 401 from every
+    // sub-request because only the cookie was forwarded.
     if (cookie) headers.cookie = cookie;
+    if (authorization) headers.authorization = authorization;
+    if (xVercelCron) headers["x-vercel-cron"] = xVercelCron;
     const res = await fetch(`${origin}${path}`, { headers, cache: "no-store" });
     const elapsed = Date.now() - t;
     if (!res.ok) {
@@ -212,6 +223,10 @@ export async function GET(req: Request) {
   // ── Apply mode ─────────────────────────────────────────────────────────
   const origin = originFromReq(req);
   const cookie = req.headers.get("cookie");
+  // Forward the incoming bearer + x-vercel-cron so a CRON_SECRET fire
+  // can drive this end-to-end without a dashboard cookie. (2026-06-04)
+  const authorization = req.headers.get("authorization");
+  const xVercelCron = req.headers.get("x-vercel-cron");
 
   const applied: BackfillRecordApplyOutcome[] = [];
   let truncated_by_budget = false;
@@ -233,16 +248,22 @@ export async function GET(req: Request) {
       origin,
       `/api/agents/appraiser/arv/${o.record.recordId}`,
       cookie,
+      authorization,
+      xVercelCron,
     );
     const rehab = await callEndpoint(
       origin,
       `/api/agents/appraiser/rehab/${o.record.recordId}`,
       cookie,
+      authorization,
+      xVercelCron,
     );
     const buyerIntel = await callEndpoint(
       origin,
       `/api/agents/appraiser/buyer-intelligence/${o.record.recordId}`,
       cookie,
+      authorization,
+      xVercelCron,
     );
 
     const aggregate = aggregateBackfillStatus(arv.status, rehab.status, buyerIntel.status);
