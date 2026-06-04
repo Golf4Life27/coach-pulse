@@ -390,6 +390,10 @@ export interface FirecrawlPhotoProbeResult {
   dropped_variant_dedup: number | null;
   subject_listing_id: string | null;
   sample_match: string | null;
+  /** First few RAW (pre-filter) match filenames — the part after the
+   *  last "/" — so we can see the actual Redfin CDN URL shape the
+   *  cluster-by-id filter has to parse. Diagnostic only. */
+  raw_filenames: string[];
   error: string | null;
 }
 
@@ -408,6 +412,7 @@ export async function probeFirecrawlPhotos(
     dropped_variant_dedup: null,
     subject_listing_id: null,
     sample_match: null,
+    raw_filenames: [],
     error: null,
   };
   if (!FIRECRAWL_API_KEY) {
@@ -442,6 +447,7 @@ export async function probeFirecrawlPhotos(
     const matches = `${html}\n${markdown}`.match(FIRECRAWL_HTML_IMG_RE) ?? [];
     const unique = Array.from(new Set(matches));
     result.img_match_count = unique.length;
+    result.raw_filenames = unique.slice(0, 5).map((u) => u.split("/").pop() ?? u);
     const filtered = filterPropertyPhotos(unique, verificationUrl);
     result.filtered_count = filtered.kept.length;
     result.dropped_chrome = filtered.dropped_chrome;

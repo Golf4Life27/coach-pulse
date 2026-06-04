@@ -169,7 +169,11 @@ export async function GET(req: Request) {
     `P924 R${rcSrcCode}+${firstRc?.listings_sale_photo_count ?? "-"}/${firstRc?.properties_photo_count ?? "-"}` +
     ` F${firstProbe?.firecrawl.scrape_status ?? "-"}+${firstProbe?.firecrawl.img_match_count ?? "-"}/${firstProbe?.firecrawl.filtered_count ?? "-"}` +
     ` S${firstProbe?.probe.scraperapi_http_status ?? "-"}+${firstProbe?.probe.regex_match_count ?? "-"}`;
-  console.log(tight);
+  // Fold the first raw Firecrawl filename into the SAME first log line
+  // (runtime-log MCP only surfaces the first console.log per request).
+  // Reveals the actual Redfin CDN URL shape so we can debug the filter.
+  const rawFn = firstProbe?.firecrawl.raw_filenames?.[0] ?? "none";
+  console.log(`${tight} FN=${rawFn}`);
 
   // Longer-form summary AFTER — used by the response body + audit row.
   // Not surfaced by the runtime-log MCP (tool only returns first log per
