@@ -128,11 +128,31 @@ export async function GET(req: Request) {
   const apply = url.searchParams.get("apply") === "1";
   const paceMs = readBackfillPaceMs();
 
+  // Skip + cursor support (2026-06-04): before this, `slice(0, limit)`
+  // always took the SAME first N records, so a record with a structural
+  // blocker (missing Building_SqFt → rehab 422) made a small-limit cron
+  // recycle it forever without ever reaching the rest of the cluster.
+  //   ?skip=recA,recB   — exclude these record ids outright.
+  //   ?after=recX       — only process records whose id sorts AFTER recX
+  //                       (a lexical cursor; pair with ?limit to page).
+  // Sorting by id first makes `after` a deterministic cursor.
+  const skipIds = new Set(
+    (url.searchParams.get("skip") ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.startsWith("rec")),
+  );
+  const after = url.searchParams.get("after");
+
   // Recent days fetcher matches the briefing aggregator's view of the
   // pipeline (last 7 days of Texted/Emailed + everything in
   // Negotiating/Response Received/Counter Received/Offer Accepted).
   const active = await getActiveListingsForBrief({ recentDays: 7 });
-  const subset = limit != null ? active.slice(0, limit) : active;
+  const ordered = [...active].sort((a, b) => a.id.localeCompare(b.id));
+  const filtered = ordered.filter(
+    (l) => !skipIds.has(l.id) && (after ? l.id.localeCompare(after) > 0 : true),
+  );
+  const subset = limit != null ? filtered.slice(0, limit) : filtered;
 
   const outcomes: BackfillRecordOutcome[] = subset.map((l) => {
     const eligibility = classifyBackfillEligibility(l, {
@@ -166,6 +186,12 @@ export async function GET(req: Request) {
 
   const totalCost = totalBackfillCost(eligible.map((o) => o.cost));
 
+  // Cursor for the next page: the highest record id we examined this
+  // call. A cron/operator passes ?after=<next_cursor> to advance past
+  // the records already processed — so a structurally-blocked record
+  // can't trap the sweep on subsequent fires.
+  const next_cursor = subset.length > 0 ? subset[subset.length - 1].id : null;
+
   if (!apply) {
     await audit({
       agent: "appraiser",
@@ -196,6 +222,7 @@ export async function GET(req: Request) {
       elapsed_ms: Date.now() - t0,
       active_total_in_airtable: active.length,
       examined: subset.length,
+      next_cursor,
       summary: {
         eligible: eligible.length,
         skipped: skipped.length,
@@ -350,6 +377,7 @@ export async function GET(req: Request) {
     elapsed_ms: Date.now() - t0,
     active_total_in_airtable: active.length,
     examined: subset.length,
+    next_cursor,
     summary: {
       eligible: eligible.length,
       skipped: skipped.length,

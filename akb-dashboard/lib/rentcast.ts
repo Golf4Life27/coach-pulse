@@ -177,3 +177,92 @@ export function median(values: number[]): number | null {
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
+
+export interface SubjectFacts {
+  squareFootage: number | null;
+  bedrooms: number | null;
+  bathrooms: number | null;
+  yearBuilt: number | null;
+  /** which RentCast endpoint actually returned the facts. */
+  source: "listings_sale" | "properties" | null;
+}
+
+/**
+ * Fetch the subject property's own structural facts (square footage etc.)
+ * for the Building_SqFt backfill. Tries the active sale-listing endpoint
+ * first (`/listings/sale` — same endpoint verify-listing uses, so an
+ * active record almost always resolves here), then falls back to the
+ * `/properties` record endpoint for off-market subjects.
+ *
+ * Returns nulls + source:null when neither endpoint resolves. Never
+ * throws — the caller (a backfill loop) isolates per-record failures.
+ */
+export async function getSubjectFacts(input: {
+  address: string;
+  city: string;
+  state: string;
+  zip: string;
+}): Promise<SubjectFacts> {
+  const empty: SubjectFacts = {
+    squareFootage: null,
+    bedrooms: null,
+    bathrooms: null,
+    yearBuilt: null,
+    source: null,
+  };
+  if (!RENTCAST_API_KEY) return empty;
+
+  const qp = new URLSearchParams({
+    address: input.address,
+    city: input.city,
+    state: input.state,
+    zipCode: input.zip,
+  });
+
+  // 1. Active sale listing (covers the active cluster).
+  try {
+    const res = await fetch(`${BASE}/listings/sale?${qp.toString()}&status=active`, {
+      headers: { "X-Api-Key": RENTCAST_API_KEY },
+      cache: "no-store",
+    });
+    if (res.ok) {
+      const body = (await res.json()) as unknown;
+      const rec = Array.isArray(body) ? (body[0] as Record<string, unknown> | undefined) : undefined;
+      const facts = extractFacts(rec);
+      if (facts.squareFootage != null) return { ...facts, source: "listings_sale" };
+    }
+  } catch {
+    // fall through to /properties
+  }
+
+  // 2. Property record (off-market / inactive subjects).
+  try {
+    const res = await fetch(`${BASE}/properties?${qp.toString()}`, {
+      headers: { "X-Api-Key": RENTCAST_API_KEY },
+      cache: "no-store",
+    });
+    if (res.ok) {
+      const body = (await res.json()) as unknown;
+      const rec = Array.isArray(body) ? (body[0] as Record<string, unknown> | undefined) : undefined;
+      const facts = extractFacts(rec);
+      if (facts.squareFootage != null) return { ...facts, source: "properties" };
+    }
+  } catch {
+    // fall through to empty
+  }
+
+  return empty;
+}
+
+/** Pure: pull structural facts off a RentCast property/listing record. */
+export function extractFacts(rec: Record<string, unknown> | undefined): Omit<SubjectFacts, "source"> {
+  if (!rec) return { squareFootage: null, bedrooms: null, bathrooms: null, yearBuilt: null };
+  const num = (v: unknown): number | null =>
+    typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
+  return {
+    squareFootage: num(rec.squareFootage),
+    bedrooms: num(rec.bedrooms),
+    bathrooms: num(rec.bathrooms),
+    yearBuilt: num(rec.yearBuilt),
+  };
+}
