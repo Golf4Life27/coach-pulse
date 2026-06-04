@@ -205,6 +205,41 @@ export async function GET(req: Request) {
   console.log(`SQFT.applied=${applySqft}`);
   console.log(`SQFT.written=${sqftWritten}`);
 
+  // SUMMARY — single-line condensed dump of every photo-source probe so
+  // the Vercel runtime-log indexer (which collapses to one line per
+  // request) surfaces the verdict in one row. Format: JSON-stringified.
+  const summary = {
+    fc_url: probes.map((p) => ({
+      key: p.firecrawl.firecrawl_key_present,
+      http: p.firecrawl.scrape_status,
+      html: p.firecrawl.html_length,
+      md: p.firecrawl.markdown_length,
+      matches: p.firecrawl.img_match_count,
+      sample: p.firecrawl.sample_match?.slice(0, 120) ?? null,
+      err: p.firecrawl.error,
+    })),
+    sa_url: probes.map((p) => ({
+      key: p.probe.scraper_key_present,
+      http: p.probe.scraperapi_http_status,
+      matches: p.probe.regex_match_count,
+      sample: p.probe.sample_match?.slice(0, 120) ?? null,
+      err: p.probe.error,
+    })),
+    rc: rentcastProbes.map((rp) => ({
+      addr: rp.address,
+      key: rp.rentcast.rentcast_key_present,
+      ls_status: rp.rentcast.listings_sale_status,
+      ls_photos: rp.rentcast.listings_sale_photo_count,
+      props_status: rp.rentcast.properties_status,
+      props_photos: rp.rentcast.properties_photo_count,
+      source: rp.rentcast.source,
+      sample: rp.rentcast.sample_photo?.slice(0, 120) ?? null,
+      fields: rp.rentcast.photo_field_keys,
+      err: rp.rentcast.error,
+    })),
+  };
+  console.log(`SUMMARY ${JSON.stringify(summary)}`);
+
   await audit({
     agent: "appraiser",
     event: "appraiser_readiness",
