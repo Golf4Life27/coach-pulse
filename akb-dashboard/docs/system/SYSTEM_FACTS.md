@@ -188,12 +188,26 @@ These do not change without a Bible amendment.
 
 | Anchor | Value |
 |--------|-------|
-| Wholesale fee target | $10K/deal floor |
+| **Wholesale fee — current floor (on-market)** | **$5K/deal** (operationally locked 2026-06-03, Spine `rec937cFJthvCZzBM` / reconciliation `rec6e6hYLuOpaLANf`; `DEFAULT_WHOLESALE_FEE` in `lib/pre-contract-math.ts`) |
+| Wholesale fee — efficiency target | **$10K+** as build efficiency grows (operational lift, not a Bible change) |
+| Wholesale fee — off-market / tax-delinquent / land | **materially higher** than the on-market default (deal-type-specific; quantify when those crawler sources land live) |
 | MAO discipline | 65% ARV − rehab − wholesale fee (V2.1) |
 | Buyer cap rates | TX 8% / TN 10% / MI 9% / Default 9% (env-overridable) |
 | Cadence | door-opener at 65% of list; price-drop = re-engagement (not first contact) — INV-030 |
 | Crawler 2.0 unlock | $40K/mo net × 3 consecutive months (Bible §1.2) |
 | Dream Phase unlock | operator hours < 15h/wk |
+
+**Eventual:** `Wholesale_Fee` should become **deal-type-aware**, not a single
+hardcoded default. Source-of-truth shape will be a per-listing field or a
+lookup keyed on `(deal_source, market_tier, distress_grade)`, with the V1
+$5K default as the on-market fallback. Wired into the math gate's
+`evaluatePreContractMath(inputs)` via `inputs.wholesaleFee` — the helper
+already accepts a per-call override, so adding the field is a read-path
+change at the gate, not a math-layer rebuild.
+
+Legacy `lib/appraiser/mao-range.ts:DEFAULT_WHOLESALE_FEE` still carries
+the original Bible $15K default — flagged for reconciliation when that
+module is next touched.
 
 ## 10. What this file is not
 
