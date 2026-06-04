@@ -159,8 +159,8 @@ describe("buildManualRehabAirtableFields", () => {
     );
     expect(fields.Est_Rehab).toBe(25000);
     expect(fields.Est_Rehab_Mid).toBe(25000);
-    expect(fields.Est_Rehab_Low).toBe(20000);
-    expect(fields.Est_Rehab_High).toBe(30000);
+    expect(fields.Rehab_Est_Low).toBe(20000);
+    expect(fields.Rehab_Est_High).toBe(30000);
     expect(fields.Rehab_Source).toBe("manual_operator");
     expect(fields.Rehab_Confidence_Score).toBe(MANUAL_REHAB_CONFIDENCE_SCORE);
     expect(fields.Rehab_Estimated_At).toBe("2026-05-23T12:00:00.000Z");

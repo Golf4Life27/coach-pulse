@@ -169,19 +169,20 @@ export async function POST(
     screened_at,
   };
 
-  // Persist to Airtable.
-  try {
-    await updateListingRecord(recordId, {
-      Pre_Offer_Screen_Result: passed ? (warnings.length > 0 ? "Warn" : "Pass") : "Block",
-      Pre_Offer_Screen_Notes: [
-        ...blockers.map((b) => `BLOCK: ${b.check} — ${b.reason}`),
-        ...warnings.map((w) => `WARN: ${w.check} — ${w.reason}`),
-      ].join("\n"),
-      Pre_Offer_Screen_At: screened_at,
-    });
-  } catch (err) {
-    console.error(`[pre-offer-screen] Failed to persist for ${recordId}:`, err);
-  }
+  // Field-name audit 2026-06-04 (Spine recd9RNKGWOWjjDzz, silent-422
+  // sweep): the three Pre_Offer_Screen_* fields below DO NOT EXIST in
+  // the Listings_V1 schema. This PATCH has been silently 422-ing since
+  // the route shipped, so the screen result never actually persisted.
+  // Downstream consequence: the consumer at outreach-safety-check:183
+  // gates "if (isFirstOutreach && !listing.preOfferScreenAt)" — since
+  // preOfferScreenAt was always null, that check has been silently
+  // blocking every first outreach. Removing the dead write here makes
+  // the silent failure explicit; the route still computes + returns
+  // the screen result, just doesn't persist it. Operator decision
+  // pending: add the 3 fields to schema (and restore persistence
+  // here) OR accept that pre-offer-screen is a transient compute
+  // surface and refactor the outreach-safety-check guard.
+  // try { await updateListingRecord(recordId, { ... }); } — removed.
 
   return NextResponse.json(result);
 }

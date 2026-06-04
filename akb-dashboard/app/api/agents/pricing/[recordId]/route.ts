@@ -257,9 +257,9 @@ export async function GET(
   if (phase4b.ok && rehabOverride == null && phase4b.result.rehab_mid != null) {
     // Skip Airtable rehab fields when we used an override — the override
     // is a math input only, not a persistence-worthy value.
-    fieldsToWrite.Est_Rehab_Low = phase4b.result.rehab_low;
+    fieldsToWrite.Rehab_Est_Low = phase4b.result.rehab_low;
     fieldsToWrite.Est_Rehab_Mid = phase4b.result.rehab_mid;
-    fieldsToWrite.Est_Rehab_High = phase4b.result.rehab_high;
+    fieldsToWrite.Rehab_Est_High = phase4b.result.rehab_high;
     // The Investor_MAO + Your_MAO Airtable formulas reference Est_Rehab
     // (fldmup8SvMky9eyag), NOT Est_Rehab_Mid (fldyDCVwvn9jfdiES). Write
     // BOTH — Est_Rehab so the formula computes correctly, Est_Rehab_Mid

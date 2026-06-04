@@ -77,13 +77,22 @@ export async function POST(
 
   const sentAt = new Date().toISOString();
 
-  // Append to Notes + stamp the per-text field.
+  // Append to Notes + stamp Last_Outbound_At.
+  //
+  // Field-name audit 2026-06-04 (Spine recd9RNKGWOWjjDzz): the
+  // DD_Volley_Text_{1,2,3}_Sent_At per-text-index fields DO NOT EXIST
+  // in the Listings_V1 schema, so the FIELD_BY_INDEX[body.textIndex]
+  // entry below has been silently 422-ing this entire PATCH on every
+  // fire — taking Last_Outbound_At + Verification_Notes down with it.
+  // Removed the per-text stamp; Last_Outbound_At + Verification_Notes
+  // now persist. Per-text timing is reconstructible from
+  // Verification_Notes (each volley appends a timestamped line). If
+  // structured per-index timing matters, add the 3 fields to schema
+  // and restore the line.
   const noteLine = `${todayStamp()} — DD Volley Text ${body.textIndex} sent: ${content}`;
   const fields: Record<string, unknown> = {
-    [FIELD_BY_INDEX[body.textIndex]]: sentAt,
     Last_Outbound_At: sentAt,
   };
-  // Append note (read-modify-write).
   const existingNotes = listing.notes ?? "";
   fields.Verification_Notes = existingNotes ? `${existingNotes}\n${noteLine}` : noteLine;
 

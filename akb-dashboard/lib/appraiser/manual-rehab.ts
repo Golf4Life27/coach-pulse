@@ -146,9 +146,9 @@ export function buildManualRehabAirtableFields(
 ): Record<string, unknown> {
   return {
     Est_Rehab: v.rehabMid,
-    Est_Rehab_Low: v.rehabLow,
+    Rehab_Est_Low: v.rehabLow,
     Est_Rehab_Mid: v.rehabMid,
-    Est_Rehab_High: v.rehabHigh,
+    Rehab_Est_High: v.rehabHigh,
     Rehab_Confidence_Score: MANUAL_REHAB_CONFIDENCE_SCORE,
     Rehab_Line_Items_JSON: JSON.stringify({
       source: "manual",

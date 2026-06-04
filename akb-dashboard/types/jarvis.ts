@@ -360,7 +360,7 @@ export interface PhotoAnalysisResult {
   line_items: PhotoLineItem[];
   red_flags: PhotoRedFlag[];
   photo_count: number;
-  photo_sources: Array<"listing" | "streetview">;
+  photo_sources: Array<"rentcast" | "firecrawl" | "listing" | "streetview">;
   market_multiplier: number;
   analyzed_at: string;
 }

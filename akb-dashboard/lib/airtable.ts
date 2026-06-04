@@ -169,22 +169,29 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "Contract_Offer_Price": "contractOfferPrice",
   "Seller_Motivation_Score": "sellerMotivationScore",
   "List_Price_At_Send": "listPriceAtSend",
-  // ── Phase 3: photo analysis ──────────────────────────────────────────────
-  "Est_Rehab_Low": "estRehabLow",
+  // ── Phase 3: photo analysis / rehab ──────────────────────────────────────
+  // Field-name audit 2026-06-04 (Spine recd9RNKGWOWjjDzz): canonical
+  // schema uses Rehab_Est_Low / Rehab_Est_High (prefix-swapped from
+  // the older Est_Rehab_Low/High names). The 8 fields below the rehab
+  // block (Photo_Confidence / Line_Items_JSON / Red_Flags /
+  // Photo_Analyzed_At / Visual_Verified / Visual_Source /
+  // Pre_Offer_Screen_* / DD_Volley_Text_*) DO NOT EXIST in the
+  // Listings_V1 schema and their mappings were removed — they always
+  // read null, so any consumer that gated on them was effectively
+  // dead code. Flagged for operator: see audit report.
+  // Schema field names are Rehab_Est_Low / Rehab_Est_High; the JS prop
+  // names retain the legacy Est_Rehab_Low / Est_Rehab_High shape to
+  // avoid a ripple-rename across consumers (3+ readers in pipeline,
+  // appraiser-panel, etc.). Translation lives here.
+  "Rehab_Est_Low": "estRehabLow",
   "Est_Rehab_Mid": "estRehabMid",
-  "Est_Rehab_High": "estRehabHigh",
+  "Rehab_Est_High": "estRehabHigh",
   "Rehab_Estimated_At": "rehabEstimatedAt",
   "Rehab_Line_Items_JSON": "rehabLineItemsJson",
   "Rehab_Red_Flags": "rehabRedFlags",
   "Rehab_Source": "rehabSource",
   "Memphis_Assignment_Verified": "memphisAssignmentVerified",
   "EMD_Operator_Signoff": "emdOperatorSignoff",
-  "Photo_Confidence": "photoConfidence",
-  "Line_Items_JSON": "lineItemsJson",
-  "Red_Flags": "redFlags",
-  "Photo_Analyzed_At": "photoAnalyzedAt",
-  "Visual_Verified": "visualVerified",
-  "Visual_Source": "visualSource",
   // ── Phase 3: ARV validation ──────────────────────────────────────────────
   "Real_ARV_Low": "realArvLow",
   "Real_ARV_High": "realArvHigh",
@@ -200,14 +207,6 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "Your_MAO": "yourMao",
   "Auto_Approve_v2": "autoApproveV2",
   "ARV_Validated_At": "arvValidatedAt",
-  // ── Phase 3: pre-offer screen ────────────────────────────────────────────
-  "Pre_Offer_Screen_Result": "preOfferScreenResult",
-  "Pre_Offer_Screen_Notes": "preOfferScreenNotes",
-  "Pre_Offer_Screen_At": "preOfferScreenAt",
-  // ── Phase 3: DD volley ───────────────────────────────────────────────────
-  "DD_Volley_Text_1_Sent_At": "ddVolleyText1SentAt",
-  "DD_Volley_Text_2_Sent_At": "ddVolleyText2SentAt",
-  "DD_Volley_Text_3_Sent_At": "ddVolleyText3SentAt",
 };
 
 const DEAL_FIELDS: Record<string, string> = {

@@ -123,14 +123,8 @@ export async function GET(
   }));
 
   const photo_sources = Array.from(new Set(photos.map((p) => p.source))) as Array<
-    "listing" | "streetview"
+    "rentcast" | "firecrawl" | "listing" | "streetview"
   >;
-  const visualSource =
-    photo_sources.length === 2
-      ? "Both"
-      : photo_sources[0] === "listing"
-        ? "Listing Photos"
-        : "Street View";
 
   const result: PhotoAnalysisResult = {
     recordId,
@@ -147,17 +141,31 @@ export async function GET(
     analyzed_at: rehab.computed_at,
   };
 
+  // Field-name fix 2026-06-04 (silent-422 sweep): this PATCH had been
+  // failing entirely on every fire because 8 of the 9 fields below
+  // didn't exist in the Listings_V1 schema (Airtable PATCH is atomic,
+  // so ANY unknown field 422s the whole write). Renames to the
+  // canonical Rehab_* names; removed Visual_Verified + Visual_Source
+  // (no schema analog — flagged for operator: schema add or accept
+  // that this route no longer tracks "visually verified" provenance).
   try {
     await updateListingRecord(recordId, {
-      Est_Rehab_Low: rehab.rehab_low,
+      Rehab_Est_Low: rehab.rehab_low,
       Est_Rehab_Mid: rehab.rehab_mid,
-      Est_Rehab_High: rehab.rehab_high,
-      Photo_Confidence: rehab.confidence,
-      Line_Items_JSON: JSON.stringify(result.line_items),
-      Red_Flags: rehab.red_flags.join(", ") || "",
-      Photo_Analyzed_At: result.analyzed_at,
-      Visual_Verified: true,
-      Visual_Source: visualSource,
+      Rehab_Est_High: rehab.rehab_high,
+      Rehab_Confidence_Score: rehab.confidence,
+      Rehab_Line_Items_JSON: JSON.stringify(result.line_items),
+      Rehab_Red_Flags: rehab.red_flags.join(", ") || "",
+      Rehab_Estimated_At: result.analyzed_at,
+      // Visual_Verified + Visual_Source: REMOVED — no schema analog.
+      // The downstream pre-offer-screen guard reads listing.visualVerified
+      // which is also broken (stale-read mapping). Operator decision
+      // pending — see audit report 2026-06-04 (Spine recd9RNKGWOWjjDzz).
+      // Rehab_Source: write a fixed "vision" — this route only runs
+      // the automated vision pipeline. visualSource ("Both"/"Listing
+      // Photos"/"Street View") is not a valid Rehab_Source enum value
+      // and was 422ing too.
+      Rehab_Source: "vision",
     });
   } catch (err) {
     console.error(`[photo-analysis] Failed to persist for ${recordId}:`, err);
