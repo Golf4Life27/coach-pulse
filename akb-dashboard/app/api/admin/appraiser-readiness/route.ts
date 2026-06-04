@@ -252,6 +252,11 @@ export async function GET(req: Request) {
       missing_both: missingBoth.length,
       sqft_written: sqftWritten,
       probe_count: probes.length,
+      // Full photo-probe verdict (truncated samples) so the audit row
+      // carries the readiness signal — runtime-log indexer collapses
+      // multi-line console.log to one row, so this is how we surface
+      // RentCast/Firecrawl/ScraperAPI breakdowns off-cron.
+      photo_verdict: summary,
     },
     ms: Date.now() - t0,
   });
