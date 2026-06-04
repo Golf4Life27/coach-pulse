@@ -203,15 +203,19 @@ describe("computeMaoRange — V2.1 floor math", () => {
     // SA wholesale numbers (Est_Rehab ~60K, Wholesale_Fee_Target 15K
     // default), the floor lands at ~$90K. This test is the canonical
     // Phase 4A.1 validation fixture per the sprint brief.
+    // 2026-06-04 (Spine rec6e6hYLuOpaLANf): DEFAULT_WHOLESALE_FEE
+    // reconciled $15K → $5K (now sourced from pre-contract-math.ts).
+    // At the same $165K ARV + $60K rehab inputs the floor moves
+    // $90K → $100K — mechanically correct given the lower fee.
     const r = computeMaoRange({
       arvMid: 165_000,
       estRehab: 60_000,
-      wholesaleFee: null, // uses default 15000
+      wholesaleFee: null, // uses default 5000 (was 15000 pre-V1.1)
       listPrice: 140_000,
       sellerMotivationScore: null,
     });
-    expect(r.floor).toBe(90_000);
-    expect(r.target).toBe(90_000); // motivation null → target = floor
+    expect(r.floor).toBe(100_000); // 165K − 60K − 5K
+    expect(r.target).toBe(100_000); // motivation null → target = floor
   });
 
   it("clamps floor to 0 when subtraction would go negative", () => {
@@ -225,7 +229,7 @@ describe("computeMaoRange — V2.1 floor math", () => {
     expect(r.floor).toBe(0);
   });
 
-  it("defaults wholesale_fee to 15000 when null", () => {
+  it("defaults wholesale_fee to 5000 when null (Spine rec6e6hYLuOpaLANf, reconciled 2026-06-04)", () => {
     const r = computeMaoRange({
       arvMid: 200_000,
       estRehab: 30_000,
@@ -233,8 +237,8 @@ describe("computeMaoRange — V2.1 floor math", () => {
       listPrice: 175_000,
       sellerMotivationScore: null,
     });
-    expect(r.floor).toBe(200_000 - 30_000 - 15_000);
-    expect(r.modifier_inputs.wholesale_fee).toBe(15_000);
+    expect(r.floor).toBe(200_000 - 30_000 - 5_000);
+    expect(r.modifier_inputs.wholesale_fee).toBe(5_000);
   });
 
   it("defaults buyer_profit to 30000 when null (surfaced in modifier_inputs only)", () => {

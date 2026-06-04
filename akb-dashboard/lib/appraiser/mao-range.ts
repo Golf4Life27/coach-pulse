@@ -21,8 +21,12 @@
 //     (clean deal + motivated seller). V2.1 is the never-go-below
 //     floor; seller motivation is the modifier."
 //
-// Bible v3 §9 defaults used when listing fields are null:
-//   wholesaleFeeTarget = 15000
+// Defaults used when listing fields are null:
+//   wholesaleFeeTarget = DEFAULT_WHOLESALE_FEE ($5K — operational
+//     floor per SYSTEM_FACTS §9, Spine rec6e6hYLuOpaLANf 2026-06-04;
+//     was the original Bible v3 §9 $15K target — reconciled to the
+//     same constant `pre-contract-math.ts:DEFAULT_WHOLESALE_FEE`
+//     uses so BroCard pricing + PC-27 share one fee).
 //   buyerProfitTarget = 30000 (informational; not in floor formula)
 //
 // Note: floor here does NOT subtract buyer_profit. That's because the
@@ -35,10 +39,14 @@
 // different assumptions.
 
 import { computeDualTrack, type DualTrackResult } from "./buyer-intelligence";
+// Single fee-constant source of truth (Spine rec6e6hYLuOpaLANf,
+// reconciled 2026-06-04). Both this module and the pre-contract math
+// gate read from the same definition so the BroCard pricing layer and
+// PC-27 can't drift.
+import { DEFAULT_WHOLESALE_FEE } from "@/lib/pre-contract-math";
 
 export type ArvConfidenceLabel = "HIGH" | "MED" | "LOW";
 
-const DEFAULT_WHOLESALE_FEE = 15000;
 const DEFAULT_BUYER_PROFIT = 30000;
 const SOFT_CEILING_FRACTION_OF_LIST = 0.75;
 
