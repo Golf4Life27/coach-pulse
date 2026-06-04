@@ -47,6 +47,10 @@
     {
       "path": "/api/cron/zip-approval-reply-scan",
       "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/admin/appraiser-readiness?apply_sqft=1&limit=10",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

@@ -64,6 +64,65 @@ export function streetViewUrl(
 }
 
 /**
+ * Diagnostic probe for the listing-photo scrape path. Unlike
+ * scrapeListingPhotos (which swallows everything to []), this returns
+ * the full breakdown so an operator can tell WHY a scrape came back
+ * empty: missing key vs ScraperAPI error vs Redfin-HTML-change (HTML
+ * returned but regex matched nothing) vs genuinely-photoless listing.
+ *
+ * Never throws — captures the failure into the result.
+ */
+export interface PhotoProbeResult {
+  scraper_key_present: boolean;
+  google_key_present: boolean;
+  url_is_redfin: boolean;
+  scraperapi_http_status: number | null;
+  html_length: number | null;
+  regex_match_count: number | null;
+  sample_match: string | null;
+  error: string | null;
+}
+
+export async function probeListingPhotos(
+  verificationUrl: string | null,
+): Promise<PhotoProbeResult> {
+  const result: PhotoProbeResult = {
+    scraper_key_present: Boolean(SCRAPER_API_KEY),
+    google_key_present: Boolean(GOOGLE_MAPS_API_KEY),
+    url_is_redfin: Boolean(verificationUrl && verificationUrl.includes("redfin.com")),
+    scraperapi_http_status: null,
+    html_length: null,
+    regex_match_count: null,
+    sample_match: null,
+    error: null,
+  };
+  if (!SCRAPER_API_KEY) {
+    result.error = "SCRAPER_API_KEY not configured";
+    return result;
+  }
+  if (!verificationUrl || !verificationUrl.includes("redfin.com")) {
+    result.error = "verificationUrl missing or not a redfin.com URL";
+    return result;
+  }
+  const target = `https://api.scraperapi.com/?api_key=${SCRAPER_API_KEY}&url=${encodeURIComponent(verificationUrl)}&render=true`;
+  try {
+    const res = await fetch(target, { cache: "no-store" });
+    result.scraperapi_http_status = res.status;
+    const html = await res.text();
+    result.html_length = html.length;
+    const matches = html.match(REDFIN_PHOTO_RE) ?? [];
+    const unique = Array.from(new Set(matches));
+    result.regex_match_count = unique.length;
+    result.sample_match = unique[0] ?? null;
+    if (!res.ok) result.error = `ScraperAPI HTTP ${res.status}`;
+    return result;
+  } catch (err) {
+    result.error = String(err).slice(0, 300);
+    return result;
+  }
+}
+
+/**
  * Returns combined photo array — listing photos first, then Street View
  * as a fallback / supplemental view. Capped at maxTotal.
  */
