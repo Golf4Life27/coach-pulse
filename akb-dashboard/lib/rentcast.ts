@@ -218,6 +218,62 @@ export function extractAnnualTaxes(rec: Record<string, unknown> | undefined): nu
   return bestTotal;
 }
 
+/** Pure: pull the most-recent year's CAD assessed value from a RentCast
+ *  property record. RentCast returns `taxAssessments` keyed by year:
+ *  `{ "2023": { year: 2023, value: 165000, ... }, ... }`. Highest year's
+ *  `value`. The assessed value is CAD-sourced; multiplied by a published
+ *  county effective tax rate it gives a much more reliable annual-tax
+ *  estimate than RentCast's `propertyTaxes` (which on Bexar records is
+ *  county-only and understates the true combined load). Returns null
+ *  when absent. */
+export function extractAssessedValue(rec: Record<string, unknown> | undefined): number | null {
+  if (!rec) return null;
+  const ta = rec.taxAssessments as Record<string, unknown> | undefined;
+  if (!ta || typeof ta !== "object") return null;
+  let bestYear = -Infinity;
+  let bestValue: number | null = null;
+  for (const [year, v] of Object.entries(ta)) {
+    const yr = Number(year);
+    const value = (v as Record<string, unknown> | null)?.value;
+    if (Number.isFinite(yr) && typeof value === "number" && Number.isFinite(value) && value > 0 && yr > bestYear) {
+      bestYear = yr;
+      bestValue = value;
+    }
+  }
+  return bestValue;
+}
+
+/**
+ * Fetch the subject's most-recent CAD assessed value from RentCast
+ * `/properties`. Never throws — returns null on any failure.
+ */
+export async function getRentCastAssessedValue(input: {
+  address: string;
+  city: string;
+  state: string;
+  zip: string;
+}): Promise<number | null> {
+  if (!RENTCAST_API_KEY) return null;
+  const qp = new URLSearchParams({
+    address: input.address,
+    city: input.city,
+    state: input.state,
+    zipCode: input.zip,
+  });
+  try {
+    const res = await fetch(`${BASE}/properties?${qp.toString()}`, {
+      headers: { "X-Api-Key": RENTCAST_API_KEY },
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as unknown;
+    const rec = Array.isArray(body) ? (body[0] as Record<string, unknown> | undefined) : undefined;
+    return extractAssessedValue(rec);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Fetch the subject's most-recent annual property taxes from RentCast
  * `/properties`. Never throws — returns null on any failure (caller

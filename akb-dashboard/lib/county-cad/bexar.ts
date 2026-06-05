@@ -23,6 +23,7 @@
 
 const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY;
 const FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v2/search";
+const FIRECRAWL_SCRAPE_URL = "https://api.firecrawl.dev/v2/scrape";
 
 /** Bexar County combined effective property-tax rate, fraction of
  *  assessed value. Sourced from the operator-confirmed "1.5-2%+" range
@@ -135,7 +136,13 @@ export function extractAssessedValueFromCadMarkdown(markdown: string): number | 
 
 /** Pure: format the Bexar CAD search query Firecrawl will resolve. */
 export function buildBexarCadQuery(input: { address: string; city: string; zip: string }): string {
-  return `${input.address} ${input.city} ${input.zip} Bexar Appraisal District property tax`.trim();
+  return `"${input.address}" ${input.zip} site:bcad.org OR site:search.bcad.org Bexar property tax`.trim();
+}
+
+/** Pure: build the Bexar CAD direct property search URL — bypasses
+ *  Firecrawl's search ranking by hitting the CAD site directly. */
+export function buildBexarCadDirectSearchUrl(input: { address: string }): string {
+  return `https://search.bcad.org/Search/Result?searchString=${encodeURIComponent(input.address)}`;
 }
 
 /** I/O wrapper. Never throws. Returns nulls on any failure → operator
@@ -161,38 +168,75 @@ export async function fetchBexarCadTaxes(input: {
     return { ...base, error: "FIRECRAWL_API_KEY not set" };
   }
 
-  const query = buildBexarCadQuery(input);
+  // Two-stage Firecrawl: (1) direct scrape of search.bcad.org search URL
+  // (cheapest, hits the actual property search page); (2) fall back to
+  // /v2/search with a site:-scoped query. Whichever yields markdown wins.
+  let md = "";
+  let resultUrl: string | null = null;
   try {
-    const res = await fetch(FIRECRAWL_SEARCH_URL, {
+    const directUrl = buildBexarCadDirectSearchUrl({ address: input.address });
+    const scrapeRes = await fetch(FIRECRAWL_SCRAPE_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${FIRECRAWL_API_KEY}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        query,
-        limit: 5,
-        scrapeOptions: { formats: [{ type: "markdown" }] },
-      }),
+      body: JSON.stringify({ url: directUrl, formats: ["markdown"] }),
       cache: "no-store",
     });
-    base.firecrawlStatus = res.status;
-    if (!res.ok) {
-      return { ...base, error: `Firecrawl search ${res.status}` };
+    base.firecrawlStatus = scrapeRes.status;
+    if (scrapeRes.ok) {
+      const sb = (await scrapeRes.json()) as { data?: { markdown?: string } };
+      const scrapedMd = sb.data?.markdown ?? "";
+      if (scrapedMd.length > 0) {
+        md = scrapedMd;
+        resultUrl = directUrl;
+      }
     }
-    const body = (await res.json()) as {
-      data?: { web?: Array<{ url?: string; title?: string; markdown?: string }> };
-    };
-    const candidates = body.data?.web ?? [];
-    // Prefer a bcad.org result; else first with a non-empty markdown.
-    const pick =
-      candidates.find((r) => (r.url ?? "").includes("bcad.org") && r.markdown) ??
-      candidates.find((r) => r.markdown);
-    if (!pick) {
-      return { ...base, error: "no bcad.org / no markdown in Firecrawl result" };
+  } catch {
+    // fall through to /v2/search
+  }
+
+  if (!md) {
+    const query = buildBexarCadQuery(input);
+    try {
+      const res = await fetch(FIRECRAWL_SEARCH_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${FIRECRAWL_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query,
+          limit: 5,
+          scrapeOptions: { formats: [{ type: "markdown" }] },
+        }),
+        cache: "no-store",
+      });
+      base.firecrawlStatus = res.status;
+      if (!res.ok) {
+        return { ...base, error: `Firecrawl search ${res.status}` };
+      }
+      const body = (await res.json()) as {
+        data?: { web?: Array<{ url?: string; title?: string; markdown?: string }> };
+      };
+      const candidates = body.data?.web ?? [];
+      const pick =
+        candidates.find((r) => (r.url ?? "").includes("bcad.org") && r.markdown) ??
+        candidates.find((r) => r.markdown);
+      if (!pick) {
+        return { ...base, error: "no bcad.org / no markdown in Firecrawl result" };
+      }
+      md = pick.markdown ?? "";
+      resultUrl = pick.url ?? null;
+    } catch (err) {
+      return { ...base, error: String(err).slice(0, 300) };
     }
-    base.url = pick.url ?? null;
-    const md = pick.markdown ?? "";
+  }
+
+  base.url = resultUrl;
+  try {
+    // (legacy try/catch frame kept for the extraction block below)
 
     const { total, matchContext } = extractAnnualTaxesFromCadMarkdown(md);
     const assessed = extractAssessedValueFromCadMarkdown(md);

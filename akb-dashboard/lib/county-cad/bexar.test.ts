@@ -4,6 +4,7 @@ import {
   extractAnnualTaxesFromCadMarkdown,
   extractAssessedValueFromCadMarkdown,
   buildBexarCadQuery,
+  buildBexarCadDirectSearchUrl,
 } from "./bexar";
 
 describe("extractAnnualTaxesFromCadMarkdown", () => {
@@ -46,10 +47,17 @@ describe("extractAssessedValueFromCadMarkdown", () => {
 });
 
 describe("buildBexarCadQuery", () => {
-  it("includes the address + city + zip + Bexar CAD context", () => {
+  it("includes the address + zip + Bexar CAD site scope", () => {
     const q = buildBexarCadQuery({ address: "5435 Callaghan Rd", city: "San Antonio", zip: "78228" });
     expect(q).toContain("5435 Callaghan Rd");
     expect(q).toContain("78228");
-    expect(q.toLowerCase()).toContain("bexar");
+    expect(q).toMatch(/site:bcad\.org/);
+  });
+});
+
+describe("buildBexarCadDirectSearchUrl", () => {
+  it("builds the search.bcad.org URL with the address URL-encoded", () => {
+    const u = buildBexarCadDirectSearchUrl({ address: "5435 Callaghan Rd" });
+    expect(u).toBe("https://search.bcad.org/Search/Result?searchString=5435%20Callaghan%20Rd");
   });
 });
