@@ -33,7 +33,13 @@ import { getRentEstimate, getAnnualPropertyTaxes } from "@/lib/rentcast";
 import { sourceMarketCapRate } from "@/lib/cap-rate-source";
 import { computeLandlordMax, NON_TAX_OPEX } from "@/lib/landlord-lane";
 import { investorCapBand, checkCapFloor } from "@/lib/investor-cap";
-import { computeInvestorMao, computeYourMao, DEFAULT_WHOLESALE_FEE } from "@/lib/pre-contract-math";
+import {
+  computeInvestorMao,
+  computeYourMao,
+  DEFAULT_WHOLESALE_FEE,
+  evaluatePreContractMath,
+} from "@/lib/pre-contract-math";
+import { takeLowerMao, type LaneMAO } from "@/lib/lower-lane";
 import { audit } from "@/lib/audit-log";
 
 export const runtime = "nodejs";
@@ -54,6 +60,22 @@ const DEFAULT_RECORD_IDS = [
   "rec1HTUqK0YEVb7uA", // 23 Fields Ave (control — must BLOCK)
 ];
 
+/** Operator-confirmed default investor cap (2026-06-05): 10% for
+ *  transitional zips (78228 today), 9% for SA / TX-metro broadly,
+ *  11% midpoint for Memphis. Records outside these maps still HOLD
+ *  the operative MAO unless ?investor_cap=<n> is supplied. */
+const TRANSITIONAL_ZIPS = new Set<string>([
+  "78228", // 5435 Callaghan
+]);
+function defaultInvestorCapFor(state: string | null, zip: string | null): number | null {
+  const z = (zip ?? "").trim();
+  if (z && TRANSITIONAL_ZIPS.has(z)) return 0.1;
+  const s = (state ?? "").trim().toUpperCase();
+  if (s === "TX") return 0.09;
+  if (s === "TN") return 0.11;
+  return null;
+}
+
 export async function GET(req: Request) {
   const t0 = Date.now();
   const url = new URL(req.url);
@@ -66,13 +88,31 @@ export async function GET(req: Request) {
   const opexParam = opexRaw != null ? Number(opexRaw) : NaN;
   const opexRatio = Number.isFinite(opexParam) && opexParam > 0 && opexParam < 1 ? opexParam : OPEX_RATIO;
 
-  // Operative investor cap is ONLY set when the operator/Maverick passes
-  // a confirmed ?investor_cap. No confirmed cap → operative MAO HOLDs;
-  // we still show the candidate-band sensitivity.
+  // Operative investor cap. Pass ?investor_cap=<n> to apply a single
+  // confirmed cap to ALL records. Otherwise the operator-confirmed
+  // per-market defaults apply (10% transitional zips / 9% TX / 11% TN).
   const capRaw = url.searchParams.get("investor_cap");
   const confirmedCapParam = capRaw != null ? Number(capRaw) : NaN;
-  const confirmedInvestorCap =
+  const explicitInvestorCap =
     Number.isFinite(confirmedCapParam) && confirmedCapParam > 0 && confirmedCapParam < 1 ? confirmedCapParam : null;
+
+  // Per-record annual property tax override (re-sourced from county CAD).
+  // Format: ?taxes_override=recA:3500,recB:2800  (or single number for
+  // ad-hoc single-record runs).
+  const taxesOverrideMap = new Map<string, number>();
+  const taxesOverrideRaw = url.searchParams.get("taxes_override");
+  if (taxesOverrideRaw) {
+    for (const pair of taxesOverrideRaw.split(",")) {
+      const trimmed = pair.trim();
+      if (!trimmed) continue;
+      const [maybeId, maybeN] = trimmed.includes(":") ? trimmed.split(":") : [null, trimmed];
+      const n = Number(maybeN);
+      if (Number.isFinite(n) && n > 0) {
+        if (maybeId && maybeId.startsWith("rec")) taxesOverrideMap.set(maybeId.trim(), Math.round(n));
+        else if (!maybeId && recordIds.length === 1) taxesOverrideMap.set(recordIds[0], Math.round(n));
+      }
+    }
+  }
 
   const fee = DEFAULT_WHOLESALE_FEE;
 
@@ -85,17 +125,25 @@ export async function GET(req: Request) {
     }
     const addr = { address: listing.address ?? "", city: listing.city ?? "", state: listing.state ?? "", zip: listing.zip ?? "" };
 
-    const [rentEst, taxes, capFloorSrc] = await Promise.all([
+    const [rentEst, rentcastTaxes, capFloorSrc] = await Promise.all([
       getRentEstimate(addr).catch(() => null),
       getAnnualPropertyTaxes(addr).catch(() => null),
       addr.zip ? sourceMarketCapRate(addr.zip, opexRatio).catch(() => null) : Promise.resolve(null),
     ]);
+
+    // Tax precedence: ?taxes_override (operator-confirmed re-source) wins
+    // over the RentCast value. Both surfaced in the response for audit.
+    const taxesOverride = taxesOverrideMap.get(recordId) ?? null;
+    const taxes = taxesOverride ?? rentcastTaxes;
 
     const monthlyRent = rentEst?.rent ?? null;
     const marketImpliedFloor = capFloorSrc?.marketImpliedCap ?? null;
     const estRehab = (listing.estRehabMid ?? listing.estRehab ?? null) as number | null;
 
     const band = investorCapBand(listing.state, addr.zip);
+
+    // Per-record operative cap: explicit override > confirmed default.
+    const operativeCap = explicitInvestorCap ?? defaultInvestorCapFor(listing.state, addr.zip);
 
     // MAO at each candidate investor cap (sensitivity surface). Each uses
     // the SAME full-opex NOI; only the operative cap varies.
@@ -113,8 +161,8 @@ export async function GET(req: Request) {
       };
     });
 
-    // Operative MAO: ONLY when a confirmed cap is supplied. Otherwise HOLD.
-    let operative: {
+    // Landlord lane @ operative cap.
+    let landlordOperative: {
       status: "ok" | "hold" | "block";
       investor_cap: number | null;
       landlord_value: number | null;
@@ -122,40 +170,70 @@ export async function GET(req: Request) {
       your_mao: number | null;
       reason: string;
     };
-    if (confirmedInvestorCap == null) {
-      operative = {
+    if (operativeCap == null) {
+      landlordOperative = {
         status: "hold",
         investor_cap: null,
         landlord_value: null,
         investor_mao: null,
         your_mao: null,
-        reason: "HOLD — no confirmed investor-required cap. Pass ?investor_cap=<sourced fraction> after confirming against real investor data. Candidate band shown for confirmation.",
+        reason: "Landlord HOLD — no operative cap (no default for this state/zip, no explicit ?investor_cap).",
       };
     } else {
-      const floor = checkCapFloor(confirmedInvestorCap, marketImpliedFloor);
-      const ll = computeLandlordMax({ monthlyRent, annualTaxes: taxes, opexRatio, capRate: confirmedInvestorCap });
+      const floor = checkCapFloor(operativeCap, marketImpliedFloor);
+      const ll = computeLandlordMax({ monthlyRent, annualTaxes: taxes, opexRatio, capRate: operativeCap });
       const investorMao = ll.status === "ok" ? computeInvestorMao(ll.landlordValue, estRehab) : null;
       const yourMao = computeYourMao(investorMao, fee);
       let status: "ok" | "hold" | "block";
       let reason: string;
       if (!floor.ok) {
         status = "block";
-        reason = `BLOCK — ${floor.reason}`;
+        reason = `Landlord BLOCK — ${floor.reason}`;
       } else if (ll.status !== "ok" || investorMao == null || yourMao == null) {
         status = "hold";
-        reason = `HOLD — ${ll.status !== "ok" ? ll.reason : "Est_Rehab missing (need rehab to compute Investor_MAO)"}`;
+        reason = `Landlord HOLD — ${ll.status !== "ok" ? ll.reason : "Est_Rehab missing (need rehab to compute Investor_MAO)"}`;
       } else if (yourMao <= 0) {
         status = "block";
-        reason = `BLOCK — Your_MAO=$${yourMao.toLocaleString()} ≤ 0; income math does not support a wholesale spread.`;
+        reason = `Landlord BLOCK — Your_MAO=$${yourMao.toLocaleString()} ≤ 0; income math does not support a wholesale spread.`;
       } else if (listing.contractOfferPrice != null && listing.contractOfferPrice > yourMao) {
         status = "block";
-        reason = `BLOCK — Contract $${listing.contractOfferPrice.toLocaleString()} > Your_MAO $${yourMao.toLocaleString()}.`;
+        reason = `Landlord BLOCK — Contract $${listing.contractOfferPrice.toLocaleString()} > Your_MAO $${yourMao.toLocaleString()}.`;
       } else {
         status = "ok";
-        reason = `Your_MAO=$${yourMao?.toLocaleString()} at confirmed cap ${(confirmedInvestorCap * 100).toFixed(2)}%.`;
+        reason = `Landlord Your_MAO=$${yourMao?.toLocaleString()} at operative cap ${(operativeCap * 100).toFixed(2)}%.`;
       }
-      operative = { status, investor_cap: confirmedInvestorCap, landlord_value: ll.landlordValue, investor_mao: investorMao, your_mao: yourMao, reason };
+      landlordOperative = { status, investor_cap: operativeCap, landlord_value: ll.landlordValue, investor_mao: investorMao, your_mao: yourMao, reason };
     }
+
+    // Flipper lane (V2.1: Buyer_Median − Est_Rehab − Fee). HOLDs on
+    // every record in prod until Buyer_Median writers ship — but we
+    // still run it so the lower-of-two guard cross-checks.
+    const flipperEval = evaluatePreContractMath({
+      contractOfferPrice: listing.contractOfferPrice ?? null,
+      buyerMedian: (listing as { buyerMedianValue?: number | null }).buyerMedianValue ?? null,
+      estRehab,
+      cmaValidatedAt: listing.arvValidatedAt ?? null,
+    });
+
+    // Lower-of-two-lanes guard: when BOTH lanes compute, take the LOWER
+    // Your_MAO. Permissive lane never overrides a tighter ceiling.
+    const landlordLaneMao: LaneMAO = {
+      lane: "landlord",
+      status: landlordOperative.status,
+      investorMao: landlordOperative.investor_mao,
+      yourMao: landlordOperative.your_mao,
+      reason: landlordOperative.reason,
+    };
+    const flipperLaneMao: LaneMAO = {
+      lane: "flipper",
+      // pre-contract-math uses "pass"/"hold"/"block"; LaneMAO uses
+      // "ok"/"hold"/"block". Map pass→ok.
+      status: flipperEval.status === "pass" ? "ok" : flipperEval.status,
+      investorMao: flipperEval.investorMao,
+      yourMao: flipperEval.yourMao,
+      reason: flipperEval.message,
+    };
+    const guard = takeLowerMao(landlordLaneMao, flipperLaneMao);
 
     const grossRent = monthlyRent != null ? Math.round(monthlyRent * 12) : null;
     results.push({
@@ -168,6 +246,9 @@ export async function GET(req: Request) {
         monthly_rent: monthlyRent,
         annual_gross_rent: grossRent,
         county_taxes: taxes,
+        county_taxes_source: taxesOverride != null ? "operator_override_pending_confirmation" : "rentcast_properties",
+        rentcast_taxes_raw: rentcastTaxes,
+        taxes_override: taxesOverride,
         est_rehab: estRehab,
         wholesale_fee: fee,
       },
@@ -186,14 +267,31 @@ export async function GET(req: Request) {
         market_implied_provenance: capFloorSrc?.provenance ?? "unavailable",
       },
       mao_by_candidate_cap: candidateRows,
-      operative_mao: operative,
+      landlord_lane: landlordOperative,
+      flipper_lane: {
+        status: flipperEval.status,
+        investor_mao: flipperEval.investorMao,
+        your_mao: flipperEval.yourMao,
+        reason: flipperEval.message,
+      },
+      operative_mao: {
+        lane: guard.operative.lane,
+        investor_mao: guard.operative.investorMao,
+        your_mao: guard.operative.yourMao,
+        margin_between_lanes: guard.marginBetweenLanes,
+        reason: guard.reason,
+        guard: "lower_of_two_lanes_takes_lower_mao",
+      },
     });
 
     console.log(
       `LANDLORD_MAO ${recordId} ${listing.address ?? ""} tier=${band.tier} rent=${monthlyRent ?? "-"} ` +
-      `taxes=${taxes ?? "-"} rehab=${estRehab ?? "-"} opex=${opexRatio} mkt_floor=${marketImpliedFloor ?? "-"} ` +
-      `op_cap=${operative.investor_cap ?? "-"} op_your_mao=${operative.your_mao ?? "-"} status=${operative.status} ` +
-      `band_your_mao=[${candidateRows.map((c) => c.your_mao ?? "-").join(",")}]`,
+      `taxes=${taxes ?? "-"}${taxesOverride != null ? "*ovr" : ""} rehab=${estRehab ?? "-"} opex=${opexRatio} ` +
+      `mkt_floor=${marketImpliedFloor ?? "-"} op_cap=${landlordOperative.investor_cap ?? "-"} ` +
+      `landlord=${landlordOperative.your_mao ?? "-"}/${landlordOperative.status} ` +
+      `flipper=${flipperEval.yourMao ?? "-"}/${flipperEval.status} ` +
+      `OP_LANE=${guard.operative.lane} OP_YMAO=${guard.operative.yourMao ?? "-"} ` +
+      `band=[${candidateRows.map((c) => c.your_mao ?? "-").join(",")}]`,
     );
   }
 
@@ -201,20 +299,24 @@ export async function GET(req: Request) {
     agent: "appraiser",
     event: "landlord_mao_report",
     status: "confirmed_success",
-    inputSummary: { recordIds, opexRatio, fee, confirmedInvestorCap },
-    outputSummary: { count: results.length, opex_pending_confirmation: opexRatio, operative_cap_confirmed: confirmedInvestorCap != null },
+    inputSummary: { recordIds, opexRatio, fee, explicitInvestorCap, taxesOverrideRecords: Array.from(taxesOverrideMap.keys()) },
+    outputSummary: { count: results.length, opex_pending_confirmation: opexRatio, explicit_cap_supplied: explicitInvestorCap != null, taxes_overrides: taxesOverrideMap.size },
     ms: Date.now() - t0,
   });
 
   return NextResponse.json({
     ok: true,
     note:
-      "REPORT ONLY — no writes, no offers. The OPERATIVE cap is the SOURCED investor-required cap (NOT the retail market-implied cap, which is AVM-contaminated and shown only as a floor). " +
-      "Cap band + expense load + MAO are PENDING MAVERICK SOURCE-CONFIRMATION + operator eyeball. Pass ?investor_cap=<confirmed fraction> to compute the operative MAO.",
+      "REPORT ONLY — no writes, no offers. Operative cap = sourced investor-required cap (market-implied cap is AVM-contaminated → floor sanity-check only). " +
+      "Operative MAO applies the LOWER-OF-TWO-LANES GUARD across landlord (rent-cap) + flipper (Buyer_Median); permissive lane cannot override a tighter ceiling. " +
+      "Tax overrides via ?taxes_override=recA:N,recB:N apply confirmed county-CAD values per record. PENDING operator confirmation before any number drives offers.",
     opex_ratio: opexRatio,
     opex_source: NON_TAX_OPEX.source,
     wholesale_fee: fee,
-    confirmed_investor_cap: confirmedInvestorCap,
+    explicit_investor_cap: explicitInvestorCap,
+    defaults_note:
+      "Per-record operative cap defaults (operator-confirmed 2026-06-05): 10% for TRANSITIONAL_ZIPS (currently {78228}), 9% for other TX, 11% for TN. Override via ?investor_cap=<n>.",
+    taxes_override_records: Array.from(taxesOverrideMap.entries()).map(([id, n]) => ({ recordId: id, taxes: n })),
     results,
     elapsed_ms: Date.now() - t0,
   });

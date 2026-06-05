@@ -59,6 +59,14 @@
     {
       "path": "/api/admin/landlord-mao",
       "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/admin/resource-bexar-taxes?recordId=recG4GNM2sa0ZYj7p",
+      "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/agents/appraiser/rehab/recG4GNM2sa0ZYj7p",
+      "schedule": "*/10 * * * *"
     }
   ]
 }
