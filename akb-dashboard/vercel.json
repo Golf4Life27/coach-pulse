@@ -63,6 +63,10 @@
     {
       "path": "/api/agents/appraiser/rehab/recG4GNM2sa0ZYj7p",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/stale-deal-triage?apply=1&limit=50",
+      "schedule": "15,45 * * * *"
     }
   ]
 }
