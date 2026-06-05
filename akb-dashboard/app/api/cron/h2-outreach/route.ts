@@ -40,6 +40,7 @@ import { NextResponse } from "next/server";
 import { getListings, getListing, updateListingRecord } from "@/lib/airtable";
 import { sendMessageWithId } from "@/lib/quo";
 import { audit } from "@/lib/audit-log";
+import { checkFirstOutreachHydration, checkOfferOverList } from "@/lib/outreach-economics";
 import {
   authenticate,
   hasDashboardSession,
@@ -369,6 +370,45 @@ async function handle(req: Request): Promise<Response> {
           row.error = "idempotent_skip: dispatch already claimed";
           summary.idempotent_skipped++;
         } else {
+          // ── PRE-SEND HARD GATES (2026-06-05) ─────────────────────────
+          // The 6 unauthorized sends went through because this route
+          // never called the safety gates. Both gates are pure / no-I/O,
+          // so wiring them here adds zero latency. Fresh-fetch the
+          // listing fields the checks read (the planning load may not
+          // have populated hydration timestamps).
+          const fresh = await getListing(p.recordId);
+          const hydration = checkFirstOutreachHydration({
+            lastOutreachDate: fresh?.lastOutreachDate ?? null,
+            arvValidatedAt: fresh?.arvValidatedAt ?? null,
+            rehabEstimatedAt: fresh?.rehabEstimatedAt ?? null,
+          });
+          if (!hydration.ok) {
+            row.error = `hydration_block: ${hydration.blockedBecause}`;
+            summary.errors++;
+            await audit({
+              agent: "crier",
+              event: "h2_outreach_hydration_blocked",
+              status: "confirmed_failure",
+              recordId: p.recordId,
+              inputSummary: { missing: hydration.missing },
+              outputSummary: { reason: hydration.blockedBecause },
+            });
+            continue;
+          }
+          const economics = checkOfferOverList(p.message!, fresh?.listPrice ?? null);
+          if (!economics.ok) {
+            row.error = `economics_block: ${economics.blockedBecause}`;
+            summary.errors++;
+            await audit({
+              agent: "crier",
+              event: "h2_outreach_economics_blocked",
+              status: "confirmed_failure",
+              recordId: p.recordId,
+              inputSummary: { offer: economics.offerAmount, list: economics.listPrice, ratio: economics.ratio },
+              outputSummary: { reason: economics.blockedBecause },
+            });
+            continue;
+          }
           const result = await sendMessageWithId(p.toE164!, p.message!);
           row.sms_fired = true;
           row.sms_message_id = result.id;

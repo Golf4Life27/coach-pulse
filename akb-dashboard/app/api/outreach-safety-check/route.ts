@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getListing } from "@/lib/airtable";
 import type { AgentContext, SafetyCheckResult, SafetyCheckReason } from "@/types/jarvis";
+import { checkFirstOutreachHydration, checkOfferOverList } from "@/lib/outreach-economics";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -176,29 +177,45 @@ export async function POST(req: Request) {
     return NextResponse.json(result, { status: 200 });
   }
 
-  // Check 6 — Pre-offer screen on first outreach. If listing has no prior
-  // outreach (lastOutreachDate empty) AND no pre-offer-screen has run, we
-  // block until the operator runs the screen. This is the Ford St guard.
-  const isFirstOutreach = !listing.lastOutreachDate || (ac.totalOutreaches === 0);
-  if (isFirstOutreach && !listing.preOfferScreenAt) {
+  // Check 6 — First-outreach hydration prerequisite. CORRECTED 2026-06-05
+  // after unauthorized send: previously gated on `listing.preOfferScreenAt`,
+  // a schema field that DOES NOT EXIST in Listings_V1 → always read null →
+  // either always-blocked the deal-action path (silently, since no Verif
+  // Notes write), OR (more importantly) was bypassed entirely by the h2
+  // cron which never called this route. Now uses the REAL hydration
+  // signals: a first outreach (no Last_Outreach_Date) requires both
+  // `arvValidatedAt` AND `rehabEstimatedAt`. The 6 unauthorized sends were
+  // all first-outreach records with NEITHER hydrated — this is the
+  // regression this check is designed to catch.
+  const hydration = checkFirstOutreachHydration({
+    lastOutreachDate: listing.lastOutreachDate,
+    arvValidatedAt: listing.arvValidatedAt,
+    rehabEstimatedAt: listing.rehabEstimatedAt,
+  });
+  if (!hydration.ok) {
     const result: SafetyCheckResult = {
       passed: false,
       reason: "cooldown",
       warnings: [
-        `Pre-offer screen has not run on ${listing.address}. Run /api/pre-offer-screen first or this outreach may fire on a property with hidden flags (fire damage, negative spread, distress mismatch).`,
+        `First outreach on ${listing.address} is missing hydrated pricing inputs — ${hydration.blockedBecause}. Run ARV + rehab pipelines before contacting.`,
       ],
       agentContext: ac,
     };
     return NextResponse.json(result, { status: 200 });
   }
 
-  // Check 7 — Pre-offer screen prior result was Block.
-  if (listing.preOfferScreenResult === "Block") {
+  // Check 7 — >85%-of-list block. CORRECTED 2026-06-05: previously gated
+  // on `listing.preOfferScreenResult === "Block"` (schema field doesn't
+  // exist → always undefined → never fired). Now a real check: parse the
+  // outgoing message body for the offer amount and BLOCK when offer
+  // exceeds 85% of List_Price. Pure helper in lib/outreach-economics.
+  const economics = checkOfferOverList(body, listing.listPrice);
+  if (!economics.ok) {
     const result: SafetyCheckResult = {
       passed: false,
       reason: "cooldown",
       warnings: [
-        `Pre-offer screen flagged BLOCKERS on ${listing.address}: ${(listing.preOfferScreenNotes ?? "").split("\n").filter((l) => l.startsWith("BLOCK:")).join(" / ")}. Resolve before contacting.`,
+        `Outreach BLOCKED on ${listing.address}: ${economics.blockedBecause}. Confirm rehab/ARV + offer math before contacting.`,
       ],
       agentContext: ac,
     };
