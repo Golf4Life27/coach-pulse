@@ -57,20 +57,8 @@
       "schedule": "*/5 * * * *"
     },
     {
-      "path": "/api/agents/appraiser/rehab/rec9d5p4j2NW1AFMt",
-      "schedule": "*/10 * * * *"
-    },
-    {
-      "path": "/api/agents/appraiser/rehab/recG4GNM2sa0ZYj7p",
-      "schedule": "*/10 * * * *"
-    },
-    {
-      "path": "/api/agents/appraiser/rehab/recd3aN6DLdBmMJV4",
-      "schedule": "*/10 * * * *"
-    },
-    {
       "path": "/api/admin/landlord-mao",
-      "schedule": "*/10 * * * *"
+      "schedule": "*/30 * * * *"
     }
   ]
 }
