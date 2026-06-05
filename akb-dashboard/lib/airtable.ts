@@ -97,8 +97,18 @@ const LISTING_FIELDS: Record<string, string> = {
   //   wholesaleFeeTarget default 15000, buyerProfitTarget default 30000
   fldSPxo0LRdGDBxcv: "wholesaleFeeTarget",
   fldpmMwfqbXx6d58N: "buyerProfitTarget",
-  fldHhSpaiNq1OPzfc: "investorMao",
-  fldfE06eS402RcPCN: "yourMao",
+  // ── ECONOMICS QUARANTINE (2026-06-05) ────────────────────────────────
+  // Investor_MAO / Your_MAO (flds Hh.. / fE..) are LEGACY FORMULA fields:
+  //   Your_MAO = ARV − rehab − ARV*0.13 − IF(profit,_,30000) − IF(fee,_,15000)
+  // i.e. ARV-driven (banned AVM basis) with the legacy $30k/$15k constants
+  // (empty record → −45,000). They are READ-ONLY via API and must NOT be
+  // treated as economic truth. We map the JS props `investorMao`/`yourMao`
+  // to the CLEAN, writable V2.1 fields instead, so every reader gets the
+  // V2.1 value (null → HOLD until the triage worker computes it). The
+  // legacy formula fields are intentionally NOT mapped (renamed legacy_*
+  // in Airtable); nothing reads them for decisions.
+  fldAtudyUDNgoPWLR: "investorMao", // Investor_MAO_V21 (clean)
+  fldd8EndI5IrBtETD: "yourMao",     // Your_MAO_V21 (clean)
   fldAvk2aIBU1Lh3Dz: "autoApproveV2",
   fldvHDqtftWehMJR7: "arvValidatedAt",
   // ── D3 cadence inputs
@@ -203,8 +213,11 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "ARV_Comp_Details_JSON": "arvCompDetailsJson",
   "Wholesale_Fee_Target": "wholesaleFeeTarget",
   "Buyer_Profit_Target": "buyerProfitTarget",
-  "Investor_MAO": "investorMao",
-  "Your_MAO": "yourMao",
+  // Economics quarantine (see ID-map note): map to the clean V2.1 fields,
+  // NOT the legacy ARV-driven formula fields (legacy_Investor_MAO /
+  // legacy_Your_MAO in Airtable). null → HOLD until V2.1 computes.
+  "Investor_MAO_V21": "investorMao",
+  "Your_MAO_V21": "yourMao",
   "Auto_Approve_v2": "autoApproveV2",
   "ARV_Validated_At": "arvValidatedAt",
 };

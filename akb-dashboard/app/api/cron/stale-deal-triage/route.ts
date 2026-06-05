@@ -281,8 +281,11 @@ async function handle(req: Request, params: TriageParams) {
     const econFields: Record<string, unknown> = {};
     if (monthlyRent != null) econFields.Estimated_Monthly_Rent = monthlyRent;
     if (v21.status === "ok") {
-      econFields.Investor_MAO = v21.investorMao;
-      econFields.Your_MAO = v21.yourMao;
+      // Write the CLEAN V2.1 fields — NOT Investor_MAO / Your_MAO, which are
+      // read-only LEGACY FORMULA fields (writing them 422s). See the
+      // economics-quarantine note in lib/airtable.ts.
+      econFields.Investor_MAO_V21 = v21.investorMao;
+      econFields.Your_MAO_V21 = v21.yourMao;
     }
     const finalNotes = appendTriageNote(upsertMaoV21Marker(listing.notes, maoMarker), note);
     const econAudit = {

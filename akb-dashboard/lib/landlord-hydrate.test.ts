@@ -16,12 +16,27 @@ describe("defaultInvestorCapFor", () => {
   it("9% for other TX", () => {
     expect(defaultInvestorCapFor("TX", "78230")).toBe(0.09);
   });
-  it("11% for TN", () => {
-    expect(defaultInvestorCapFor("TN", "38109")).toBe(0.11);
+  it("TN/Memphis is UNCONFIRMED → null → HOLD (candidate band, never a silent default)", () => {
+    // Confirmation gates the computation. An unconfirmed cap defaulting in
+    // is the false-dispose machine (too-high cap → understated value →
+    // negative MAO → live deal silently buried). 38109 must HOLD.
+    expect(defaultInvestorCapFor("TN", "38109")).toBeNull();
   });
   it("null (HOLD) outside the sourced maps — no guessed cap", () => {
     expect(defaultInvestorCapFor("CA", "90001")).toBeNull();
     expect(defaultInvestorCapFor(null, null)).toBeNull();
+  });
+});
+
+describe("cap gate ends-to-end: unconfirmed market → V2.1 HOLD", () => {
+  it("a fully-hydrated TN record still HOLDs because the cap is unconfirmed", () => {
+    // Rent + taxes + rehab all present, but TN cap is null → HOLD → no MAO
+    // → the triage classifier receives null → never disposes. The exact
+    // false-dispose this gate prevents.
+    const cap = defaultInvestorCapFor("TN", "38109");
+    const r = computeV21LandlordMao({ monthlyRent: 1200, annualTaxes: 1800, estRehab: 25000, capRate: cap });
+    expect(r.status).toBe("hold");
+    expect(r.yourMao).toBeNull();
   });
 });
 

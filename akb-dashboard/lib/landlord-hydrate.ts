@@ -28,11 +28,16 @@
 import { computeLandlordMax, NON_TAX_OPEX } from "./landlord-lane";
 import { computeInvestorMao, computeYourMao, DEFAULT_WHOLESALE_FEE } from "./pre-contract-math";
 
-// ── Operator-confirmed default investor-required cap (2026-06-05) ──────
-// 10% for transitional zips (78228 today), 9% for SA / TX-metro broadly,
-// 11% midpoint for Memphis. Outside these → null (HOLD; no guessed cap).
-// Moved here from app/api/admin/landlord-mao so the cron + the admin
-// report share ONE source of truth.
+// ── Investor-required cap: ONLY operator-CONFIRMED markets default ─────
+// Confirmation gates the computation. An unconfirmed cap silently
+// defaulting in is the false-dispose machine: a too-high cap understates
+// value → negative MAO → a live deal silently buried on a parameter
+// nobody confirmed. So unconfirmed market === missing input === HOLD
+// (return null), NEVER a guessed band default.
+//
+// CONFIRMED (operator, 2026-06-05): 78228-transitional 10%, other TX 9%.
+// NOT confirmed: Memphis/TN — 10–12% is a CANDIDATE band only (see
+// lib/investor-cap.ts), so TN returns null → HOLD until confirmed.
 export const TRANSITIONAL_ZIPS: ReadonlySet<string> = new Set<string>([
   "78228", // 5435 Callaghan Rd
 ]);
@@ -42,10 +47,10 @@ export function defaultInvestorCapFor(
   zip: string | null | undefined,
 ): number | null {
   const z = (zip ?? "").trim();
-  if (z && TRANSITIONAL_ZIPS.has(z)) return 0.1;
+  if (z && TRANSITIONAL_ZIPS.has(z)) return 0.1; // confirmed transitional
   const s = (state ?? "").trim().toUpperCase();
-  if (s === "TX") return 0.09;
-  if (s === "TN") return 0.11;
+  if (s === "TX") return 0.09; // confirmed SA / TX-metro
+  // TN (Memphis) is a CANDIDATE band, NOT confirmed → HOLD, never default.
   return null;
 }
 
