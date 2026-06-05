@@ -197,6 +197,59 @@ export interface SubjectFacts {
  * Returns nulls + source:null when neither endpoint resolves. Never
  * throws — the caller (a backfill loop) isolates per-record failures.
  */
+/** Pure: pull the most-recent annual property-tax total from a RentCast
+ *  property record. RentCast returns `propertyTaxes` keyed by year:
+ *  `{ "2023": { year: 2023, total: 4200 }, ... }`. We take the highest
+ *  year's `total`. Returns null when absent (→ caller HOLDs). */
+export function extractAnnualTaxes(rec: Record<string, unknown> | undefined): number | null {
+  if (!rec) return null;
+  const pt = rec.propertyTaxes as Record<string, unknown> | undefined;
+  if (!pt || typeof pt !== "object") return null;
+  let bestYear = -Infinity;
+  let bestTotal: number | null = null;
+  for (const [year, v] of Object.entries(pt)) {
+    const yr = Number(year);
+    const total = (v as Record<string, unknown> | null)?.total;
+    if (Number.isFinite(yr) && typeof total === "number" && Number.isFinite(total) && total > 0 && yr > bestYear) {
+      bestYear = yr;
+      bestTotal = total;
+    }
+  }
+  return bestTotal;
+}
+
+/**
+ * Fetch the subject's most-recent annual property taxes from RentCast
+ * `/properties`. Never throws — returns null on any failure (caller
+ * HOLDs rather than fabricating a tax number).
+ */
+export async function getAnnualPropertyTaxes(input: {
+  address: string;
+  city: string;
+  state: string;
+  zip: string;
+}): Promise<number | null> {
+  if (!RENTCAST_API_KEY) return null;
+  const qp = new URLSearchParams({
+    address: input.address,
+    city: input.city,
+    state: input.state,
+    zipCode: input.zip,
+  });
+  try {
+    const res = await fetch(`${BASE}/properties?${qp.toString()}`, {
+      headers: { "X-Api-Key": RENTCAST_API_KEY },
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as unknown;
+    const rec = Array.isArray(body) ? (body[0] as Record<string, unknown> | undefined) : undefined;
+    return extractAnnualTaxes(rec);
+  } catch {
+    return null;
+  }
+}
+
 export async function getSubjectFacts(input: {
   address: string;
   city: string;

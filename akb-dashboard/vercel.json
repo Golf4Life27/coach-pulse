@@ -49,8 +49,20 @@
       "schedule": "*/15 * * * *"
     },
     {
-      "path": "/api/admin/url-backfill?apply=1&limit=20",
+      "path": "/api/admin/url-backfill?apply=1&limit=10",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/admin/appraiser-backfill?apply=1&selection=rehab_ready&limit=3",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/agents/appraiser/rehab/rec9d5p4j2NW1AFMt",
+      "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/admin/landlord-mao",
+      "schedule": "*/10 * * * *"
     }
   ]
 }

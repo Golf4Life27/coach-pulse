@@ -1,6 +1,25 @@
 // @agent: appraiser — RentCast subject-facts extraction tests.
 import { describe, it, expect } from "vitest";
-import { extractFacts, extractPhotoUrls, findPhotoFieldKeys } from "./rentcast";
+import { extractFacts, extractPhotoUrls, findPhotoFieldKeys, extractAnnualTaxes } from "./rentcast";
+
+describe("extractAnnualTaxes", () => {
+  it("returns the most-recent year's tax total", () => {
+    expect(
+      extractAnnualTaxes({
+        propertyTaxes: { "2022": { year: 2022, total: 3800 }, "2023": { year: 2023, total: 4200 } },
+      }),
+    ).toBe(4200);
+  });
+  it("returns null when propertyTaxes absent or empty", () => {
+    expect(extractAnnualTaxes(undefined)).toBeNull();
+    expect(extractAnnualTaxes({})).toBeNull();
+    expect(extractAnnualTaxes({ propertyTaxes: {} })).toBeNull();
+  });
+  it("ignores non-positive / malformed totals", () => {
+    expect(extractAnnualTaxes({ propertyTaxes: { "2023": { year: 2023, total: 0 } } })).toBeNull();
+    expect(extractAnnualTaxes({ propertyTaxes: { "2023": { year: 2023 } } })).toBeNull();
+  });
+});
 
 describe("extractFacts", () => {
   it("pulls structural facts off a RentCast record", () => {
