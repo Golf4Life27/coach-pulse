@@ -126,16 +126,34 @@ export async function GET(req: Request) {
       // only backfill genuinely-on-market subjects.)
       o.confirmed = fc.resolved && !!fc.url && match.matched && fc.stillActive;
 
-      if (o.confirmed && apply) {
-        try {
-          await updateListingRecord(l.id, {
-            Verification_URL: fc.url,
-            Verification_Source: "firecrawl_url_backfill",
-            Last_Verified: new Date().toISOString(),
-          });
-          o.written = true;
-        } catch (err) {
-          o.write_error = String(err).slice(0, 300);
+      if (apply) {
+        if (o.confirmed) {
+          try {
+            await updateListingRecord(l.id, {
+              Verification_URL: fc.url,
+              Verification_Source: "firecrawl_url_backfill",
+              Last_Verified: new Date().toISOString(),
+            });
+            o.written = true;
+          } catch (err) {
+            o.write_error = String(err).slice(0, 300);
+          }
+        } else if (!o.firecrawl_error) {
+          // Firecrawl ran but couldn't confirm a URL (unresolved / not
+          // on-market / strict-match miss). Stamp an "attempted, no
+          // confirm" marker so this record drops out of the backfill
+          // retry pool — never writes a URL, never fabricates. A
+          // transient Firecrawl error (firecrawl_error set) is NOT
+          // marked, so it's retried on the next pass.
+          try {
+            await updateListingRecord(l.id, {
+              Verification_Source: "firecrawl_url_unresolved",
+              Last_Verified: new Date().toISOString(),
+            });
+          } catch {
+            // best-effort marker; a failure here just means a retry
+            // next pass (harmless).
+          }
         }
       }
     } catch (err) {

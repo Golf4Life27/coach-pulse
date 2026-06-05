@@ -507,7 +507,13 @@ export interface VerificationUrlCoverage {
 export async function getUrlLessActiveCandidates(opts: {
   maxRecords?: number;
 } = {}): Promise<Listing[]> {
-  const formula = `AND({Live_Status}='Active', {Verification_URL}='')`;
+  // Exclude records the backfill already attempted and couldn't confirm
+  // (Verification_Source='firecrawl_url_unresolved') so a static-path
+  // cron advances through the full set instead of spinning on the
+  // unconfirmable ones at the front of the id sort. Those stay URL-less
+  // (correctly — no confirmed portal page) but drop out of the retry
+  // pool; a future re-listing re-opens them via normal intake/verify.
+  const formula = `AND({Live_Status}='Active', {Verification_URL}='', {Verification_Source}!='firecrawl_url_unresolved')`;
   const records = await fetchRecords(LISTINGS_TABLE, Object.keys(LISTING_FIELDS), {
     filterByFormula: formula,
     sort: [{ field: "Address", direction: "asc" }],
