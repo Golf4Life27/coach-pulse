@@ -37,6 +37,7 @@ import {
   computeRehabRange,
 } from "@/lib/appraiser/rehab-calibration";
 import { audit } from "@/lib/audit-log";
+import { foldRehabRead, type RehabRead } from "@/lib/rehab-median";
 import {
   authenticate,
   hasDashboardSession,
@@ -274,29 +275,54 @@ export async function GET(
     state: listing.state,
   });
 
-  // One-line confidence-vs-gate observability (runtime-log surfaces the
-  // first console.log per request). gate=PASS only when confidence ≥ 60.
+  // ── Median-of-last-5-valid persistence (2026-06-05) ─────────────
+  // Persist the MEDIAN of the last 5 VALID reads instead of overwriting
+  // on every fire. A conf=0 parse-failure / low outlier is excluded as
+  // invalid (not averaged in) and can no longer flip the persisted gate.
+  // The rolling history rides in Rehab_Line_Items_JSON.read_history.
+  const nowIso = new Date().toISOString();
+  const thisRead: RehabRead = {
+    ts: nowIso,
+    conf: vision.confidence,
+    rehab_low: range.rehab_low ?? 0,
+    rehab_mid: range.rehab_mid ?? 0,
+    rehab_high: range.rehab_high ?? 0,
+  };
+  let priorHistory: RehabRead[] = [];
+  try {
+    const parsed = listing.rehabLineItemsJson ? JSON.parse(listing.rehabLineItemsJson) : null;
+    if (parsed && Array.isArray(parsed.read_history)) priorHistory = parsed.read_history as RehabRead[];
+  } catch {
+    priorHistory = [];
+  }
+  const folded = foldRehabRead(priorHistory, thisRead);
+
+  // One-line observability (runtime-log surfaces the first console.log).
+  // gate=PASS only when the MEDIAN conf ≥ 60 (single-read conf shown too).
   const photoSrcCounts = photos.reduce<Record<string, number>>((acc, p) => {
     acc[p.source] = (acc[p.source] ?? 0) + 1;
     return acc;
   }, {});
   console.log(
-    `REHAB ${recordId} conf=${vision.confidence} gate=${vision.confidence >= 60 ? "PASS" : "HOLD"} ` +
-    `cond=${vision.condition_overall} photos=${vision.photo_count} ` +
+    `REHAB ${recordId} conf=${vision.confidence} med_conf=${folded.medianConf ?? "-"} ` +
+    `gate=${folded.gatePass ? "PASS" : "HOLD"} valid=${folded.validCount}/${5} ` +
+    `accepted=${folded.newReadAccepted} cond=${vision.condition_overall} photos=${vision.photo_count} ` +
     `src=${Object.entries(photoSrcCounts).map(([k, v]) => `${k}:${v}`).join(",")} ` +
-    `rehab_mid=${range.rehab_mid}`,
+    `this_mid=${range.rehab_mid} med_mid=${folded.medianRehabMid ?? "-"}`,
   );
 
   // ── Airtable write (skippable) ──────────────────────────────────
-  const nowIso = new Date().toISOString();
+  // Only persist when we have ≥1 valid read in the window. A first fire
+  // that is itself a misfire (validCount 0) writes nothing — there is no
+  // trustworthy number to persist (correct HOLD).
   let airtableError: string | null = null;
-  if (!skipWrite && range.rehab_mid != null) {
+  if (!skipWrite && folded.validCount > 0 && folded.medianRehabMid != null) {
     const fieldsToWrite: Record<string, unknown> = {
-      Est_Rehab: range.rehab_mid,
-      Rehab_Est_Low: range.rehab_low,
-      Est_Rehab_Mid: range.rehab_mid,
-      Rehab_Est_High: range.rehab_high,
-      Rehab_Confidence_Score: vision.confidence,
+      Est_Rehab: folded.medianRehabMid,
+      Rehab_Est_Low: folded.medianRehabLow,
+      Est_Rehab_Mid: folded.medianRehabMid,
+      Rehab_Est_High: folded.medianRehabHigh,
+      Rehab_Confidence_Score: folded.medianConf,
       Rehab_Line_Items_JSON: JSON.stringify({
         bbc_tier: bbcTier,
         market_tier: range.market_tier,
@@ -305,6 +331,10 @@ export async function GET(
         calibrated_rate_per_sqft: range.calibrated_rate_per_sqft,
         vision_condition: vision.condition_overall,
         vision_line_items: vision.line_items,
+        // Rolling valid-read history (last 5) — drives the median.
+        read_history: folded.history,
+        median_conf: folded.medianConf,
+        median_rehab_mid: folded.medianRehabMid,
       }).slice(0, 95_000),
       Rehab_Red_Flags: vision.red_flags.join(", "),
       Rehab_Estimated_At: nowIso,
