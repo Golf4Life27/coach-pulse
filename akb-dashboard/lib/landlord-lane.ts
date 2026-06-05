@@ -8,15 +8,23 @@
 // landlord lane gives an independent, income-based MAO from data we DO
 // have in TX (rent + taxes) plus a SOURCED market cap rate.
 //
-// ── The math ─────────────────────────────────────────────────────────
+// ── The math (V2.1 floor, corrected 2026-06-05) ──────────────────────
 // Standard income (cap-rate) valuation:
 //
-//   landlord_value = annual_NOI / cap_rate
+//   landlord_value = annual_NOI / INVESTOR_REQUIRED_cap
 //
 //   annual_NOI = annual_gross_rent − annual_taxes − annual_opex
 //   annual_gross_rent = monthly_rent × 12
-//   annual_opex = annual_gross_rent × opex_ratio   (insurance, vacancy,
-//                 maintenance, mgmt — NOT incl. taxes, which are explicit)
+//   annual_opex = annual_gross_rent × opex_ratio   (FULL non-tax load:
+//                 insurance + vacancy + maintenance + management — taxes
+//                 are explicit + separate; see NON_TAX_OPEX)
+//
+// ⚠️ `capRate` here MUST be the SOURCED, conservatively-high
+// INVESTOR-REQUIRED cap (lib/investor-cap.ts), NOT the retail
+// market-implied cap (RentCast median-sale ÷ rent) — that's retail,
+// AVM-contaminated, and overstates MAO. Downstream (V2.1 floor):
+//   Investor_MAO = landlord_value − Est_Rehab
+//   Your_MAO     = Investor_MAO − Wholesale_Fee
 //
 // NOTE on the brief's shorthand: the brief wrote "landlord_max =
 // cap_rate × net_rent". Dimensionally a cap-rate valuation is
@@ -33,6 +41,25 @@
 // in EXPLICITLY by the caller (sourced/confirmed), never defaulted here.
 //
 // Pure + unit-tested. No I/O.
+
+// Full conservative NON-TAX operating-expense load (fraction of gross
+// rent), corrected 2026-06-05 per operator: NOI must carry insurance +
+// vacancy + maintenance + management — NOT taxes only. County property
+// taxes are applied SEPARATELY as an explicit $ amount (see
+// LandlordLaneInputs.annualTaxes). This ratio + its source are surfaced
+// in every report for confirmation.
+export const NON_TAX_OPEX = {
+  vacancy: 0.08,
+  maintenance: 0.1,
+  management: 0.1,
+  insurance: 0.07,
+  /** Sum of the above = full non-tax load applied to gross rent. */
+  ratio: 0.35,
+  source:
+    "Conservative SFR buy-hold underwriting: vacancy 8% + maintenance 10% + management 10% + insurance 7% = 35% of gross rent, " +
+    "EXCLUDING county property taxes (applied separately as an explicit $ amount). Near the '50% rule' less taxes. " +
+    "PENDING operator confirmation.",
+} as const;
 
 export interface LandlordLaneInputs {
   /** Subject monthly market rent (RentCast rent AVM). */

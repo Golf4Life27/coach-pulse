@@ -12,16 +12,16 @@ describe("deriveImpliedCapRate", () => {
     // = 18000/200000 = 0.09; × (1−0.4) = 0.054.
     const r = deriveImpliedCapRate({ medianSalePrice: 200000, medianRent: 1500, marketOpexRatio: 0.4 });
     expect(r.grossYield).toBe(0.09);
-    expect(r.capRate).toBe(0.054);
+    expect(r.marketImpliedCap).toBe(0.054);
   });
 
   it("returns null on non-positive medians (no fabricated cap)", () => {
-    expect(deriveImpliedCapRate({ medianSalePrice: 0, medianRent: 1500, marketOpexRatio: 0.4 }).capRate).toBeNull();
-    expect(deriveImpliedCapRate({ medianSalePrice: 200000, medianRent: null, marketOpexRatio: 0.4 }).capRate).toBeNull();
+    expect(deriveImpliedCapRate({ medianSalePrice: 0, medianRent: 1500, marketOpexRatio: 0.4 }).marketImpliedCap).toBeNull();
+    expect(deriveImpliedCapRate({ medianSalePrice: 200000, medianRent: null, marketOpexRatio: 0.4 }).marketImpliedCap).toBeNull();
   });
 
   it("rejects an invalid opex ratio", () => {
-    expect(deriveImpliedCapRate({ medianSalePrice: 200000, medianRent: 1500, marketOpexRatio: 1 }).capRate).toBeNull();
+    expect(deriveImpliedCapRate({ medianSalePrice: 200000, medianRent: 1500, marketOpexRatio: 1 }).marketImpliedCap).toBeNull();
   });
 });
 
@@ -53,7 +53,7 @@ describe("sourceMarketCapRate", () => {
         body: { saleData: { medianPrice: 200000 }, rentalData: { medianRent: 1500 } },
       }),
     });
-    expect(r.capRate).toBe(0.054);
+    expect(r.marketImpliedCap).toBe(0.054);
     expect(r.source).toBe("rentcast_markets_derived");
     expect(r.provenance).toContain("RentCast /markets zip 75211");
     expect(r.assumptions.marketOpexRatio).toBe(0.4);
@@ -63,7 +63,7 @@ describe("sourceMarketCapRate", () => {
     const r = await sourceMarketCapRate("75211", 0.4, {
       fetchMarkets: async () => ({ status: 200, body: {} }),
     });
-    expect(r.capRate).toBeNull();
+    expect(r.marketImpliedCap).toBeNull();
     expect(r.error).toMatch(/no usable median/);
   });
 
@@ -71,13 +71,13 @@ describe("sourceMarketCapRate", () => {
     const r = await sourceMarketCapRate("75211", 0.4, {
       fetchMarkets: async () => ({ status: 429, body: null }),
     });
-    expect(r.capRate).toBeNull();
+    expect(r.marketImpliedCap).toBeNull();
     expect(r.error).toContain("429");
   });
 
   it("rejects an invalid zip", async () => {
     const r = await sourceMarketCapRate("7521", 0.4, { fetchMarkets: async () => ({ status: 200, body: {} }) });
-    expect(r.capRate).toBeNull();
+    expect(r.marketImpliedCap).toBeNull();
     expect(r.error).toMatch(/invalid zip/);
   });
 });

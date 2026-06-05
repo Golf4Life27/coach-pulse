@@ -1,56 +1,53 @@
-// Landlord-lane MAO report — Track 2 (2026-06-05).
+// Landlord-lane MAO report — Track 2 (2026-06-05, cap-basis corrected).
 // @agent: appraiser / orchestrator
 //
-// GET /api/admin/landlord-mao?recordIds=rec1,rec2[&opex=0.40]
+// GET /api/admin/landlord-mao?recordIds=rec1,rec2[&investor_cap=0.10][&opex=0.35]
 //
-// Produces a rent-based (income-approach) MAO for each record and
-// surfaces the SOURCED market cap rate + every assumption for Maverick
-// source-confirmation. This is a REPORT surface — it does NOT write
-// Airtable and does NOT drive any live offer. Per the brief: "Return the
-// sourced cap rate(s) per-market to Maverick for source-confirmation
-// before it drives any live offer."
+// Produces a rent-based (income-approach) MAO surface for each record
+// and returns the OPERATIVE INVESTOR-REQUIRED cap candidates + the full
+// conservative expense load + the resulting MAO for Maverick source-
+// confirmation. REPORT ONLY — no Airtable writes, no live offers. No
+// number drives an offer until the operator confirms the cap against
+// real investor data and eyeballs the parameters.
 //
-// Per record:
-//   rent     = RentCast rent AVM (getRentEstimate)
-//   taxes    = RentCast property record (getAnnualPropertyTaxes)
-//   cap rate = RentCast /markets DERIVED (sourceMarketCapRate) — sourced,
-//              never hardcoded; null → HOLD
-//   landlord_value = NOI / cap       (lib/landlord-lane)
-//   Investor_MAO   = landlord_value − Est_Rehab
+// CAP BASIS (corrected per operator): the operative cap is the SOURCED,
+// conservatively-high INVESTOR-REQUIRED cap (lib/investor-cap.ts), NOT
+// the retail market-implied cap (RentCast median-sale ÷ rent), which is
+// retail value, AVM-contaminated in non-disclosure TX, and overstates
+// MAO ~30-50%. The market-implied cap is shown ONLY as a floor sanity-
+// check (investor cap must be ≥ it).
+//
+//   landlord_value = annual_NOI / investor_required_cap
+//   annual_NOI     = gross_rent − county_taxes − gross_rent×non_tax_opex
+//   Investor_MAO   = landlord_value − Est_Rehab        (V2.1 floor)
 //   Your_MAO       = Investor_MAO − Wholesale_Fee
 //
-// Missing ANY input → HOLD on that record (no fabricated number). The
-// existing Buyer_Median lane is run alongside for comparison (it HOLDs
-// in prod — zero Buyer_Median writers — which is the whole reason the
-// landlord lane exists).
-//
-// Auth: /api/admin/* convention (Vercel deployment layer). Read-only.
+// When no confirmed ?investor_cap is supplied, the OPERATIVE MAO HOLDs
+// (investor_cap_unconfirmed) and the report shows MAO across the
+// conservative candidate band so Maverick can confirm. Missing rent /
+// taxes / rehab → HOLD (no fabricated numbers).
 
 import { NextResponse } from "next/server";
 import { getListing } from "@/lib/airtable";
 import { getRentEstimate, getAnnualPropertyTaxes } from "@/lib/rentcast";
 import { sourceMarketCapRate } from "@/lib/cap-rate-source";
-import { computeLandlordMax } from "@/lib/landlord-lane";
-import {
-  computeInvestorMao,
-  computeYourMao,
-  evaluatePreContractMath,
-  DEFAULT_WHOLESALE_FEE,
-} from "@/lib/pre-contract-math";
+import { computeLandlordMax, NON_TAX_OPEX } from "@/lib/landlord-lane";
+import { investorCapBand, checkCapFloor } from "@/lib/investor-cap";
+import { computeInvestorMao, computeYourMao, DEFAULT_WHOLESALE_FEE } from "@/lib/pre-contract-math";
 import { audit } from "@/lib/audit-log";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
-// Operating-expense ratio (fraction of gross rent; excludes taxes, which
-// are explicit, and debt service). Standard buy-hold underwriting
-// assumption — surfaced in every result + flagged for Maverick
-// confirmation. Env-tunable; NOT a hidden default. Used for BOTH the
-// subject NOI and the market cap-rate derivation (consistent; errs
-// conservative on value).
-const DEFAULT_OPEX_RATIO = Number(process.env.LANDLORD_OPEX_RATIO ?? "0.40");
+// Full conservative NON-TAX opex load (insurance + vacancy + maintenance
+// + management). County taxes are separate + explicit. Sourced in
+// NON_TAX_OPEX; env-tunable for confirmation runs.
+const OPEX_RATIO = (() => {
+  const raw = process.env.LANDLORD_OPEX_RATIO;
+  const n = raw != null ? Number(raw) : NaN;
+  return Number.isFinite(n) && n > 0 && n < 1 ? n : NON_TAX_OPEX.ratio;
+})();
 
-// The two DoD records + 23 Fields (must still BLOCK) when no ?recordIds.
 const DEFAULT_RECORD_IDS = [
   "recG4GNM2sa0ZYj7p", // 5435 Callaghan Rd, San Antonio TX 78228
   "recd3aN6DLdBmMJV4", // 11114 Dreamland Dr, San Antonio TX 78230
@@ -64,13 +61,19 @@ export async function GET(req: Request) {
   const recordIds = idsParam
     ? idsParam.split(",").map((s) => s.trim()).filter((s) => s.startsWith("rec"))
     : DEFAULT_RECORD_IDS;
-  // BUGFIX: Number(null) === 0, which would pass the (≥0 && <1) guard and
-  // silently zero the opex (no expense haircut → inflated values). Only
-  // override the default when an explicit, valid ?opex is supplied.
+
   const opexRaw = url.searchParams.get("opex");
   const opexParam = opexRaw != null ? Number(opexRaw) : NaN;
-  const opexRatio =
-    Number.isFinite(opexParam) && opexParam > 0 && opexParam < 1 ? opexParam : DEFAULT_OPEX_RATIO;
+  const opexRatio = Number.isFinite(opexParam) && opexParam > 0 && opexParam < 1 ? opexParam : OPEX_RATIO;
+
+  // Operative investor cap is ONLY set when the operator/Maverick passes
+  // a confirmed ?investor_cap. No confirmed cap → operative MAO HOLDs;
+  // we still show the candidate-band sensitivity.
+  const capRaw = url.searchParams.get("investor_cap");
+  const confirmedCapParam = capRaw != null ? Number(capRaw) : NaN;
+  const confirmedInvestorCap =
+    Number.isFinite(confirmedCapParam) && confirmedCapParam > 0 && confirmedCapParam < 1 ? confirmedCapParam : null;
+
   const fee = DEFAULT_WHOLESALE_FEE;
 
   const results = [];
@@ -82,89 +85,115 @@ export async function GET(req: Request) {
     }
     const addr = { address: listing.address ?? "", city: listing.city ?? "", state: listing.state ?? "", zip: listing.zip ?? "" };
 
-    // Parallel data pulls. Each degrades to null on failure (→ HOLD).
-    const [rentEst, taxes, capSource] = await Promise.all([
+    const [rentEst, taxes, capFloorSrc] = await Promise.all([
       getRentEstimate(addr).catch(() => null),
       getAnnualPropertyTaxes(addr).catch(() => null),
       addr.zip ? sourceMarketCapRate(addr.zip, opexRatio).catch(() => null) : Promise.resolve(null),
     ]);
 
     const monthlyRent = rentEst?.rent ?? null;
-    const capRate = capSource?.capRate ?? null;
+    const marketImpliedFloor = capFloorSrc?.marketImpliedCap ?? null;
     const estRehab = (listing.estRehabMid ?? listing.estRehab ?? null) as number | null;
 
-    const landlord = computeLandlordMax({ monthlyRent, annualTaxes: taxes, opexRatio, capRate });
+    const band = investorCapBand(listing.state, addr.zip);
 
-    // Landlord-lane MAO: landlord_value plays the role of the ARV/comp
-    // floor that the investor underwrites to (same shape as the
-    // Buyer_Median lane, different basis).
-    const investorMaoLandlord = landlord.status === "ok"
-      ? computeInvestorMao(landlord.landlordValue, estRehab)
-      : null;
-    const yourMaoLandlord = computeYourMao(investorMaoLandlord, fee);
-
-    // Existing Buyer_Median lane for comparison.
-    const buyerMedianLane = evaluatePreContractMath({
-      contractOfferPrice: listing.contractOfferPrice ?? null,
-      buyerMedian: (listing as { buyerMedianValue?: number | null }).buyerMedianValue ?? null,
-      estRehab,
-      cmaValidatedAt: listing.arvValidatedAt ?? null,
+    // MAO at each candidate investor cap (sensitivity surface). Each uses
+    // the SAME full-opex NOI; only the operative cap varies.
+    const candidateRows = band.candidates.map((cap) => {
+      const ll = computeLandlordMax({ monthlyRent, annualTaxes: taxes, opexRatio, capRate: cap });
+      const investorMao = ll.status === "ok" ? computeInvestorMao(ll.landlordValue, estRehab) : null;
+      const yourMao = computeYourMao(investorMao, fee);
+      const floor = checkCapFloor(cap, marketImpliedFloor);
+      return {
+        investor_cap: cap,
+        landlord_value: ll.landlordValue,
+        investor_mao: investorMao,
+        your_mao: yourMao,
+        floor_check_ok: floor.ok,
+      };
     });
 
-    // The reportable MAO + its gate status.
-    let maoStatus: "ok" | "hold" | "block";
-    if (landlord.status !== "ok" || investorMaoLandlord == null || yourMaoLandlord == null) {
-      maoStatus = "hold";
-    } else if (yourMaoLandlord <= 0) {
-      maoStatus = "block";
-    } else if (listing.contractOfferPrice != null && listing.contractOfferPrice > yourMaoLandlord) {
-      maoStatus = "block";
+    // Operative MAO: ONLY when a confirmed cap is supplied. Otherwise HOLD.
+    let operative: {
+      status: "ok" | "hold" | "block";
+      investor_cap: number | null;
+      landlord_value: number | null;
+      investor_mao: number | null;
+      your_mao: number | null;
+      reason: string;
+    };
+    if (confirmedInvestorCap == null) {
+      operative = {
+        status: "hold",
+        investor_cap: null,
+        landlord_value: null,
+        investor_mao: null,
+        your_mao: null,
+        reason: "HOLD — no confirmed investor-required cap. Pass ?investor_cap=<sourced fraction> after confirming against real investor data. Candidate band shown for confirmation.",
+      };
     } else {
-      maoStatus = "ok";
+      const floor = checkCapFloor(confirmedInvestorCap, marketImpliedFloor);
+      const ll = computeLandlordMax({ monthlyRent, annualTaxes: taxes, opexRatio, capRate: confirmedInvestorCap });
+      const investorMao = ll.status === "ok" ? computeInvestorMao(ll.landlordValue, estRehab) : null;
+      const yourMao = computeYourMao(investorMao, fee);
+      let status: "ok" | "hold" | "block";
+      let reason: string;
+      if (!floor.ok) {
+        status = "block";
+        reason = `BLOCK — ${floor.reason}`;
+      } else if (ll.status !== "ok" || investorMao == null || yourMao == null) {
+        status = "hold";
+        reason = `HOLD — ${ll.status !== "ok" ? ll.reason : "Est_Rehab missing (need rehab to compute Investor_MAO)"}`;
+      } else if (yourMao <= 0) {
+        status = "block";
+        reason = `BLOCK — Your_MAO=$${yourMao.toLocaleString()} ≤ 0; income math does not support a wholesale spread.`;
+      } else if (listing.contractOfferPrice != null && listing.contractOfferPrice > yourMao) {
+        status = "block";
+        reason = `BLOCK — Contract $${listing.contractOfferPrice.toLocaleString()} > Your_MAO $${yourMao.toLocaleString()}.`;
+      } else {
+        status = "ok";
+        reason = `Your_MAO=$${yourMao?.toLocaleString()} at confirmed cap ${(confirmedInvestorCap * 100).toFixed(2)}%.`;
+      }
+      operative = { status, investor_cap: confirmedInvestorCap, landlord_value: ll.landlordValue, investor_mao: investorMao, your_mao: yourMao, reason };
     }
 
-    const row = {
+    const grossRent = monthlyRent != null ? Math.round(monthlyRent * 12) : null;
+    results.push({
       recordId,
       address: listing.address,
       zip: addr.zip,
+      state: listing.state,
       contractOfferPrice: listing.contractOfferPrice ?? null,
       inputs: {
         monthly_rent: monthlyRent,
-        annual_taxes: taxes,
+        annual_gross_rent: grossRent,
+        county_taxes: taxes,
         est_rehab: estRehab,
-        opex_ratio: opexRatio,
-        cap_rate: capRate,
         wholesale_fee: fee,
       },
-      cap_rate_source: capSource
-        ? { capRate: capSource.capRate, grossYield: capSource.grossYield, medianSalePrice: capSource.medianSalePrice, medianRent: capSource.medianRent, source: capSource.source, provenance: capSource.provenance, error: capSource.error }
-        : { error: "zip missing" },
-      landlord: {
-        status: landlord.status,
-        landlord_value: landlord.landlordValue,
-        annual_noi: landlord.annualNoi,
-        missing: landlord.missing,
-        reason: landlord.reason,
+      expense_load: {
+        non_tax_opex_ratio: opexRatio,
+        itemized: { vacancy: NON_TAX_OPEX.vacancy, maintenance: NON_TAX_OPEX.maintenance, management: NON_TAX_OPEX.management, insurance: NON_TAX_OPEX.insurance },
+        note: "Applied to gross rent; county property taxes are separate + explicit above.",
+        source: NON_TAX_OPEX.source,
       },
-      landlord_mao: {
-        status: maoStatus,
-        investor_mao: investorMaoLandlord,
-        your_mao: yourMaoLandlord,
+      operative_cap_basis: {
+        tier: band.tier,
+        candidate_band: band.candidates,
+        conservative_high: band.conservativeHigh,
+        source: band.source,
+        market_implied_floor: marketImpliedFloor,
+        market_implied_provenance: capFloorSrc?.provenance ?? "unavailable",
       },
-      buyer_median_lane: {
-        status: buyerMedianLane.status,
-        investor_mao: buyerMedianLane.investorMao,
-        your_mao: buyerMedianLane.yourMao,
-        message: buyerMedianLane.message,
-      },
-    };
-    results.push(row);
+      mao_by_candidate_cap: candidateRows,
+      operative_mao: operative,
+    });
 
     console.log(
-      `LANDLORD_MAO ${recordId} ${listing.address ?? ""} zip=${addr.zip} ` +
-      `rent=${monthlyRent ?? "-"} taxes=${taxes ?? "-"} rehab=${estRehab ?? "-"} ` +
-      `cap=${capRate ?? "-"} value=${landlord.landlordValue ?? "-"} ` +
-      `inv_mao=${investorMaoLandlord ?? "-"} your_mao=${yourMaoLandlord ?? "-"} status=${maoStatus}`,
+      `LANDLORD_MAO ${recordId} ${listing.address ?? ""} tier=${band.tier} rent=${monthlyRent ?? "-"} ` +
+      `taxes=${taxes ?? "-"} rehab=${estRehab ?? "-"} opex=${opexRatio} mkt_floor=${marketImpliedFloor ?? "-"} ` +
+      `op_cap=${operative.investor_cap ?? "-"} op_your_mao=${operative.your_mao ?? "-"} status=${operative.status} ` +
+      `band_your_mao=[${candidateRows.map((c) => c.your_mao ?? "-").join(",")}]`,
     );
   }
 
@@ -172,16 +201,20 @@ export async function GET(req: Request) {
     agent: "appraiser",
     event: "landlord_mao_report",
     status: "confirmed_success",
-    inputSummary: { recordIds, opexRatio, fee },
-    outputSummary: { count: results.length, opex_pending_confirmation: opexRatio },
+    inputSummary: { recordIds, opexRatio, fee, confirmedInvestorCap },
+    outputSummary: { count: results.length, opex_pending_confirmation: opexRatio, operative_cap_confirmed: confirmedInvestorCap != null },
     ms: Date.now() - t0,
   });
 
   return NextResponse.json({
     ok: true,
-    note: "REPORT ONLY — does not write Airtable or drive offers. Cap rates + opex assumption are PENDING MAVERICK SOURCE-CONFIRMATION before any live use.",
-    opex_ratio_assumption: opexRatio,
+    note:
+      "REPORT ONLY — no writes, no offers. The OPERATIVE cap is the SOURCED investor-required cap (NOT the retail market-implied cap, which is AVM-contaminated and shown only as a floor). " +
+      "Cap band + expense load + MAO are PENDING MAVERICK SOURCE-CONFIRMATION + operator eyeball. Pass ?investor_cap=<confirmed fraction> to compute the operative MAO.",
+    opex_ratio: opexRatio,
+    opex_source: NON_TAX_OPEX.source,
     wholesale_fee: fee,
+    confirmed_investor_cap: confirmedInvestorCap,
     results,
     elapsed_ms: Date.now() - t0,
   });

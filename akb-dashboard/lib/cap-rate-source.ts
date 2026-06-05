@@ -1,29 +1,27 @@
-// Market cap-rate sourcing — Track 2 (2026-06-05).
+// Market-implied cap — FLOOR SANITY-CHECK ONLY (Track 2; corrected
+// 2026-06-05 per operator).
 // @agent: appraiser
 //
-// The landlord lane (lib/landlord-lane.ts) needs a cap rate. The brief
-// is strict: "cap rate must be SOURCED from real market data (RentCast
-// market stats or a cited market report) — do NOT hardcode a guessed
-// rate ... Return the sourced cap rate(s) per-market to Maverick for
-// source-confirmation before it drives any live offer. No fabricated
-// defaults — missing input = HOLD."
+// ⚠️ DO NOT use the value from this module as the OPERATIVE cap in MAO
+// math. It is the MARKET-IMPLIED cap, derived from RentCast /v1/markets
+// median SALE price ÷ rent. Two reasons that's wrong for offer math:
+//   1. Median-sale = RETAIL value, not the investor acquisition ceiling.
+//      Using it overstates MAO ~30-50% and re-creates the 23 Fields
+//      over-offer failure.
+//   2. In non-disclosure TX, RentCast median-sale is AVM-DERIVED, so
+//      feeding it into offer math pulls an AVM into pricing — a hard
+//      violation of the V2.1 floor principle (no AVM in offers).
 //
-// This module DERIVES an implied market cap rate from RentCast's
-// /v1/markets endpoint (zip-level median sale price + median long-term
-// rent), with every assumption made explicit and a provenance string
-// attached so Maverick/operator can confirm before live use. It NEVER
-// returns a hardcoded fallback — if RentCast has no usable market data
-// for the zip, it returns capRate:null (→ landlord lane HOLDs).
+// The OPERATIVE cap MUST be a SOURCED, conservatively-high
+// investor-required cap (real investor underwriting / market data),
+// supplied + confirmed by the operator/Maverick — see
+// lib/investor-cap.ts. This module's output may be surfaced ONLY as a
+// floor sanity-check ("the investor-required cap should be ≥ the
+// market-implied cap"), never as the operative input.
 //
-// ── Derivation ───────────────────────────────────────────────────────
-//   gross_yield      = (median_rent × 12) / median_sale_price
-//   implied_cap_rate = gross_yield × (1 − market_opex_ratio)
-//
-// market_opex_ratio is the single modeling assumption. It is surfaced in
-// the result (assumptions.marketOpexRatio + provenance) for confirmation
-// — this module does not silently bake a number into the cap; the caller
-// passes it in explicitly. The derived cap is therefore fully traceable:
-// RentCast medians (sourced) × a stated opex assumption (confirmable).
+// ── Derivation (retail, AVM-contaminated — floor only) ───────────────
+//   gross_yield        = (median_rent × 12) / median_sale_price
+//   market_implied_cap = gross_yield × (1 − market_opex_ratio)
 //
 // The HTTP layer is injectable for tests; the pure derivation
 // (deriveImpliedCapRate) is separately unit-tested.
@@ -33,19 +31,17 @@ const BASE = "https://api.rentcast.io/v1";
 
 export interface MarketCapRateResult {
   zip: string;
-  /** Implied market cap rate as a fraction (e.g. 0.072), or null when it
-   *  can't be sourced. null → caller HOLDs (no fabricated default). */
-  capRate: number | null;
+  /** MARKET-IMPLIED cap (RETAIL, AVM-contaminated). FLOOR SANITY-CHECK
+   *  ONLY — never the operative cap in MAO math. null when unsourced. */
+  marketImpliedCap: number | null;
+  /** Hard flag so callers can't accidentally treat this as operative. */
+  operative: false;
   grossYield: number | null;
   medianSalePrice: number | null;
   medianRent: number | null;
-  /** Modeling assumption(s) used in the derivation — surfaced for
-   *  Maverick source-confirmation. */
   assumptions: { marketOpexRatio: number };
-  /** Human-readable provenance: exactly how this cap was derived. */
   provenance: string;
   source: "rentcast_markets_derived" | null;
-  /** RentCast /markets HTTP status (diagnostic). */
   httpStatus: number | null;
   error: string | null;
 }
@@ -56,20 +52,20 @@ export function deriveImpliedCapRate(input: {
   medianSalePrice: number | null | undefined;
   medianRent: number | null | undefined;
   marketOpexRatio: number;
-}): { capRate: number | null; grossYield: number | null } {
+}): { marketImpliedCap: number | null; grossYield: number | null } {
   const { medianSalePrice, medianRent, marketOpexRatio } = input;
   if (
     typeof medianSalePrice !== "number" || !Number.isFinite(medianSalePrice) || medianSalePrice <= 0 ||
     typeof medianRent !== "number" || !Number.isFinite(medianRent) || medianRent <= 0 ||
     typeof marketOpexRatio !== "number" || !Number.isFinite(marketOpexRatio) || marketOpexRatio < 0 || marketOpexRatio >= 1
   ) {
-    return { capRate: null, grossYield: null };
+    return { marketImpliedCap: null, grossYield: null };
   }
   const grossYield = (medianRent * 12) / medianSalePrice;
   const capRate = grossYield * (1 - marketOpexRatio);
   return {
     grossYield: Math.round(grossYield * 10000) / 10000,
-    capRate: Math.round(capRate * 10000) / 10000,
+    marketImpliedCap: Math.round(capRate * 10000) / 10000,
   };
 }
 
@@ -124,7 +120,8 @@ export async function sourceMarketCapRate(
 ): Promise<MarketCapRateResult> {
   const base: MarketCapRateResult = {
     zip,
-    capRate: null,
+    marketImpliedCap: null,
+    operative: false,
     grossYield: null,
     medianSalePrice: null,
     medianRent: null,
@@ -160,20 +157,21 @@ export async function sourceMarketCapRate(
     return { ...base, error: "RentCast /markets returned no usable median sale price / rent for this zip" };
   }
 
-  const { capRate, grossYield } = deriveImpliedCapRate({ medianSalePrice, medianRent, marketOpexRatio });
+  const { marketImpliedCap: capRate, grossYield } = deriveImpliedCapRate({ medianSalePrice, medianRent, marketOpexRatio });
   if (capRate == null) {
     return { ...base, error: "cap-rate derivation failed (non-positive medians or invalid opex ratio)" };
   }
 
   return {
     ...base,
-    capRate,
+    marketImpliedCap: capRate,
     grossYield,
     source: "rentcast_markets_derived",
     provenance:
-      `RentCast /markets zip ${zip}: median sale $${medianSalePrice.toLocaleString()}, ` +
-      `median rent $${medianRent.toLocaleString()}/mo → gross yield ${(grossYield! * 100).toFixed(2)}% ` +
-      `× (1 − opex ${(marketOpexRatio * 100).toFixed(0)}%) = implied cap ${(capRate * 100).toFixed(2)}%. ` +
-      `CONFIRM the opex assumption + cap before driving any live offer.`,
+      `FLOOR ONLY (NOT operative): RentCast /markets zip ${zip} median sale $${medianSalePrice.toLocaleString()} ` +
+      `(AVM-derived in non-disclosure TX), median rent $${medianRent.toLocaleString()}/mo → gross yield ` +
+      `${(grossYield! * 100).toFixed(2)}% × (1 − opex ${(marketOpexRatio * 100).toFixed(0)}%) = market-implied ` +
+      `cap ${(capRate * 100).toFixed(2)}%. This is RETAIL — use only to sanity-check that the SOURCED ` +
+      `investor-required cap is ≥ this. Never feed it into offer math.`,
   };
 }
