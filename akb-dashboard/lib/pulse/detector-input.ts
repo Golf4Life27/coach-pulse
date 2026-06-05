@@ -25,6 +25,16 @@ export interface PulseDetectorInput {
   /** Env vars for threshold overrides. Defaults to process.env in
    *  prod; tests inject. */
   env: Record<string, string | undefined>;
+  /** Verification_URL coverage over the Live_Status=Active population
+   *  (computed in the scan route via getActiveVerificationUrlCoverage).
+   *  Null when the coverage query failed / was skipped — the detector
+   *  degrades gracefully. Drives the verification_url_coverage metric. */
+  verification_url_coverage?: {
+    activeTotal: number;
+    withUrl: number;
+    withoutUrl: number;
+    coveragePct: number;
+  } | null;
   /** Now-clock for deterministic detection timestamps + age
    *  computations. */
   now: () => Date;

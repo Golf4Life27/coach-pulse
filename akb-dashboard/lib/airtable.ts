@@ -459,6 +459,81 @@ export async function getRecentlyDeadCandidates(opts: {
   return listings;
 }
 
+// Rehab-sweep candidate selection (2026-06-05). The appraiser backfill
+// was crawling the brief's active set in lexicographic id order and
+// burning calls on records with NO Verification_URL (Firecrawl can't
+// fire → vision falls back to Street-View-only → preflight refusal).
+// Sourcing reality from the base: ~1,751 active records HAVE a
+// Verification_URL, ~396 don't (~82% coverage) — the pool isn't
+// starved, the selection was just wrong.
+//
+// This fetcher selects the records that can ACTUALLY produce a
+// vision-based rehab: Live_Status = "Active" AND Verification_URL is
+// non-empty. Server-side filtered (filterByFormula) so we never pull
+// the URL-less records into memory just to drop them. Sorted by id for
+// a deterministic cursor (?after=) — order within the filtered set is
+// irrelevant now that every record in it has a URL.
+export async function getRehabSweepCandidates(opts: {
+  maxRecords?: number;
+} = {}): Promise<Listing[]> {
+  // NOT({Verification_URL}='') excludes both empty-string and blank
+  // (Airtable treats a never-set url field as "").
+  const formula = `AND({Live_Status}='Active', NOT({Verification_URL}=''))`;
+  const records = await fetchRecords(LISTINGS_TABLE, Object.keys(LISTING_FIELDS), {
+    filterByFormula: formula,
+    sort: [{ field: "Address", direction: "asc" }],
+    maxRecords: opts.maxRecords,
+  });
+  return records.map((r) => mapRecord<Listing>(r, LISTING_FIELDS));
+}
+
+// Verification_URL coverage over the active population (2026-06-05).
+// Surfaced as a Pulse metric so the URL-coverage gap (the thing that
+// was starving the rehab sweep) stays visible after this cycle. One
+// server-side-filtered pass over Live_Status=Active records pulling
+// ONLY the Verification_URL field — counts non-empty vs total. Cheap
+// (~22 page fetches for ~2.1k records, well within a Pulse scan's 60s).
+export interface VerificationUrlCoverage {
+  activeTotal: number;
+  withUrl: number;
+  withoutUrl: number;
+  /** 0-100, rounded to 1 decimal. 0 when activeTotal is 0. */
+  coveragePct: number;
+}
+
+// URL-less active candidates for the Firecrawl URL backfill (2026-06-05).
+// Live_Status=Active AND Verification_URL empty — the ~396 records that
+// can't be rehab-swept until a URL is resolved. Server-side filtered.
+export async function getUrlLessActiveCandidates(opts: {
+  maxRecords?: number;
+} = {}): Promise<Listing[]> {
+  const formula = `AND({Live_Status}='Active', {Verification_URL}='')`;
+  const records = await fetchRecords(LISTINGS_TABLE, Object.keys(LISTING_FIELDS), {
+    filterByFormula: formula,
+    sort: [{ field: "Address", direction: "asc" }],
+    maxRecords: opts.maxRecords,
+  });
+  return records.map((r) => mapRecord<Listing>(r, LISTING_FIELDS));
+}
+
+export async function getActiveVerificationUrlCoverage(): Promise<VerificationUrlCoverage> {
+  const records = await fetchRecords(
+    LISTINGS_TABLE,
+    ["fldXrW8CWUphUfKgJ"], // Verification_URL only
+    { filterByFormula: `{Live_Status}='Active'` },
+  );
+  const activeTotal = records.length;
+  let withUrl = 0;
+  for (const r of records) {
+    const fields = (r.fields ?? {}) as Record<string, unknown>;
+    const v = fields.fldXrW8CWUphUfKgJ;
+    if (typeof v === "string" && v.trim() !== "") withUrl++;
+  }
+  const withoutUrl = activeTotal - withUrl;
+  const coveragePct = activeTotal === 0 ? 0 : Math.round((withUrl / activeTotal) * 1000) / 10;
+  return { activeTotal, withUrl, withoutUrl, coveragePct };
+}
+
 export async function getListing(id: string): Promise<Listing | null> {
   const cacheKey = `listing:${id}`;
   const cached = getCached<Listing>(cacheKey);

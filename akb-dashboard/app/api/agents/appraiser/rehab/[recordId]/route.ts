@@ -274,6 +274,19 @@ export async function GET(
     state: listing.state,
   });
 
+  // One-line confidence-vs-gate observability (runtime-log surfaces the
+  // first console.log per request). gate=PASS only when confidence ≥ 60.
+  const photoSrcCounts = photos.reduce<Record<string, number>>((acc, p) => {
+    acc[p.source] = (acc[p.source] ?? 0) + 1;
+    return acc;
+  }, {});
+  console.log(
+    `REHAB ${recordId} conf=${vision.confidence} gate=${vision.confidence >= 60 ? "PASS" : "HOLD"} ` +
+    `cond=${vision.condition_overall} photos=${vision.photo_count} ` +
+    `src=${Object.entries(photoSrcCounts).map(([k, v]) => `${k}:${v}`).join(",")} ` +
+    `rehab_mid=${range.rehab_mid}`,
+  );
+
   // ── Airtable write (skippable) ──────────────────────────────────
   const nowIso = new Date().toISOString();
   let airtableError: string | null = null;

@@ -28,7 +28,7 @@
 // the final audit always lands.
 
 import { NextResponse } from "next/server";
-import { getActiveListingsForBrief } from "@/lib/airtable";
+import { getActiveListingsForBrief, getRehabSweepCandidates } from "@/lib/airtable";
 import { audit } from "@/lib/audit-log";
 import {
   aggregateBackfillStatus,
@@ -144,10 +144,24 @@ export async function GET(req: Request) {
   );
   const after = url.searchParams.get("after");
 
-  // Recent days fetcher matches the briefing aggregator's view of the
-  // pipeline (last 7 days of Texted/Emailed + everything in
-  // Negotiating/Response Received/Counter Received/Offer Accepted).
-  const active = await getActiveListingsForBrief({ recentDays: 7 });
+  // ── Selection mode (2026-06-05) ─────────────────────────────────
+  //   default          — briefing-active set (Outreach_Status-based;
+  //                       Negotiating/Response Received/Counter
+  //                       Received/Offer Accepted + recent Texted/
+  //                       Emailed). Kept for the ARV/rent sweeps.
+  //   ?selection=rehab_ready
+  //                    — records that can ACTUALLY produce a vision
+  //                       rehab: Live_Status=Active AND a non-empty
+  //                       Verification_URL. This stops the sweep from
+  //                       crawling lex-first into the ~396 URL-less
+  //                       actives (Firecrawl can't fire on them →
+  //                       Street-View-only → rehab preflight refusal).
+  //                       Expect ~1,751 candidates.
+  const selection = url.searchParams.get("selection");
+  const rehabReady = selection === "rehab_ready";
+  const active = rehabReady
+    ? await getRehabSweepCandidates()
+    : await getActiveListingsForBrief({ recentDays: 7 });
   const ordered = [...active].sort((a, b) => a.id.localeCompare(b.id));
   const filtered = ordered.filter(
     (l) => !skipIds.has(l.id) && (after ? l.id.localeCompare(after) > 0 : true),
@@ -201,6 +215,7 @@ export async function GET(req: Request) {
         limit,
         include_manual_review: includeManualReview,
         force,
+        selection: rehabReady ? "rehab_ready" : "brief_active",
         active_total: active.length,
         examined: subset.length,
       },
@@ -218,9 +233,11 @@ export async function GET(req: Request) {
     return NextResponse.json({
       mode: "dry_run",
       apply_available: true,
+      selection: rehabReady ? "rehab_ready" : "brief_active",
       pace_ms: paceMs,
       elapsed_ms: Date.now() - t0,
       active_total_in_airtable: active.length,
+      candidate_count: active.length,
       examined: subset.length,
       next_cursor,
       summary: {

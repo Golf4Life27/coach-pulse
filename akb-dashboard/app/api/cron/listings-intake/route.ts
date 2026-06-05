@@ -111,7 +111,11 @@ async function estimateRentcastRemaining(): Promise<number | null> {
   }
 }
 
-async function createIntakeListing(c: IntakeCandidate, promote: boolean): Promise<string> {
+async function createIntakeListing(
+  c: IntakeCandidate,
+  promote: boolean,
+  firecrawlUrl: string | null,
+): Promise<string> {
   if (!AIRTABLE_PAT) throw new Error("AIRTABLE_PAT not set");
   const url = `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}`;
   const iso = new Date().toISOString();
@@ -126,6 +130,20 @@ async function createIntakeListing(c: IntakeCandidate, promote: boolean): Promis
     // review-queued, all of them. Marks the active working surface.
     [SOURCE_VERSION_FIELD_NAME]: SOURCE_VERSION_V2,
   };
+  // URL-at-intake (2026-06-05): the Firecrawl verify step already
+  // resolved the subject's portal-detail URL (fc.url) to read renovation
+  // language — but the intake create was DISCARDING it, so every new
+  // record landed with an empty Verification_URL and the downstream
+  // rehab vision had nothing to scrape. Persist it now so new records
+  // carry a URL from the start (the whole point of URL discovery living
+  // at the front of intake→verify). Verification_Source + Last_Verified
+  // mirror the verify-listing write convention. Only set when the
+  // resolver actually returned a URL — never synthesize.
+  if (firecrawlUrl) {
+    fields["Verification_URL"] = firecrawlUrl;
+    fields["Verification_Source"] = "firecrawl_intake";
+    fields["Last_Verified"] = iso;
+  }
   if (c.propertyType) fields["Property_Type"] = c.propertyType;
   if (c.beds != null) fields["Bedrooms"] = c.beds;
   if (c.listPrice != null) fields["List_Price"] = c.listPrice;
@@ -438,7 +456,7 @@ export async function GET(req: Request) {
 
   // ── Phase 3: classify completed results (sequential — accurate count
   // aggregation regardless of non-deterministic completion order). ──
-  const toWrite: Array<{ candidate: IntakeCandidate; zip: string; promote: boolean }> = [];
+  const toWrite: Array<{ candidate: IntakeCandidate; zip: string; promote: boolean; firecrawlUrl: string | null }> = [];
   const bumpBlocked = (reason: AutoPromoteBlockReason | "auto_promote_disabled" | "auto_promote_dry_run") => {
     summary.auto_promote.reasons_blocked[reason] = (summary.auto_promote.reasons_blocked[reason] ?? 0) + 1;
   };
@@ -553,16 +571,16 @@ export async function GET(req: Request) {
         promote, agentPhonePresent: !!c.agentPhone,
       });
     } else {
-      toWrite.push({ candidate: c, zip, promote });
+      toWrite.push({ candidate: c, zip, promote, firecrawlUrl: fc.url });
     }
   }
 
   // ── Phase 4: writes (live only; sequential, post-pool — no concurrent
   // Airtable writes / intra-run dup races). ──
   if (!dryRun) {
-    for (const { candidate: c, zip, promote } of toWrite) {
+    for (const { candidate: c, zip, promote, firecrawlUrl } of toWrite) {
       try {
-        await createIntakeListing(c, promote);
+        await createIntakeListing(c, promote, firecrawlUrl);
         summary.written++;
       } catch (err) {
         summary.per_zip_errors.push({
