@@ -16,6 +16,7 @@ import { NextResponse } from "next/server";
 import { getListing } from "@/lib/airtable";
 import { getAnnualPropertyTaxes, getRentCastAssessedValue } from "@/lib/rentcast";
 import { fetchBexarCadTaxes, BEXAR_EFFECTIVE_TAX_RATE } from "@/lib/county-cad/bexar";
+import { fetchRedfinPublicTaxes } from "@/lib/county-cad/redfin-public-facts";
 import { audit } from "@/lib/audit-log";
 
 export const runtime = "nodejs";
@@ -30,6 +31,7 @@ export async function GET(req: Request) {
   let city = url.searchParams.get("city") ?? "";
   let state = url.searchParams.get("state") ?? "";
   let zip = url.searchParams.get("zip") ?? "";
+  let verificationUrl: string | null = null;
 
   if (recordId) {
     const listing = await getListing(recordId);
@@ -38,12 +40,13 @@ export async function GET(req: Request) {
     city = listing.city ?? "";
     state = listing.state ?? "";
     zip = listing.zip ?? "";
+    verificationUrl = listing.verificationUrl ?? null;
   }
   if (!address || !zip) {
     return NextResponse.json({ error: "missing_address_or_zip" }, { status: 400 });
   }
 
-  const [rentCast, rentcastAssessed, bexar] = await Promise.all([
+  const [rentCast, rentcastAssessed, bexar, redfin] = await Promise.all([
     getAnnualPropertyTaxes({ address, city, state, zip }).catch(() => null),
     getRentCastAssessedValue({ address, city, state, zip }).catch(() => null),
     fetchBexarCadTaxes({ address, city, zip }).catch((err) => ({
@@ -53,6 +56,14 @@ export async function GET(req: Request) {
       rawExcerpt: null, url: null, firecrawlStatus: null,
       error: String(err).slice(0, 200),
     })),
+    verificationUrl
+      ? fetchRedfinPublicTaxes(verificationUrl).catch((err) => ({
+          annualTaxes: null, year: null, assessedValue: null, source: null,
+          provenance: `redfin fetch threw: ${String(err).slice(0, 200)}`,
+          rawExcerpt: null, url: verificationUrl, firecrawlStatus: null,
+          error: String(err).slice(0, 200),
+        }))
+      : Promise.resolve(null),
   ]);
 
   // RentCast-assessed-value-derived tax estimate as a CAD-grounded
@@ -64,18 +75,31 @@ export async function GET(req: Request) {
   const rentcastDerivedTaxes =
     rentcastAssessed != null ? Math.round(rentcastAssessed * BEXAR_EFFECTIVE_TAX_RATE) : null;
 
-  // Recommendation precedence: direct Bexar scrape > RentCast-derived >
-  // Bexar-scraped derived > null.
+  // Recommendation precedence (highest → lowest fidelity):
+  //   1. Redfin Public Facts (CAD-sourced via Redfin's listing-detail
+  //      tax history table — most reliable when verificationUrl is set).
+  //   2. Direct Bexar CAD scrape (when search.bcad.org renders the
+  //      detail page; today returns "Domain not found").
+  //   3. RentCast assessedValue × Bexar effective rate (CAD-grounded
+  //      derivation; explicit operator confirmation still required).
+  //   4. Bexar scraped-assessed × rate.
+  //   5. null → HOLD.
   const recommendedAnnualTaxes =
-    bexar.directAnnualTaxes ?? rentcastDerivedTaxes ?? bexar.derivedAnnualTaxes ?? null;
+    redfin?.annualTaxes ??
+    bexar.directAnnualTaxes ??
+    rentcastDerivedTaxes ??
+    bexar.derivedAnnualTaxes ??
+    null;
   const recommendedSource =
-    bexar.directAnnualTaxes != null
-      ? "bexar_cad_direct"
-      : rentcastDerivedTaxes != null
-        ? "rentcast_assessed_x_bexar_effective_rate"
-        : bexar.derivedAnnualTaxes != null
-          ? "bexar_scraped_assessed_x_rate"
-          : null;
+    redfin?.annualTaxes != null
+      ? "redfin_public_facts_cad_sourced"
+      : bexar.directAnnualTaxes != null
+        ? "bexar_cad_direct"
+        : rentcastDerivedTaxes != null
+          ? "rentcast_assessed_x_bexar_effective_rate"
+          : bexar.derivedAnnualTaxes != null
+            ? "bexar_scraped_assessed_x_rate"
+            : null;
 
   console.log(
     `BEXAR_TAXES ${recordId ?? "(adhoc)"} ${address} zip=${zip} rc_pt=${rentCast ?? "-"} ` +
@@ -113,11 +137,13 @@ export async function GET(req: Request) {
         : "RentCast taxAssessments not available; no derivation possible.",
       note: "RentCast /properties.propertyTaxes is county-only on many Bexar records; understates the true combined load. The assessedValue (above) IS CAD-sourced and is a more reliable derivation basis.",
     },
+    redfin_public_facts: redfin,
     bexar_cad_scrape: bexar,
     recommended: {
       annualTaxes: recommendedAnnualTaxes,
       source: recommendedSource,
-      note: "Precedence: direct Bexar scrape > RentCast assessedValue × Bexar effective rate > Bexar scraped assessed × rate. All PENDING operator confirmation against bcad.org.",
+      note:
+        "Precedence: Redfin Public Facts (CAD-sourced) > direct Bexar scrape > RentCast assessedValue × Bexar effective rate > Bexar scraped assessed × rate. All PENDING operator confirmation against bcad.org.",
     },
     bexar_effective_rate_used_for_derivation: BEXAR_EFFECTIVE_TAX_RATE,
     elapsed_ms: Date.now() - t0,
