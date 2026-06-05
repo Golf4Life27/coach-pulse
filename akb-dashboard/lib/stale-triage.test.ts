@@ -128,16 +128,17 @@ describe("classifyStaleDeal — terminal signals dispose", () => {
     expect(r.verdict).not.toBe("dispose_dead");
   });
 
-  it("missing-data MAO sentinel must arrive as null, not a negative (Dreamland/-114,600, Palo Alto/-45,000 guard)", () => {
-    // The route gates Your_MAO on a real value basis (ARV or rent present).
-    // A negative MAO with NO valuation behind it (= -(rehab+fees)) is a
-    // missing-data artifact and MUST reach the classifier as null so it
-    // HOLDs rather than false-disposes. This pins the contract the route
-    // depends on: null never disposes; a raw negative would have.
-    const asSentinelNull = classifyStaleDeal({ ...base, landlordYourMao: null, hasResponded: true });
-    expect(asSentinelNull.verdict).toBe("hold");
-    const ifWeHadWronglyPassedNegative = classifyStaleDeal({ ...base, landlordYourMao: -114600, hasResponded: true });
-    expect(ifWeHadWronglyPassedNegative.verdict).toBe("dispose_dead"); // ← what the gate PREVENTS
+  it("uncomputable economics arrive as null, not a legacy negative (V2.1 quarantine contract)", () => {
+    // The route NO LONGER reads the legacy Your_MAO / Real_ARV_Median fields
+    // (quarantined — old ARV formula, banned AVM basis). It computes the
+    // V2.1 landlord MAO fresh and passes it ONLY when status==="ok"; a HOLD
+    // (missing rent/taxes/cap/rehab, or NOI≤0) arrives as null. This pins
+    // the contract: null never disposes; a real V2.1 negative (the genuine
+    // dispose signal, e.g. Dreamland once its rent is persisted) does.
+    const uncomputable = classifyStaleDeal({ ...base, landlordYourMao: null, hasResponded: true });
+    expect(uncomputable.verdict).toBe("hold");
+    const realV21Negative = classifyStaleDeal({ ...base, landlordYourMao: -12556, hasResponded: true });
+    expect(realV21Negative.verdict).toBe("dispose_dead");
   });
 });
 

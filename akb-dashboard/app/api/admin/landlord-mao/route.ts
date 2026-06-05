@@ -40,6 +40,7 @@ import {
   evaluatePreContractMath,
 } from "@/lib/pre-contract-math";
 import { takeLowerMao, type LaneMAO } from "@/lib/lower-lane";
+import { defaultInvestorCapFor } from "@/lib/landlord-hydrate";
 import { audit } from "@/lib/audit-log";
 
 export const runtime = "nodejs";
@@ -60,21 +61,9 @@ const DEFAULT_RECORD_IDS = [
   "rec1HTUqK0YEVb7uA", // 23 Fields Ave (control — must BLOCK)
 ];
 
-/** Operator-confirmed default investor cap (2026-06-05): 10% for
- *  transitional zips (78228 today), 9% for SA / TX-metro broadly,
- *  11% midpoint for Memphis. Records outside these maps still HOLD
- *  the operative MAO unless ?investor_cap=<n> is supplied. */
-const TRANSITIONAL_ZIPS = new Set<string>([
-  "78228", // 5435 Callaghan
-]);
-function defaultInvestorCapFor(state: string | null, zip: string | null): number | null {
-  const z = (zip ?? "").trim();
-  if (z && TRANSITIONAL_ZIPS.has(z)) return 0.1;
-  const s = (state ?? "").trim().toUpperCase();
-  if (s === "TX") return 0.09;
-  if (s === "TN") return 0.11;
-  return null;
-}
+// Operative investor-cap defaults (10% transitional zips / 9% TX / 11% TN)
+// now live in lib/landlord-hydrate.ts so the cron + this report share one
+// source of truth (imported as defaultInvestorCapFor above).
 
 export async function GET(req: Request) {
   const t0 = Date.now();

@@ -1,0 +1,193 @@
+// V2.1 economics hydration — 2026-06-05.
+// @agent: orchestrator / appraiser
+//
+// WHY THIS EXISTS — the legacy-field quarantine.
+// The Airtable economics fields Your_MAO / Investor_MAO / Real_ARV_Median
+// are LEGACY: they were written by the old ARV-driven formula whose
+// wholesale-fee/profit constants ($15k + $30k = the −45,000 sentinel)
+// predate V2.1, and whose value basis (Real_ARV_Median) is an
+// AVM-contaminated, banned offer-math input in non-disclosure TX. NOTHING
+// may treat those persisted fields as economic truth.
+//
+// This module is the clean replacement: it computes the V2.1 landlord-lane
+// MAO from SOURCED inputs (rent + county taxes + sourced investor-required
+// cap + Est_Rehab) using the exact endpoint logic (lib/landlord-lane +
+// lib/pre-contract-math), and stamps a provenance marker so a consumer can
+// tell a V2.1-clean number from a legacy one. The flipper lane stays
+// uncomputable in TX (no Buyer_Median writers) → landlord is operative;
+// lower-of-two-lanes applies once flipper ships.
+//
+//   landlord_value = annual_NOI / investor_required_cap
+//   Investor_MAO   = landlord_value − Est_Rehab        (V2.1 floor)
+//   Your_MAO       = Investor_MAO − $5,000 wholesale fee
+//
+// Missing rent / taxes / rehab / cap → HOLD (no fabricated numbers).
+//
+// Pure. No I/O — the caller fetches rent/taxes and persists the result.
+
+import { computeLandlordMax, NON_TAX_OPEX } from "./landlord-lane";
+import { computeInvestorMao, computeYourMao, DEFAULT_WHOLESALE_FEE } from "./pre-contract-math";
+
+// ── Operator-confirmed default investor-required cap (2026-06-05) ──────
+// 10% for transitional zips (78228 today), 9% for SA / TX-metro broadly,
+// 11% midpoint for Memphis. Outside these → null (HOLD; no guessed cap).
+// Moved here from app/api/admin/landlord-mao so the cron + the admin
+// report share ONE source of truth.
+export const TRANSITIONAL_ZIPS: ReadonlySet<string> = new Set<string>([
+  "78228", // 5435 Callaghan Rd
+]);
+
+export function defaultInvestorCapFor(
+  state: string | null | undefined,
+  zip: string | null | undefined,
+): number | null {
+  const z = (zip ?? "").trim();
+  if (z && TRANSITIONAL_ZIPS.has(z)) return 0.1;
+  const s = (state ?? "").trim().toUpperCase();
+  if (s === "TX") return 0.09;
+  if (s === "TN") return 0.11;
+  return null;
+}
+
+export interface V21MaoInputs {
+  monthlyRent: number | null | undefined;
+  annualTaxes: number | null | undefined;
+  estRehab: number | null | undefined;
+  capRate: number | null | undefined;
+  /** Non-tax opex ratio (defaults to the sourced NON_TAX_OPEX.ratio). */
+  opexRatio?: number;
+  /** Wholesale fee (defaults to V2.1 DEFAULT_WHOLESALE_FEE = $5,000). */
+  wholesaleFee?: number;
+}
+
+export interface V21MaoResult {
+  /** "ok" only when rent + taxes + cap + rehab all present AND NOI>0. */
+  status: "ok" | "hold";
+  landlordValue: number | null;
+  investorMao: number | null;
+  yourMao: number | null;
+  cap: number | null;
+  /** Inputs actually used (provenance). */
+  used: { monthlyRent: number | null; annualTaxes: number | null; estRehab: number | null; capRate: number | null; opexRatio: number; wholesaleFee: number };
+  reason: string;
+}
+
+/**
+ * Pure: the V2.1 landlord-lane Your_MAO from sourced inputs. Composes the
+ * endpoint's own libs (computeLandlordMax → computeInvestorMao →
+ * computeYourMao). HOLD on any missing input — never a fabricated number.
+ */
+export function computeV21LandlordMao(inp: V21MaoInputs): V21MaoResult {
+  const opexRatio = inp.opexRatio ?? NON_TAX_OPEX.ratio;
+  const wholesaleFee = inp.wholesaleFee ?? DEFAULT_WHOLESALE_FEE;
+  const capRate = typeof inp.capRate === "number" && Number.isFinite(inp.capRate) ? inp.capRate : null;
+  const estRehab = typeof inp.estRehab === "number" && Number.isFinite(inp.estRehab) ? inp.estRehab : null;
+  const used = {
+    monthlyRent: typeof inp.monthlyRent === "number" && Number.isFinite(inp.monthlyRent) ? inp.monthlyRent : null,
+    annualTaxes: typeof inp.annualTaxes === "number" && Number.isFinite(inp.annualTaxes) ? inp.annualTaxes : null,
+    estRehab,
+    capRate,
+    opexRatio,
+    wholesaleFee,
+  };
+
+  const ll = computeLandlordMax({ monthlyRent: inp.monthlyRent, annualTaxes: inp.annualTaxes, opexRatio, capRate });
+  if (ll.status !== "ok") {
+    return { status: "hold", landlordValue: ll.landlordValue, investorMao: null, yourMao: null, cap: capRate, used, reason: ll.reason };
+  }
+  const investorMao = computeInvestorMao(ll.landlordValue, estRehab);
+  if (investorMao == null) {
+    return {
+      status: "hold",
+      landlordValue: ll.landlordValue,
+      investorMao: null,
+      yourMao: null,
+      cap: capRate,
+      used,
+      reason: `V2.1 HOLD — Est_Rehab missing/invalid (need rehab to compute Investor_MAO from landlord value $${ll.landlordValue?.toLocaleString()}).`,
+    };
+  }
+  const yourMao = computeYourMao(investorMao, wholesaleFee);
+  return {
+    status: "ok",
+    landlordValue: ll.landlordValue,
+    investorMao,
+    yourMao,
+    cap: capRate,
+    used,
+    reason: `V2.1 landlord Your_MAO=$${yourMao?.toLocaleString()} = (NOI/cap $${ll.landlordValue?.toLocaleString()} − rehab $${estRehab?.toLocaleString()} − fee $${wholesaleFee.toLocaleString()}).`,
+  };
+}
+
+// ── Provenance marker (the quarantine boundary) ───────────────────────
+// Stamped into Verification_Notes when V2.1 economics are persisted. Its
+// presence is the ONLY way a consumer should trust the economics fields:
+// a record without a fresh MAO_V2.1 marker carries legacy (quarantined)
+// numbers and must be treated as economically unknown.
+
+export const MAO_V21_SENTINEL = "MAO_V2.1";
+
+const MARKER_RE = /\[MAO_V2\.1 [^\]]*\]/g;
+// Non-global twin for stateless .test() (a /g regex's lastIndex is
+// stateful across calls and would skip lines in a filter).
+const MARKER_LINE_RE = /\[MAO_V2\.1 [^\]]*\]/;
+
+function pad2(n: number): string {
+  return n < 10 ? `0${n}` : String(n);
+}
+
+export interface MaoV21Marker {
+  yourMao: number | null;
+  investorMao: number | null;
+  cap: number | null;
+  rent: number | null;
+  taxes: number | null;
+  status: "ok" | "hold";
+}
+
+/** Pure: build the single-line provenance marker. */
+export function buildMaoV21Marker(m: MaoV21Marker, now: Date): string {
+  const f = (v: number | null) => (v == null ? "-" : String(v));
+  const stamp = `${now.getUTCFullYear()}-${pad2(now.getUTCMonth() + 1)}-${pad2(now.getUTCDate())}`;
+  return `[${MAO_V21_SENTINEL} status=${m.status} your_mao=${f(m.yourMao)} investor_mao=${f(m.investorMao)} cap=${m.cap == null ? "-" : m.cap.toFixed(4)} rent=${f(m.rent)} taxes=${f(m.taxes)} @${stamp}]`;
+}
+
+/** Pure: parse the LAST MAO_V2.1 marker out of a notes blob. null when
+ *  none present (→ legacy / unknown economics → must not be trusted). */
+export function parseMaoV21Marker(notes: string | null | undefined): MaoV21Marker | null {
+  if (!notes) return null;
+  const matches = notes.match(MARKER_RE);
+  if (!matches || matches.length === 0) return null;
+  const last = matches[matches.length - 1];
+  const get = (key: string): string | null => {
+    const m = last.match(new RegExp(`${key}=([^ \\]]+)`));
+    return m ? m[1] : null;
+  };
+  const num = (key: string): number | null => {
+    const v = get(key);
+    if (v == null || v === "-") return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const status = get("status");
+  return {
+    status: status === "ok" ? "ok" : "hold",
+    yourMao: num("your_mao"),
+    investorMao: num("investor_mao"),
+    cap: num("cap"),
+    rent: num("rent"),
+    taxes: num("taxes"),
+  };
+}
+
+/** Pure: replace any existing MAO_V2.1 marker(s) with the new one (so the
+ *  record carries exactly one, current marker — notes don't accrete). The
+ *  marker is kept on its own line, appended after non-marker notes. */
+export function upsertMaoV21Marker(notes: string | null | undefined, marker: string): string {
+  const stripped = (notes ?? "")
+    .split("\n")
+    .filter((line) => !MARKER_LINE_RE.test(line))
+    .join("\n")
+    .replace(/\s+$/u, "");
+  return stripped.length > 0 ? `${stripped}\n${marker}` : marker;
+}

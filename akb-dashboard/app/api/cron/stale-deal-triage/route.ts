@@ -47,6 +47,14 @@ import { audit } from "@/lib/audit-log";
 import { getActiveListingsForBrief, updateListingRecord } from "@/lib/airtable";
 import { findStaleListings } from "@/lib/pulse/detectors/stale-data-drift";
 import { transitionStage } from "@/lib/pipeline-state/engine";
+import { getRentEstimate, getAnnualPropertyTaxes } from "@/lib/rentcast";
+import {
+  computeV21LandlordMao,
+  defaultInvestorCapFor,
+  buildMaoV21Marker,
+  upsertMaoV21Marker,
+  type V21MaoResult,
+} from "@/lib/landlord-hydrate";
 import {
   detectDecline,
   isStale,
@@ -216,18 +224,37 @@ async function handle(req: Request, params: TriageParams) {
     const mlsActive = mlsIsActive(listing.mlsStatus);
     const decline = detectDecline(listing.notes);
     const hasResponded = RESPONDED_STATUSES.has(listing.outreachStatus ?? "");
-    // Your_MAO is dispose-eligible ONLY when a REAL value basis backs it.
-    // A negative MAO with NO ARV and NO rent is a missing-data artifact
-    // (= -(rehab + fees), e.g. the -45,000 / -114,600 sentinels seen across
-    // unhydrated records), NOT a genuine uneconomic spread — disposing on it
-    // would be a false dispose on missing data. Gate on a real valuation
-    // input; otherwise treat the MAO as uncomputable (null → never disposes
-    // → HOLD), exactly per the classifier's contract.
-    const hasValueBasis =
-      (typeof listing.realArvMedian === "number" && Number.isFinite(listing.realArvMedian) && listing.realArvMedian > 0) ||
-      (typeof listing.estimatedMonthlyRent === "number" && Number.isFinite(listing.estimatedMonthlyRent) && listing.estimatedMonthlyRent > 0);
-    const maoComputed = typeof listing.yourMao === "number" && Number.isFinite(listing.yourMao);
-    const landlordYourMao = hasValueBasis && maoComputed ? (listing.yourMao as number) : null;
+
+    // ── V2.1 economics hydration (legacy fields are QUARANTINED) ──────
+    // The persisted Your_MAO / Investor_MAO / Real_ARV_Median fields are
+    // legacy (old ARV-driven formula; banned AVM value basis) and are NOT
+    // read here. Instead we compute the V2.1 landlord-lane MAO fresh from
+    // SOURCED inputs (rent + county taxes + sourced cap + Est_Rehab), then
+    // persist it back (rewiring the fields + stamping a provenance marker).
+    // This is also why a deal like Dreamland can finally dispose on
+    // economics: its rent is fetchable but was never written — now it is.
+    const addr = {
+      address: listing.address ?? "",
+      city: listing.city ?? "",
+      state: listing.state ?? "",
+      zip: listing.zip ?? "",
+    };
+    const [rentEst, rentcastTaxes] = await Promise.all([
+      getRentEstimate(addr).catch(() => null),
+      getAnnualPropertyTaxes(addr).catch(() => null),
+    ]);
+    const monthlyRent = rentEst?.rent ?? null;
+    const cap = defaultInvestorCapFor(listing.state, listing.zip);
+    const estRehab = (listing.estRehabMid ?? listing.estRehab ?? null) as number | null;
+    const v21: V21MaoResult = computeV21LandlordMao({
+      monthlyRent,
+      annualTaxes: rentcastTaxes,
+      estRehab,
+      capRate: cap,
+    });
+    // Only a fully-computed V2.1 MAO is a dispose-eligible signal; a HOLD
+    // (missing rent/taxes/cap/rehab, or NOI≤0) → null → never disposes.
+    const landlordYourMao = v21.status === "ok" ? v21.yourMao : null;
 
     const result = classifyStaleDeal({
       isActive,
@@ -241,9 +268,35 @@ async function handle(req: Request, params: TriageParams) {
     const { daysSinceMovement } = isStale(listing, now, params.days);
     const note = buildTriageNote(result, daysSinceMovement, now);
 
+    // V2.1 economics persistence payload — rewire the legacy fields to the
+    // freshly-computed V2.1 landlord values + stamp the provenance marker
+    // (the quarantine boundary). Rent is written whenever fetched (the
+    // "fetchable but never persisted" gap); Investor/Your_MAO only when a
+    // real V2.1 number computed. Applied on EVERY verdict so the field
+    // cleanup happens regardless of dispose/hold/re-engage.
+    const maoMarker = buildMaoV21Marker(
+      { status: v21.status, yourMao: v21.yourMao, investorMao: v21.investorMao, cap: v21.cap, rent: monthlyRent, taxes: rentcastTaxes },
+      now,
+    );
+    const econFields: Record<string, unknown> = {};
+    if (monthlyRent != null) econFields.Estimated_Monthly_Rent = monthlyRent;
+    if (v21.status === "ok") {
+      econFields.Investor_MAO = v21.investorMao;
+      econFields.Your_MAO = v21.yourMao;
+    }
+    const finalNotes = appendTriageNote(upsertMaoV21Marker(listing.notes, maoMarker), note);
+    const econAudit = {
+      monthly_rent: monthlyRent,
+      annual_taxes: rentcastTaxes,
+      investor_cap: cap,
+      est_rehab: estRehab,
+      v21_status: v21.status,
+      v21_your_mao: v21.yourMao,
+    };
+
     acted++;
 
-    // ── Dry-run: report the verdict, write nothing ────────────────────
+    // ── Dry-run: report the verdict + computed economics, write nothing ─
     if (!params.apply) {
       outcomes.push({
         recordId: listing.id,
@@ -253,6 +306,7 @@ async function handle(req: Request, params: TriageParams) {
         disposeCategory: result.disposeCategory,
         reason: result.reason,
         action: "preview",
+        detail: `v21_your_mao=${v21.yourMao ?? "-"} (${v21.status}; rent=${monthlyRent ?? "-"} taxes=${rentcastTaxes ?? "-"} cap=${cap ?? "-"} rehab=${estRehab ?? "-"})`,
       });
       continue;
     }
@@ -285,10 +339,12 @@ async function handle(req: Request, params: TriageParams) {
           continue;
         }
         // Mirror to Outreach_Status=Dead (so it leaves the active
-        // population → Pulse count drops) + stamp the dispose reason.
+        // population → Pulse count drops) + stamp the dispose reason +
+        // rewire the V2.1 economics fields/marker.
         await updateListingRecord(listing.id, {
           Outreach_Status: "Dead",
-          Verification_Notes: appendTriageNote(listing.notes, note),
+          Verification_Notes: finalNotes,
+          ...econFields,
         });
         await audit({
           agent: "orchestrator",
@@ -303,7 +359,7 @@ async function handle(req: Request, params: TriageParams) {
             declined: decline.declined,
             hasResponded,
             landlordYourMao,
-            hasValueBasis,
+            ...econAudit,
           },
           outputSummary: { verdict: result.verdict, dispose_category: result.disposeCategory },
           decision: result.reason,
@@ -318,17 +374,19 @@ async function handle(req: Request, params: TriageParams) {
           action: "disposed",
         });
       } else {
-        // reengage_queue / hold — annotate ONLY. No status change, no
-        // send. The record stays active; the operator sees the flag.
+        // reengage_queue / hold — annotate + rewire V2.1 economics ONLY.
+        // No status change, no send. The record stays active; the operator
+        // sees the flag and the clean economics.
         await updateListingRecord(listing.id, {
-          Verification_Notes: appendTriageNote(listing.notes, note),
+          Verification_Notes: finalNotes,
+          ...econFields,
         });
         await audit({
           agent: "orchestrator",
           event: "stale_deal_triage",
           status: "confirmed_success",
           recordId: listing.id,
-          inputSummary: { address: listing.address, days_stale: daysSinceMovement, isActive, mlsActive, hasResponded },
+          inputSummary: { address: listing.address, days_stale: daysSinceMovement, isActive, mlsActive, hasResponded, ...econAudit },
           outputSummary: { verdict: result.verdict },
           decision: result.reason,
         });
