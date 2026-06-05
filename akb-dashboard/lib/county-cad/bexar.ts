@@ -248,7 +248,7 @@ export async function fetchBexarCadTaxes(input: {
       base.recommendedAnnualTaxes = total;
       base.source = "bexar_cad_firecrawl_direct";
       base.provenance =
-        `Bexar CAD via Firecrawl (${pick.url ?? "unknown URL"}): extracted direct annual tax total $${total.toLocaleString()} from "${(matchContext ?? "").slice(0, 80)}…". CONFIRM by reading the bcad.org page.`;
+        `Bexar CAD via Firecrawl (${resultUrl ?? "unknown URL"}): extracted direct annual tax total $${total.toLocaleString()} from "${(matchContext ?? "").slice(0, 80)}…". CONFIRM by reading the bcad.org page.`;
       return base;
     }
     if (assessed != null) {
@@ -257,13 +257,13 @@ export async function fetchBexarCadTaxes(input: {
       base.recommendedAnnualTaxes = derived;
       base.source = "bexar_cad_firecrawl_derived";
       base.provenance =
-        `Bexar CAD via Firecrawl (${pick.url ?? "unknown URL"}): no direct tax total extracted — DERIVED from assessed value $${assessed.toLocaleString()} × Bexar combined effective rate ${(BEXAR_EFFECTIVE_TAX_RATE * 100).toFixed(2)}% = $${derived.toLocaleString()}/yr. This is a DERIVED estimate, not a direct CAD number; CONFIRM against the actual taxing-unit breakdown on bcad.org before driving any offer.`;
+        `Bexar CAD via Firecrawl (${resultUrl ?? "unknown URL"}): no direct tax total extracted — DERIVED from assessed value $${assessed.toLocaleString()} × Bexar combined effective rate ${(BEXAR_EFFECTIVE_TAX_RATE * 100).toFixed(2)}% = $${derived.toLocaleString()}/yr. This is a DERIVED estimate, not a direct CAD number; CONFIRM against the actual taxing-unit breakdown on bcad.org before driving any offer.`;
       return base;
     }
     return {
       ...base,
       error: "could not extract a tax total or assessed value from Firecrawl markdown",
-      provenance: `Bexar CAD via Firecrawl (${pick.url ?? "unknown URL"}): scrape returned markdown but extraction patterns matched no usable number. Operator: read rawExcerpt.`,
+      provenance: `Bexar CAD via Firecrawl (${resultUrl ?? "unknown URL"}): scrape returned markdown but extraction patterns matched no usable number. Operator: read rawExcerpt.`,
     };
   } catch (err) {
     return { ...base, error: String(err).slice(0, 300) };
