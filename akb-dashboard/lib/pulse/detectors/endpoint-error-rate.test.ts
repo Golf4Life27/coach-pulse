@@ -142,4 +142,20 @@ describe("detectEndpointErrorRate", () => {
     });
     expect(dets).toEqual([]);
   });
+
+  it("excludes failure-only write events (patch_failed) by default — they structurally read 100%", () => {
+    // 8 patch_failed, 0 successes (no patch_succeeded counterpart event)
+    // → would otherwise fire at a fixed 100%. Default exclusion silences it.
+    const auditLog = Array(8).fill(0).map(() => audit("patch_failed", "confirmed_failure"));
+    const dets = detectEndpointErrorRate({ ...baseInput, audit_log: auditLog });
+    expect(dets.find((d) => d.id === "endpoint_error_rate_high:patch_failed")).toBeUndefined();
+  });
+
+  it("default failure-only exclusions cover the known write-failure events", () => {
+    for (const ev of ["batch_patch_failed", "formula_field_write_blocked", "proposal_patch_failed"]) {
+      const auditLog = Array(6).fill(0).map(() => audit(ev, "confirmed_failure"));
+      const dets = detectEndpointErrorRate({ ...baseInput, audit_log: auditLog });
+      expect(dets.find((d) => d.id === `endpoint_error_rate_high:${ev}`)).toBeUndefined();
+    }
+  });
 });

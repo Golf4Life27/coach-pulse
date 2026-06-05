@@ -43,15 +43,33 @@ function readRate(env: Record<string, string | undefined>, key: string, fallback
   return n;
 }
 
+// Failure-ONLY audit events: these are audited exclusively on failure
+// (there is no `*_succeeded` counterpart), so the failures/(failures+
+// successes) rate is ALWAYS 100% whenever even one appears in the
+// window. Rate-alarming them is structurally meaningless noise — a
+// single transient/historical write failure pins the detector at 100%.
+// They remain durable in the audit log for direct inspection (and
+// /api/admin/audit-summary), which is the right surface for a
+// failure-only signal. (2026-06-05: the Est_Rehab_Low patch_failed
+// 8/8=100% false-alarm — the writes were already fixed in 04a0a44 /
+// 90ce407; the detector was just echoing pre-fix entries at a
+// structurally-fixed 100%.)
+const DEFAULT_FAILURE_ONLY_EXCLUSIONS = [
+  "patch_failed",
+  "batch_patch_failed",
+  "formula_field_write_blocked",
+  "proposal_patch_failed",
+];
+
 function readExclusions(env: Record<string, string | undefined>): Set<string> {
+  const out = new Set<string>(DEFAULT_FAILURE_ONLY_EXCLUSIONS);
   const raw = env.PULSE_ERROR_RATE_EXCLUDE;
-  if (!raw) return new Set();
-  return new Set(
-    raw
-      .split(",")
-      .map((s) => s.trim())
-      .filter((s) => s.length > 0),
-  );
+  if (raw) {
+    for (const s of raw.split(",").map((x) => x.trim()).filter((x) => x.length > 0)) {
+      out.add(s);
+    }
+  }
+  return out;
 }
 
 interface EventTally {

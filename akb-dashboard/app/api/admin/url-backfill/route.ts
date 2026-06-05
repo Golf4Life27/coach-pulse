@@ -183,6 +183,13 @@ export async function GET(req: Request) {
     unmatched_reasons[reason] = (unmatched_reasons[reason] ?? 0) + 1;
   }
 
+  // Diagnostic FIRST line (runtime-log surfaces only the first
+  // console.log per request): the actual Firecrawl error string driving
+  // the firecrawl_error reason, so we can tell rate-limit vs quota vs
+  // hard failure without guessing.
+  const firstErr = outcomes.find((o) => o.firecrawl_error)?.firecrawl_error ?? null;
+  if (firstErr) console.log(`URLBACKFILL_ERR ${firstErr.slice(0, 220)}`);
+
   console.log(
     `URLBACKFILL mode=${apply ? "apply" : "dry"} cand=${candidates.length} examined=${outcomes.length} ` +
     `confirmed=${confirmed} written=${written} unmatched=${unmatched} ` +
