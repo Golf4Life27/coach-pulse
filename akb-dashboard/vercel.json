@@ -41,10 +41,6 @@
       "schedule": "0 3 * * *"
     },
     {
-      "path": "/api/cron/h2-outreach?dry_run=false&limit=25&send_delay_ms=10000",
-      "schedule": "30 15 * * *"
-    },
-    {
       "path": "/api/cron/zip-approval-reply-scan",
       "schedule": "*/15 * * * *"
     },

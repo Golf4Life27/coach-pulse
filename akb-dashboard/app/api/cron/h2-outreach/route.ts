@@ -138,6 +138,31 @@ async function handle(req: Request): Promise<Response> {
     return NextResponse.json({ error: "cron_disabled" }, { status: 503 });
   }
 
+  // ── HARD KILL (2026-06-05) ────────────────────────────────────────
+  // Unauthorized sends fired at 15:30:27-15:31:27Z via api.openphone.com
+  // from this route (cron `30 15 * * *` matched exactly). Route is now
+  // CODE-LEVEL DISABLED regardless of env. Cron removed from vercel.json.
+  // To re-enable, the operator must remove this block intentionally AND
+  // fix the phantom safety gates (>85%-of-list block + outreach-safety-
+  // check reading null fields) — see operator brief.
+  if (process.env.H2_OUTREACH_HARD_DISABLE !== "false") {
+    await audit({
+      agent: "crier",
+      event: "h2_outreach_hard_disabled",
+      status: "confirmed_failure",
+      inputSummary: { auth_kind: authKind, params: Object.fromEntries(url.searchParams) },
+      outputSummary: { reason: "hard_disable_after_unauthorized_send_2026_06_05" },
+    });
+    return NextResponse.json(
+      {
+        error: "h2_outreach_hard_disabled",
+        reason:
+          "Route disabled in code after unauthorized send at 2026-06-05T15:30:27Z. Phantom safety gates must be fixed before re-enabling.",
+      },
+      { status: 503 },
+    );
+  }
+
   // ── Params + the dry-run / live gate ─────────────────────────────
   const liveEnv = process.env.H2_OUTREACH_LIVE === "true";
   const dryRunParam = url.searchParams.get("dry_run") === "false" ? false : true;

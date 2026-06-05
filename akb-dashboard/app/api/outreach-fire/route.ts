@@ -103,6 +103,18 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
+  // HARD KILL (2026-06-05) — see /api/cron/h2-outreach route header.
+  // Outreach is OFF until the phantom safety gates are fixed.
+  if (process.env.H2_OUTREACH_HARD_DISABLE !== "false") {
+    return Response.json(
+      {
+        error: "outreach_fire_hard_disabled",
+        reason:
+          "Sister sender to h2-outreach. Disabled in code after unauthorized send at 2026-06-05T15:30:27Z.",
+      },
+      { status: 503 },
+    );
+  }
   if (!process.env.AIRTABLE_PAT) {
     return Response.json({ error: "AIRTABLE_PAT not set" }, { status: 500 });
   }
