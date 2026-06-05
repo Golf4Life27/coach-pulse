@@ -51,13 +51,20 @@ export function extractRedfinTaxHistory(markdown: string): RedfinTaxExtraction {
       context = m[0].replace(/\s+/g, " ").slice(0, 180);
     }
   }
-  // Fallback for non-table renderings: look for "Annual Tax Amount" /
-  // "Property Taxes" pairs followed by $N.
+  // Fallback for non-table renderings: look for "Annual Tax Amount $N"
+  // (literal annual phrasing). DELIBERATELY EXCLUDES the bare "Property
+  // Taxes $N" pattern because Redfin's mortgage-calculator widget renders
+  // exactly that with a MONTHLY estimate (e.g. "Property taxes $375"
+  // = $375/month), not the annual. Pattern-matching that as annual on
+  // 5435 Callaghan returned $375 — which is the monthly tax estimate; the
+  // true annual is ~$4,500 (verified against RentCast assessedValue ×
+  // Bexar effective rate). Tax-history table extraction (above) remains
+  // the authoritative path.
   if (bestTaxes == null) {
-    const FALLBACK = /(annual tax amount|property tax(?:es)?|tax amount)[^\$]*\$\s*([\d,]+)/i;
+    const FALLBACK = /annual tax(?:\s+amount)?[^\$]*\$\s*([\d,]+)/i;
     const fm = markdown.match(FALLBACK);
     if (fm) {
-      const n = Number(fm[2].replace(/,/g, ""));
+      const n = Number(fm[1].replace(/,/g, ""));
       if (Number.isFinite(n) && n > 100 && n < 200_000) {
         bestTaxes = Math.round(n);
         context = fm[0].replace(/\s+/g, " ").slice(0, 180);

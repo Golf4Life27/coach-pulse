@@ -22,6 +22,15 @@ describe("extractRedfinTaxHistory", () => {
     expect(r.annualTaxes).toBe(4287);
   });
 
+  it("does NOT misread Redfin's mortgage-calculator monthly tax ('Property taxes $375' = $375/MONTH, not annual) — 2026-06-05 regression", () => {
+    // The mortgage estimate widget renders 'Property taxes $375' meaning
+    // $375/month. Treating it as annual on 5435 Callaghan returned $375
+    // when the true annual is ~$4,500. The fallback now only matches
+    // 'Annual Tax' explicitly so this no longer false-fires.
+    const md = "Monthly cost breakdown ... Principal & interest $580 ... Property taxes $375 ... HOA $0 ...";
+    expect(extractRedfinTaxHistory(md).annualTaxes).toBeNull();
+  });
+
   it("returns nulls when nothing parseable is present", () => {
     expect(extractRedfinTaxHistory("nothing tax-shaped").annualTaxes).toBeNull();
     expect(extractRedfinTaxHistory("").annualTaxes).toBeNull();
