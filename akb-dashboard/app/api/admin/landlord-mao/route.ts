@@ -64,8 +64,13 @@ export async function GET(req: Request) {
   const recordIds = idsParam
     ? idsParam.split(",").map((s) => s.trim()).filter((s) => s.startsWith("rec"))
     : DEFAULT_RECORD_IDS;
-  const opexParam = Number(url.searchParams.get("opex"));
-  const opexRatio = Number.isFinite(opexParam) && opexParam >= 0 && opexParam < 1 ? opexParam : DEFAULT_OPEX_RATIO;
+  // BUGFIX: Number(null) === 0, which would pass the (≥0 && <1) guard and
+  // silently zero the opex (no expense haircut → inflated values). Only
+  // override the default when an explicit, valid ?opex is supplied.
+  const opexRaw = url.searchParams.get("opex");
+  const opexParam = opexRaw != null ? Number(opexRaw) : NaN;
+  const opexRatio =
+    Number.isFinite(opexParam) && opexParam > 0 && opexParam < 1 ? opexParam : DEFAULT_OPEX_RATIO;
   const fee = DEFAULT_WHOLESALE_FEE;
 
   const results = [];
