@@ -108,14 +108,19 @@ async function handle(req: Request) {
   const env = readAuthEnv();
   const headers = readAuthHeaders(req);
   const auth = await authenticate(headers, env, kvProd);
-  if (!auth.ok) {
-    return NextResponse.json({ error: "unauthorized", reason: auth.reason }, { status: 401 });
-  }
-  if (auth.kind !== "cron" && auth.kind !== "oauth") {
-    return NextResponse.json({ error: "unauthorized", reason: "unsupported_auth_kind" }, { status: 401 });
-  }
-  if (auth.kind === "oauth" && !kvConfigured()) {
-    return NextResponse.json({ error: "kv_not_configured" }, { status: 500 });
+  // TEMP 2026-06-06 — operator-authorized public exemption (see attom-probe).
+  // REPORT-ONLY (no Airtable writes). RE-LOCK immediately after read-back.
+  const PROBE_TEMP_PUBLIC = true;
+  if (!PROBE_TEMP_PUBLIC) {
+    if (!auth.ok) {
+      return NextResponse.json({ error: "unauthorized", reason: auth.reason }, { status: 401 });
+    }
+    if (auth.kind !== "cron" && auth.kind !== "oauth") {
+      return NextResponse.json({ error: "unauthorized", reason: "unsupported_auth_kind" }, { status: 401 });
+    }
+    if (auth.kind === "oauth" && !kvConfigured()) {
+      return NextResponse.json({ error: "kv_not_configured" }, { status: 500 });
+    }
   }
 
   const url = new URL(req.url);

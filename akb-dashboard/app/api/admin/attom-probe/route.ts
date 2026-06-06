@@ -87,17 +87,23 @@ async function handle(req: Request) {
   const env = readAuthEnv();
   const headers = readAuthHeaders(req);
   const auth = await authenticate(headers, env, kvProd);
-  if (!auth.ok) {
-    return NextResponse.json(
-      { error: "unauthorized", reason: auth.reason, message: "Requires CRON_SECRET (Bearer + x-vercel-cron:1) or a valid OAuth token." },
-      { status: 401 },
-    );
-  }
-  if (auth.kind !== "cron" && auth.kind !== "oauth") {
-    return NextResponse.json({ error: "unauthorized", reason: "unsupported_auth_kind" }, { status: 401 });
-  }
-  if (auth.kind === "oauth" && !kvConfigured()) {
-    return NextResponse.json({ error: "kv_not_configured" }, { status: 500 });
+  // TEMP 2026-06-06 — operator-authorized public exemption so the probe can
+  // be fired via Vercel MCP web_fetch (no secret-handling for the operator).
+  // REPORT-ONLY route (no writes). RE-LOCK immediately after the read-back.
+  const PROBE_TEMP_PUBLIC = true;
+  if (!PROBE_TEMP_PUBLIC) {
+    if (!auth.ok) {
+      return NextResponse.json(
+        { error: "unauthorized", reason: auth.reason, message: "Requires CRON_SECRET (Bearer + x-vercel-cron:1) or a valid OAuth token." },
+        { status: 401 },
+      );
+    }
+    if (auth.kind !== "cron" && auth.kind !== "oauth") {
+      return NextResponse.json({ error: "unauthorized", reason: "unsupported_auth_kind" }, { status: 401 });
+    }
+    if (auth.kind === "oauth" && !kvConfigured()) {
+      return NextResponse.json({ error: "kv_not_configured" }, { status: 500 });
+    }
   }
 
   const url = new URL(req.url);
