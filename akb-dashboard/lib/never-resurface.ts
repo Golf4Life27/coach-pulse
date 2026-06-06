@@ -10,6 +10,10 @@ export const NEVER_RESURFACE: ReadonlySet<string> = new Set([
   "9618 tamalpais dr", "811 manhattan dr", "1635 arbor pl",
   "4448 marcell ave", "2725 bowling green ave", "2011 ramsey ave",
   "707 n pine st", "8641 craige dr", "910 green st",
+  // 2026-06-05 — corporate-investor seller (recorded fact: "Albert from
+  // Mainstay, corporate investor at/near list"). Same precedent as
+  // 910 Green St. Not a guess from free text; a recorded reply.
+  "336 burwood dr",
 ]);
 
 /** Pure: true when an address is on the never-resurface blocklist. */

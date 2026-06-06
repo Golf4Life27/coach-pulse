@@ -12,8 +12,8 @@ import {
 } from "./never-resurface";
 
 describe("NEVER_RESURFACE constant", () => {
-  it("contains the locked Canon §9 twelve addresses (lowercased)", () => {
-    expect(NEVER_RESURFACE.size).toBe(12);
+  it("contains the locked Canon §9 thirteen addresses (lowercased)", () => {
+    expect(NEVER_RESURFACE.size).toBe(13);
     expect(NEVER_RESURFACE.has("2715 monterey st")).toBe(true);
     expect(NEVER_RESURFACE.has("910 green st")).toBe(true);
     expect(NEVER_RESURFACE.has("707 n pine st")).toBe(true);
@@ -45,6 +45,9 @@ describe("isNeverResurfaceLoose — substring matcher (Pipeline_State backfill h
     expect(isNeverResurfaceLoose("2715 Monterey St, San Antonio, TX 78201")).toBe(true);
     expect(isNeverResurfaceLoose("910 Green St, Memphis, TN 38106")).toBe(true);
     expect(isNeverResurfaceLoose("707 N Pine St, Anywhere, TX 78250")).toBe(true);
+    // 2026-06-05 — 336 Burwood Dr: corporate-investor seller (Mainstay).
+    // Same precedent as 910 Green St; reply recorded in Verification_Notes.
+    expect(isNeverResurfaceLoose("336 Burwood Dr, Memphis, TN 38109")).toBe(true);
   });
 
   it("matches case-insensitively + tolerates leading/trailing whitespace", () => {

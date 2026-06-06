@@ -15,6 +15,7 @@ const NEVER_RESURFACE = [
   "9618 Tamalpais Dr", "811 Manhattan Dr", "1635 Arbor Pl",
   "4448 Marcell Ave", "2725 Bowling Green Ave", "2011 Ramsey Ave",
   "707 N Pine St", "8641 Craige Dr", "910 Green St",
+  "336 Burwood Dr",
 ];
 
 const BUSINESS_RULES = `
