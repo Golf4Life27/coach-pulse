@@ -109,6 +109,13 @@ const LISTING_FIELDS: Record<string, string> = {
   // in Airtable); nothing reads them for decisions.
   fldAtudyUDNgoPWLR: "investorMao", // Investor_MAO_V21 (clean)
   fldd8EndI5IrBtETD: "yourMao",     // Your_MAO_V21 (clean)
+  // ── Tax confirmed-override (2026-06-06). Confirmed values are
+  // operator/CAD-sourced and survive the V2.1 cron's re-runs (the
+  // structural anti-regression — Spine-only Bexar fact regressed
+  // Callaghan to $555 RentCast tax). When confirmedTaxes is present,
+  // the cron USES it and NEVER writes Annual_Taxes_Confirmed.
+  fld5XgHjw4vohVVKa: "confirmedTaxes",
+  fldm8UB2wT9jkWvNs: "confirmedTaxesSource",
   fldAvk2aIBU1Lh3Dz: "autoApproveV2",
   fldvHDqtftWehMJR7: "arvValidatedAt",
   // ── D3 cadence inputs
@@ -218,6 +225,8 @@ const LISTING_NAME_MAP: Record<string, string> = {
   // legacy_Your_MAO in Airtable). null → HOLD until V2.1 computes.
   "Investor_MAO_V21": "investorMao",
   "Your_MAO_V21": "yourMao",
+  "Annual_Taxes_Confirmed": "confirmedTaxes",
+  "Annual_Taxes_Source": "confirmedTaxesSource",
   "Auto_Approve_v2": "autoApproveV2",
   "ARV_Validated_At": "arvValidatedAt",
 };

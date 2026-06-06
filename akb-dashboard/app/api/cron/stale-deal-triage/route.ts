@@ -47,10 +47,12 @@ import { audit } from "@/lib/audit-log";
 import { getActiveListingsForBrief, updateListingRecord } from "@/lib/airtable";
 import { findStaleListings } from "@/lib/pulse/detectors/stale-data-drift";
 import { transitionStage } from "@/lib/pipeline-state/engine";
-import { getRentEstimate, getAnnualPropertyTaxes } from "@/lib/rentcast";
+import { getRentEstimate, getAnnualPropertyTaxes, getRentCastAssessedValue } from "@/lib/rentcast";
+import { isNeverResurfaceLoose } from "@/lib/never-resurface";
 import {
   computeV21LandlordMao,
   defaultInvestorCapFor,
+  resolveAnnualTaxes,
   buildMaoV21Marker,
   upsertMaoV21Marker,
   type V21MaoResult,
@@ -197,20 +199,39 @@ async function handle(req: Request, params: TriageParams) {
   const stale = findStaleListings(listings, params.days, now);
   const byId = new Map(listings.map((l) => [l.id, l]));
 
+  // ── Cohort assembly — blacklist sweep ∪ stale sweep ──────────────────
+  // Blacklist matches dispose regardless of staleness (a Canon §9 fact
+  // sourced from the operator-curated list). Future blacklist adds
+  // self-dispose at the next cron tick without waiting for the record to
+  // age into the >14d cohort. Dedupe so a record that's both blacklisted
+  // AND stale is processed once.
+  const staleIds = new Set(stale.map((s) => s.id));
+  const blacklistedExtras = listings
+    .filter((l) => isNeverResurfaceLoose(l.address) && !staleIds.has(l.id))
+    .map((l) => ({ id: l.id, address: l.address, days_since_touch: -1 }));
+  const work: Array<{ id: string; address: string; days_since_touch: number }> = [
+    ...blacklistedExtras,
+    ...stale,
+  ];
+
   const outcomes: RecordOutcome[] = [];
   let acted = 0;
 
-  for (const s of stale) {
+  for (const s of work) {
     if (acted >= params.limit) break;
     const listing = byId.get(s.id);
     if (!listing) continue;
 
-    // Durability: skip records this worker has already classified.
-    if (alreadyTriaged(listing.notes)) {
+    const onBlacklist = isNeverResurfaceLoose(listing.address);
+
+    // Durability: skip records this worker has already classified, UNLESS
+    // they're newly on the blacklist — a blacklist add must dispose even
+    // when a prior HOLD/re-engage annotation is present.
+    if (!onBlacklist && alreadyTriaged(listing.notes)) {
       outcomes.push({
         recordId: listing.id,
         address: listing.address,
-        daysSinceMovement: s.days_since_touch,
+        daysSinceMovement: s.days_since_touch < 0 ? null : s.days_since_touch,
         verdict: "hold",
         disposeCategory: null,
         reason: "already classified by a prior sweep (sentinel present) — skipped",
@@ -225,30 +246,47 @@ async function handle(req: Request, params: TriageParams) {
     const decline = detectDecline(listing.notes);
     const hasResponded = RESPONDED_STATUSES.has(listing.outreachStatus ?? "");
 
-    // ── V2.1 economics hydration (legacy fields are QUARANTINED) ──────
-    // The persisted Your_MAO / Investor_MAO / Real_ARV_Median fields are
-    // legacy (old ARV-driven formula; banned AVM value basis) and are NOT
-    // read here. Instead we compute the V2.1 landlord-lane MAO fresh from
-    // SOURCED inputs (rent + county taxes + sourced cap + Est_Rehab), then
-    // persist it back (rewiring the fields + stamping a provenance marker).
-    // This is also why a deal like Dreamland can finally dispose on
-    // economics: its rent is fetchable but was never written — now it is.
+    // ── V2.1 economics hydration ──────────────────────────────────────
+    // Legacy Your_MAO / Investor_MAO / Real_ARV_Median are QUARANTINED;
+    // we compute V2.1 fresh from SOURCED inputs (rent + county taxes +
+    // sourced cap + Est_Rehab) and persist via the V21 fields/marker.
+    //
+    // Tax precedence (anti-regression): (1) operator/CAD-confirmed value
+    // on the record WINS and is NEVER overwritten; (2) else RentCast
+    // auto-fetch, gated by the TX plausibility guard (taxes/assessed
+    // < 1.2% → unreliable → null → V2.1 HOLD; no fabricated dispose on
+    // the $555 Bexar class). Blacklist records skip RentCast entirely.
     const addr = {
       address: listing.address ?? "",
       city: listing.city ?? "",
       state: listing.state ?? "",
       zip: listing.zip ?? "",
     };
-    const [rentEst, rentcastTaxes] = await Promise.all([
-      getRentEstimate(addr).catch(() => null),
-      getAnnualPropertyTaxes(addr).catch(() => null),
-    ]);
-    const monthlyRent = rentEst?.rent ?? null;
+    let monthlyRent: number | null = null;
+    let rentcastTaxes: number | null = null;
+    let assessedValue: number | null = null;
+    if (!onBlacklist) {
+      const [rentEst, rcTaxes, rcAssessed] = await Promise.all([
+        getRentEstimate(addr).catch(() => null),
+        getAnnualPropertyTaxes(addr).catch(() => null),
+        getRentCastAssessedValue(addr).catch(() => null),
+      ]);
+      monthlyRent = rentEst?.rent ?? null;
+      rentcastTaxes = rcTaxes;
+      assessedValue = rcAssessed;
+    }
+    const taxResolution = resolveAnnualTaxes({
+      state: listing.state,
+      confirmedTaxes: listing.confirmedTaxes,
+      confirmedLabel: listing.confirmedTaxesSource,
+      rentcastTaxes,
+      assessedValue,
+    });
     const cap = defaultInvestorCapFor(listing.state, listing.zip);
     const estRehab = (listing.estRehabMid ?? listing.estRehab ?? null) as number | null;
     const v21: V21MaoResult = computeV21LandlordMao({
       monthlyRent,
-      annualTaxes: rentcastTaxes,
+      annualTaxes: taxResolution.annualTaxes,
       estRehab,
       capRate: cap,
     });
@@ -263,6 +301,7 @@ async function handle(req: Request, params: TriageParams) {
       declineMatch: decline.matched,
       hasResponded,
       landlordYourMao,
+      onBlacklist,
     });
 
     const { daysSinceMovement } = isStale(listing, now, params.days);
@@ -275,7 +314,7 @@ async function handle(req: Request, params: TriageParams) {
     // real V2.1 number computed. Applied on EVERY verdict so the field
     // cleanup happens regardless of dispose/hold/re-engage.
     const maoMarker = buildMaoV21Marker(
-      { status: v21.status, yourMao: v21.yourMao, investorMao: v21.investorMao, cap: v21.cap, rent: monthlyRent, taxes: rentcastTaxes },
+      { status: v21.status, yourMao: v21.yourMao, investorMao: v21.investorMao, cap: v21.cap, rent: monthlyRent, taxes: taxResolution.annualTaxes },
       now,
     );
     const econFields: Record<string, unknown> = {};
@@ -286,15 +325,33 @@ async function handle(req: Request, params: TriageParams) {
       // economics-quarantine note in lib/airtable.ts.
       econFields.Investor_MAO_V21 = v21.investorMao;
       econFields.Your_MAO_V21 = v21.yourMao;
+    } else if (taxResolution.source === "rentcast_implausible" || v21.status === "hold") {
+      // Anti-regression: if a record already carries a tax-tainted V21
+      // number (e.g. Callaghan's $83,100 computed against $555 taxes), and
+      // the new run can't produce a clean V21 (implausible taxes / missing
+      // input / etc.), NULL the stale fields so the field of record can't
+      // serve a known-bad number. Confirmed-tax overrides skip this path
+      // because they DO produce a clean V21.
+      if (listing.yourMao != null) econFields.Your_MAO_V21 = null;
+      if (listing.investorMao != null) econFields.Investor_MAO_V21 = null;
     }
+    // Annual_Taxes_Confirmed is INTENTIONALLY never in econFields — the
+    // cron treats it as immutable (operator/CAD-owned). Same for
+    // Annual_Taxes_Source.
     const finalNotes = appendTriageNote(upsertMaoV21Marker(listing.notes, maoMarker), note);
     const econAudit = {
       monthly_rent: monthlyRent,
-      annual_taxes: rentcastTaxes,
+      annual_taxes: taxResolution.annualTaxes,
+      annual_taxes_source: taxResolution.source,
+      annual_taxes_label: taxResolution.confirmedLabel ?? null,
+      plausibility_reason: taxResolution.plausibilityReason ?? null,
+      tax_freeze_write: taxResolution.freezeWrite,
+      assessed_value: assessedValue,
       investor_cap: cap,
       est_rehab: estRehab,
       v21_status: v21.status,
       v21_your_mao: v21.yourMao,
+      on_blacklist: onBlacklist,
     };
 
     acted++;

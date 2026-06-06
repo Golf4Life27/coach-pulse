@@ -28,6 +28,129 @@
 import { computeLandlordMax, NON_TAX_OPEX } from "./landlord-lane";
 import { computeInvestorMao, computeYourMao, DEFAULT_WHOLESALE_FEE } from "./pre-contract-math";
 
+// ── Tax-plausibility guard (TX) ────────────────────────────────────────
+// RentCast /properties returns county-only or partial taxes for many TX
+// records (e.g. $555/yr on 5435 Callaghan in Bexar — implies 0.28% effective
+// rate against the $196k assessed value, impossible: TX floor is 1.5–2%+).
+// Persisting a V2.1 MAO from a tax this corrupt poisons the field of record.
+//
+// Posture: same as the cap gate — never compute on an input we can't trust.
+// Effective rate = taxes / assessedValue. If < TX_TAX_RATE_FLOOR (1.2% — a
+// safety margin below the empirical 1.5–2%+ floor that catches the $555 class
+// but lets a legitimately-low Bexar record through), the tax is treated as
+// UNRELIABLE → missing input → caller HOLDs (null taxes → V2.1 HOLD).
+//
+// TX-only by design. TN already HOLDs on the cap-confirmation gate, so the
+// guard is moot there; other states aren't in scope yet.
+
+export const TX_TAX_RATE_FLOOR = 0.012;
+
+export interface TaxPlausibilityResult {
+  plausible: boolean;
+  /** Implied effective rate (taxes / assessedValue), or null when not
+   *  computable. */
+  effectiveRate: number | null;
+  reason: string;
+}
+
+/** Pure: TX tax-plausibility check. For non-TX, returns plausible:true
+ *  (out of scope; TN HOLDs upstream on cap). Returns plausible:true when
+ *  assessedValue isn't available (can't reject what we can't measure —
+ *  this matches the "no fabricated rejection" posture). */
+export function checkTxTaxPlausibility(
+  state: string | null | undefined,
+  annualTaxes: number | null | undefined,
+  assessedValue: number | null | undefined,
+): TaxPlausibilityResult {
+  const s = (state ?? "").trim().toUpperCase();
+  if (s !== "TX") {
+    return { plausible: true, effectiveRate: null, reason: "non-TX (guard scope is TX only)" };
+  }
+  if (typeof annualTaxes !== "number" || !Number.isFinite(annualTaxes) || annualTaxes <= 0) {
+    // No taxes to check — caller already HOLDs on missing taxes.
+    return { plausible: true, effectiveRate: null, reason: "no taxes to evaluate" };
+  }
+  if (typeof assessedValue !== "number" || !Number.isFinite(assessedValue) || assessedValue <= 0) {
+    // Without assessed value we can't compute the rate. Pass through (the
+    // V2.1 lane will still HOLD if other inputs missing); don't manufacture
+    // a rejection on a missing comparator.
+    return { plausible: true, effectiveRate: null, reason: "no assessed value to compute rate" };
+  }
+  const rate = annualTaxes / assessedValue;
+  if (rate < TX_TAX_RATE_FLOOR) {
+    return {
+      plausible: false,
+      effectiveRate: rate,
+      reason: `TX tax-plausibility FAIL — effective rate ${(rate * 100).toFixed(3)}% < floor ${(TX_TAX_RATE_FLOOR * 100).toFixed(1)}% (TX is 1.5–2%+). Taxes $${annualTaxes.toLocaleString()} vs assessed $${assessedValue.toLocaleString()} — unreliable, treat as missing input.`,
+    };
+  }
+  return {
+    plausible: true,
+    effectiveRate: rate,
+    reason: `TX tax-plausibility OK — effective rate ${(rate * 100).toFixed(3)}% ≥ floor ${(TX_TAX_RATE_FLOOR * 100).toFixed(1)}%.`,
+  };
+}
+
+// ── Confirmed-override resolution ──────────────────────────────────────
+// Verified facts (operator/Maverick-sourced or county-CAD-scraped) must
+// survive autonomous re-runs — the structural anti-regression. When a
+// confirmed value lives on the record, the cron uses it and NEVER
+// overwrites it.
+
+export type TaxSource = "confirmed" | "rentcast_auto" | "rentcast_implausible" | "missing";
+
+export interface TaxResolution {
+  /** The taxes the V2.1 computation should use. null → HOLD. */
+  annualTaxes: number | null;
+  source: TaxSource;
+  /** When source==='confirmed', the operator-supplied provenance label. */
+  confirmedLabel?: string | null;
+  /** When the auto path was rejected by plausibility, the rejection reason. */
+  plausibilityReason?: string;
+  /** True when the cron should NOT write back this field (confirmed values
+   *  are immutable from the cron's perspective). */
+  freezeWrite: boolean;
+}
+
+/** Pure: resolve which tax value to use, applying confirmed-override
+ *  precedence and the TX plausibility guard. */
+export function resolveAnnualTaxes(input: {
+  state: string | null | undefined;
+  confirmedTaxes: number | null | undefined;
+  confirmedLabel: string | null | undefined;
+  rentcastTaxes: number | null | undefined;
+  assessedValue: number | null | undefined;
+}): TaxResolution {
+  // (1) Confirmed value wins, full stop. Never overwritten by the cron.
+  if (typeof input.confirmedTaxes === "number" && Number.isFinite(input.confirmedTaxes) && input.confirmedTaxes > 0) {
+    return {
+      annualTaxes: Math.round(input.confirmedTaxes),
+      source: "confirmed",
+      confirmedLabel: input.confirmedLabel ?? null,
+      freezeWrite: true,
+    };
+  }
+  // (2) No confirmed value → fall back to RentCast, but apply the TX
+  //     plausibility guard.
+  const plaus = checkTxTaxPlausibility(input.state, input.rentcastTaxes, input.assessedValue);
+  if (!plaus.plausible) {
+    return {
+      annualTaxes: null,
+      source: "rentcast_implausible",
+      plausibilityReason: plaus.reason,
+      freezeWrite: false,
+    };
+  }
+  if (typeof input.rentcastTaxes === "number" && Number.isFinite(input.rentcastTaxes) && input.rentcastTaxes > 0) {
+    return {
+      annualTaxes: Math.round(input.rentcastTaxes),
+      source: "rentcast_auto",
+      freezeWrite: false,
+    };
+  }
+  return { annualTaxes: null, source: "missing", freezeWrite: false };
+}
+
 // ── Investor-required cap: ONLY operator-CONFIRMED markets default ─────
 // Confirmation gates the computation. An unconfirmed cap silently
 // defaulting in is the false-dispose machine: a too-high cap understates

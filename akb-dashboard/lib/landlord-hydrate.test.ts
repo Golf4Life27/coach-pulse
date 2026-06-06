@@ -3,6 +3,9 @@ import { describe, it, expect } from "vitest";
 import {
   computeV21LandlordMao,
   defaultInvestorCapFor,
+  checkTxTaxPlausibility,
+  resolveAnnualTaxes,
+  TX_TAX_RATE_FLOOR,
   buildMaoV21Marker,
   parseMaoV21Marker,
   upsertMaoV21Marker,
@@ -139,5 +142,120 @@ describe("MAO_V2.1 provenance marker (quarantine boundary)", () => {
   it("upsert onto empty notes returns just the marker", () => {
     const m = buildMaoV21Marker({ status: "ok", yourMao: 1, investorMao: 6, cap: 0.09, rent: 1, taxes: 1 }, now);
     expect(upsertMaoV21Marker(null, m)).toBe(m);
+  });
+});
+
+describe("TX tax-plausibility guard", () => {
+  it("rejects the $555 Bexar/Callaghan class — 0.28% of $196k is impossible for TX", () => {
+    const r = checkTxTaxPlausibility("TX", 555, 196310);
+    expect(r.plausible).toBe(false);
+    expect(r.effectiveRate).toBeCloseTo(0.00283, 4);
+    expect(r.reason).toContain("FAIL");
+  });
+  it("accepts Dreamland-class (Bexar 2.2%+) — well above the 1.2% floor", () => {
+    // Dreamland: 6,222/278,000 ≈ 2.24%.
+    expect(checkTxTaxPlausibility("TX", 6222, 278000).plausible).toBe(true);
+  });
+  it("rejects just-below the floor; accepts just-above", () => {
+    expect(checkTxTaxPlausibility("TX", 1190, 100_000).plausible).toBe(false); // 1.19%
+    expect(checkTxTaxPlausibility("TX", 1210, 100_000).plausible).toBe(true);  // 1.21%
+    expect(TX_TAX_RATE_FLOOR).toBe(0.012);
+  });
+  it("non-TX is out of scope — passes through (TN HOLDs on cap upstream)", () => {
+    expect(checkTxTaxPlausibility("TN", 500, 100000).plausible).toBe(true);
+    expect(checkTxTaxPlausibility(null, 500, 100000).plausible).toBe(true);
+  });
+  it("missing assessedValue → passes through (don't manufacture rejections)", () => {
+    expect(checkTxTaxPlausibility("TX", 555, null).plausible).toBe(true);
+  });
+});
+
+describe("resolveAnnualTaxes — confirmed-override precedence + plausibility", () => {
+  it("confirmed value WINS over RentCast and freezes write", () => {
+    // The Callaghan regression: RentCast returns the bad $555 but the
+    // operator stamped $4,515 — confirmed must win.
+    const r = resolveAnnualTaxes({
+      state: "TX",
+      confirmedTaxes: 4515,
+      confirmedLabel: "operator_2026-06-05",
+      rentcastTaxes: 555,
+      assessedValue: 196310,
+    });
+    expect(r.source).toBe("confirmed");
+    expect(r.annualTaxes).toBe(4515);
+    expect(r.freezeWrite).toBe(true);
+    expect(r.confirmedLabel).toBe("operator_2026-06-05");
+  });
+
+  it("confirmed value survives a SECOND cron re-run with same inputs (idempotent)", () => {
+    // The structural anti-regression — verified facts must survive autonomy.
+    const inputs = {
+      state: "TX" as const,
+      confirmedTaxes: 4515,
+      confirmedLabel: "bexar_cad_2026-06-04",
+      rentcastTaxes: 555,
+      assessedValue: 196310,
+    };
+    const r1 = resolveAnnualTaxes(inputs);
+    const r2 = resolveAnnualTaxes(inputs);
+    expect(r1.annualTaxes).toBe(4515);
+    expect(r2.annualTaxes).toBe(4515);
+    expect(r1.freezeWrite).toBe(true);
+    expect(r2.freezeWrite).toBe(true);
+    // After re-run, source is still confirmed (no silent demotion).
+    expect(r2.source).toBe("confirmed");
+  });
+
+  it("no confirmed + plausible RentCast → uses RentCast (not frozen)", () => {
+    const r = resolveAnnualTaxes({
+      state: "TX",
+      confirmedTaxes: null,
+      confirmedLabel: null,
+      rentcastTaxes: 6222,
+      assessedValue: 278000,
+    });
+    expect(r.source).toBe("rentcast_auto");
+    expect(r.annualTaxes).toBe(6222);
+    expect(r.freezeWrite).toBe(false);
+  });
+
+  it("no confirmed + implausible RentCast → null (V2.1 HOLD downstream)", () => {
+    // Without a confirmed override, the $555 path now resolves to null
+    // taxes → V2.1 HOLD → no MAO persisted. The cron NULLs any prior
+    // tainted V21 value (route handles that branch).
+    const r = resolveAnnualTaxes({
+      state: "TX",
+      confirmedTaxes: null,
+      confirmedLabel: null,
+      rentcastTaxes: 555,
+      assessedValue: 196310,
+    });
+    expect(r.source).toBe("rentcast_implausible");
+    expect(r.annualTaxes).toBeNull();
+    expect(r.plausibilityReason).toContain("FAIL");
+  });
+
+  it("no confirmed + no RentCast → missing (V2.1 HOLD)", () => {
+    const r = resolveAnnualTaxes({
+      state: "TX",
+      confirmedTaxes: null,
+      confirmedLabel: null,
+      rentcastTaxes: null,
+      assessedValue: null,
+    });
+    expect(r.source).toBe("missing");
+    expect(r.annualTaxes).toBeNull();
+  });
+
+  it("confirmed value works even when no RentCast comparator exists", () => {
+    const r = resolveAnnualTaxes({
+      state: "TX",
+      confirmedTaxes: 4515,
+      confirmedLabel: "operator_2026-06-05",
+      rentcastTaxes: null,
+      assessedValue: null,
+    });
+    expect(r.source).toBe("confirmed");
+    expect(r.annualTaxes).toBe(4515);
   });
 });

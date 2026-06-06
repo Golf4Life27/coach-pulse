@@ -195,6 +195,46 @@ describe("classifyStaleDeal — precedence", () => {
     expect(r.disposeCategory).toBe("delisted");
   });
 
+  it("blacklist beats EVERYTHING — even responded + positive MAO + active listing", () => {
+    // Burwood-class: corporate seller on never-resurface list, still
+    // texted/active. Blacklist is a Canon §9 sourced fact (operator-curated,
+    // explicit list — zero false-positive risk, not the inference we avoided).
+    const r = classifyStaleDeal({
+      isActive: true,
+      mlsActive: true,
+      declined: false,
+      hasResponded: true,
+      landlordYourMao: 50000,
+      onBlacklist: true,
+    });
+    expect(r.verdict).toBe("dispose_dead");
+    expect(r.disposeCategory).toBe("blacklist");
+    expect(r.reason).toContain("blocklist");
+  });
+
+  it("blacklist disposes even when delisted (would've been delisted anyway, but reason is more specific)", () => {
+    const r = classifyStaleDeal({
+      isActive: false,
+      mlsActive: false,
+      declined: false,
+      hasResponded: false,
+      landlordYourMao: null,
+      onBlacklist: true,
+    });
+    expect(r.disposeCategory).toBe("blacklist");
+  });
+
+  it("non-blacklist (onBlacklist omitted) behaves exactly as before", () => {
+    const r = classifyStaleDeal({
+      isActive: true,
+      mlsActive: true,
+      declined: false,
+      hasResponded: false,
+      landlordYourMao: null,
+    });
+    expect(r.verdict).toBe("reengage_queue");
+  });
+
   it("declined beats uneconomic", () => {
     const r = classifyStaleDeal({
       isActive: true,

@@ -147,6 +147,11 @@ export interface Listing {
   buyerProfitTarget?: number | null;
   investorMao?: number | null;
   yourMao?: number | null;
+  // Confirmed-override taxes (2026-06-06). Operator/CAD-sourced; survives
+  // V2.1 cron re-runs (anti-regression). See lib/landlord-hydrate.ts
+  // resolveAnnualTaxes for precedence.
+  confirmedTaxes?: number | null;
+  confirmedTaxesSource?: string | null;
   autoApproveV2?: boolean;
   arvValidatedAt?: string | null;
   // Phase 3 — pre-offer screen

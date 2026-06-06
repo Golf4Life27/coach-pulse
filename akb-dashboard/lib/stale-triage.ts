@@ -94,7 +94,8 @@ export type StaleVerdict = "dispose_dead" | "reengage_queue" | "hold";
 export type DisposeCategory =
   | "delisted"
   | "declined_reply"
-  | "uneconomic_negative_spread";
+  | "uneconomic_negative_spread"
+  | "blacklist";
 
 export interface StaleClassifyInput {
   /** Live_Status === "Active". */
@@ -110,6 +111,9 @@ export interface StaleClassifyInput {
    *  (missing rehab / rent / taxes). Only a NEGATIVE (≤0) value disposes;
    *  null never disposes (it's a HOLD input, not a terminal one). */
   landlordYourMao: number | null;
+  /** Address matches the never-resurface blocklist (Canon §9 / Sentinel).
+   *  HARDEST terminal signal — sourced fact, not inference. Beats everything. */
+  onBlacklist?: boolean;
 }
 
 export interface StaleClassifyResult {
@@ -125,6 +129,18 @@ export interface StaleClassifyResult {
  */
 export function classifyStaleDeal(input: StaleClassifyInput): StaleClassifyResult {
   // ── Terminal signals → dispose dead ───────────────────────────────
+  // 0. Blacklist — Canon §9 sourced fact (operator-curated, explicit list).
+  //    Zero false-positive risk (the inference we avoided was free-text
+  //    seller-type guessing). Beats every other signal: a blacklisted
+  //    address never gets pursued regardless of economics, response state,
+  //    or listing status.
+  if (input.onBlacklist) {
+    return {
+      verdict: "dispose_dead",
+      disposeCategory: "blacklist",
+      reason: "address on never-resurface blocklist (Canon §9 sourced fact) — permanent disposal",
+    };
+  }
   // 1. Delisted / off-market — the property is gone; nothing to pursue.
   if (!input.isActive || !input.mlsActive) {
     return {
@@ -193,6 +209,12 @@ const VERDICT_TAG: Record<StaleVerdict, string> = {
   reengage_queue: "RE-ENGAGE-ELIGIBLE (flag only; outreach OFF)",
   hold: "HOLD",
 };
+
+/** Pure: does this record's verification notes already contain the blacklist
+ *  triage line? Re-runs are skipped via the existing STALE_TRIAGE_SENTINEL
+ *  check, but blacklist disposals carry a more specific tag so they're
+ *  visible in the audit trail. */
+export const BLACKLIST_DISPOSE_TAG = "blacklist";
 
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
