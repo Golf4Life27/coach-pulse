@@ -28,7 +28,7 @@
         }
       },
       "arv_source_verified": false,
-      "_arv_source_note": "ATTOM /salescomparables (Michigan disclosure state) — verify endpoint returns real recorded MI sales on a Detroit probe before flipping arv_source_verified to true.",
+      "_arv_source_note": "2026-06-06 LIVE PROBE: ATTOM property/v2 salescomparables CONFIRMED returns real recorded arms-length Detroit sales (18 comps for 1973 Sturtevant; e.g. 1568 Highland $65k, 1689 Tyler $77.3k). Source integrity is real (disclosure-state recorded sales, never AVM). HELD at false for ONE more reason: raw recorded median is AS-IS-contaminated in bimodal Detroit (~$70k median vs ~$145k renovated anchor ≈ the 2.0x in arv_uplift.json). ARV%Max expects RENOVATED ARV, so feeding raw median double-discounts and under-passes every deal. FLIP to true after wiring the Detroit renovated-uplift into synthesizeArv. Address-match caveat: 2/3 probe addresses 400'd on ATTOM property-match — listing-address normalization needed for full coverage.",
       "sourcing_allowed": true
     },
     {
