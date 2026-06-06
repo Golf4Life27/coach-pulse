@@ -191,7 +191,7 @@ async function handle(req: Request) {
     agent: "appraiser",
     event: "attom_probe",
     status: "confirmed_success",
-    inputSummary: { state: stateFilter || "all", probe_count: probes.length, auth_kind: auth.kind },
+    inputSummary: { state: stateFilter || "all", probe_count: probes.length, auth_kind: auth.ok ? auth.kind : "temp_public" },
     outputSummary: { by_state: byState },
     ms: Date.now() - t0,
   });

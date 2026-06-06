@@ -175,7 +175,7 @@ async function handle(req: Request) {
     agent: "appraiser",
     event: "detroit_spread_report",
     status: "confirmed_success",
-    inputSummary: { limit, include_control: includeControl, force_live: forceLive, auth_kind: auth.kind },
+    inputSummary: { limit, include_control: includeControl, force_live: forceLive, auth_kind: auth.ok ? auth.kind : "temp_public" },
     outputSummary: summary,
     ms: Date.now() - t0,
   });
