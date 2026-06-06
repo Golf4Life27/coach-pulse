@@ -86,9 +86,9 @@ describe("evaluateDeal — single formula, market-agnostic", () => {
     expect(r.pricingFloor).toBe(60000);
   });
 
-  it("HOLD when market is not live (Detroit before arv_source_verified)", () => {
-    const detroitFromConfig = listMarkets().find((m) => m.id === "detroit_mi")!;
-    const r = evaluateDeal({ arv: 200000, rehab: 30000, listPrice: 90000 }, detroitFromConfig);
+  it("HOLD when market is not live (unverified market)", () => {
+    const unverified = { ...detroitLive, arv_source_verified: false };
+    const r = evaluateDeal({ arv: 200000, rehab: 30000, listPrice: 90000 }, unverified);
     expect(r.status).toBe("hold");
     expect(r.reason).toContain("arv_source_verified");
   });

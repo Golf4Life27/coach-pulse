@@ -24,9 +24,14 @@ describe("market registry — load + invariants", () => {
     expect(det!.buyer_params!.max_rehab_usd).toBe(68537);
   });
 
-  it("Detroit's arv_source_verified starts FALSE — flipped by operator after live ATTOM probe", () => {
+  it("Detroit arv_source_verified is TRUE — flipped 2026-06-06 on the spread-sweep proof (Strathmoor PASS)", () => {
     const det = listMarkets().find((m) => m.id === "detroit_mi");
-    expect(det!.arv_source_verified).toBe(false);
+    expect(det!.arv_source_verified).toBe(true);
+  });
+
+  it("Detroit is LIVE-for-sourcing (all three gates true)", () => {
+    const det = listMarkets().find((m) => m.id === "detroit_mi")!;
+    expect(isMarketLive(det).live).toBe(true);
   });
 
   it("wholesale_fee_default is $5,000 (V2.1)", () => {
@@ -109,15 +114,16 @@ describe("getMarketForListing — ZIP-prefix wins, state fallback", () => {
 describe("isMarketLive — three-gate liveness", () => {
   const detroit = listMarkets().find((m) => m.id === "detroit_mi")!;
 
-  it("Detroit is NOT live today — arv_source_verified is still false", () => {
+  it("Detroit is LIVE today (flipped on proof) — all three gates pass", () => {
     const v = isMarketLive(detroit);
-    expect(v.live).toBe(false);
-    expect(v.reasons.some((r) => r.includes("arv_source_verified"))).toBe(true);
+    expect(v.live).toBe(true);
   });
 
-  it("a fully-flipped market is live", () => {
-    const flipped = { ...detroit, arv_source_verified: true };
-    expect(isMarketLive(flipped).live).toBe(true);
+  it("an un-verified market is NOT live, cites arv_source_verified", () => {
+    const unverified = { ...detroit, arv_source_verified: false };
+    const v = isMarketLive(unverified);
+    expect(v.live).toBe(false);
+    expect(v.reasons.some((r) => r.includes("arv_source_verified"))).toBe(true);
   });
 
   it("true placeholder (no params) is NOT live, cites buyer_params_present", () => {

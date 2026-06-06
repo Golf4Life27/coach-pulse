@@ -27,8 +27,8 @@
           "_pending_operator_paste": "fill from BBC row: beds_min, baths_min, year_built_min, sqft_min/max, property_types_allowed, max_price_usd, counties (refine)"
         }
       },
-      "arv_source_verified": false,
-      "_arv_source_note": "2026-06-06 LIVE PROBE: ATTOM property/v2 salescomparables CONFIRMED returns real recorded arms-length Detroit sales (18 comps for 1973 Sturtevant; e.g. 1568 Highland $65k, 1689 Tyler $77.3k). Source integrity is real (disclosure-state recorded sales, never AVM). HELD at false for ONE more reason: raw recorded median is AS-IS-contaminated in bimodal Detroit (~$70k median vs ~$145k renovated anchor ≈ the 2.0x in arv_uplift.json). ARV%Max expects RENOVATED ARV, so feeding raw median double-discounts and under-passes every deal. FLIP to true after wiring the Detroit renovated-uplift into synthesizeArv. Address-match caveat: 2/3 probe addresses 400'd on ATTOM property-match — listing-address normalization needed for full coverage.",
+      "arv_source_verified": true,
+      "_arv_source_note": "FLIPPED true 2026-06-06 ON PROOF: the spread sweep produced a passing renovated-cluster ARV on a real listing — 15875 Strathmoor St (48227): 7 renovated comps @ median $145/sqft (distressed cluster 11 @ $41/sqft), MAD 2.6%, ARV $212,412, MAO $94,805 ≥ list $79,000, spread +$15,805 = PASS. ARV is renovated-cluster median $/sqft × subject sqft from ATTOM recorded MI sales — never AVM, never the arv_uplift 2.0x. Renovated-cluster dispersion bound (≤25% MAD) HOLDs noisy comp sets; missing Est_Rehab HOLDs most listings (hydrate rehab to grow the target list).",
       "sourcing_allowed": true
     },
     {
