@@ -41,11 +41,13 @@ const AIRTABLE_PAT = process.env.AIRTABLE_PAT;
 const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
 const CONTROL_RECORDS = [{ id: "rec1HTUqK0YEVb7uA", label: "23 Fields (TN control)" }];
 
-// Days-on-market negative-information threshold. v1 absolute (a true
-// zip-norm DOM benchmark needs a market-stats source — flagged). DOM far
-// above this at the current price = the market rejecting the price →
-// blocks underwritten-mode (off the allowlist) until explained.
-const DOM_FLAG_DAYS = 120;
+// Days-on-market negative-information FLAG (never auto-dispose). Detroit v1
+// = 60d ≈ 2× the sourced 48227 norm of ~31 days. The earlier 120d threshold
+// would have passed Strathmoor at 87d — a threshold that misses its own
+// motivating fixture is miscalibrated by construction. DOM > flag blocks
+// underwritten-mode (off the allowlist → comp audit required); the listing
+// is NEVER disposed on DOM alone.
+const DOM_FLAG_DAYS = 60;
 
 interface SweepRow {
   Address: string;
