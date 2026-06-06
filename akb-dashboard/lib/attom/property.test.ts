@@ -5,12 +5,16 @@ import {
   buildPropertyDetailUrl,
   buildAssessmentDetailUrl,
   buildSalesComparablesUrl,
+  normalizeStreetForAttom,
   mapPropertyDetail,
   mapAssessmentDetail,
   mapSalesComparables,
   synthesizeArv,
   type SoldComp,
 } from "./property";
+
+const NOW = new Date("2026-06-06T00:00:00.000Z");
+const recent = "2026-03-01T00:00:00.000Z";
 
 describe("URL builders", () => {
   it("buildAddress2 joins city/state/zip cleanly", () => {
@@ -20,13 +24,13 @@ describe("URL builders", () => {
   it("property/detail uses address1/address2 query params", () => {
     const u = buildPropertyDetailUrl({ address1: "1973 Sturtevant St", address2: "Detroit, MI 48206" });
     expect(u).toContain("/property/detail");
-    expect(u).toContain("address1=1973+Sturtevant+St");
+    expect(u).toContain("address1=1973+STURTEVANT+ST");
     expect(u).toContain("address2=Detroit%2C+MI+48206");
   });
   it("assessment/detail uses the same convention", () => {
     const u = buildAssessmentDetailUrl({ address1: "5435 Callaghan Rd", address2: "San Antonio, TX 78228" });
     expect(u).toContain("/assessment/detail");
-    expect(u).toContain("address1=5435+Callaghan+Rd");
+    expect(u).toContain("address1=5435+CALLAGHAN+RD");
   });
   it("salescomparables/address uses the property/v2 base + path segments (street/city/county/state/zip)", () => {
     const u = buildSalesComparablesUrl("1973 Sturtevant St", "Detroit", "MI", "48206");
@@ -34,7 +38,7 @@ describe("URL builders", () => {
     // (v1.0.0 → 404 "No rule matched"; confirmed live 2026-06-06).
     expect(u).toContain("/property/v2/salescomparables/address/");
     expect(u).not.toContain("propertyapi/v1.0.0/salescomparables");
-    expect(u).toContain("/1973%20Sturtevant%20St/");
+    expect(u).toContain("/1973%20STURTEVANT%20ST/");
     expect(u).toContain("/Detroit/0/MI/48206");
   });
   it("salescomparables accepts radius + min/max comp params", () => {
@@ -156,42 +160,83 @@ describe("response mappers", () => {
   });
 });
 
-describe("ARV synthesizer — recorded comps only, never AVM", () => {
-  const comp = (amount: number, sqft: number | null = 1100): SoldComp => ({
-    saleAmount: amount, saleDate: "2025-04-01", sqft, address: null,
+describe("normalizeStreetForAttom", () => {
+  it("uppercases, collapses whitespace, drops punctuation", () => {
+    expect(normalizeStreetForAttom("  1973  Sturtevant St. ")).toBe("1973 STURTEVANT ST");
+    expect(normalizeStreetForAttom("1620 W. Grand Blvd,")).toBe("1620 W GRAND BLVD");
+  });
+  it("strips trailing unit designators (the ATTOM 400 class)", () => {
+    expect(normalizeStreetForAttom("123 Main St Apt 4B")).toBe("123 MAIN ST");
+    expect(normalizeStreetForAttom("55 Oak Ave #200")).toBe("55 OAK AVE");
+    expect(normalizeStreetForAttom("9 Elm Dr Unit 12")).toBe("9 ELM DR");
+  });
+  it("handles null/empty", () => {
+    expect(normalizeStreetForAttom(null)).toBe("");
+    expect(normalizeStreetForAttom("")).toBe("");
+  });
+});
+
+describe("ARV synthesizer — RENOVATED-cluster, recorded comps only, never AVM", () => {
+  const comp = (amount: number, sqft: number | null = 1100, saleDate: string | null = recent): SoldComp => ({
+    saleAmount: amount, saleDate, sqft, address: null,
   });
 
-  it("median of clean comps → ARV", () => {
-    const r = synthesizeArv([comp(140000), comp(145000), comp(150000)]);
+  it("unimodal clean set → ARV = median sale (no subjectSqft)", () => {
+    const r = synthesizeArv([comp(140000), comp(145000), comp(150000)], { now: NOW });
     expect(r.status).toBe("ok");
+    expect(r.bimodal).toBe(false);
     expect(r.arv).toBe(145000);
-    expect(r.medianPricePerSqft).toBeGreaterThan(0);
   });
 
-  it("HOLD on insufficient comps (<3) — never fabricate ARV from 1 sale", () => {
-    expect(synthesizeArv([comp(145000), comp(150000)]).status).toBe("hold");
-    expect(synthesizeArv([]).arv).toBeNull();
+  it("BIMODAL Detroit set → ARV from the RENOVATED cluster; distressed excluded", () => {
+    // Distressed cluster ~$15–18/sqft (REO), renovated ~$50–62/sqft (retail).
+    // 1100 sqft each. Largest gap dominates → split. Renovated median ≈ $55/sqft.
+    const distressed = [comp(16500, 1100), comp(17600, 1100), comp(18700, 1100)]; // 15/16/17 psf
+    const renovated = [comp(55000, 1100), comp(60500, 1100), comp(64900, 1100), comp(68200, 1100)]; // 50/55/59/62
+    const r = synthesizeArv([...distressed, ...renovated], { subjectSqft: 1100, now: NOW });
+    expect(r.status).toBe("ok");
+    expect(r.bimodal).toBe(true);
+    expect(r.renovatedCount).toBe(4);
+    expect(r.distressedCount).toBe(3);
+    // ARV ≈ renovated median $/sqft (≈$57) × 1100 ≈ $62k — NOT the ~$17k distressed.
+    expect(r.arv!).toBeGreaterThan(55000);
+    expect(r.arv!).toBeLessThan(70000);
+    expect(r.distressedMedianPpsf!).toBeLessThan(20);
   });
 
-  it("HOLD on excessive dispersion (>25% MAD/median) — comp set too noisy", () => {
-    // Median 145k, but MAD = 35k (huge swings) → 24%... let me push further.
-    // 100k, 145k, 200k → median 145, abs devs 45/0/55 → MAD 45 → 31% → HOLD.
-    const r = synthesizeArv([comp(100000), comp(145000), comp(200000)]);
+  it("subjectSqft scales the renovated $/sqft to the subject", () => {
+    const renovated = [comp(55000, 1100), comp(60500, 1100), comp(66000, 1100)]; // 50/55/60 psf, median 55
+    const r = synthesizeArv(renovated, { subjectSqft: 1400, now: NOW });
+    // unimodal, median $/sqft ≈ 55 × 1400 ≈ 77000
+    expect(r.arv!).toBeGreaterThan(73000);
+    expect(r.arv!).toBeLessThan(81000);
+  });
+
+  it("HOLD on insufficient recent comps (<3)", () => {
+    expect(synthesizeArv([comp(145000), comp(150000)], { now: NOW }).status).toBe("hold");
+    expect(synthesizeArv([], { now: NOW }).arv).toBeNull();
+  });
+
+  it("HOLD when renovated cluster dispersion exceeds the bound", () => {
+    // wildly scattered $/sqft, unimodal, MAD/median > 25%.
+    const r = synthesizeArv([comp(90000, 1100), comp(145000, 1100), comp(210000, 1100)], { now: NOW });
     expect(r.status).toBe("hold");
     expect(r.reason).toContain("dispersion");
   });
 
-  it("PASSES the Sturtevant anchor band (~$145k validation case)", () => {
-    // Brigana's boots-on-ground anchor: ~$145k retail comp on Sturtevant St.
-    // A clean 5-comp set near anchor → ARV near anchor.
-    const r = synthesizeArv([comp(138000), comp(142000), comp(145000), comp(149000), comp(152000)]);
-    expect(r.status).toBe("ok");
-    expect(r.arv).toBeGreaterThanOrEqual(140000);
-    expect(r.arv).toBeLessThanOrEqual(150000);
+  it("drops stale comps (older than the recency window)", () => {
+    const stale = "2022-01-01T00:00:00.000Z";
+    const r = synthesizeArv(
+      [comp(60000, 1100, stale), comp(61000, 1100, stale), comp(150000, 1100, recent)],
+      { now: NOW },
+    );
+    // only 1 recent comp survives → HOLD.
+    expect(r.status).toBe("hold");
   });
 
-  it("median $/sqft is computed when ≥3 comps carry sqft", () => {
-    const r = synthesizeArv([comp(140000, 1100), comp(145000, 1150), comp(150000, 1200)]);
-    expect(r.medianPricePerSqft).not.toBeNull();
+  it("does NOT use the arv_uplift.json 2.0× multiplier (clustering only)", () => {
+    // A clean renovated set must yield the cluster median, never median×2.
+    const r = synthesizeArv([comp(60000, 1100), comp(62000, 1100), comp(64000, 1100)], { subjectSqft: 1100, now: NOW });
+    expect(r.arv!).toBeLessThan(70000); // ≈ $62k, not ~$124k
   });
 });

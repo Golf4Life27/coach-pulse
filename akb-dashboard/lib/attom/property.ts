@@ -37,18 +37,34 @@ export function buildAddress2(city: string, state: string, zip: string): string 
   return `${city}, ${state} ${zip}`.replace(/\s+/g, " ").trim();
 }
 
+// ── Address normalization (ATTOM property-match) ──────────────────────
+// ATTOM's matcher 400'd 2/3 live probe addresses ("Unable to locate a
+// property record"). It is sensitive to casing, unit designators, doubled
+// whitespace, and punctuation. Normalize the street BEFORE building any
+// ATTOM URL so the match rate (and the TX/TN disclosure-gap measurement)
+// improves. Pure; tested.
+const UNIT_RE = /\s+(#|APT|UNIT|STE|SUITE|BLDG|FL|FLOOR|RM|ROOM|LOT|SPC|TRLR)\.?\s*\S+\s*$/i;
+
+export function normalizeStreetForAttom(street: string | null | undefined): string {
+  let s = (street ?? "").toUpperCase().trim();
+  s = s.replace(/[.,]/g, " ");        // drop periods/commas
+  s = s.replace(/\s+/g, " ").trim();  // collapse whitespace
+  s = s.replace(UNIT_RE, "").trim();  // strip trailing unit designators
+  return s;
+}
+
 // ── URL builders (pure) ───────────────────────────────────────────────
 
 export function buildPropertyDetailUrl(addr: AttomAddress, base: string = ATTOM_BASE): string {
   const u = new URL(`${base}/property/detail`);
-  u.searchParams.set("address1", addr.address1);
+  u.searchParams.set("address1", normalizeStreetForAttom(addr.address1));
   u.searchParams.set("address2", addr.address2);
   return u.toString();
 }
 
 export function buildAssessmentDetailUrl(addr: AttomAddress, base: string = ATTOM_BASE): string {
   const u = new URL(`${base}/assessment/detail`);
-  u.searchParams.set("address1", addr.address1);
+  u.searchParams.set("address1", normalizeStreetForAttom(addr.address1));
   u.searchParams.set("address2", addr.address2);
   return u.toString();
 }
@@ -69,7 +85,7 @@ export function buildSalesComparablesUrl(
   const county = opts.county ?? "0";
   const enc = (s: string) => encodeURIComponent(s);
   const u = new URL(
-    `${base}/salescomparables/address/${enc(street)}/${enc(city)}/${enc(county)}/${enc(state)}/${enc(zip)}`,
+    `${base}/salescomparables/address/${enc(normalizeStreetForAttom(street))}/${enc(city)}/${enc(county)}/${enc(state)}/${enc(zip)}`,
   );
   if (opts.searchRadiusMi != null) u.searchParams.set("searchRadius", String(opts.searchRadiusMi));
   if (opts.minComps != null) u.searchParams.set("minComps", String(opts.minComps));
@@ -246,29 +262,54 @@ export function mapSalesComparables(body: AttomSalesComparablesResponse): SoldCo
     .filter((x): x is SoldComp => x != null);
 }
 
-// ── ARV synthesizer ───────────────────────────────────────────────────
+// ── ARV synthesizer — RENOVATED-CLUSTER method ────────────────────────
 // The single integrity point: ARV from recorded retail sold comps. Never
-// AVM. We require a MINIMUM comp count (default 3) and a MAXIMUM dispersion
-// (median absolute deviation / median ≤ MAX_MAD_FRACTION) — sparse or
-// noisy comp sets return null (caller HOLDs).
+// AVM, and NEVER a fabricated value multiplier (the arv_uplift.json 2.0×
+// is a single-deal operator fit — cross-check only, never a generator).
 //
-// Method = median of the sale amounts (robust to outliers). When sqft is
-// available across enough comps we ALSO surface a $/sqft median for the
-// subject-sqft-scaled ARV, but the primary ARV is straight-median dollars.
+// Detroit/Memphis comp sets are BIMODAL: a distressed cluster (low $/sqft,
+// REO/wholesale) and a renovated cluster (high $/sqft, retail). ARV = After-
+// Repair Value = the RENOVATED cluster's value, computed from the comps
+// themselves:
+//   1. keep recent (≤RECENCY_MONTHS) comps with a positive sale + sqft.
+//   2. cluster on $/sqft via the single largest gap. The split is declared
+//      bimodal ONLY when that gap DOMINATES (≥ GAP_DOMINANCE × the next-
+//      largest gap) — otherwise the market is unimodal and the whole recent
+//      set IS the market (renovated == market value there).
+//   3. renovated cluster = the upper $/sqft cluster (or the whole set when
+//      unimodal). Require ≥MIN_RENOVATED_COMPS + the dispersion bound on the
+//      renovated cluster's $/sqft, else HOLD.
+//   4. ARV = renovated-cluster median $/sqft × subject sqft (sqft-scaled to
+//      the subject). Falls back to renovated-cluster median sale amount when
+//      subject sqft is unknown.
+//
+// No fabricated numbers anywhere: every threshold is a clustering-validity
+// rule (relative to the data's own dispersion), not an assumed value factor.
 
-const MIN_COMPS = 3;
-const MAX_MAD_FRACTION = 0.25; // 25% dispersion ceiling; tighter → caller HOLDs
+const MIN_RENOVATED_COMPS = 3;
+const MAX_MAD_FRACTION = 0.25;   // dispersion ceiling on the renovated cluster
+const RECENCY_MONTHS = 24;       // ignore stale recorded sales
+const GAP_DOMINANCE = 2;         // largest $/sqft gap must be ≥2× the next to split
+
+export interface CompPpsf {
+  comp: SoldComp;
+  ppsf: number;
+}
 
 export interface ArvSynthesisResult {
   arv: number | null;
-  /** Comps that survived plausibility (positive sale, dated within window). */
+  /** Recent valid comps actually used (positive sale + sqft, within window). */
   comps: SoldComp[];
-  /** Median sale amount (robust). null when comps insufficient. */
-  median: number | null;
-  /** Median absolute deviation / median — dispersion metric. */
+  /** Whether a dominant bimodal split was detected. */
+  bimodal: boolean;
+  /** Renovated (upper) cluster size + median $/sqft. */
+  renovatedCount: number;
+  renovatedMedianPpsf: number | null;
+  /** Distressed (lower) cluster size + median $/sqft (null when unimodal). */
+  distressedCount: number;
+  distressedMedianPpsf: number | null;
+  /** MAD/median of the renovated cluster's $/sqft (dispersion). */
   madFraction: number | null;
-  /** Median $/sqft when ≥MIN_COMPS comps have sqft (secondary signal). */
-  medianPricePerSqft: number | null;
   status: "ok" | "hold";
   reason: string;
 }
@@ -280,47 +321,102 @@ function median(xs: number[]): number | null {
   return s.length % 2 === 1 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
-/** Pure: synthesize an ARV from a comp list. */
-export function synthesizeArv(comps: SoldComp[]): ArvSynthesisResult {
-  if (comps.length < MIN_COMPS) {
-    return {
-      arv: null,
-      comps,
-      median: null,
-      madFraction: null,
-      medianPricePerSqft: null,
-      status: "hold",
-      reason: `insufficient comps — ${comps.length} < ${MIN_COMPS} required`,
-    };
-  }
-  const amounts = comps.map((c) => c.saleAmount);
-  const med = median(amounts) as number;
-  const absDev = amounts.map((x) => Math.abs(x - med));
-  const mad = median(absDev) as number;
-  const madFrac = med > 0 ? mad / med : 1;
-  if (madFrac > MAX_MAD_FRACTION) {
-    return {
-      arv: null,
-      comps,
-      median: med,
-      madFraction: madFrac,
-      medianPricePerSqft: null,
-      status: "hold",
-      reason: `comp dispersion too high — MAD/median ${(madFrac * 100).toFixed(1)}% > ${(MAX_MAD_FRACTION * 100).toFixed(0)}% ceiling`,
-    };
-  }
-  const withSqft = comps.filter((c) => c.sqft != null && c.sqft > 0);
-  const psqftMedian = withSqft.length >= MIN_COMPS
-    ? median(withSqft.map((c) => c.saleAmount / (c.sqft as number)))
-    : null;
+function monthsBetween(dateStr: string | null | undefined, now: Date): number | null {
+  if (!dateStr) return null;
+  const t = Date.parse(dateStr);
+  if (!Number.isFinite(t)) return null;
+  return (now.getTime() - t) / (1000 * 60 * 60 * 24 * 30.44);
+}
+
+function holdArv(comps: SoldComp[], reason: string, extra: Partial<ArvSynthesisResult> = {}): ArvSynthesisResult {
   return {
-    arv: Math.round(med),
-    comps,
-    median: med,
+    arv: null, comps, bimodal: false,
+    renovatedCount: 0, renovatedMedianPpsf: null,
+    distressedCount: 0, distressedMedianPpsf: null,
+    madFraction: null, status: "hold", reason, ...extra,
+  };
+}
+
+/** Pure: synthesize a RENOVATED-cluster ARV from recorded comps. */
+export function synthesizeArv(
+  comps: SoldComp[],
+  opts: { subjectSqft?: number | null; now?: Date } = {},
+): ArvSynthesisResult {
+  const now = opts.now ?? new Date();
+  const subjectSqft = typeof opts.subjectSqft === "number" && opts.subjectSqft > 0 ? opts.subjectSqft : null;
+
+  // (1) recent + valid (need sqft for $/sqft clustering). Undated comps are
+  //     kept (can't assess recency); clearly-stale (>RECENCY_MONTHS) dropped.
+  const recent = comps.filter((c) => {
+    if (!(c.saleAmount > 0)) return false;
+    if (!(typeof c.sqft === "number" && c.sqft > 0)) return false;
+    const m = monthsBetween(c.saleDate, now);
+    return m == null || m <= RECENCY_MONTHS;
+  });
+  if (recent.length < MIN_RENOVATED_COMPS) {
+    return holdArv(recent, `insufficient recent comps with sqft — ${recent.length} < ${MIN_RENOVATED_COMPS} required`);
+  }
+
+  // (2) $/sqft, sorted, then largest-gap clustering.
+  const pp: CompPpsf[] = recent
+    .map((c) => ({ comp: c, ppsf: c.saleAmount / (c.sqft as number) }))
+    .sort((a, b) => a.ppsf - b.ppsf);
+  const gaps: Array<{ idx: number; gap: number }> = [];
+  for (let i = 1; i < pp.length; i++) gaps.push({ idx: i, gap: pp[i].ppsf - pp[i - 1].ppsf });
+  const sortedGaps = [...gaps].sort((a, b) => b.gap - a.gap);
+  const largest = sortedGaps[0];
+  const second = sortedGaps[1];
+  const bimodal =
+    pp.length >= 4 && largest != null && largest.gap > 0 &&
+    (second == null || second.gap === 0 || largest.gap >= GAP_DOMINANCE * second.gap);
+
+  let renovated: CompPpsf[];
+  let distressed: CompPpsf[];
+  if (bimodal) {
+    distressed = pp.slice(0, largest.idx);
+    renovated = pp.slice(largest.idx);
+  } else {
+    distressed = [];
+    renovated = pp; // unimodal → the market median IS the renovated/market value
+  }
+
+  const distressedMedPpsf = distressed.length > 0 ? median(distressed.map((x) => x.ppsf)) : null;
+
+  // (3) bounds on the renovated cluster.
+  if (renovated.length < MIN_RENOVATED_COMPS) {
+    return holdArv(recent, `renovated cluster too thin — ${renovated.length} < ${MIN_RENOVATED_COMPS}`, {
+      bimodal, distressedCount: distressed.length, distressedMedianPpsf: distressedMedPpsf == null ? null : Math.round(distressedMedPpsf),
+    });
+  }
+  const renoPpsf = renovated.map((x) => x.ppsf);
+  const medPpsf = median(renoPpsf) as number;
+  const mad = median(renoPpsf.map((x) => Math.abs(x - medPpsf))) as number;
+  const madFrac = medPpsf > 0 ? mad / medPpsf : 1;
+  if (madFrac > MAX_MAD_FRACTION) {
+    return holdArv(recent, `renovated cluster dispersion too high — MAD/median ${(madFrac * 100).toFixed(1)}% > ${(MAX_MAD_FRACTION * 100).toFixed(0)}% ceiling`, {
+      bimodal, renovatedCount: renovated.length, renovatedMedianPpsf: Math.round(medPpsf),
+      distressedCount: distressed.length, distressedMedianPpsf: distressedMedPpsf == null ? null : Math.round(distressedMedPpsf),
+      madFraction: madFrac,
+    });
+  }
+
+  // (4) ARV: renovated median $/sqft × subject sqft (sqft-scaled), else
+  //     renovated-cluster median sale amount.
+  const arv = subjectSqft != null
+    ? Math.round(medPpsf * subjectSqft)
+    : Math.round(median(renovated.map((x) => x.comp.saleAmount)) as number);
+
+  return {
+    arv,
+    comps: recent,
+    bimodal,
+    renovatedCount: renovated.length,
+    renovatedMedianPpsf: Math.round(medPpsf),
+    distressedCount: distressed.length,
+    distressedMedianPpsf: distressedMedPpsf == null ? null : Math.round(distressedMedPpsf),
     madFraction: madFrac,
-    medianPricePerSqft: psqftMedian == null ? null : Math.round(psqftMedian),
     status: "ok",
-    reason: `ARV = median of ${comps.length} recorded sold comps = $${Math.round(med).toLocaleString()} (MAD/median ${(madFrac * 100).toFixed(1)}%)`,
+    reason: `ARV $${arv.toLocaleString()} = renovated-cluster ${subjectSqft != null ? `median $/sqft $${Math.round(medPpsf)} × ${subjectSqft} sqft` : `median sale`} (${renovated.length} reno comps${bimodal ? `, distressed cluster ${distressed.length} @ $${distressedMedPpsf != null ? Math.round(distressedMedPpsf) : "-"}/sqft` : ", unimodal market"}, MAD ${(madFrac * 100).toFixed(1)}%).`,
   };
 }
 
@@ -374,6 +470,9 @@ export interface SalesComparablesQuery {
   searchRadiusMi?: number;
   minComps?: number;
   maxComps?: number;
+  /** Subject living area — scales the renovated-cluster $/sqft into a
+   *  subject-specific ARV. */
+  subjectSqft?: number | null;
 }
 
 export function fetchSalesComparables(q: SalesComparablesQuery): Promise<AttomFetchOutcome<SoldComp[]>> {
@@ -417,6 +516,6 @@ export async function fetchArvFromAttom(q: SalesComparablesQuery): Promise<{
   if (out.error || !out.data) {
     return { status: "hold", arv: null, synthesis: null, fetchError: out.error };
   }
-  const syn = synthesizeArv(out.data);
+  const syn = synthesizeArv(out.data, { subjectSqft: q.subjectSqft ?? null });
   return { status: syn.status, arv: syn.arv, synthesis: syn, fetchError: null };
 }

@@ -33,13 +33,31 @@ describe("market registry — load + invariants", () => {
     expect(getWholesaleFeeDefault()).toBe(5000);
   });
 
-  it("non-Detroit known metros are DORMANT placeholders (buyer_params_present:false)", () => {
-    const others = listMarkets().filter((m) => m.id !== "detroit_mi");
-    expect(others.length).toBeGreaterThan(0);
-    for (const m of others) {
-      expect(m.buyer_params_present).toBe(false);
-      expect(m.buyer_params).toBeNull();
-    }
+  it("Memphis + Dallas have BBC params seeded but stay DORMANT (arv_source_verified:false)", () => {
+    const memphis = listMarkets().find((m) => m.id === "memphis_tn")!;
+    expect(memphis.buyer_params_present).toBe(true);
+    expect(memphis.buyer_params!.arv_pct_max).toBe(0.7175);
+    expect(memphis.buyer_params!.max_rehab_usd).toBe(75062);
+    expect(memphis.buyer_params!.max_price_usd).toBe(308710);
+    expect(memphis.arv_source_verified).toBe(false); // dormant
+    expect(isMarketLive(memphis).live).toBe(false);
+
+    const dallas = listMarkets().find((m) => m.id === "dallas_tx")!;
+    expect(dallas.buyer_params!.arv_pct_max).toBe(0.5883);
+    expect(dallas.buyer_params!.max_rehab_usd).toBe(60722);
+    expect(dallas.buyer_params!.max_price_usd).toBe(353422);
+    expect(dallas.arv_source_verified).toBe(false); // dormant
+    expect(isMarketLive(dallas).live).toBe(false);
+  });
+
+  it("Detroit Max_Price is null (the $321B artifact is removed, not seeded)", () => {
+    const det = listMarkets().find((m) => m.id === "detroit_mi")!;
+    expect(det.buyer_params!.max_price_usd).toBeNull();
+  });
+
+  it("still-dormant metros with no params (Houston/SA) remain placeholder", () => {
+    const placeholders = listMarkets().filter((m) => !m.buyer_params_present);
+    for (const m of placeholders) expect(m.buyer_params).toBeNull();
   });
 });
 
@@ -102,11 +120,18 @@ describe("isMarketLive — three-gate liveness", () => {
     expect(isMarketLive(flipped).live).toBe(true);
   });
 
-  it("dormant placeholder is NOT live (buyer_params_present false)", () => {
+  it("true placeholder (no params) is NOT live, cites buyer_params_present", () => {
+    const placeholder = listMarkets().find((m) => !m.buyer_params_present)!;
+    const v = isMarketLive(placeholder);
+    expect(v.live).toBe(false);
+    expect(v.reasons.some((r) => r.includes("buyer_params_present"))).toBe(true);
+  });
+
+  it("params-seeded-but-dormant (Memphis) is NOT live, cites arv_source_verified", () => {
     const memphis = listMarkets().find((m) => m.id === "memphis_tn")!;
     const v = isMarketLive(memphis);
     expect(v.live).toBe(false);
-    expect(v.reasons.some((r) => r.includes("buyer_params_present"))).toBe(true);
+    expect(v.reasons.some((r) => r.includes("arv_source_verified"))).toBe(true);
   });
 
   it("null market is NOT live", () => {

@@ -37,10 +37,22 @@
       "state": "TN",
       "counties": ["Shelby"],
       "zip_prefixes": ["38"],
-      "buyer_params_present": false,
-      "buyer_params": null,
+      "buyer_params_present": true,
+      "buyer_params": {
+        "arv_pct_max": 0.7175,
+        "max_rehab_usd": 75062,
+        "max_price_usd": 308710,
+        "criteria": {
+          "beds_min": null,
+          "baths_min": null,
+          "year_built_min": 1910,
+          "sqft_min": 60,
+          "sqft_max": 3500,
+          "property_types_allowed": ["single family", "multi", "duplex", "two family"]
+        }
+      },
       "arv_source_verified": false,
-      "_arv_source_note": "Non-disclosure state — ATTOM sold-comp coverage TBD via probe; may need MLS feed.",
+      "_arv_source_note": "BBC row seeded 2026-06-06 (SF+MF). DORMANT: non-disclosure state — ATTOM sold-comp coverage unproven (probe blocked by address-match; assessor taxes confirmed nationwide). Flip arv_source_verified only after a Memphis listing produces a passing renovated-cluster ARV.",
       "sourcing_allowed": true
     },
     {
@@ -61,10 +73,22 @@
       "state": "TX",
       "counties": ["Dallas"],
       "zip_prefixes": ["75"],
-      "buyer_params_present": false,
-      "buyer_params": null,
+      "buyer_params_present": true,
+      "buyer_params": {
+        "arv_pct_max": 0.5883,
+        "max_rehab_usd": 60722,
+        "max_price_usd": 353422,
+        "criteria": {
+          "beds_min": null,
+          "baths_min": null,
+          "year_built_min": 1930,
+          "sqft_min": 1,
+          "sqft_max": 3500,
+          "property_types_allowed": ["single family"]
+        }
+      },
       "arv_source_verified": false,
-      "_arv_source_note": "Non-disclosure state — ATTOM sold-comp coverage TBD via probe; may need MLS feed.",
+      "_arv_source_note": "BBC row seeded 2026-06-06 (SF). DORMANT: non-disclosure state — ATTOM sold-comp coverage unproven (probe blocked by address-match; assessor taxes confirmed nationwide). Flip arv_source_verified only after a Dallas listing produces a passing renovated-cluster ARV.",
       "sourcing_allowed": true
     },
     {
