@@ -28,10 +28,12 @@ describe("URL builders", () => {
     expect(u).toContain("/assessment/detail");
     expect(u).toContain("address1=5435+Callaghan+Rd");
   });
-  it("salescomparables/address uses path segments (street/city/county/state/zip)", () => {
+  it("salescomparables/address uses the property/v2 base + path segments (street/city/county/state/zip)", () => {
     const u = buildSalesComparablesUrl("1973 Sturtevant St", "Detroit", "MI", "48206");
-    // Path order: street/city/county/state/zip — county defaults to "0".
-    expect(u).toContain("/salescomparables/address/");
+    // Sales Comparables is under property/v2, NOT propertyapi/v1.0.0
+    // (v1.0.0 → 404 "No rule matched"; confirmed live 2026-06-06).
+    expect(u).toContain("/property/v2/salescomparables/address/");
+    expect(u).not.toContain("propertyapi/v1.0.0/salescomparables");
     expect(u).toContain("/1973%20Sturtevant%20St/");
     expect(u).toContain("/Detroit/0/MI/48206");
   });
@@ -62,9 +64,9 @@ describe("response mappers", () => {
     expect(mapPropertyDetail({ property: [] }).sqft).toBeNull();
   });
 
-  it("mapAssessmentDetail extracts tax + assessed value", () => {
+  it("mapAssessmentDetail extracts tax + assessed value (lowercase ATTOM field names)", () => {
     const r = mapAssessmentDetail({
-      property: [{ assessment: { tax: { taxAmt: 4515, taxYear: 2025 }, assessed: { assdttlvalue: 196310 } } }],
+      property: [{ assessment: { tax: { taxamt: 4515, taxyear: 2025 }, assessed: { assdttlvalue: 196310 } } }],
     });
     expect(r.annualTaxes).toBe(4515);
     expect(r.assessedValue).toBe(196310);

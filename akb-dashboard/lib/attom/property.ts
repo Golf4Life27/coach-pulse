@@ -19,6 +19,11 @@
 
 const ATTOM_API_KEY = process.env.ATTOM_API_KEY;
 const ATTOM_BASE = "https://api.gateway.attomdata.com/propertyapi/v1.0.0";
+// Sales Comparables is a SEPARATE ATTOM product under a different base +
+// version (property/v2), NOT propertyapi/v1.0.0. Hitting it under v1.0.0
+// returns 404 "No rule matched" (gateway routing miss) — confirmed live
+// 2026-06-06. This is the "wrong endpoint" the operator flagged.
+const ATTOM_SALESCOMP_BASE = "https://api.gateway.attomdata.com/property/v2";
 
 export interface AttomAddress {
   /** Street line (e.g. "5435 Callaghan Rd"). */
@@ -60,7 +65,7 @@ export function buildSalesComparablesUrl(
   zip: string,
   opts: { searchRadiusMi?: number; minComps?: number; maxComps?: number; county?: string; base?: string } = {},
 ): string {
-  const base = opts.base ?? ATTOM_BASE;
+  const base = opts.base ?? ATTOM_SALESCOMP_BASE;
   const county = opts.county ?? "0";
   const enc = (s: string) => encodeURIComponent(s);
   const u = new URL(
@@ -90,7 +95,10 @@ interface AttomAssessmentResponse {
   status?: { code?: number; msg?: string; total?: number };
   property?: Array<{
     assessment?: {
-      tax?: { taxAmt?: number; taxYear?: number };
+      // ATTOM uses lowercase field names: taxamt / taxyear / assdttlvalue /
+      // mktttlvalue. (camelCase silently reads null — confirmed live: a
+      // probe returned assdttlvalue but null taxamt under taxAmt.)
+      tax?: { taxamt?: number; taxyear?: number };
       assessed?: { assdttlvalue?: number };
       market?: { mktttlvalue?: number };
     };
@@ -149,9 +157,9 @@ export function mapAssessmentDetail(body: AttomAssessmentResponse): AssessorReco
   const a = body.property?.[0]?.assessment;
   if (!a) return { annualTaxes: null, assessedValue: null, taxYear: null };
   return {
-    annualTaxes: a.tax?.taxAmt ?? null,
+    annualTaxes: a.tax?.taxamt ?? null,
     assessedValue: a.assessed?.assdttlvalue ?? a.market?.mktttlvalue ?? null,
-    taxYear: a.tax?.taxYear ?? null,
+    taxYear: a.tax?.taxyear ?? null,
   };
 }
 
