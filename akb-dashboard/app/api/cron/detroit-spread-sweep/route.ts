@@ -41,6 +41,12 @@ const AIRTABLE_PAT = process.env.AIRTABLE_PAT;
 const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
 const CONTROL_RECORDS = [{ id: "rec1HTUqK0YEVb7uA", label: "23 Fields (TN control)" }];
 
+// Days-on-market negative-information threshold. v1 absolute (a true
+// zip-norm DOM benchmark needs a market-stats source — flagged). DOM far
+// above this at the current price = the market rejecting the price →
+// blocks underwritten-mode (off the allowlist) until explained.
+const DOM_FLAG_DAYS = 120;
+
 interface SweepRow {
   Address: string;
   Record_Id: string;
@@ -53,6 +59,11 @@ interface SweepRow {
   Spread: number | null;
   Renovated_Comps: number | null;
   Reno_PSF: number | null;
+  Zip_Benchmark_PSF: number | null;
+  Guard: string;
+  DOM: number | null;
+  Allowlist_Clean: boolean;
+  Reno_Comps: string;
   Bimodal: boolean;
   ATTOM_Match: boolean;
   Reason: string;
@@ -78,7 +89,7 @@ async function upsertRows(rows: SweepRow[]): Promise<{ written: number; errors: 
 }
 
 async function evalListing(
-  l: Pick<Listing, "id" | "address" | "city" | "state" | "zip" | "liveStatus" | "outreachStatus" | "listPrice" | "contractOfferPrice" | "estRehab" | "estRehabMid" | "bedrooms" | "bathrooms" | "buildingSqFt">,
+  l: Pick<Listing, "id" | "address" | "city" | "state" | "zip" | "liveStatus" | "outreachStatus" | "listPrice" | "contractOfferPrice" | "estRehab" | "estRehabMid" | "bedrooms" | "bathrooms" | "buildingSqFt" | "dom">,
   market: Market,
   runAt: string,
 ): Promise<SweepRow> {
@@ -108,6 +119,20 @@ async function evalListing(
     market,
   );
 
+  // ── Comp-sanity guard: zip-benchmark + DOM → allowlist gate ──────────
+  const syn = arvOut.synthesis;
+  const dom = typeof l.dom === "number" && Number.isFinite(l.dom) ? l.dom : null;
+  const domFlag = dom != null && dom > DOM_FLAG_DAYS;
+  const guardStatus = syn?.guardStatus ?? "no_zip_benchmark";
+  const guard = domFlag ? `dom_flag(${dom}d)` : guardStatus;
+  // Allowlist = PASS AND guard clean AND no DOM flag. A benchmark breach or
+  // a cross-zip (no-benchmark) cluster never auto-passes (comp audit first).
+  const allowlistClean = result.status === "pass" && guardStatus === "clean" && !domFlag;
+
+  const renoCompsText = (syn?.renovatedComps ?? [])
+    .map((c) => `${c.address ?? "?"} | ${c.zip ?? "?"} | ${c.distanceMi != null ? c.distanceMi.toFixed(2) : "?"}mi | ${c.sqft ?? "?"}sf | $${c.saleAmount.toLocaleString()} | ${(c.saleDate ?? "").slice(0, 10)} | $${c.ppsf}/sf`)
+    .join("\n");
+
   return {
     Address: l.address,
     Record_Id: l.id,
@@ -118,11 +143,16 @@ async function evalListing(
     Rehab: rehab,
     MAO: result.mao,
     Spread: result.spread,
-    Renovated_Comps: arvOut.synthesis?.renovatedCount ?? null,
-    Reno_PSF: arvOut.synthesis?.renovatedMedianPpsf ?? null,
-    Bimodal: arvOut.synthesis?.bimodal ?? false,
+    Renovated_Comps: syn?.renovatedCount ?? null,
+    Reno_PSF: syn?.renovatedMedianPpsf ?? null,
+    Zip_Benchmark_PSF: syn?.zipBenchmarkPpsf ?? null,
+    Guard: guard,
+    DOM: dom,
+    Allowlist_Clean: allowlistClean,
+    Reno_Comps: renoCompsText,
+    Bimodal: syn?.bimodal ?? false,
     ATTOM_Match: attomMatch,
-    Reason: `${result.reason} | ARV: ${arvOut.synthesis?.reason ?? arvOut.fetchError ?? "n/a"}`,
+    Reason: `${result.reason} | ARV: ${syn?.reason ?? arvOut.fetchError ?? "n/a"}`,
     Run_At: runAt,
   };
 }
@@ -175,7 +205,10 @@ async function handle(req: Request) {
   const write = await upsertRows(rows);
 
   const passing = rows.filter((r) => r.Status === "pass");
-  const spreadPositive = rows.filter((r) => r.Spread != null && r.Spread >= 0);
+  const allowlist = rows.filter((r) => r.Allowlist_Clean);
+  const breached = rows.filter((r) => r.Guard === "benchmark_breach");
+  const noBenchmark = rows.filter((r) => r.Guard === "no_zip_benchmark");
+  const domFlagged = rows.filter((r) => r.Guard.startsWith("dom_flag"));
   const attomMatched = rows.filter((r) => r.ATTOM_Match);
   const arvProduced = rows.filter((r) => r.ARV != null);
   const summary = {
@@ -183,9 +216,13 @@ async function handle(req: Request) {
     detroit_active: detroitActive.length,
     attom_match: `${attomMatched.length}/${rows.length}`,
     arv_produced: `${arvProduced.length}/${rows.length}`,
-    pass: passing.length,
-    spread_positive: spreadPositive.length,
-    top_targets: rows.filter((r) => r.Spread != null && r.Spread >= 0).slice(0, 10).map((r) => ({ address: r.Address, zip: r.Zip, spread: r.Spread, mao: r.MAO, arv: r.ARV, list: r.List_Price, status: r.Status })),
+    pass_pre_guard: passing.length,
+    allowlist_clean: allowlist.length,
+    guard_benchmark_breach: breached.length,
+    guard_no_zip_benchmark: noBenchmark.length,
+    guard_dom_flag: domFlagged.length,
+    allowlist: allowlist.map((r) => ({ address: r.Address, zip: r.Zip, spread: r.Spread, mao: r.MAO, arv: r.ARV, list: r.List_Price })),
+    pass_but_guard_caught: passing.filter((r) => !r.Allowlist_Clean).map((r) => ({ address: r.Address, zip: r.Zip, guard: r.Guard, cluster_psf: r.Reno_PSF, zip_psf: r.Zip_Benchmark_PSF, spread: r.Spread })),
     airtable_written: write.written,
     airtable_errors: write.errors,
     run_at: runAt,

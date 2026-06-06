@@ -184,6 +184,11 @@ export interface SoldComp {
   saleDate: string | null;
   sqft: number | null;
   address: string | null;
+  /** Comp's own zip — drives the subject-zip sold-benchmark reconciliation
+   *  (cross-zip comps are the boundary-contamination class). */
+  zip: string | null;
+  /** Distance from subject (miles) — for the comp-audit surface. */
+  distanceMi: number | null;
 }
 
 function asArray(x: unknown): Record<string, unknown>[] {
@@ -233,6 +238,8 @@ function parseMismoComps(body: AttomSalesComparablesResponse): SoldComp[] {
         saleDate: attr(sh, "@TransferDate_ext") ?? attr(sh, "@PropertySalesDate"),
         sqft: sqft != null && sqft > 0 ? sqft : null,
         address: attr(c, "@_StreetAddress"),
+        zip: attr(c, "@_PostalCode"),
+        distanceMi: numAttr(c, "@DistanceFromSubjectPropertyMilesCount"),
       });
     }
   }
@@ -257,6 +264,8 @@ export function mapSalesComparables(body: AttomSalesComparablesResponse): SoldCo
         saleDate: c.salesearchdate ?? null,
         sqft: c.size?.livingsize ?? c.size?.universalsize ?? null,
         address: c.address?.line1 ?? null,
+        zip: c.address?.postal1 ?? null,
+        distanceMi: null,
       };
     })
     .filter((x): x is SoldComp => x != null);
@@ -290,11 +299,31 @@ const MIN_RENOVATED_COMPS = 3;
 const MAX_MAD_FRACTION = 0.25;   // dispersion ceiling on the renovated cluster
 const RECENCY_MONTHS = 24;       // ignore stale recorded sales
 const GAP_DOMINANCE = 2;         // largest $/sqft gap must be ≥2× the next to split
+// Sold-benchmark reconciliation: the (radius-wide) renovated cluster median
+// $/sqft must reconcile against the subject's OWN-ZIP renovated sold $/sqft.
+// Breach (cluster runs hot vs the zip's observed solds — boundary
+// contamination from pricier adjacent zips) → flag for comp audit, never
+// auto-pass. The benchmark is DATA-DERIVED (the subject-zip comps), not a
+// constant; the tolerance is the only knob.
+const BENCHMARK_TOLERANCE = 0.15; // cluster may exceed zip benchmark by ≤15%
 
 export interface CompPpsf {
   comp: SoldComp;
   ppsf: number;
 }
+
+/** A single renovated comp, for the comp-audit surface. */
+export interface RenovatedCompAudit {
+  address: string | null;
+  zip: string | null;
+  distanceMi: number | null;
+  sqft: number | null;
+  saleAmount: number;
+  saleDate: string | null;
+  ppsf: number;
+}
+
+export type GuardStatus = "clean" | "benchmark_breach" | "no_zip_benchmark";
 
 export interface ArvSynthesisResult {
   arv: number | null;
@@ -310,6 +339,13 @@ export interface ArvSynthesisResult {
   distressedMedianPpsf: number | null;
   /** MAD/median of the renovated cluster's $/sqft (dispersion). */
   madFraction: number | null;
+  /** Subject-zip renovated benchmark $/sqft (data-derived) + reconciliation. */
+  zipBenchmarkPpsf: number | null;
+  zipBenchmarkComps: number;
+  benchmarkBreach: boolean;
+  guardStatus: GuardStatus;
+  /** The renovated comps backing the ARV — for the comp-audit surface. */
+  renovatedComps: RenovatedCompAudit[];
   status: "ok" | "hold";
   reason: string;
 }
@@ -328,25 +364,21 @@ function monthsBetween(dateStr: string | null | undefined, now: Date): number | 
   return (now.getTime() - t) / (1000 * 60 * 60 * 24 * 30.44);
 }
 
-function holdArv(comps: SoldComp[], reason: string, extra: Partial<ArvSynthesisResult> = {}): ArvSynthesisResult {
-  return {
-    arv: null, comps, bimodal: false,
-    renovatedCount: 0, renovatedMedianPpsf: null,
-    distressedCount: 0, distressedMedianPpsf: null,
-    madFraction: null, status: "hold", reason, ...extra,
-  };
+interface ClusterOutcome {
+  status: "ok" | "hold";
+  reason: string;
+  renovated: CompPpsf[];
+  distressed: CompPpsf[];
+  bimodal: boolean;
+  renovatedMedPpsf: number | null;
+  distressedMedPpsf: number | null;
+  madFraction: number | null;
 }
 
-/** Pure: synthesize a RENOVATED-cluster ARV from recorded comps. */
-export function synthesizeArv(
-  comps: SoldComp[],
-  opts: { subjectSqft?: number | null; now?: Date } = {},
-): ArvSynthesisResult {
-  const now = opts.now ?? new Date();
-  const subjectSqft = typeof opts.subjectSqft === "number" && opts.subjectSqft > 0 ? opts.subjectSqft : null;
-
-  // (1) recent + valid (need sqft for $/sqft clustering). Undated comps are
-  //     kept (can't assess recency); clearly-stale (>RECENCY_MONTHS) dropped.
+/** Pure: recency-filter + largest-gap cluster a comp set; return the
+ *  renovated cluster + its median $/sqft (with the dispersion bound). Reused
+ *  for the full radius set (ARV) AND the subject-zip subset (benchmark). */
+function renovatedCluster(comps: SoldComp[], now: Date): ClusterOutcome {
   const recent = comps.filter((c) => {
     if (!(c.saleAmount > 0)) return false;
     if (!(typeof c.sqft === "number" && c.sqft > 0)) return false;
@@ -354,10 +386,8 @@ export function synthesizeArv(
     return m == null || m <= RECENCY_MONTHS;
   });
   if (recent.length < MIN_RENOVATED_COMPS) {
-    return holdArv(recent, `insufficient recent comps with sqft — ${recent.length} < ${MIN_RENOVATED_COMPS} required`);
+    return { status: "hold", reason: `insufficient recent comps with sqft — ${recent.length} < ${MIN_RENOVATED_COMPS}`, renovated: [], distressed: [], bimodal: false, renovatedMedPpsf: null, distressedMedPpsf: null, madFraction: null };
   }
-
-  // (2) $/sqft, sorted, then largest-gap clustering.
   const pp: CompPpsf[] = recent
     .map((c) => ({ comp: c, ppsf: c.saleAmount / (c.sqft as number) }))
     .sort((a, b) => a.ppsf - b.ppsf);
@@ -369,54 +399,112 @@ export function synthesizeArv(
   const bimodal =
     pp.length >= 4 && largest != null && largest.gap > 0 &&
     (second == null || second.gap === 0 || largest.gap >= GAP_DOMINANCE * second.gap);
-
-  let renovated: CompPpsf[];
-  let distressed: CompPpsf[];
-  if (bimodal) {
-    distressed = pp.slice(0, largest.idx);
-    renovated = pp.slice(largest.idx);
-  } else {
-    distressed = [];
-    renovated = pp; // unimodal → the market median IS the renovated/market value
-  }
-
+  const renovated = bimodal ? pp.slice(largest.idx) : pp;
+  const distressed = bimodal ? pp.slice(0, largest.idx) : [];
   const distressedMedPpsf = distressed.length > 0 ? median(distressed.map((x) => x.ppsf)) : null;
-
-  // (3) bounds on the renovated cluster.
   if (renovated.length < MIN_RENOVATED_COMPS) {
-    return holdArv(recent, `renovated cluster too thin — ${renovated.length} < ${MIN_RENOVATED_COMPS}`, {
-      bimodal, distressedCount: distressed.length, distressedMedianPpsf: distressedMedPpsf == null ? null : Math.round(distressedMedPpsf),
-    });
+    return { status: "hold", reason: `renovated cluster too thin — ${renovated.length} < ${MIN_RENOVATED_COMPS}`, renovated, distressed, bimodal, renovatedMedPpsf: null, distressedMedPpsf, madFraction: null };
   }
   const renoPpsf = renovated.map((x) => x.ppsf);
   const medPpsf = median(renoPpsf) as number;
   const mad = median(renoPpsf.map((x) => Math.abs(x - medPpsf))) as number;
   const madFrac = medPpsf > 0 ? mad / medPpsf : 1;
   if (madFrac > MAX_MAD_FRACTION) {
-    return holdArv(recent, `renovated cluster dispersion too high — MAD/median ${(madFrac * 100).toFixed(1)}% > ${(MAX_MAD_FRACTION * 100).toFixed(0)}% ceiling`, {
-      bimodal, renovatedCount: renovated.length, renovatedMedianPpsf: Math.round(medPpsf),
-      distressedCount: distressed.length, distressedMedianPpsf: distressedMedPpsf == null ? null : Math.round(distressedMedPpsf),
-      madFraction: madFrac,
+    return { status: "hold", reason: `renovated cluster dispersion too high — MAD/median ${(madFrac * 100).toFixed(1)}% > ${(MAX_MAD_FRACTION * 100).toFixed(0)}% ceiling`, renovated, distressed, bimodal, renovatedMedPpsf: Math.round(medPpsf), distressedMedPpsf, madFraction: madFrac };
+  }
+  return { status: "ok", reason: "ok", renovated, distressed, bimodal, renovatedMedPpsf: medPpsf, distressedMedPpsf, madFraction: madFrac };
+}
+
+function holdArv(comps: SoldComp[], reason: string, extra: Partial<ArvSynthesisResult> = {}): ArvSynthesisResult {
+  return {
+    arv: null, comps, bimodal: false,
+    renovatedCount: 0, renovatedMedianPpsf: null,
+    distressedCount: 0, distressedMedianPpsf: null,
+    madFraction: null, zipBenchmarkPpsf: null, zipBenchmarkComps: 0,
+    benchmarkBreach: false, guardStatus: "no_zip_benchmark",
+    renovatedComps: [], status: "hold", reason, ...extra,
+  };
+}
+
+/** Pure: synthesize a RENOVATED-cluster ARV from recorded comps, with the
+ *  subject-zip sold-benchmark reconciliation guard. */
+export function synthesizeArv(
+  comps: SoldComp[],
+  opts: { subjectSqft?: number | null; subjectZip?: string | null; now?: Date } = {},
+): ArvSynthesisResult {
+  const now = opts.now ?? new Date();
+  const subjectSqft = typeof opts.subjectSqft === "number" && opts.subjectSqft > 0 ? opts.subjectSqft : null;
+  const subjectZip = (opts.subjectZip ?? "").trim() || null;
+
+  const cl = renovatedCluster(comps, now);
+  const recent = comps.filter((c) => c.saleAmount > 0 && typeof c.sqft === "number" && c.sqft > 0);
+  if (cl.status !== "ok" || cl.renovatedMedPpsf == null) {
+    return holdArv(recent, cl.reason, {
+      bimodal: cl.bimodal,
+      renovatedCount: cl.renovated.length,
+      renovatedMedianPpsf: cl.renovatedMedPpsf == null ? null : Math.round(cl.renovatedMedPpsf),
+      distressedCount: cl.distressed.length,
+      distressedMedianPpsf: cl.distressedMedPpsf == null ? null : Math.round(cl.distressedMedPpsf),
+      madFraction: cl.madFraction,
     });
   }
+  const medPpsf = cl.renovatedMedPpsf;
 
-  // (4) ARV: renovated median $/sqft × subject sqft (sqft-scaled), else
-  //     renovated-cluster median sale amount.
+  // ── Sold-benchmark reconciliation (subject-zip renovated $/sqft) ──────
+  // Cluster the subject-zip comps independently; that renovated median is
+  // the zip's observed renovated sold $/sqft. If the radius-wide cluster
+  // runs hot vs it (>tolerance), the cluster is contaminated by pricier
+  // adjacent zips → breach → flag, never auto-pass. No same-zip benchmark
+  // (the comps are mostly out-of-zip) is ALSO a flag.
+  let zipBenchmarkPpsf: number | null = null;
+  let zipBenchmarkComps = 0;
+  let guardStatus: GuardStatus = "clean";
+  if (subjectZip) {
+    const sameZip = comps.filter((c) => (c.zip ?? "").trim() === subjectZip);
+    const zc = renovatedCluster(sameZip, now);
+    if (zc.status === "ok" && zc.renovatedMedPpsf != null) {
+      zipBenchmarkPpsf = zc.renovatedMedPpsf;
+      zipBenchmarkComps = zc.renovated.length;
+      if (medPpsf > zipBenchmarkPpsf * (1 + BENCHMARK_TOLERANCE)) guardStatus = "benchmark_breach";
+    } else {
+      guardStatus = "no_zip_benchmark";
+    }
+  } else {
+    guardStatus = "no_zip_benchmark";
+  }
+  const benchmarkBreach = guardStatus === "benchmark_breach";
+
   const arv = subjectSqft != null
     ? Math.round(medPpsf * subjectSqft)
-    : Math.round(median(renovated.map((x) => x.comp.saleAmount)) as number);
+    : Math.round(median(cl.renovated.map((x) => x.comp.saleAmount)) as number);
+
+  const renovatedComps: RenovatedCompAudit[] = cl.renovated
+    .map((x) => ({ address: x.comp.address, zip: x.comp.zip, distanceMi: x.comp.distanceMi, sqft: x.comp.sqft, saleAmount: x.comp.saleAmount, saleDate: x.comp.saleDate, ppsf: Math.round(x.ppsf) }))
+    .sort((a, b) => b.ppsf - a.ppsf);
+
+  const guardNote =
+    guardStatus === "clean"
+      ? `zip-benchmark OK ($${Math.round(medPpsf)} cluster vs $${zipBenchmarkPpsf != null ? Math.round(zipBenchmarkPpsf) : "-"} zip, ${zipBenchmarkComps} zip comps)`
+      : guardStatus === "benchmark_breach"
+      ? `⚠ BENCHMARK BREACH — cluster $${Math.round(medPpsf)}/sqft > zip $${Math.round(zipBenchmarkPpsf as number)}/sqft +${(((medPpsf / (zipBenchmarkPpsf as number)) - 1) * 100).toFixed(0)}% (comp-audit required; do NOT auto-pass)`
+      : `⚠ NO ZIP BENCHMARK — <${MIN_RENOVATED_COMPS} same-zip renovated comps (cluster is cross-zip; comp-audit required)`;
 
   return {
     arv,
     comps: recent,
-    bimodal,
-    renovatedCount: renovated.length,
+    bimodal: cl.bimodal,
+    renovatedCount: cl.renovated.length,
     renovatedMedianPpsf: Math.round(medPpsf),
-    distressedCount: distressed.length,
-    distressedMedianPpsf: distressedMedPpsf == null ? null : Math.round(distressedMedPpsf),
-    madFraction: madFrac,
+    distressedCount: cl.distressed.length,
+    distressedMedianPpsf: cl.distressedMedPpsf == null ? null : Math.round(cl.distressedMedPpsf),
+    madFraction: cl.madFraction,
+    zipBenchmarkPpsf: zipBenchmarkPpsf == null ? null : Math.round(zipBenchmarkPpsf),
+    zipBenchmarkComps,
+    benchmarkBreach,
+    guardStatus,
+    renovatedComps,
     status: "ok",
-    reason: `ARV $${arv.toLocaleString()} = renovated-cluster ${subjectSqft != null ? `median $/sqft $${Math.round(medPpsf)} × ${subjectSqft} sqft` : `median sale`} (${renovated.length} reno comps${bimodal ? `, distressed cluster ${distressed.length} @ $${distressedMedPpsf != null ? Math.round(distressedMedPpsf) : "-"}/sqft` : ", unimodal market"}, MAD ${(madFrac * 100).toFixed(1)}%).`,
+    reason: `ARV $${arv.toLocaleString()} = renovated-cluster ${subjectSqft != null ? `median $/sqft $${Math.round(medPpsf)} × ${subjectSqft} sqft` : "median sale"} (${cl.renovated.length} reno comps${cl.bimodal ? `, distressed ${cl.distressed.length} @ $${cl.distressedMedPpsf != null ? Math.round(cl.distressedMedPpsf) : "-"}/sqft` : ", unimodal"}, MAD ${((cl.madFraction ?? 0) * 100).toFixed(1)}%). ${guardNote}.`,
   };
 }
 
@@ -516,6 +604,6 @@ export async function fetchArvFromAttom(q: SalesComparablesQuery): Promise<{
   if (out.error || !out.data) {
     return { status: "hold", arv: null, synthesis: null, fetchError: out.error };
   }
-  const syn = synthesizeArv(out.data, { subjectSqft: q.subjectSqft ?? null });
+  const syn = synthesizeArv(out.data, { subjectSqft: q.subjectSqft ?? null, subjectZip: q.zip });
   return { status: syn.status, arv: syn.arv, synthesis: syn, fetchError: null };
 }

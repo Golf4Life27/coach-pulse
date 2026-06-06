@@ -177,8 +177,8 @@ describe("normalizeStreetForAttom", () => {
 });
 
 describe("ARV synthesizer — RENOVATED-cluster, recorded comps only, never AVM", () => {
-  const comp = (amount: number, sqft: number | null = 1100, saleDate: string | null = recent): SoldComp => ({
-    saleAmount: amount, saleDate, sqft, address: null,
+  const comp = (amount: number, sqft: number | null = 1100, saleDate: string | null = recent, zip: string | null = "48227"): SoldComp => ({
+    saleAmount: amount, saleDate, sqft, address: null, zip, distanceMi: 0.2,
   });
 
   it("unimodal clean set → ARV = median sale (no subjectSqft)", () => {
@@ -238,5 +238,47 @@ describe("ARV synthesizer — RENOVATED-cluster, recorded comps only, never AVM"
     // A clean renovated set must yield the cluster median, never median×2.
     const r = synthesizeArv([comp(60000, 1100), comp(62000, 1100), comp(64000, 1100)], { subjectSqft: 1100, now: NOW });
     expect(r.arv!).toBeLessThan(70000); // ≈ $62k, not ~$124k
+  });
+});
+
+describe("sold-benchmark guard — subject-zip reconciliation (the Strathmoor class)", () => {
+  const c = (amount: number, zip: string, sqft = 1000, dist = 0.3): SoldComp => ({
+    saleAmount: amount, saleDate: recent, sqft, address: `${amount} ${zip} St`, zip, distanceMi: dist,
+  });
+
+  it("BREACH: radius cluster ($160/sqft, cross-zip 48206) ≫ subject-zip 48227 renovated ($100/sqft) → flag, no clean", () => {
+    const set = [
+      c(95000, "48227"), c(100000, "48227"), c(105000, "48227"), // 48227 pocket ~$100/sf
+      c(150000, "48206"), c(160000, "48206"), c(165000, "48206"), // 48206 pricier, inflates cluster
+    ];
+    const r = synthesizeArv(set, { subjectSqft: 1000, subjectZip: "48227", now: NOW });
+    expect(r.renovatedMedianPpsf).toBe(160);   // cluster pulled up by 48206
+    expect(r.zipBenchmarkPpsf).toBe(100);      // subject-zip's own renovated solds
+    expect(r.benchmarkBreach).toBe(true);
+    expect(r.guardStatus).toBe("benchmark_breach");
+  });
+
+  it("CLEAN: cluster reconciles with the subject-zip benchmark", () => {
+    const set = [c(95000, "48227"), c(100000, "48227"), c(105000, "48227")];
+    const r = synthesizeArv(set, { subjectSqft: 1000, subjectZip: "48227", now: NOW });
+    expect(r.guardStatus).toBe("clean");
+    expect(r.benchmarkBreach).toBe(false);
+  });
+
+  it("NO ZIP BENCHMARK: cluster is entirely cross-zip → flag (never auto-pass)", () => {
+    const set = [c(150000, "48206"), c(160000, "48206"), c(165000, "48206")];
+    const r = synthesizeArv(set, { subjectSqft: 1000, subjectZip: "48227", now: NOW });
+    expect(r.guardStatus).toBe("no_zip_benchmark");
+  });
+
+  it("comp-audit surface: every renovated comp carries address/zip/distance/sqft/date/ppsf", () => {
+    const set = [c(95000, "48227"), c(100000, "48227"), c(105000, "48227")];
+    const r = synthesizeArv(set, { subjectSqft: 1000, subjectZip: "48227", now: NOW });
+    expect(r.renovatedComps.length).toBe(3);
+    const top = r.renovatedComps[0];
+    expect(top.zip).toBe("48227");
+    expect(top.distanceMi).toBe(0.3);
+    expect(top.ppsf).toBeGreaterThan(0);
+    expect(top.saleDate).toBe(recent);
   });
 });
