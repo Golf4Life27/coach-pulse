@@ -67,6 +67,10 @@
     {
       "path": "/api/cron/stale-deal-triage?apply=1&limit=50",
       "schedule": "15,45 * * * *"
+    },
+    {
+      "path": "/api/cron/detroit-spread-sweep?limit=40",
+      "schedule": "*/10 * * * *"
     }
   ]
 }
