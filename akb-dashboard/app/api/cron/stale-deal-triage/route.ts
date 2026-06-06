@@ -48,6 +48,7 @@ import { getActiveListingsForBrief, updateListingRecord } from "@/lib/airtable";
 import { findStaleListings } from "@/lib/pulse/detectors/stale-data-drift";
 import { transitionStage } from "@/lib/pipeline-state/engine";
 import { getRentEstimate, getAnnualPropertyTaxes, getRentCastAssessedValue } from "@/lib/rentcast";
+import { fetchAssessor, buildAddress2 } from "@/lib/attom/property";
 import { isNeverResurfaceLoose } from "@/lib/never-resurface";
 import {
   computeV21LandlordMao,
@@ -265,13 +266,22 @@ async function handle(req: Request, params: TriageParams) {
     let monthlyRent: number | null = null;
     let rentcastTaxes: number | null = null;
     let assessedValue: number | null = null;
+    let attomTaxes: number | null = null;
+    let attomAssessed: number | null = null;
     if (!onBlacklist) {
-      const [rentEst, rcTaxes, rcAssessed] = await Promise.all([
+      // ATTOM assessor is now the preferred tax source (nationwide tax roll —
+      // authoritative even in non-disclosure TX/TN). RentCast stays as a
+      // fallback. The plausibility guard applies to whichever wins.
+      const attomAddr2 = buildAddress2(addr.city, addr.state, addr.zip);
+      const [rentEst, attomOut, rcTaxes, rcAssessed] = await Promise.all([
         getRentEstimate(addr).catch(() => null),
+        fetchAssessor({ address1: addr.address, address2: attomAddr2 }).catch(() => null),
         getAnnualPropertyTaxes(addr).catch(() => null),
         getRentCastAssessedValue(addr).catch(() => null),
       ]);
       monthlyRent = rentEst?.rent ?? null;
+      attomTaxes = attomOut?.data?.annualTaxes ?? null;
+      attomAssessed = attomOut?.data?.assessedValue ?? null;
       rentcastTaxes = rcTaxes;
       assessedValue = rcAssessed;
     }
@@ -279,6 +289,8 @@ async function handle(req: Request, params: TriageParams) {
       state: listing.state,
       confirmedTaxes: listing.confirmedTaxes,
       confirmedLabel: listing.confirmedTaxesSource,
+      attomTaxes,
+      attomAssessedValue: attomAssessed,
       rentcastTaxes,
       assessedValue,
     });

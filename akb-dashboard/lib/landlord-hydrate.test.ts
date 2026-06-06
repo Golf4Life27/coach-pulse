@@ -219,6 +219,51 @@ describe("resolveAnnualTaxes — confirmed-override precedence + plausibility", 
     expect(r.freezeWrite).toBe(false);
   });
 
+  it("ATTOM assessor BEATS RentCast when both present and ATTOM is plausible", () => {
+    // Same record: ATTOM returns $4,500 (good), RentCast returns $555 (bad).
+    // ATTOM wins; RentCast is irrelevant.
+    const r = resolveAnnualTaxes({
+      state: "TX",
+      confirmedTaxes: null,
+      confirmedLabel: null,
+      attomTaxes: 4500,
+      attomAssessedValue: 196310,
+      rentcastTaxes: 555,
+      assessedValue: 196310,
+    });
+    expect(r.source).toBe("attom_assessor");
+    expect(r.annualTaxes).toBe(4500);
+  });
+
+  it("ATTOM assessor that fails plausibility does NOT fall through to RentCast — caller HOLDs", () => {
+    // If ATTOM itself returns an implausible number, the auto path is broken
+    // for this record. Don't silently fall back; HOLD. (Anti-regression:
+    // never let a worse source rescue a bad better source.)
+    const r = resolveAnnualTaxes({
+      state: "TX",
+      confirmedTaxes: null,
+      confirmedLabel: null,
+      attomTaxes: 200, // 0.1% effective — broken
+      attomAssessedValue: 200000,
+      rentcastTaxes: 6222,
+      assessedValue: 200000,
+    });
+    expect(r.source).toBe("attom_assessor_implausible");
+    expect(r.annualTaxes).toBeNull();
+  });
+
+  it("ATTOM absent → falls back to RentCast (with plausibility)", () => {
+    const r = resolveAnnualTaxes({
+      state: "TX",
+      confirmedTaxes: null,
+      confirmedLabel: null,
+      attomTaxes: null,
+      rentcastTaxes: 6222,
+      assessedValue: 278000,
+    });
+    expect(r.source).toBe("rentcast_auto");
+  });
+
   it("no confirmed + implausible RentCast → null (V2.1 HOLD downstream)", () => {
     // Without a confirmed override, the $555 path now resolves to null
     // taxes → V2.1 HOLD → no MAO persisted. The cron NULLs any prior

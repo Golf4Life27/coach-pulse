@@ -96,8 +96,23 @@ export function checkTxTaxPlausibility(
 // survive autonomous re-runs — the structural anti-regression. When a
 // confirmed value lives on the record, the cron uses it and NEVER
 // overwrites it.
+//
+// PRECEDENCE (2026-06-06 — ATTOM assessor becomes the primary auto path):
+//   (1) Annual_Taxes_Confirmed (operator/CAD-confirmed) — wins absolutely.
+//   (2) ATTOM assessor — nationwide tax-roll data; authoritative even in
+//       non-disclosure states. Tax-plausibility guard still applies as a
+//       backstop (the guard catches the few records where the tax roll
+//       lookup itself fails to a known-bad value).
+//   (3) RentCast /properties — fallback only, with plausibility guard.
+//   (4) null → V2.1 HOLD.
 
-export type TaxSource = "confirmed" | "rentcast_auto" | "rentcast_implausible" | "missing";
+export type TaxSource =
+  | "confirmed"
+  | "attom_assessor"
+  | "attom_assessor_implausible"
+  | "rentcast_auto"
+  | "rentcast_implausible"
+  | "missing";
 
 export interface TaxResolution {
   /** The taxes the V2.1 computation should use. null → HOLD. */
@@ -113,12 +128,16 @@ export interface TaxResolution {
 }
 
 /** Pure: resolve which tax value to use, applying confirmed-override
- *  precedence and the TX plausibility guard. */
+ *  precedence, ATTOM-then-RentCast fallback, and the TX plausibility guard. */
 export function resolveAnnualTaxes(input: {
   state: string | null | undefined;
   confirmedTaxes: number | null | undefined;
   confirmedLabel: string | null | undefined;
+  attomTaxes?: number | null | undefined;
+  attomAssessedValue?: number | null | undefined;
   rentcastTaxes: number | null | undefined;
+  /** Subject assessed value (for the plausibility check). ATTOM-sourced
+   *  is preferred; rentcast-sourced is the fallback. */
   assessedValue: number | null | undefined;
 }): TaxResolution {
   // (1) Confirmed value wins, full stop. Never overwritten by the cron.
@@ -130,8 +149,27 @@ export function resolveAnnualTaxes(input: {
       freezeWrite: true,
     };
   }
-  // (2) No confirmed value → fall back to RentCast, but apply the TX
-  //     plausibility guard.
+  // (2) ATTOM assessor (preferred auto-path). Use ATTOM's own assessed value
+  //     for the plausibility check when available; otherwise the RentCast
+  //     assessed value.
+  if (typeof input.attomTaxes === "number" && Number.isFinite(input.attomTaxes) && input.attomTaxes > 0) {
+    const attomAssessed = input.attomAssessedValue ?? input.assessedValue;
+    const plaus = checkTxTaxPlausibility(input.state, input.attomTaxes, attomAssessed);
+    if (!plaus.plausible) {
+      return {
+        annualTaxes: null,
+        source: "attom_assessor_implausible",
+        plausibilityReason: plaus.reason,
+        freezeWrite: false,
+      };
+    }
+    return {
+      annualTaxes: Math.round(input.attomTaxes),
+      source: "attom_assessor",
+      freezeWrite: false,
+    };
+  }
+  // (3) RentCast fallback with the same plausibility guard.
   const plaus = checkTxTaxPlausibility(input.state, input.rentcastTaxes, input.assessedValue);
   if (!plaus.plausible) {
     return {

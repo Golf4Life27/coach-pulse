@@ -1,0 +1,83 @@
+{
+  "$schema_note": "National buy-box registry — operator-curated source of truth for the market-agnostic deal-math engine. Each market is a CONFIG ROW, not code: any change here flows through the engine with zero rebuild. Flags gate live sourcing: a market is LIVE-FOR-SOURCING only when buyer_params_present AND arv_source_verified AND sourcing_allowed. Restricted states (IL/MO/SC/NC/OK/ND) are sourcing_allowed:false hardcoded — they are STRUCTURALLY UNSOURCEABLE here, so no future change can resurrect them by accident. Non-Detroit metros are DORMANT PLACEHOLDERS (buyer_params_present:false): paste in the BBC row to flip them on.",
+  "last_updated": "2026-06-06",
+  "source": "BBC national buy-box table (Detroit row pinned; other rows pending operator paste-in)",
+  "version": 1,
+  "wholesale_fee_default": 5000,
+  "restricted_states": ["IL", "MO", "SC", "NC", "OK", "ND"],
+  "markets": [
+    {
+      "id": "detroit_mi",
+      "label": "Detroit, MI",
+      "state": "MI",
+      "counties": ["Wayne"],
+      "zip_prefixes": ["48"],
+      "buyer_params_present": true,
+      "buyer_params": {
+        "arv_pct_max": 0.6461,
+        "max_rehab_usd": 68537,
+        "max_price_usd": null,
+        "criteria": {
+          "beds_min": null,
+          "baths_min": null,
+          "year_built_min": null,
+          "sqft_min": null,
+          "sqft_max": null,
+          "property_types_allowed": null,
+          "_pending_operator_paste": "fill from BBC row: beds_min, baths_min, year_built_min, sqft_min/max, property_types_allowed, max_price_usd, counties (refine)"
+        }
+      },
+      "arv_source_verified": false,
+      "_arv_source_note": "ATTOM /salescomparables (Michigan disclosure state) — verify endpoint returns real recorded MI sales on a Detroit probe before flipping arv_source_verified to true.",
+      "sourcing_allowed": true
+    },
+    {
+      "id": "memphis_tn",
+      "label": "Memphis, TN",
+      "state": "TN",
+      "counties": ["Shelby"],
+      "zip_prefixes": ["38"],
+      "buyer_params_present": false,
+      "buyer_params": null,
+      "arv_source_verified": false,
+      "_arv_source_note": "Non-disclosure state — ATTOM sold-comp coverage TBD via probe; may need MLS feed.",
+      "sourcing_allowed": true
+    },
+    {
+      "id": "san_antonio_tx",
+      "label": "San Antonio, TX",
+      "state": "TX",
+      "counties": ["Bexar"],
+      "zip_prefixes": ["78"],
+      "buyer_params_present": false,
+      "buyer_params": null,
+      "arv_source_verified": false,
+      "_arv_source_note": "Non-disclosure state — ATTOM sold-comp coverage TBD via probe; may need MLS feed.",
+      "sourcing_allowed": true
+    },
+    {
+      "id": "dallas_tx",
+      "label": "Dallas, TX",
+      "state": "TX",
+      "counties": ["Dallas"],
+      "zip_prefixes": ["75"],
+      "buyer_params_present": false,
+      "buyer_params": null,
+      "arv_source_verified": false,
+      "_arv_source_note": "Non-disclosure state — ATTOM sold-comp coverage TBD via probe; may need MLS feed.",
+      "sourcing_allowed": true
+    },
+    {
+      "id": "houston_tx",
+      "label": "Houston, TX",
+      "state": "TX",
+      "counties": ["Harris"],
+      "zip_prefixes": ["77"],
+      "buyer_params_present": false,
+      "buyer_params": null,
+      "arv_source_verified": false,
+      "_arv_source_note": "Non-disclosure state — ATTOM sold-comp coverage TBD via probe; may need MLS feed.",
+      "sourcing_allowed": true
+    }
+  ]
+}
