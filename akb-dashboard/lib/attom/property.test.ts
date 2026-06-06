@@ -92,6 +92,59 @@ describe("response mappers", () => {
     expect(comps[0].saleAmount).toBe(145000);
     expect(comps[0].sqft).toBe(1150);
   });
+  it("mapSalesComparables parses the REAL v2 MISMO envelope (confirmed live 2026-06-06)", () => {
+    // Trimmed real Sturtevant response: subject (REO, non-arms-length) +
+    // two arms-length comps. The subject's own sale must NOT be a comp.
+    const body = {
+      RESPONSE_GROUP: {
+        RESPONSE: {
+          RESPONSE_DATA: {
+            PROPERTY_INFORMATION_RESPONSE_ext: {
+              SUBJECT_PROPERTY_ext: {
+                PROPERTY: [
+                  {
+                    PRODUCT_INFO_ext: { "@Product_ext": "SalesCompSubjectProperty" },
+                    SALES_HISTORY: { "@PropertySalesAmount": "17000", "@PropertySalesDate": "2023-07-07T00:00:00" },
+                  },
+                  {
+                    COMPARABLE_PROPERTY_ext: {
+                      "@_Sequence": "1",
+                      "@_StreetAddress": "1568 HIGHLAND ST",
+                      SALES_HISTORY: { "@PropertySalesAmount": "65000.00", "@TransferDate_ext": "2026-01-28T00:00:00", "@ArmsLengthTransactionIndicatorExt": "A" },
+                      STRUCTURE: { "@GrossLivingAreaSquareFeetCount": "1344" },
+                    },
+                  },
+                  {
+                    COMPARABLE_PROPERTY_ext: {
+                      "@_Sequence": "2",
+                      "@_StreetAddress": "1689 TYLER ST",
+                      SALES_HISTORY: { "@PropertySalesAmount": "77300.00", "@TransferDate_ext": "2025-12-17T00:00:00", "@ArmsLengthTransactionIndicatorExt": "A" },
+                      STRUCTURE: { "@GrossLivingAreaSquareFeetCount": "1260" },
+                    },
+                  },
+                  {
+                    COMPARABLE_PROPERTY_ext: {
+                      "@_Sequence": "3",
+                      "@_StreetAddress": "999 NONARM ST",
+                      SALES_HISTORY: { "@PropertySalesAmount": "5000.00", "@TransferDate_ext": "2025-11-01T00:00:00", "@ArmsLengthTransactionIndicatorExt": "Q" },
+                      STRUCTURE: { "@GrossLivingAreaSquareFeetCount": "1000" },
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+    };
+    const comps = mapSalesComparables(body as never);
+    // 2 arms-length comps; subject ($17k REO) + non-arms-length ("Q") excluded.
+    expect(comps).toHaveLength(2);
+    expect(comps.map((c) => c.saleAmount).sort((a, b) => a - b)).toEqual([65000, 77300]);
+    expect(comps[0].address).toBe("1568 HIGHLAND ST");
+    expect(comps[0].sqft).toBe(1344);
+  });
+
   it("mapSalesComparables accepts the nested property[].sale shape too", () => {
     const comps = mapSalesComparables({
       property: [

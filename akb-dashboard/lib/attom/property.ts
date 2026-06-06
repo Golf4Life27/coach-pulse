@@ -117,11 +117,11 @@ interface AttomComp {
 
 interface AttomSalesComparablesResponse {
   status?: { code?: number; msg?: string };
-  /** The subject + comps live in `RESPONSE_GROUP.response.RESPONSE_DATA[].STATUS_RES_DATA[]`
-   *  per ATTOM docs, but the gateway's JSON envelope flattens to `comparables` in v1.0.0. */
+  /** v1.0.0-style flat shape (kept as a fallback / for unit fixtures). */
   comparables?: AttomComp[];
-  /** Some responses nest under `property[].sale` etc.; we accept both shapes. */
   property?: Array<{ sale?: AttomComp }>;
+  /** v2 MISMO envelope (the REAL shape — confirmed live 2026-06-06). */
+  RESPONSE_GROUP?: unknown;
 }
 
 // ── Pure mappers ──────────────────────────────────────────────────────
@@ -170,14 +170,69 @@ export interface SoldComp {
   address: string | null;
 }
 
+function asArray(x: unknown): Record<string, unknown>[] {
+  if (Array.isArray(x)) return x as Record<string, unknown>[];
+  if (x != null && typeof x === "object") return [x as Record<string, unknown>];
+  return [];
+}
+function getObj(o: unknown, key: string): unknown {
+  return o != null && typeof o === "object" ? (o as Record<string, unknown>)[key] : undefined;
+}
+function attr(o: unknown, key: string): string | null {
+  const v = getObj(o, key);
+  return v == null ? null : String(v);
+}
+function numAttr(o: unknown, key: string): number | null {
+  const v = attr(o, key);
+  if (v == null || v.trim() === "") return null;
+  const n = parseFloat(v.replace(/[^0-9.\-]/g, ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Pure: parse the v2 MISMO sales-comparables envelope into SoldComp[]. The
+ *  comps live at RESPONSE_GROUP.RESPONSE.RESPONSE_DATA
+ *  .PROPERTY_INFORMATION_RESPONSE_ext.SUBJECT_PROPERTY_ext.PROPERTY[], where
+ *  each PROPERTY element carrying a COMPARABLE_PROPERTY_ext is a comp.
+ *  Non-arms-length transfers (indicator present and != "A") are excluded —
+ *  ARV integrity (the subject's own REO/bank transfer is NOT a comp). */
+function parseMismoComps(body: AttomSalesComparablesResponse): SoldComp[] {
+  const rg = getObj(body, "RESPONSE_GROUP");
+  // tolerate RESPONSE / response casing
+  const resp = getObj(rg, "RESPONSE") ?? getObj(rg, "response");
+  const rd = getObj(resp, "RESPONSE_DATA");
+  const pir = getObj(rd, "PROPERTY_INFORMATION_RESPONSE_ext");
+  const subj = getObj(pir, "SUBJECT_PROPERTY_ext");
+  const props = asArray(getObj(subj, "PROPERTY"));
+  const out: SoldComp[] = [];
+  for (const p of props) {
+    for (const c of asArray(getObj(p, "COMPARABLE_PROPERTY_ext"))) {
+      const sh = getObj(c, "SALES_HISTORY");
+      const amt = numAttr(sh, "@PropertySalesAmount");
+      if (amt == null || amt <= 0) continue;
+      const arms = attr(sh, "@ArmsLengthTransactionIndicatorExt");
+      if (arms != null && arms.trim() !== "" && arms.toUpperCase() !== "A") continue;
+      const sqft = numAttr(getObj(c, "STRUCTURE"), "@GrossLivingAreaSquareFeetCount");
+      out.push({
+        saleAmount: amt,
+        saleDate: attr(sh, "@TransferDate_ext") ?? attr(sh, "@PropertySalesDate"),
+        sqft: sqft != null && sqft > 0 ? sqft : null,
+        address: attr(c, "@_StreetAddress"),
+      });
+    }
+  }
+  return out;
+}
+
 export function mapSalesComparables(body: AttomSalesComparablesResponse): SoldComp[] {
-  // Accept both envelope shapes (gateway has rotated this over versions).
+  // v2 MISMO envelope (the real API shape) first.
+  const mismo = parseMismoComps(body);
+  if (mismo.length > 0) return mismo;
+  // Fallback: v1.0.0-style flat shapes (unit fixtures / legacy).
   const flat = Array.isArray(body.comparables) ? body.comparables : [];
   const nested: AttomComp[] = Array.isArray(body.property)
     ? body.property.map((p) => p.sale).filter((s): s is AttomComp => !!s)
     : [];
-  const raw = [...flat, ...nested];
-  return raw
+  return [...flat, ...nested]
     .map((c): SoldComp | null => {
       const amt = c.amount?.saleamt;
       if (typeof amt !== "number" || !Number.isFinite(amt) || amt <= 0) return null;
