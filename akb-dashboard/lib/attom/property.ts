@@ -69,6 +69,16 @@ export function buildAssessmentDetailUrl(addr: AttomAddress, base: string = ATTO
   return u.toString();
 }
 
+/** ATTOM /saleshistory/detail returns the property's recorded transfer
+ *  history (sale events, deed types, parties). Used for seller basis +
+ *  deed-type ingestion (title-risk flagging). */
+export function buildSalesHistoryUrl(addr: AttomAddress, base: string = ATTOM_BASE): string {
+  const u = new URL(`${base}/saleshistory/detail`);
+  u.searchParams.set("address1", normalizeStreetForAttom(addr.address1));
+  u.searchParams.set("address2", addr.address2);
+  return u.toString();
+}
+
 /** ATTOM /salescomparables/address uses path-segment params:
  *   /salescomparables/address/{street}/{city}/{county}/{state}/{zip}
  *
@@ -167,6 +177,84 @@ export interface AssessorRecord {
   annualTaxes: number | null;
   assessedValue: number | null;
   taxYear: number | null;
+}
+
+/** Title-risk classes derived from deed type. Quit-claim and tax-foreclosure
+ *  deeds carry materially higher title-defect probability (un-warranted
+ *  title or compressed transfer chain). Surfaced as a DD item, never as an
+ *  auto-dispose. */
+export type TitleRisk = "none" | "quit_claim" | "tax_foreclosure" | "sheriff" | "unknown";
+
+export function classifyTitleRisk(deedType: string | null | undefined): TitleRisk {
+  if (!deedType) return "unknown";
+  const d = deedType.toLowerCase();
+  if (d.includes("quit") || d.includes("quitclaim")) return "quit_claim";
+  if (d.includes("tax") && (d.includes("foreclosure") || d.includes("deed") || d.includes("sale"))) return "tax_foreclosure";
+  if (d.includes("sheriff") || d.includes("treasurer")) return "sheriff";
+  return "none";
+}
+
+export interface SalesHistoryEvent {
+  saleAmount: number | null;
+  saleDate: string | null;
+  deedType: string | null;
+  sellerName: string | null;
+  buyerName: string | null;
+  titleRisk: TitleRisk;
+}
+
+export interface SalesHistoryRecord {
+  /** Most-recent sale event (the seller basis). */
+  lastSale: SalesHistoryEvent | null;
+  /** Full event list (most-recent first when ordered). */
+  events: SalesHistoryEvent[];
+  /** True when ANY event in the history carries a flagged deed type. */
+  titleRiskAny: boolean;
+}
+
+/** Pure: parse ATTOM /saleshistory/detail into structured events. Accepts
+ *  the v1.0.0 flat envelope (property[].salehistory[]) — newest first. */
+export function mapSalesHistory(body: unknown): SalesHistoryRecord {
+  const empty: SalesHistoryRecord = { lastSale: null, events: [], titleRiskAny: false };
+  const properties = getObj(body, "property");
+  const p0 = Array.isArray(properties) ? (properties[0] as Record<string, unknown>) : null;
+  if (!p0) return empty;
+  // salehistory is the canonical key; fall back to saleshistory casing.
+  const raw = (getObj(p0, "salehistory") ?? getObj(p0, "saleshistory") ?? getObj(p0, "saleHistory")) as unknown;
+  const arr = Array.isArray(raw) ? (raw as Array<Record<string, unknown>>) : [];
+  const events: SalesHistoryEvent[] = arr.map((evt) => {
+    const amount = (getObj(getObj(evt, "amount"), "saleamt") as number | undefined) ?? null;
+    const date =
+      (getObj(getObj(evt, "amount"), "salesearchdate") as string | undefined) ??
+      (getObj(getObj(evt, "amount"), "salerecdate") as string | undefined) ??
+      (getObj(evt, "salesearchdate") as string | undefined) ??
+      null;
+    const deedType =
+      (getObj(getObj(evt, "calculation"), "deedType") as string | undefined) ??
+      (getObj(getObj(evt, "saleTransDate"), "deedType") as string | undefined) ??
+      (getObj(evt, "deedType") as string | undefined) ??
+      null;
+    const seller = (getObj(getObj(evt, "saleHistoryTransfer"), "transferName2") as string | undefined) ?? null;
+    const buyer = (getObj(getObj(evt, "saleHistoryTransfer"), "transferName1") as string | undefined) ?? null;
+    return {
+      saleAmount: typeof amount === "number" && Number.isFinite(amount) && amount > 0 ? amount : null,
+      saleDate: typeof date === "string" ? date : null,
+      deedType: typeof deedType === "string" ? deedType : null,
+      sellerName: typeof seller === "string" ? seller : null,
+      buyerName: typeof buyer === "string" ? buyer : null,
+      titleRisk: classifyTitleRisk(typeof deedType === "string" ? deedType : null),
+    };
+  });
+  // Order newest first by saleDate when parseable; events lacking a date
+  // stay in input order at the bottom.
+  events.sort((a, b) => {
+    const at = a.saleDate ? Date.parse(a.saleDate) : 0;
+    const bt = b.saleDate ? Date.parse(b.saleDate) : 0;
+    return bt - at;
+  });
+  const lastSale = events[0] ?? null;
+  const titleRiskAny = events.some((e) => e.titleRisk !== "none" && e.titleRisk !== "unknown");
+  return { lastSale, events, titleRiskAny };
 }
 
 export function mapAssessmentDetail(body: AttomAssessmentResponse): AssessorRecord {
@@ -306,6 +394,16 @@ const GAP_DOMINANCE = 2;         // largest $/sqft gap must be ≥2× the next t
 // auto-pass. The benchmark is DATA-DERIVED (the subject-zip comps), not a
 // constant; the tolerance is the only knob.
 const BENCHMARK_TOLERANCE = 0.15; // cluster may exceed zip benchmark by ≤15%
+// Nearest-weighted CONSERVATIVE ARV — the "never the hot tail" surface.
+// When the renovated band is wide, distance matters: closer comps reflect
+// the same micro-market; farther comps drift into neighbor pockets. Weight
+// inversely by distance, then take the conservative percentile (25th) of
+// the weighted $/sqft. This is a SECOND ARV ANCHOR, surfaced alongside the
+// median; callers can decide whether to underwrite from the conservative
+// or central figure. Pure: no fabricated multiplier, derived from the same
+// comp set.
+const CONSERVATIVE_PERCENTILE = 0.25;
+const NEAREST_INVERSE_DISTANCE_EPS_MI = 0.1; // floor on inverse-distance weight
 
 export interface CompPpsf {
   comp: SoldComp;
@@ -346,6 +444,13 @@ export interface ArvSynthesisResult {
   guardStatus: GuardStatus;
   /** The renovated comps backing the ARV — for the comp-audit surface. */
   renovatedComps: RenovatedCompAudit[];
+  /** Nearest-weighted CONSERVATIVE ARV: inverse-distance-weighted comps,
+   *  25th percentile of $/sqft × subject sqft. The "never the hot tail"
+   *  number — for underwriting from the conservative side when the band
+   *  is wide. null when subjectSqft unknown OR none of the renovated
+   *  comps carry distance. */
+  arvConservative: number | null;
+  conservativeMedianPpsf: number | null;
   status: "ok" | "hold";
   reason: string;
 }
@@ -422,8 +527,35 @@ function holdArv(comps: SoldComp[], reason: string, extra: Partial<ArvSynthesisR
     distressedCount: 0, distressedMedianPpsf: null,
     madFraction: null, zipBenchmarkPpsf: null, zipBenchmarkComps: 0,
     benchmarkBreach: false, guardStatus: "no_zip_benchmark",
-    renovatedComps: [], status: "hold", reason, ...extra,
+    renovatedComps: [], arvConservative: null, conservativeMedianPpsf: null,
+    status: "hold", reason, ...extra,
   };
+}
+
+/** Pure: nearest-weighted CONSERVATIVE $/sqft from a $/sqft list with
+ *  distances. Weight = 1 / max(distance, EPS); sort by $/sqft asc and
+ *  take the value at the cumulative-weight P25 (the conservative tail).
+ *  null when no distances are available across the input. */
+export function nearestWeightedConservativePpsf(
+  pp: CompPpsf[],
+  percentile: number = CONSERVATIVE_PERCENTILE,
+): number | null {
+  const weighted = pp
+    .map((x) => ({ ppsf: x.ppsf, dist: x.comp.distanceMi }))
+    .filter((x) => typeof x.dist === "number" && Number.isFinite(x.dist!));
+  if (weighted.length === 0) return null;
+  const sorted = [...weighted].sort((a, b) => a.ppsf - b.ppsf);
+  const totalW = sorted.reduce(
+    (s, x) => s + 1 / Math.max(x.dist as number, NEAREST_INVERSE_DISTANCE_EPS_MI),
+    0,
+  );
+  const target = totalW * percentile;
+  let acc = 0;
+  for (const x of sorted) {
+    acc += 1 / Math.max(x.dist as number, NEAREST_INVERSE_DISTANCE_EPS_MI);
+    if (acc >= target) return x.ppsf;
+  }
+  return sorted[sorted.length - 1].ppsf;
 }
 
 /** Pure: synthesize a RENOVATED-cluster ARV from recorded comps, with the
@@ -478,6 +610,12 @@ export function synthesizeArv(
     ? Math.round(medPpsf * subjectSqft)
     : Math.round(median(cl.renovated.map((x) => x.comp.saleAmount)) as number);
 
+  // Nearest-weighted conservative ARV — the "never the hot tail" surface.
+  const conservativePpsf = nearestWeightedConservativePpsf(cl.renovated);
+  const arvConservative = conservativePpsf != null && subjectSqft != null
+    ? Math.round(conservativePpsf * subjectSqft)
+    : null;
+
   const renovatedComps: RenovatedCompAudit[] = cl.renovated
     .map((x) => ({ address: x.comp.address, zip: x.comp.zip, distanceMi: x.comp.distanceMi, sqft: x.comp.sqft, saleAmount: x.comp.saleAmount, saleDate: x.comp.saleDate, ppsf: Math.round(x.ppsf) }))
     .sort((a, b) => b.ppsf - a.ppsf);
@@ -503,8 +641,10 @@ export function synthesizeArv(
     benchmarkBreach,
     guardStatus,
     renovatedComps,
+    arvConservative,
+    conservativeMedianPpsf: conservativePpsf == null ? null : Math.round(conservativePpsf),
     status: "ok",
-    reason: `ARV $${arv.toLocaleString()} = renovated-cluster ${subjectSqft != null ? `median $/sqft $${Math.round(medPpsf)} × ${subjectSqft} sqft` : "median sale"} (${cl.renovated.length} reno comps${cl.bimodal ? `, distressed ${cl.distressed.length} @ $${cl.distressedMedPpsf != null ? Math.round(cl.distressedMedPpsf) : "-"}/sqft` : ", unimodal"}, MAD ${((cl.madFraction ?? 0) * 100).toFixed(1)}%). ${guardNote}.`,
+    reason: `ARV $${arv.toLocaleString()} (central) / $${arvConservative != null ? arvConservative.toLocaleString() : "-"} (conservative, P25 nearest-weighted) = renovated cluster ${subjectSqft != null ? `central $/sqft $${Math.round(medPpsf)} / conservative $${conservativePpsf != null ? Math.round(conservativePpsf) : "-"} × ${subjectSqft} sqft` : "median sale"} (${cl.renovated.length} reno comps${cl.bimodal ? `, distressed ${cl.distressed.length} @ $${cl.distressedMedPpsf != null ? Math.round(cl.distressedMedPpsf) : "-"}/sqft` : ", unimodal"}, MAD ${((cl.madFraction ?? 0) * 100).toFixed(1)}%). ${guardNote}.`,
   };
 }
 
@@ -548,6 +688,12 @@ export function fetchPropertyCharacteristics(addr: AttomAddress): Promise<AttomF
 
 export function fetchAssessor(addr: AttomAddress): Promise<AttomFetchOutcome<AssessorRecord>> {
   return fetchAttom(buildAssessmentDetailUrl(addr), (b) => mapAssessmentDetail(b as AttomAssessmentResponse));
+}
+
+/** Fetch the property's recorded transfer history (sale events, deed
+ *  types, parties). Used for seller basis + title-risk flagging. */
+export function fetchSalesHistory(addr: AttomAddress): Promise<AttomFetchOutcome<SalesHistoryRecord>> {
+  return fetchAttom(buildSalesHistoryUrl(addr), (b) => mapSalesHistory(b));
 }
 
 export interface SalesComparablesQuery {

@@ -5,10 +5,13 @@ import {
   buildPropertyDetailUrl,
   buildAssessmentDetailUrl,
   buildSalesComparablesUrl,
+  buildSalesHistoryUrl,
   normalizeStreetForAttom,
   mapPropertyDetail,
   mapAssessmentDetail,
   mapSalesComparables,
+  mapSalesHistory,
+  classifyTitleRisk,
   synthesizeArv,
   type SoldComp,
 } from "./property";
@@ -280,5 +283,104 @@ describe("sold-benchmark guard — subject-zip reconciliation (the Strathmoor cl
     expect(top.distanceMi).toBe(0.3);
     expect(top.ppsf).toBeGreaterThan(0);
     expect(top.saleDate).toBe(recent);
+  });
+});
+
+describe("nearest-weighted CONSERVATIVE ARV (Strathmoor fixture: 7 comps; conservative ≪ central when nearest are low)", () => {
+  // Strathmoor's actual 7 renovated comps from the 20:30 sweep:
+  //   Forrer (1.03mi) $176 | Hartwell (0.74) $155 | Lindsay (1.30) $153
+  //   Prevost 16839 (0.90) $145 | Littlefield (0.90) $144 | Prevost 17313 (1.03) $142
+  //   Asbury Park (1.49) $141
+  // Central median: $145. Nearest-weighted P25 should land at the lower
+  // values closer to the subject — never the $176/sqft Forrer tail.
+  const c = (ppsf: number, dist: number, sqft = 1000): SoldComp => ({
+    saleAmount: ppsf * sqft, saleDate: recent, sqft, address: `${ppsf}/${dist}`,
+    zip: "48227", distanceMi: dist,
+  });
+
+  it("conservative P25 < central median; ARV surfaces both numbers", () => {
+    // 7 renovated + 11 distressed (mirrors the real sweep's bimodal split).
+    const distressed = Array.from({ length: 11 }, (_, i) => c(38 + i, 0.5 + i * 0.05));
+    const renovated = [
+      c(176, 1.03), c(155, 0.74), c(153, 1.30),
+      c(145, 0.90), c(144, 0.90), c(142, 1.03),
+      c(141, 1.49),
+    ];
+    const r = synthesizeArv([...distressed, ...renovated], { subjectSqft: 1468, subjectZip: "48227", now: NOW });
+    expect(r.status).toBe("ok");
+    expect(r.renovatedMedianPpsf).toBe(145);                  // central
+    expect(r.conservativeMedianPpsf).not.toBeNull();
+    expect(r.conservativeMedianPpsf!).toBeLessThan(r.renovatedMedianPpsf!);
+    expect(r.arvConservative).not.toBeNull();
+    expect(r.arvConservative!).toBeLessThan(r.arv!);
+    // P25 must NOT be the hot tail ($176).
+    expect(r.conservativeMedianPpsf!).toBeLessThan(176);
+  });
+
+  it("when distances are missing across the cluster, conservative ARV is null (no fabrication)", () => {
+    const noDist: SoldComp = { saleAmount: 145000, saleDate: recent, sqft: 1000, address: null, zip: "48227", distanceMi: null };
+    const r = synthesizeArv([noDist, { ...noDist, saleAmount: 150000 }, { ...noDist, saleAmount: 142000 }], { subjectSqft: 1000, subjectZip: "48227", now: NOW });
+    expect(r.arvConservative).toBeNull();
+  });
+
+  it("conservative is null when subjectSqft is unknown (ppsf-scaled output only)", () => {
+    const set = [c(150, 0.5), c(155, 0.6), c(160, 0.7)];
+    const r = synthesizeArv(set, { subjectZip: "48227", now: NOW });
+    expect(r.arvConservative).toBeNull();
+  });
+});
+
+describe("classifyTitleRisk", () => {
+  it("flags quit-claim deeds", () => {
+    expect(classifyTitleRisk("Quit Claim Deed")).toBe("quit_claim");
+    expect(classifyTitleRisk("Quitclaim")).toBe("quit_claim");
+  });
+  it("flags tax-foreclosure / tax-deed", () => {
+    expect(classifyTitleRisk("Tax Deed")).toBe("tax_foreclosure");
+    expect(classifyTitleRisk("Tax Foreclosure Sale")).toBe("tax_foreclosure");
+  });
+  it("flags sheriff / treasurer deeds", () => {
+    expect(classifyTitleRisk("Sheriff Deed")).toBe("sheriff");
+    expect(classifyTitleRisk("Treasurer Deed")).toBe("sheriff");
+  });
+  it("returns none for warranty / standard deeds", () => {
+    expect(classifyTitleRisk("Warranty Deed")).toBe("none");
+    expect(classifyTitleRisk("Special Warranty Deed")).toBe("none");
+  });
+  it("returns unknown on null/empty", () => {
+    expect(classifyTitleRisk(null)).toBe("unknown");
+    expect(classifyTitleRisk("")).toBe("unknown");
+  });
+});
+
+describe("buildSalesHistoryUrl + mapSalesHistory", () => {
+  it("builds /saleshistory/detail with address1/address2", () => {
+    const u = buildSalesHistoryUrl({ address1: "15875 Strathmoor St", address2: "Detroit, MI 48227" });
+    expect(u).toContain("/saleshistory/detail");
+    expect(u).toContain("address1=15875+STRATHMOOR+ST");
+  });
+
+  it("parses a flat property[].salehistory[] envelope, newest first", () => {
+    const body = {
+      property: [{
+        salehistory: [
+          { amount: { saleamt: 17000, salesearchdate: "2023-07-07T00:00:00" }, calculation: { deedType: "Quit Claim" } },
+          { amount: { saleamt: 35000, salesearchdate: "2018-04-15T00:00:00" }, calculation: { deedType: "Warranty Deed" } },
+        ],
+      }],
+    };
+    const r = mapSalesHistory(body);
+    expect(r.events).toHaveLength(2);
+    expect(r.lastSale!.saleAmount).toBe(17000);
+    expect(r.lastSale!.saleDate).toContain("2023-07-07");
+    expect(r.lastSale!.titleRisk).toBe("quit_claim");
+    expect(r.titleRiskAny).toBe(true);
+  });
+
+  it("empty body → empty record", () => {
+    const r = mapSalesHistory({});
+    expect(r.events).toHaveLength(0);
+    expect(r.lastSale).toBeNull();
+    expect(r.titleRiskAny).toBe(false);
   });
 });

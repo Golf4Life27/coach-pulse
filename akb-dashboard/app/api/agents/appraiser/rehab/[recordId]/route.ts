@@ -64,18 +64,11 @@ export async function GET(
   }
 
   // ── Auth — dashboard session → OAuth waterfall ──────────────────
-  // TEMP 2026-06-06: operator-authorized one-shot public exemption for the
-  // Strathmoor Gate-2 fire. REPORT-ONLY for read (rehab vision writes Est_Rehab,
-  // but limited to one operator-named record via the explicit recordId path).
-  // RE-LOCK immediately after the single fire.
-  const REHAB_TEMP_PUBLIC = recordId === "rec07YAC9KOwr6iZv";
   const cookieHeader = req.headers.get("cookie");
   const isDashboard = hasDashboardSession(cookieHeader);
   let authKind: "dashboard_session" | "oauth" | "cron" | "bearer_dev" | "none" =
     "none";
-  if (REHAB_TEMP_PUBLIC) {
-    authKind = "bearer_dev";
-  } else if (isDashboard) {
+  if (isDashboard) {
     authKind = "dashboard_session";
   } else {
     const env = readAuthEnv();
