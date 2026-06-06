@@ -21,6 +21,7 @@
 import { NextResponse } from "next/server";
 import {
   fetchSalesComparables,
+  fetchSalesComparablesRaw,
   fetchAssessor,
   fetchPropertyCharacteristics,
   buildAddress2,
@@ -187,6 +188,14 @@ async function handle(req: Request) {
       : `NO — sold-comp coverage ${((s.comps_ok / s.probed) * 100).toFixed(0)}% (${s.comps_ok}/${s.probed}). May need MLS feed for ARV; ATTOM assessor still works for taxes.`,
   }));
 
+  // Debug: raw v2 salescomparables envelope for the first probe (?raw_comps=1).
+  let rawCompSample: { address1: string; status: number | null; bodyText: string | null; error: string | null } | null = null;
+  if (url.searchParams.get("raw_comps") === "1" && probes.length > 0) {
+    const p = probes[0];
+    const raw = await fetchSalesComparablesRaw({ street: p.street, city: p.city, state: p.state, zip: p.zip, minComps: 5, maxComps: 20, searchRadiusMi: 1 });
+    rawCompSample = { address1: p.street, ...raw };
+  }
+
   await audit({
     agent: "appraiser",
     event: "attom_probe",
@@ -202,6 +211,7 @@ async function handle(req: Request) {
     state_filter: stateFilter || null,
     summary,
     rows,
+    raw_comp_sample: rawCompSample,
     elapsed_ms: Date.now() - t0,
   });
 }

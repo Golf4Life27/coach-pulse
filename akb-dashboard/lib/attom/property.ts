@@ -332,6 +332,24 @@ export function fetchSalesComparables(q: SalesComparablesQuery): Promise<AttomFe
   );
 }
 
+/** Debug-only: return the RAW salescomparables JSON body (truncated) so the
+ *  v2 envelope shape can be mapped precisely. Never used in the live path. */
+export async function fetchSalesComparablesRaw(q: SalesComparablesQuery): Promise<{ status: number | null; bodyText: string | null; error: string | null }> {
+  if (!ATTOM_API_KEY) return { status: null, bodyText: null, error: "ATTOM_API_KEY not set" };
+  try {
+    const url = buildSalesComparablesUrl(q.street, q.city, q.state, q.zip, {
+      searchRadiusMi: q.searchRadiusMi ?? 1,
+      minComps: q.minComps ?? 5,
+      maxComps: q.maxComps ?? 20,
+    });
+    const res = await fetch(url, { headers: { apikey: ATTOM_API_KEY, accept: "application/json" }, cache: "no-store" });
+    const text = await res.text();
+    return { status: res.status, bodyText: text.slice(0, 9000), error: null };
+  } catch (err) {
+    return { status: null, bodyText: null, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 /** Convenience: fetch comps + synthesize ARV in one call. Returns
  *  status:"hold" + arv:null when ATTOM errors or comp synthesis HOLDs. */
 export async function fetchArvFromAttom(q: SalesComparablesQuery): Promise<{
