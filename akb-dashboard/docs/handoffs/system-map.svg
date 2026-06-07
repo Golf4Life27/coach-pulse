@@ -1,0 +1,158 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1720" height="1240" viewBox="0 0 1720 1240" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+<rect width="1720" height="1240" fill="#0d1117"/>
+<defs><marker id="ar" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8b949e"/></marker></defs>
+<text x="30" y="44" fill="#ffffff" font-size="26" font-weight="700">AKB — The Machine, end to end</text>
+<text x="30" y="74" fill="#8b949e" font-size="15">Find distressed → verify → price against the math → offer → negotiate → contract → sell to a buyer → REPEAT, market by market across the country.</text>
+<rect x="1180" y="22" width="510" height="62" rx="8" fill="#161b22" stroke="#30363d"/>
+<circle cx="1202" cy="40" r="7" fill="#2ea043"/>
+<text x="1218" y="44" fill="#c9d1d9" font-size="13">runs by itself</text>
+<circle cx="1202" cy="62" r="7" fill="#d29922"/>
+<text x="1218" y="66" fill="#c9d1d9" font-size="13">runs but needs data / a nudge</text>
+<circle cx="1202" cy="84" r="7" fill="#da3633"/>
+<text x="1218" y="88" fill="#c9d1d9" font-size="13">manual or not built yet</text>
+<rect x="30" y="110" width="220" height="214" rx="10" fill="#161b22" stroke="#30363d"/>
+<rect x="30" y="110" width="6" height="214" rx="3" fill="#2ea043"/>
+<circle cx="56" cy="138" r="13" fill="#13321f" stroke="#2ea043"/>
+<text x="56" y="143" fill="#2ea043" font-size="14" font-weight="700" text-anchor="middle">1</text>
+<text x="76" y="136" fill="#ffffff" font-size="17" font-weight="700">FIND</text>
+<text x="76" y="154" fill="#8b949e" font-size="11">Sentinel  ·  intake</text>
+<rect x="44" y="166" width="66" height="20" rx="10" fill="#13321f" stroke="#2ea043"/>
+<text x="77" y="180" fill="#2ea043" font-size="10.5" font-weight="700" text-anchor="middle">AUTOMATED</text>
+<text x="44" y="208" fill="#c9d1d9" font-size="11.5">Scans wholesale-friendly</text>
+<text x="44" y="224" fill="#c9d1d9" font-size="11.5">ZIPs every day for</text>
+<text x="44" y="240" fill="#c9d1d9" font-size="11.5">distressed listings.</text>
+<text x="44" y="256" fill="#c9d1d9" font-size="11.5">Detroit just switched on</text>
+<text x="44" y="272" fill="#c9d1d9" font-size="11.5">— 30 new ZIPs.</text>
+<rect x="265" y="110" width="220" height="214" rx="10" fill="#161b22" stroke="#30363d"/>
+<rect x="265" y="110" width="6" height="214" rx="3" fill="#d29922"/>
+<circle cx="291" cy="138" r="13" fill="#33290f" stroke="#d29922"/>
+<text x="291" y="143" fill="#d29922" font-size="14" font-weight="700" text-anchor="middle">2</text>
+<text x="311" y="136" fill="#ffffff" font-size="17" font-weight="700">VERIFY</text>
+<text x="311" y="154" fill="#8b949e" font-size="11">Sentry + Appraiser</text>
+<rect x="279" y="166" width="53" height="20" rx="10" fill="#33290f" stroke="#d29922"/>
+<text x="305" y="180" fill="#d29922" font-size="10.5" font-weight="700" text-anchor="middle">PARTIAL</text>
+<text x="279" y="208" fill="#c9d1d9" font-size="11.5">Confirms still-for-sale</text>
+<text x="279" y="224" fill="#c9d1d9" font-size="11.5">and reads photos for</text>
+<text x="279" y="240" fill="#c9d1d9" font-size="11.5">distress + rehab scope.</text>
+<text x="279" y="256" fill="#c9d1d9" font-size="11.5">Catches most, misses</text>
+<text x="279" y="272" fill="#c9d1d9" font-size="11.5">some edge cases.</text>
+<rect x="500" y="110" width="220" height="214" rx="10" fill="#161b22" stroke="#30363d"/>
+<rect x="500" y="110" width="6" height="214" rx="3" fill="#d29922"/>
+<circle cx="526" cy="138" r="13" fill="#33290f" stroke="#d29922"/>
+<text x="526" y="143" fill="#d29922" font-size="14" font-weight="700" text-anchor="middle">3</text>
+<text x="546" y="136" fill="#ffffff" font-size="17" font-weight="700">PRICE</text>
+<text x="546" y="154" fill="#8b949e" font-size="11">Appraiser</text>
+<rect x="514" y="166" width="130" height="20" rx="10" fill="#33290f" stroke="#d29922"/>
+<text x="579" y="180" fill="#d29922" font-size="10.5" font-weight="700" text-anchor="middle">MATH OK · DATA THIN</text>
+<text x="514" y="208" fill="#c9d1d9" font-size="11.5">ARV from real comps,</text>
+<text x="514" y="224" fill="#c9d1d9" font-size="11.5">rehab from photos,</text>
+<text x="514" y="240" fill="#c9d1d9" font-size="11.5">worst-case max offer.</text>
+<text x="514" y="256" fill="#c9d1d9" font-size="11.5">Needs CMA + buyer</text>
+<text x="514" y="272" fill="#c9d1d9" font-size="11.5">ceiling to be complete.</text>
+<rect x="735" y="110" width="220" height="214" rx="10" fill="#161b22" stroke="#30363d"/>
+<rect x="735" y="110" width="6" height="214" rx="3" fill="#d29922"/>
+<circle cx="761" cy="138" r="13" fill="#33290f" stroke="#d29922"/>
+<text x="761" y="143" fill="#d29922" font-size="14" font-weight="700" text-anchor="middle">4</text>
+<text x="781" y="136" fill="#ffffff" font-size="17" font-weight="700">OFFER</text>
+<text x="781" y="154" fill="#8b949e" font-size="11">Crier  ·  texts agent</text>
+<rect x="749" y="166" width="53" height="20" rx="10" fill="#33290f" stroke="#d29922"/>
+<text x="775" y="180" fill="#d29922" font-size="10.5" font-weight="700" text-anchor="middle">PARTIAL</text>
+<text x="749" y="208" fill="#c9d1d9" font-size="11.5">Texts a cash offer to the</text>
+<text x="749" y="224" fill="#c9d1d9" font-size="11.5">listing agent via Quo.</text>
+<text x="749" y="240" fill="#c9d1d9" font-size="11.5">Should NOT fire until the</text>
+<text x="749" y="256" fill="#c9d1d9" font-size="11.5">data checklist is full.</text>
+<rect x="970" y="110" width="220" height="214" rx="10" fill="#161b22" stroke="#30363d"/>
+<rect x="970" y="110" width="6" height="214" rx="3" fill="#da3633"/>
+<circle cx="996" cy="138" r="13" fill="#331717" stroke="#da3633"/>
+<text x="996" y="143" fill="#da3633" font-size="14" font-weight="700" text-anchor="middle">5</text>
+<text x="1016" y="136" fill="#ffffff" font-size="17" font-weight="700">NEGOTIATE</text>
+<text x="1016" y="154" fill="#8b949e" font-size="11">You + the math</text>
+<rect x="984" y="166" width="46" height="20" rx="10" fill="#331717" stroke="#da3633"/>
+<text x="1007" y="180" fill="#da3633" font-size="10.5" font-weight="700" text-anchor="middle">MANUAL</text>
+<text x="984" y="208" fill="#c9d1d9" font-size="11.5">Counters are captured to</text>
+<text x="984" y="224" fill="#c9d1d9" font-size="11.5">a list, but no screen</text>
+<text x="984" y="240" fill="#c9d1d9" font-size="11.5">shows them yet.</text>
+<text x="984" y="256" fill="#c9d1d9" font-size="11.5">You decide against the</text>
+<text x="984" y="272" fill="#c9d1d9" font-size="11.5">math by hand.</text>
+<rect x="1205" y="110" width="220" height="214" rx="10" fill="#161b22" stroke="#30363d"/>
+<rect x="1205" y="110" width="6" height="214" rx="3" fill="#da3633"/>
+<circle cx="1231" cy="138" r="13" fill="#331717" stroke="#da3633"/>
+<text x="1231" y="143" fill="#da3633" font-size="14" font-weight="700" text-anchor="middle">6</text>
+<text x="1251" y="136" fill="#ffffff" font-size="17" font-weight="700">CONTRACT</text>
+<text x="1251" y="154" fill="#8b949e" font-size="11">Scribe + DocuSign</text>
+<rect x="1219" y="166" width="66" height="20" rx="10" fill="#331717" stroke="#da3633"/>
+<text x="1252" y="180" fill="#da3633" font-size="10.5" font-weight="700" text-anchor="middle">NOT BUILT</text>
+<text x="1219" y="208" fill="#c9d1d9" font-size="11.5">Groundwork only.</text>
+<text x="1219" y="224" fill="#c9d1d9" font-size="11.5">Envelope creation and</text>
+<text x="1219" y="240" fill="#c9d1d9" font-size="11.5">e-signing are not</text>
+<text x="1219" y="256" fill="#c9d1d9" font-size="11.5">wired up yet.</text>
+<rect x="1440" y="110" width="220" height="214" rx="10" fill="#161b22" stroke="#30363d"/>
+<rect x="1440" y="110" width="6" height="214" rx="3" fill="#d29922"/>
+<circle cx="1466" cy="138" r="13" fill="#33290f" stroke="#d29922"/>
+<text x="1466" y="143" fill="#d29922" font-size="14" font-weight="700" text-anchor="middle">7</text>
+<text x="1486" y="136" fill="#ffffff" font-size="17" font-weight="700">DISPO</text>
+<text x="1486" y="154" fill="#8b949e" font-size="11">Scout + Forge</text>
+<rect x="1454" y="166" width="53" height="20" rx="10" fill="#33290f" stroke="#d29922"/>
+<text x="1480" y="180" fill="#d29922" font-size="10.5" font-weight="700" text-anchor="middle">PARTIAL</text>
+<text x="1454" y="208" fill="#c9d1d9" font-size="11.5">Buyer list + warm-up</text>
+<text x="1454" y="224" fill="#c9d1d9" font-size="11.5">drafts exist.</text>
+<text x="1454" y="240" fill="#c9d1d9" font-size="11.5">Matching a deal to a</text>
+<text x="1454" y="256" fill="#c9d1d9" font-size="11.5">buyer and blasting it</text>
+<text x="1454" y="272" fill="#c9d1d9" font-size="11.5">is not automated.</text>
+<line x1="251" y1="217.0" x2="264" y2="217.0" stroke="#8b949e" stroke-width="2" marker-end="url(#ar)"/>
+<line x1="486" y1="217.0" x2="499" y2="217.0" stroke="#8b949e" stroke-width="2" marker-end="url(#ar)"/>
+<line x1="721" y1="217.0" x2="734" y2="217.0" stroke="#8b949e" stroke-width="2" marker-end="url(#ar)"/>
+<line x1="956" y1="217.0" x2="969" y2="217.0" stroke="#8b949e" stroke-width="2" marker-end="url(#ar)"/>
+<line x1="1191" y1="217.0" x2="1204" y2="217.0" stroke="#8b949e" stroke-width="2" marker-end="url(#ar)"/>
+<line x1="1426" y1="217.0" x2="1439" y2="217.0" stroke="#8b949e" stroke-width="2" marker-end="url(#ar)"/>
+<path d="M 1550.0 324 L 1550.0 358 L 140.0 358 L 140.0 324" fill="none" stroke="#8b949e" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#ar)"/>
+<rect x="695" y="345" width="300" height="26" rx="13" fill="#0d1117"/>
+<text x="845" y="363" fill="#8b949e" font-size="13" text-anchor="middle" font-weight="600">REPEAT → next property · next market · loop the nation</text>
+<text x="30" y="420" fill="#ffffff" font-size="16" font-weight="700">THE DATA (Airtable) — what each step reads &amp; writes</text>
+<rect x="30" y="438" width="234" height="52" rx="8" fill="#161b22" stroke="#30363d"/>
+<rect x="30" y="438" width="5" height="52" rx="2" fill="#2ea043"/>
+<text x="44" y="460" fill="#ffffff" font-size="12.5" font-weight="700">Listings_V1</text>
+<text x="44" y="478" fill="#8b949e" font-size="10.5">live · shown everywhere</text>
+<rect x="269" y="438" width="234" height="52" rx="8" fill="#161b22" stroke="#30363d"/>
+<rect x="269" y="438" width="5" height="52" rx="2" fill="#2ea043"/>
+<text x="283" y="460" fill="#ffffff" font-size="12.5" font-weight="700">ZIP_Registry</text>
+<text x="283" y="478" fill="#8b949e" font-size="10.5">the markets we work</text>
+<rect x="508" y="438" width="234" height="52" rx="8" fill="#161b22" stroke="#30363d"/>
+<rect x="508" y="438" width="5" height="52" rx="2" fill="#da3633"/>
+<text x="522" y="460" fill="#ffffff" font-size="12.5" font-weight="700">Deal_Dossiers</text>
+<text x="522" y="478" fill="#8b949e" font-size="10.5">the Deal File — WRITTEN, NOT SHOWN</text>
+<rect x="747" y="438" width="234" height="52" rx="8" fill="#161b22" stroke="#30363d"/>
+<rect x="747" y="438" width="5" height="52" rx="2" fill="#da3633"/>
+<text x="761" y="460" fill="#ffffff" font-size="12.5" font-weight="700">Operator_Action_Items</text>
+<text x="761" y="478" fill="#8b949e" font-size="10.5">negotiations — WRITTEN, NOT SHOWN</text>
+<rect x="986" y="438" width="234" height="52" rx="8" fill="#161b22" stroke="#30363d"/>
+<rect x="986" y="438" width="5" height="52" rx="2" fill="#2ea043"/>
+<text x="1000" y="460" fill="#ffffff" font-size="12.5" font-weight="700">Agent_Proposals</text>
+<text x="1000" y="478" fill="#8b949e" font-size="10.5">shown in the Queue</text>
+<rect x="1225" y="438" width="234" height="52" rx="8" fill="#161b22" stroke="#30363d"/>
+<rect x="1225" y="438" width="5" height="52" rx="2" fill="#2ea043"/>
+<text x="1239" y="460" fill="#ffffff" font-size="12.5" font-weight="700">Prospective_Buyers</text>
+<text x="1239" y="478" fill="#8b949e" font-size="10.5">shown in Buyers</text>
+<rect x="1464" y="438" width="234" height="52" rx="8" fill="#161b22" stroke="#30363d"/>
+<rect x="1464" y="438" width="5" height="52" rx="2" fill="#d29922"/>
+<text x="1478" y="460" fill="#ffffff" font-size="12.5" font-weight="700">Detroit_Spread_Targets</text>
+<text x="1478" y="478" fill="#8b949e" font-size="10.5">deal-scan output</text>
+<rect x="30" y="560" width="1660" height="250" rx="12" fill="#161b22" stroke="#30363d"/>
+<text x="50" y="594" fill="#ffffff" font-size="18" font-weight="700">YOUR COCKPIT — the Dashboard (where your whole workflow should live)</text>
+<text x="50" y="622" fill="#ffffff" font-size="13" font-weight="700">LIVE TODAY:</text>
+<text x="146" y="622" fill="#c9d1d9" font-size="13">Command Center · Pipeline · Deal page · Queue · Buyers — all real Airtable data, no fakes. The skeleton works.</text>
+<text x="50" y="645" fill="#ffffff" font-size="13" font-weight="700">THE DREAM:</text>
+<text x="138" y="645" fill="#c9d1d9" font-size="13">One screen. Maverick lists what needs YOU, with the reason why / why-not. Every deal page carries ALL the data —</text>
+<text x="50" y="668" fill="#ffffff" font-size="13" font-weight="700"></text>
+<text x="50" y="668" fill="#8b949e" font-size="13">comps, rehab, CMA, and InvestorBase buyer ceiling — and an offer can't go out until that checklist is full.</text>
+<text x="50" y="691" fill="#ffffff" font-size="13" font-weight="700"></text>
+<text x="50" y="691" fill="#c9d1d9" font-size="13"></text>
+<text x="50" y="714" fill="#ffffff" font-size="13.5" font-weight="700">3 WIRES TO CONNECT (this closes the gap between the spine and the glass):</text>
+<text x="50" y="737" fill="#ffffff" font-size="13" font-weight="700">  1)</text>
+<text x="90" y="737" fill="#c9d1d9" font-size="13">Show the Deal File (Deal_Dossiers) on each deal page — today it's written but nothing displays it.</text>
+<text x="50" y="760" fill="#ffffff" font-size="13" font-weight="700">  2)</text>
+<text x="90" y="760" fill="#c9d1d9" font-size="13">Show negotiations + action-items (Operator_Action_Items) in the Queue — today they're written but nothing displays them.</text>
+<text x="50" y="783" fill="#ffffff" font-size="13" font-weight="700">  3)</text>
+<text x="90" y="783" fill="#c9d1d9" font-size="13">Point the message history at the reliable text feed — today the deal page reads the old lossy one and can hide replies.</text>
+<text x="30" y="845" fill="#8b949e" font-size="12">Honest status: steps 1–4 mostly run; step 5 is you-by-hand; steps 6–7 are partial/not-built. The data spine is ahead of the screens — the fix is wiring, not rebuilding.</text>
+</svg>
