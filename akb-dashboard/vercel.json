@@ -69,10 +69,6 @@
       "schedule": "15,45 * * * *"
     },
     {
-      "path": "/api/cron/strathmoor-soft-reengage",
-      "schedule": "0 14 * * 0"
-    },
-    {
       "path": "/api/cron/quo-sync?limit=40&hours_back=24",
       "schedule": "20 * * * *"
     }
