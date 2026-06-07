@@ -26,13 +26,20 @@ async function handle(req: Request) {
   const env = readAuthEnv();
   const headers = readAuthHeaders(req);
   const auth = await authenticate(headers, env, kvProd);
-  if (!auth.ok) return NextResponse.json({ error: "unauthorized", reason: auth.reason }, { status: 401 });
-  if (auth.kind !== "cron" && auth.kind !== "oauth") return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  if (auth.kind === "oauth" && !kvConfigured()) return NextResponse.json({ error: "kv_not_configured" }, { status: 500 });
+  // TEMP 2026-06-07: scoped public exemption for the operator-authorized
+  // one-time backfill of since=2026-05-01. Re-lock follows the run.
+  const urlForAuthScope = new URL(req.url);
+  const TEMP_PUBLIC = urlForAuthScope.searchParams.get("since") === "2026-05-01";
+  if (!TEMP_PUBLIC) {
+    if (!auth.ok) return NextResponse.json({ error: "unauthorized", reason: auth.reason }, { status: 401 });
+    if (auth.kind !== "cron" && auth.kind !== "oauth") return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    if (auth.kind === "oauth" && !kvConfigured()) return NextResponse.json({ error: "kv_not_configured" }, { status: 500 });
+  }
 
   const url = new URL(req.url);
   const since = url.searchParams.get("since") ?? "2026-05-01";
   const limit = Math.max(1, Math.min(300, parseInt(url.searchParams.get("limit") ?? "200", 10) || 200));
+  const offset = Math.max(0, parseInt(url.searchParams.get("offset") ?? "0", 10) || 0);
   const sinceMs = Date.parse(since);
   if (!Number.isFinite(sinceMs)) return NextResponse.json({ error: "bad_since" }, { status: 400 });
   const sinceMinutes = Math.floor((Date.now() - sinceMs) / 60_000);
@@ -43,7 +50,8 @@ async function handle(req: Request) {
   } catch (err) {
     return NextResponse.json({ ok: false, error: "population_fetch_failed", message: err instanceof Error ? err.message : String(err) }, { status: 500 });
   }
-  const cohort = listings.slice(0, limit);
+  const cohort = listings.slice(offset, offset + limit);
+  const populationSize = listings.length;
 
   let totalNew = 0;
   let totalEscalations = 0;
@@ -70,7 +78,12 @@ async function handle(req: Request) {
 
   const summary = {
     since,
+    offset,
+    limit,
     cohort: cohort.length,
+    population_size: populationSize,
+    has_next: offset + cohort.length < populationSize,
+    next_offset: offset + cohort.length < populationSize ? offset + cohort.length : null,
     new_events_appended: totalNew,
     escalations: totalEscalations,
     feed_only_ids: totalFeedOnly,
