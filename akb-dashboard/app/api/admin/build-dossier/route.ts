@@ -9,10 +9,6 @@
 // and writes a row to the Deal_Dossiers table. REPORT-ONLY (no Airtable
 // listing writes; only the dossier row).
 //
-// TEMP scoped public exemption: operator-authorized for ONE specific
-// recordId (recO7XFKcUVTTxMcB = 12724 Strathmoor) for the Deal #002 fire.
-// RE-LOCK in the next commit.
-
 import { NextResponse } from "next/server";
 import { getListing } from "@/lib/airtable";
 import {
@@ -50,17 +46,12 @@ async function handle(req: Request) {
   const env = readAuthEnv();
   const headers = readAuthHeaders(req);
   const auth = await authenticate(headers, env, kvProd);
+  if (!auth.ok) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (auth.kind !== "cron" && auth.kind !== "oauth") return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (auth.kind === "oauth" && !kvConfigured()) return NextResponse.json({ error: "kv_not_configured" }, { status: 500 });
+
   const url = new URL(req.url);
   const recordId = url.searchParams.get("recordId") ?? "";
-  // TEMP 2026-06-07: one-shot operator-authorized re-fire of Deal #002
-  // to verify the bound-bug fix flips verdict back to HOLD/fails_floor.
-  const TEMP_PUBLIC = recordId === "recO7XFKcUVTTxMcB";
-  if (!TEMP_PUBLIC) {
-    if (!auth.ok) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-    if (auth.kind !== "cron" && auth.kind !== "oauth") return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-    if (auth.kind === "oauth" && !kvConfigured()) return NextResponse.json({ error: "kv_not_configured" }, { status: 500 });
-  }
-
   if (!recordId.startsWith("rec")) return NextResponse.json({ error: "bad_record_id" }, { status: 400 });
   const dealNumberRaw = url.searchParams.get("deal");
   const dealNumber = dealNumberRaw ? parseInt(dealNumberRaw, 10) : 0;

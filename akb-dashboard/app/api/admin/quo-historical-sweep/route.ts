@@ -26,15 +26,9 @@ async function handle(req: Request) {
   const env = readAuthEnv();
   const headers = readAuthHeaders(req);
   const auth = await authenticate(headers, env, kvProd);
-  // TEMP 2026-06-07: scoped public exemption for the operator-authorized
-  // one-time backfill of since=2026-05-01. Re-lock follows the run.
-  const urlForAuthScope = new URL(req.url);
-  const TEMP_PUBLIC = urlForAuthScope.searchParams.get("since") === "2026-05-01";
-  if (!TEMP_PUBLIC) {
-    if (!auth.ok) return NextResponse.json({ error: "unauthorized", reason: auth.reason }, { status: 401 });
-    if (auth.kind !== "cron" && auth.kind !== "oauth") return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-    if (auth.kind === "oauth" && !kvConfigured()) return NextResponse.json({ error: "kv_not_configured" }, { status: 500 });
-  }
+  if (!auth.ok) return NextResponse.json({ error: "unauthorized", reason: auth.reason }, { status: 401 });
+  if (auth.kind !== "cron" && auth.kind !== "oauth") return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (auth.kind === "oauth" && !kvConfigured()) return NextResponse.json({ error: "kv_not_configured" }, { status: 500 });
 
   const url = new URL(req.url);
   const since = url.searchParams.get("since") ?? "2026-05-01";
@@ -92,7 +86,7 @@ async function handle(req: Request) {
     duration_ms: Date.now() - t0,
   };
   console.log("[quo_hist_sweep]", JSON.stringify(summary));
-  await audit({ agent: "outreach", event: "quo_historical_sweep", status: "confirmed_success", inputSummary: { since, limit, auth_kind: auth.ok ? auth.kind : "temp_public" }, outputSummary: summary });
+  await audit({ agent: "outreach", event: "quo_historical_sweep", status: "confirmed_success", inputSummary: { since, limit, auth_kind: auth.kind }, outputSummary: summary });
   return NextResponse.json({ ok: true, summary });
 }
 
