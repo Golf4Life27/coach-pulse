@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { showToast } from "@/components/Toast";
+import OperatorActionItems from "@/components/OperatorActionItems";
 
 interface Proposal {
   id: string;
@@ -106,6 +107,9 @@ export default function QueuePage() {
 
   return (
     <div className="space-y-6">
+      {/* Wire #2 (SYSTEM_HANDOFF.md) — operator action items / negotiations */}
+      <OperatorActionItems />
+
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-bold text-white">
           AGENT QUEUE{" "}
