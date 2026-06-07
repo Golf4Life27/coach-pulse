@@ -52,16 +52,26 @@ async function handle(req: Request) {
   const auth = await authenticate(headers, env, kvProd);
   const url = new URL(req.url);
   const recordId = url.searchParams.get("recordId") ?? "";
-  // Re-locked 2026-06-07 after Deal #002 fire.
-  if (!auth.ok) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  if (auth.kind !== "cron" && auth.kind !== "oauth") return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  if (auth.kind === "oauth" && !kvConfigured()) return NextResponse.json({ error: "kv_not_configured" }, { status: 500 });
+  // TEMP 2026-06-07: operator-authorized re-fire of Deal #002 only
+  // (recO7XFKcUVTTxMcB, post-vision + radius-tuned).
+  const TEMP_PUBLIC = recordId === "recO7XFKcUVTTxMcB";
+  if (!TEMP_PUBLIC) {
+    if (!auth.ok) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    if (auth.kind !== "cron" && auth.kind !== "oauth") return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    if (auth.kind === "oauth" && !kvConfigured()) return NextResponse.json({ error: "kv_not_configured" }, { status: 500 });
+  }
 
   if (!recordId.startsWith("rec")) return NextResponse.json({ error: "bad_record_id" }, { status: 400 });
   const dealNumberRaw = url.searchParams.get("deal");
   const dealNumber = dealNumberRaw ? parseInt(dealNumberRaw, 10) : 0;
   const stickyFloorRaw = url.searchParams.get("floor");
   const stickyFloor = stickyFloorRaw ? parseInt(stickyFloorRaw, 10) : null;
+  const radiusRaw = url.searchParams.get("radius_mi");
+  const radiusMi = radiusRaw ? Math.max(0.25, Math.min(5, parseFloat(radiusRaw))) : 1;
+  const minCompsRaw = url.searchParams.get("min_comps");
+  const minComps = minCompsRaw ? Math.max(3, Math.min(20, parseInt(minCompsRaw, 10))) : 5;
+  const maxCompsRaw = url.searchParams.get("max_comps");
+  const maxComps = maxCompsRaw ? Math.max(5, Math.min(50, parseInt(maxCompsRaw, 10))) : 20;
 
   const listing = await getListing(recordId);
   if (!listing) return NextResponse.json({ error: "record_missing" }, { status: 404 });
@@ -72,7 +82,7 @@ async function handle(req: Request) {
     fetchPropertyCharacteristics({ address1: addr1, address2: addr2 }).catch(() => null),
     fetchAssessor({ address1: addr1, address2: addr2 }).catch(() => null),
     fetchSalesHistory({ address1: addr1, address2: addr2 }).catch(() => null),
-    fetchSalesComparables({ street: addr1, city: listing.city ?? "", state: listing.state ?? "", zip: listing.zip ?? "", subjectSqft: listing.buildingSqFt ?? null, minComps: 5, maxComps: 20, searchRadiusMi: 1 }).catch(() => null),
+    fetchSalesComparables({ street: addr1, city: listing.city ?? "", state: listing.state ?? "", zip: listing.zip ?? "", subjectSqft: listing.buildingSqFt ?? null, minComps, maxComps, searchRadiusMi: radiusMi }).catch(() => null),
   ]);
 
   const market = listMarkets().find((m) => (listing.zip ?? "").startsWith(m.zip_prefixes[0])) ?? listMarkets().find((m) => m.id === "detroit_mi") ?? null;

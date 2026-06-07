@@ -38,6 +38,15 @@ const RECORD_ID = "rec07YAC9KOwr6iZv";          // 15875 Strathmoor St (48227)
 const AGENT_NAME = "Charles Campbell";
 const AGENT_PHONE = "561-632-9673";
 const SENTINEL = "STRATHMOOR_SOFT_REENGAGE_SENT";
+// STRUCTURAL ONE-SHOT GUARD (post-6/5-armed-worker rule):
+// The cron schedule `0 14 * * 0` is a STANDING weekly trigger. The
+// sentinel below catches dup-fires; this date window catches any FUTURE
+// week's accidental fire if the cron entry isn't removed in time. Refuses
+// outside the operator-authorized window (Sun 2026-06-07 13:55–15:00 UTC).
+// Belt + suspenders: even if the cron entry survives, no future fire can
+// reach the Quo send.
+const FIRE_WINDOW_START_MS = Date.UTC(2026, 5, 7, 13, 55, 0); // Jun is month 5 (0-based)
+const FIRE_WINDOW_END_MS   = Date.UTC(2026, 5, 7, 15, 0, 0);
 const SCRIPT =
   "Hi Charles, this is Alex with AKB Solutions. I see 15875 Strathmoor St is still available. " +
   "I took a closer look at the condition — the roof, the unfinished bathroom, and the kitchen — " +
@@ -56,6 +65,24 @@ async function handle(req: Request) {
   }
   if (auth.kind === "oauth" && !kvConfigured()) {
     return NextResponse.json({ error: "kv_not_configured" }, { status: 500 });
+  }
+
+  // Structural one-shot — refuse outside the operator-authorized fire window.
+  const nowMs = Date.now();
+  if (nowMs < FIRE_WINDOW_START_MS || nowMs > FIRE_WINDOW_END_MS) {
+    await audit({
+      agent: "outreach",
+      event: "strathmoor_soft_reengage",
+      status: "confirmed_success",
+      recordId: RECORD_ID,
+      outputSummary: { status: "outside_fire_window_noop", now_iso: new Date(nowMs).toISOString() },
+    });
+    return NextResponse.json({
+      ok: true,
+      status: "outside_fire_window_noop",
+      window_start: new Date(FIRE_WINDOW_START_MS).toISOString(),
+      window_end: new Date(FIRE_WINDOW_END_MS).toISOString(),
+    });
   }
 
   const listing = await getListing(RECORD_ID);

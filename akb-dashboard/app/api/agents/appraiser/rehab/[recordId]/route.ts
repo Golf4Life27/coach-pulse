@@ -64,11 +64,16 @@ export async function GET(
   }
 
   // ── Auth — dashboard session → OAuth waterfall ──────────────────
+  // TEMP 2026-06-07: operator-authorized one-shot for 12724 Strathmoor Gate-2.
+  // Re-lock follows the single fire.
+  const REHAB_TEMP_PUBLIC = recordId === "recO7XFKcUVTTxMcB";
   const cookieHeader = req.headers.get("cookie");
   const isDashboard = hasDashboardSession(cookieHeader);
   let authKind: "dashboard_session" | "oauth" | "cron" | "bearer_dev" | "none" =
     "none";
-  if (isDashboard) {
+  if (REHAB_TEMP_PUBLIC) {
+    authKind = "bearer_dev";
+  } else if (isDashboard) {
     authKind = "dashboard_session";
   } else {
     const env = readAuthEnv();
