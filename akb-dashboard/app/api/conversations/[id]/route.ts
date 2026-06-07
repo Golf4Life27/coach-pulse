@@ -1,5 +1,5 @@
 import { getListing, getListings } from "@/lib/airtable";
-import { getMessagesForParticipant } from "@/lib/quo";
+import { getThreadVerified } from "@/lib/quo";
 import { parseConversation } from "@/lib/notes";
 import { scorePropertyMatch, type SiblingRecord } from "@/lib/timeline-merge";
 
@@ -64,7 +64,14 @@ export async function GET(
     if (listing.agentPhone && process.env.QUO_API_KEY) {
       try {
         const phone = cleanPhone(listing.agentPhone);
-        const quoMessages = await getMessagesForParticipant(phone, 60 * 24 * 90); // 90 days
+        // Wire #3 (SYSTEM_HANDOFF.md): use the RELIABLE read path. The old
+        // getMessagesForParticipant feed silently dropped delivered messages;
+        // getThreadVerified re-looks-up each id (drops phantoms, catches body
+        // divergence). The notes-merge below remains the durable backstop for
+        // anything the live feed still misses (the sync cron writes verified
+        // messages into Verification_Notes).
+        const thread = await getThreadVerified(phone, 60 * 24 * 90, 60); // 90 days, cap lookups for page-load latency
+        const quoMessages = thread.messages;
         for (const msg of quoMessages) {
           // Attribute via scorePropertyMatch when this agent holds multiple listings.
           // match.recordId === "" means target won; empty fallback to current id.
