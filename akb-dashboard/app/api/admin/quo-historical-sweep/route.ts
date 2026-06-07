@@ -92,7 +92,7 @@ async function handle(req: Request) {
     duration_ms: Date.now() - t0,
   };
   console.log("[quo_hist_sweep]", JSON.stringify(summary));
-  await audit({ agent: "outreach", event: "quo_historical_sweep", status: "confirmed_success", inputSummary: { since, limit, auth_kind: auth.kind }, outputSummary: summary });
+  await audit({ agent: "outreach", event: "quo_historical_sweep", status: "confirmed_success", inputSummary: { since, limit, auth_kind: auth.ok ? auth.kind : "temp_public" }, outputSummary: summary });
   return NextResponse.json({ ok: true, summary });
 }
 
