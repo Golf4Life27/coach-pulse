@@ -186,7 +186,27 @@ async function handle(req: Request) {
   } catch (err) {
     return NextResponse.json({ ok: false, error: "listings_fetch_failed", message: err instanceof Error ? err.message : String(err) }, { status: 500 });
   }
-  const detroitActive = all.filter((l) => l.liveStatus === "Active" && (l.zip ?? "").startsWith("48")).slice(0, limit);
+  // Permanent fix (b) 2026-06-07 — cohort reads Pipeline_Stage + outreach history.
+  // Live_Status=Active alone is NOT enough: triage disposes records by setting
+  // Outreach_Status=Dead (and the engine writes Pipeline_Stage=dead) but Live_
+  // Status can lag. Excluding both prevents re-running spread math on records
+  // we've already terminated.
+  const detroitActive = all
+    .filter((l) => {
+      if (!((l.zip ?? "").startsWith("48"))) return false;
+      if (l.liveStatus !== "Active") return false;
+      if (l.outreachStatus === "Dead") return false;
+      if ((l.pipelineStage ?? "") === "dead") return false;
+      return true;
+    })
+    .slice(0, limit);
+  // Surface outreach history awareness — how many of the cohort already have
+  // prior contact. The dossier endpoint owns the verbatim render; here we
+  // just COUNT so the operator sees the prior-contact density at a glance.
+  const cohortPriorContactCount = detroitActive.filter((l) => {
+    const n = l.notes ?? "";
+    return n.includes("[H2 sent ") || /Automated text sent via Quo/.test(n) || /L3.*Body:/.test(n);
+  }).length;
 
   const rows: SweepRow[] = [];
   for (const l of detroitActive) rows.push(await evalListing(l, detroitForced, runAt));
@@ -216,6 +236,7 @@ async function handle(req: Request) {
   const summary = {
     evaluated: rows.length,
     detroit_active: detroitActive.length,
+    cohort_prior_contact: cohortPriorContactCount,
     attom_match: `${attomMatched.length}/${rows.length}`,
     arv_produced: `${arvProduced.length}/${rows.length}`,
     pass_pre_guard: passing.length,

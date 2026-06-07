@@ -52,13 +52,10 @@ async function handle(req: Request) {
   const auth = await authenticate(headers, env, kvProd);
   const url = new URL(req.url);
   const recordId = url.searchParams.get("recordId") ?? "";
-  // TEMP exemption scoped to ONE operator-authorized recordId.
-  const TEMP_PUBLIC = recordId === "recO7XFKcUVTTxMcB";
-  if (!TEMP_PUBLIC) {
-    if (!auth.ok) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-    if (auth.kind !== "cron" && auth.kind !== "oauth") return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-    if (auth.kind === "oauth" && !kvConfigured()) return NextResponse.json({ error: "kv_not_configured" }, { status: 500 });
-  }
+  // Re-locked 2026-06-07 after Deal #002 fire.
+  if (!auth.ok) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (auth.kind !== "cron" && auth.kind !== "oauth") return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (auth.kind === "oauth" && !kvConfigured()) return NextResponse.json({ error: "kv_not_configured" }, { status: 500 });
 
   if (!recordId.startsWith("rec")) return NextResponse.json({ error: "bad_record_id" }, { status: 400 });
   const dealNumberRaw = url.searchParams.get("deal");
@@ -214,7 +211,7 @@ async function handle(req: Request) {
     event: "deal_dossier_built",
     status: "confirmed_success",
     recordId,
-    inputSummary: { deal: dealNumber, sticky_floor: stickyFloor, auth: TEMP_PUBLIC ? "temp_public" : "cron" },
+    inputSummary: { deal: dealNumber, sticky_floor: stickyFloor, auth: auth.ok ? auth.kind : "?" },
     outputSummary: { verdict: pess.verdict, pessimistic_mao: pess.pessimisticMao, written, write_error: writeError, duration_ms: Date.now() - t0 },
   });
 
