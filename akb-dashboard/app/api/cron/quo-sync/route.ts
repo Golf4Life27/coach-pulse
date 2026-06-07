@@ -17,7 +17,7 @@
 
 import { NextResponse } from "next/server";
 import { getActiveListingsForBrief, updateListingRecord } from "@/lib/airtable";
-import { getMessagesForParticipant } from "@/lib/quo";
+import { getThreadVerified } from "@/lib/quo";
 import { normalizePhone } from "@/lib/phone-normalize";
 import { appendQuoMessagesToNotes } from "@/lib/outreach/quo-sync";
 import { audit } from "@/lib/audit-log";
@@ -81,7 +81,23 @@ async function handle(req: Request) {
     const phone = normalizePhone((l as { agentPhone?: string | null }).agentPhone);
     if (!phone) { outcomes.push({ recordId: l.id, address: l.address, agent_phone: null, new_events: 0, escalations: 0, skipped_already_present: 0, error: "no_agent_phone" }); continue; }
     try {
-      const msgs = await getMessagesForParticipant(phone, sinceMinutes);
+      // RELIABLE READ PATH (operator brief 2026-06-07): the feed walk in
+      // getMessagesForParticipant dropped two delivered 6/7 outbounds.
+      // getThreadVerified uses per-ID lookup as the source of truth; any
+      // feed-only / body-divergence ids land in the audit log via the
+      // discrepancy fields below.
+      const thread = await getThreadVerified(phone, sinceMinutes, 30);
+      const msgs = thread.messages;
+      if (thread.feedOnlyIds.length > 0 || thread.bodyDivergenceIds.length > 0) {
+        await audit({
+          agent: "outreach",
+          event: "quo_feed_discrepancy",
+          status: "uncertain",
+          recordId: l.id,
+          inputSummary: { address: l.address, agent_phone: phone },
+          outputSummary: { feed_only_ids: thread.feedOnlyIds, body_divergence_ids: thread.bodyDivergenceIds },
+        });
+      }
       const r = appendQuoMessagesToNotes(l.notes, msgs.map((m) => ({ id: m.id, body: m.body, createdAt: m.createdAt, direction: m.direction })), { syncMarkerSource: "quo_sync" });
       if (r.newEvents.length > 0) {
         await updateListingRecord(l.id, { Verification_Notes: r.notes });

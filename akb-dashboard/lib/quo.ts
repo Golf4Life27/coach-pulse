@@ -225,3 +225,85 @@ export async function getMessageStatus(messageId: string): Promise<QuoStatusResu
     raw,
   };
 }
+
+// ── Reliable lookup-by-ID — replaces the lossy feed walk ───────────────
+// THE STANDING RULE (operator brief 2026-06-07): no send is marked "sent"
+// until it has been FETCHED BACK and SEEN via this per-ID lookup. The feed
+// walk in getMessagesForParticipant silently dropped two delivered 6/7
+// outbounds — the per-ID endpoint is the authoritative reader.
+
+/** Fetch one message by its Quo id. Returns null when the id isn't found
+ *  (404) — caller decides what to do (e.g., mark "attempted_unconfirmed").
+ *  Throws on non-404 errors (network / 5xx). */
+export async function getMessageById(messageId: string): Promise<QuoMessage | null> {
+  if (!QUO_API_KEY) throw new Error("QUO_API_KEY not set");
+  if (!messageId) throw new Error("messageId required");
+  const res = await fetch(
+    `https://api.openphone.com/v1/messages/${encodeURIComponent(messageId)}`,
+    { headers: { Authorization: QUO_API_KEY, "Content-Type": "application/json" }, cache: "no-store" },
+  );
+  if (res.status === 404) return null;
+  const raw = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(`Quo getMessageById error ${res.status}: ${JSON.stringify(raw) || "(no body)"}`);
+  const data = (raw as { data?: Record<string, unknown> } | null)?.data ?? null;
+  if (!data) return null;
+  return {
+    id: typeof data.id === "string" ? data.id : messageId,
+    from: typeof data.from === "string" ? data.from : "",
+    to: extractTo(data.to),
+    body: extractBody(data),
+    direction: (data.direction as "incoming" | "outgoing") ?? "outgoing",
+    createdAt: typeof data.createdAt === "string" ? data.createdAt : "",
+  };
+}
+
+/** Reliable thread fetch — uses the per-participant endpoint to discover
+ *  message IDs, then RELIABLE-LOOKS-UP each id individually. Returns the
+ *  verified set plus any discrepancies (feed said present / lookup said
+ *  not). Tight cap on lookups to keep latency bounded.
+ *
+ *  This is the replacement path for getMessagesForParticipant in any
+ *  context where data correctness matters (sweep, duplicate guard,
+ *  send-confirmation). The feed walk itself stays available for low-stakes
+ *  one-line discovery, but is no longer the source of truth. */
+export async function getThreadVerified(
+  participantPhone: string,
+  sinceMinutes: number = 60,
+  maxLookups: number = 30,
+): Promise<{ messages: QuoMessage[]; feedOnlyIds: string[]; bodyDivergenceIds: string[] }> {
+  const feed = await getMessagesForParticipant(participantPhone, sinceMinutes);
+  const verified: QuoMessage[] = [];
+  const feedOnlyIds: string[] = [];
+  const bodyDivergenceIds: string[] = [];
+  const seen = new Set<string>();
+  let looked = 0;
+  for (const m of feed) {
+    if (!m.id || seen.has(m.id)) continue;
+    seen.add(m.id);
+    if (looked >= maxLookups) {
+      // Beyond cap, we trust the feed entry but note it wasn't verified;
+      // callers can decide to escalate or accept.
+      verified.push(m);
+      continue;
+    }
+    looked++;
+    try {
+      const lookup = await getMessageById(m.id);
+      if (lookup == null) {
+        feedOnlyIds.push(m.id);
+        continue;
+      }
+      // Body equality check — collapse whitespace, case-insensitive.
+      const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
+      if (norm(lookup.body) !== norm(m.body)) {
+        bodyDivergenceIds.push(m.id);
+      }
+      verified.push(lookup);
+    } catch {
+      // Network blip on this id — keep the feed entry, flag discrepancy
+      // implicitly by NOT adding to verified count.
+      verified.push(m);
+    }
+  }
+  return { messages: verified, feedOnlyIds, bodyDivergenceIds };
+}

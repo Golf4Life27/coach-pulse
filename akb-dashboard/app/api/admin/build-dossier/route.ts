@@ -52,10 +52,14 @@ async function handle(req: Request) {
   const auth = await authenticate(headers, env, kvProd);
   const url = new URL(req.url);
   const recordId = url.searchParams.get("recordId") ?? "";
-  // Re-locked 2026-06-07 after Deal #002 re-fire.
-  if (!auth.ok) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  if (auth.kind !== "cron" && auth.kind !== "oauth") return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  if (auth.kind === "oauth" && !kvConfigured()) return NextResponse.json({ error: "kv_not_configured" }, { status: 500 });
+  // TEMP 2026-06-07: operator-authorized recompute of Deal #002 with
+  // operator-CMA inputs. Re-lock follows the fire.
+  const TEMP_PUBLIC = recordId === "recO7XFKcUVTTxMcB";
+  if (!TEMP_PUBLIC) {
+    if (!auth.ok) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    if (auth.kind !== "cron" && auth.kind !== "oauth") return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    if (auth.kind === "oauth" && !kvConfigured()) return NextResponse.json({ error: "kv_not_configured" }, { status: 500 });
+  }
 
   if (!recordId.startsWith("rec")) return NextResponse.json({ error: "bad_record_id" }, { status: 400 });
   const dealNumberRaw = url.searchParams.get("deal");
@@ -68,6 +72,29 @@ async function handle(req: Request) {
   const minComps = minCompsRaw ? Math.max(3, Math.min(20, parseInt(minCompsRaw, 10))) : 5;
   const maxCompsRaw = url.searchParams.get("max_comps");
   const maxComps = maxCompsRaw ? Math.max(5, Math.min(50, parseInt(maxCompsRaw, 10))) : 20;
+  // ── Operator-CMA overrides (Dossier #002 recompute, 2026-06-07) ────────
+  // When ATTOM is blind on a record's pocket OR the operator has a
+  // higher-fidelity CMA, the operator can override the inputs the dossier
+  // underwrites against. EVERY override is surfaced in Section 11 with its
+  // source, so the dossier never silently passes operator-supplied numbers
+  // off as system-derived.
+  const cmaArvLowRaw = url.searchParams.get("cma_arv_low");
+  const cmaArvHighRaw = url.searchParams.get("cma_arv_high");
+  const cmaArvLow = cmaArvLowRaw ? parseInt(cmaArvLowRaw, 10) : null;
+  const cmaArvHigh = cmaArvHighRaw ? parseInt(cmaArvHighRaw, 10) : null;
+  const cmaPpsfLowRaw = url.searchParams.get("cma_ppsf_low");
+  const cmaPpsfHighRaw = url.searchParams.get("cma_ppsf_high");
+  const cmaPpsfLow = cmaPpsfLowRaw ? parseFloat(cmaPpsfLowRaw) : null;
+  const cmaPpsfHigh = cmaPpsfHighRaw ? parseFloat(cmaPpsfHighRaw) : null;
+  const cmaRehabRaw = url.searchParams.get("cma_rehab_mid");
+  const cmaRehabHighRaw = url.searchParams.get("cma_rehab_high");
+  const cmaRehab = cmaRehabRaw ? parseInt(cmaRehabRaw, 10) : null;
+  const cmaRehabHigh = cmaRehabHighRaw ? parseInt(cmaRehabHighRaw, 10) : null;
+  const cmaSource = url.searchParams.get("cma_source") ?? "operator_cma";
+  const cmaTitleFlag = url.searchParams.get("title_flag");
+  const cmaDomNote = url.searchParams.get("dom_note");
+  const cmaPriorCampaign = url.searchParams.get("prior_campaign");
+  const cmaSummary = url.searchParams.get("cma_summary");
 
   const listing = await getListing(recordId);
   if (!listing) return NextResponse.json({ error: "record_missing" }, { status: 404 });
@@ -102,10 +129,27 @@ async function handle(req: Request) {
     scopeText,
   });
 
-  // Pessimistic MAO: conservative ARV × ARV%Max − rehabHigh − fee, vs sticky floor.
+  // Operator-CMA override resolution. Order of preference:
+  //   1. cma_arv_low (explicit conservative ARV)
+  //   2. cma_ppsf_low × subject sqft (PSF-derived)
+  //   3. system synthesis (arvConservative > arv)
+  const subjectSqftEff = listing.buildingSqFt ?? null;
+  const cmaArvDerivedFromPpsfLow = cmaPpsfLow != null && subjectSqftEff != null
+    ? Math.round(cmaPpsfLow * subjectSqftEff)
+    : null;
+  const cmaArvDerivedFromPpsfHigh = cmaPpsfHigh != null && subjectSqftEff != null
+    ? Math.round(cmaPpsfHigh * subjectSqftEff)
+    : null;
+  const effectiveConservativeArv = cmaArvLow ?? cmaArvDerivedFromPpsfLow ?? syn?.arvConservative ?? syn?.arv ?? null;
+  const effectiveCentralArv = cmaArvHigh ?? cmaArvDerivedFromPpsfHigh ?? syn?.arv ?? null;
+  const effectiveRehabMid = cmaRehab ?? rehabMid;
+  const effectiveRehabHigh = cmaRehabHigh ?? cmaRehab ?? rehabHigh;
+
+  // Pessimistic MAO computed against the EFFECTIVE inputs (CMA-overridden
+  // when supplied; system otherwise).
   const pess = computePessimisticMao({
-    conservativeArv: syn?.arvConservative ?? syn?.arv ?? null,
-    rehabHigh,
+    conservativeArv: effectiveConservativeArv,
+    rehabHigh: effectiveRehabHigh,
     arvPctMax,
     stickyFloor,
   });
@@ -181,6 +225,26 @@ async function handle(req: Request) {
     l3.length > 0
       ? l3.map((a) => `- $${a.amountUsd.toLocaleString()} — token \`${a.token}\` — context: "${a.context}"`).join("\n")
       : "_no dollar-amount replies on record_",
+    "",
+    "## 11 — Operator-CMA Overrides (Source: " + cmaSource + ")",
+    (cmaArvLow != null || cmaArvHigh != null || cmaPpsfLow != null || cmaPpsfHigh != null || cmaRehab != null || cmaRehabHigh != null || cmaTitleFlag || cmaDomNote || cmaPriorCampaign || cmaSummary)
+      ? [
+          cmaSummary ? `- **Summary**: ${cmaSummary}` : "",
+          (cmaPpsfLow != null || cmaPpsfHigh != null) ? `- **Renovated $/sqft band (CMA)**: $${cmaPpsfLow ?? "-"}–$${cmaPpsfHigh ?? "-"}/sf${subjectSqftEff != null ? ` × ${subjectSqftEff}sf → **ARV $${(cmaArvDerivedFromPpsfLow ?? 0).toLocaleString()}–$${(cmaArvDerivedFromPpsfHigh ?? 0).toLocaleString()}**` : ""}` : "",
+          (cmaArvLow != null || cmaArvHigh != null) ? `- **ARV band (CMA explicit)**: $${(cmaArvLow ?? 0).toLocaleString()}–$${(cmaArvHigh ?? 0).toLocaleString()}` : "",
+          cmaRehab != null ? `- **Rehab (CMA mid)**: $${cmaRehab.toLocaleString()}` : "",
+          cmaRehabHigh != null ? `- **Rehab (CMA pessimistic high)**: $${cmaRehabHigh.toLocaleString()}` : "",
+          cmaTitleFlag ? `- **Title flag**: ⚠ ${cmaTitleFlag}` : "",
+          cmaDomNote ? `- **DOM context**: ${cmaDomNote}` : "",
+          cmaPriorCampaign ? `- **Prior campaign**: ${cmaPriorCampaign}` : "",
+          "- ↑ All CMA inputs are operator-supplied. The system did not derive these.",
+        ].filter(Boolean).join("\n")
+      : "_no operator CMA overrides supplied_",
+    "",
+    "## 12 — Effective Inputs Used for Verdict",
+    `- **Effective conservative ARV**: $${effectiveConservativeArv != null ? effectiveConservativeArv.toLocaleString() : "null"}${cmaArvLow != null || cmaPpsfLow != null ? " (CMA)" : (syn?.arvConservative != null ? " (system)" : "")}`,
+    `- **Effective rehab (high band)**: $${effectiveRehabHigh != null ? effectiveRehabHigh.toLocaleString() : "null"}${cmaRehabHigh != null || cmaRehab != null ? " (CMA)" : ""}`,
+    `- **Sticky floor**: $${stickyFloor != null ? stickyFloor.toLocaleString() : "null"}`,
   ].filter(Boolean).join("\n");
 
   // Write to Deal_Dossiers.

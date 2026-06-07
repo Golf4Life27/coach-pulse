@@ -20,6 +20,7 @@
 
 import { NextResponse } from "next/server";
 import { readRecentFromKv } from "@/lib/audit-log";
+import { countSpineRowsSince } from "@/lib/pulse/spine-count";
 import { getActiveListingsForBrief, getActiveVerificationUrlCoverage } from "@/lib/airtable";
 import { fetchCodebaseMetadataState } from "@/lib/maverick/sources/codebase-metadata";
 import { readPulseState } from "@/lib/pulse/active-store";
@@ -35,15 +36,21 @@ export async function GET() {
   try {
     // I/O fan-out in parallel to keep the scan within the lambda
     // budget. Each source is independent.
-    const [audit, listings, metadata, previousState, urlCoverage] = await Promise.all([
+    // Durable Spine counts (fix 2026-06-07 for the false "zero writes"
+    // alarm): the audit-log buffer can evict write_state events before
+    // the 48h cutoff in high-cron sessions. The Spine table count is
+    // authoritative.
+    const nowMs = Date.now();
+    const since24Iso = new Date(nowMs - 24 * 3_600_000).toISOString();
+    const since48Iso = new Date(nowMs - 48 * 3_600_000).toISOString();
+    const [audit, listings, metadata, previousState, urlCoverage, spine24, spine48] = await Promise.all([
       readRecentFromKv(DEFAULT_AUDIT_LIMIT),
       getActiveListingsForBrief({ recentDays: 14 }),
       fetchCodebaseMetadataState({ timeoutMs: 3_000 }).catch(() => null),
       readPulseState(),
-      // URL-coverage metric (2026-06-05). Best-effort — a failure here
-      // must not sink the whole scan, so it degrades to null and the
-      // detector no-ops.
       getActiveVerificationUrlCoverage().catch(() => null),
+      countSpineRowsSince(since24Iso),
+      countSpineRowsSince(since48Iso),
     ]);
 
     const testCount =
@@ -56,6 +63,8 @@ export async function GET() {
       previous_test_count: previousState.test_count_anchor,
       env: process.env as Record<string, string | undefined>,
       verification_url_coverage: urlCoverage,
+      spine_writes_24h: spine24,
+      spine_writes_48h: spine48,
       now: () => new Date(),
     });
 

@@ -94,3 +94,25 @@ describe("detectSpineWriteRate", () => {
     expect(dets[0].severity).toBe("warning"); // 2 < 3
   });
 });
+
+describe("durable Spine count overrides audit-log buffer (2026-06-07 false-alarm fix)", () => {
+  const NOW = new Date("2026-06-07T18:00:00Z");
+  const base = { audit_log: [], listings: [], test_count: null, previous_test_count: null, env: {}, now: () => NOW };
+
+  it("when spine_writes_48h > 0, NO false alarm even if audit_log is empty (the false-alarm fix)", () => {
+    const dets = detectSpineWriteRate({ ...base, spine_writes_24h: 8, spine_writes_48h: 20 });
+    expect(dets).toEqual([]);
+  });
+
+  it("durable count of 0 (real silence) STILL fires critical", () => {
+    const dets = detectSpineWriteRate({ ...base, spine_writes_24h: 0, spine_writes_48h: 0 });
+    expect(dets[0]?.severity).toBe("critical");
+    expect((dets[0]?.source_data as Record<string, unknown> | undefined)?.source).toBe("spine_table");
+  });
+
+  it("when durable counts undefined, falls back to audit_log buffer (back-compat)", () => {
+    const dets = detectSpineWriteRate({ ...base }); // audit_log empty, no durable
+    expect(dets[0]?.severity).toBe("critical");
+    expect((dets[0]?.source_data as Record<string, unknown> | undefined)?.source).toBe("audit_log_buffer");
+  });
+});

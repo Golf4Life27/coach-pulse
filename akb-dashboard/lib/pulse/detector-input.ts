@@ -22,6 +22,11 @@ export interface PulseDetectorInput {
   /** Previous test count anchor from KV (set after a successful
    *  scan); null on first run. */
   previous_test_count: number | null;
+  /** Durable Spine_Decision_Log row counts (supplied by the scan route).
+   *  When defined, spine-write-rate detector PREFERS these over the
+   *  audit-log buffer (which can miss writes evicted by high cron volume). */
+  spine_writes_24h?: number | null;
+  spine_writes_48h?: number | null;
   /** Env vars for threshold overrides. Defaults to process.env in
    *  prod; tests inject. */
   env: Record<string, string | undefined>;

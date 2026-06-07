@@ -58,8 +58,13 @@ export function detectSpineWriteRate(input: PulseDetectorInput): PulseDetection[
   const criticalMin = readIntThreshold(input.env, "PULSE_SPINE_CRITICAL_MIN", DEFAULT_CRITICAL_MIN_WRITES);
 
   const now = input.now();
-  const writes24 = countSpineWritesWithin(input.audit_log, warningHours, now);
-  const writes48 = countSpineWritesWithin(input.audit_log, criticalHours, now);
+  // 2026-06-07 FIX (false-alarm class): prefer the DURABLE Spine table
+  // count when the runner supplied one. The audit-log path was reading a
+  // 500-entry KV buffer that didn't span the 48h window in high-cron-
+  // volume sessions, hiding real writes. The table is the source of truth.
+  const writes24 = input.spine_writes_24h ?? countSpineWritesWithin(input.audit_log, warningHours, now);
+  const writes48 = input.spine_writes_48h ?? countSpineWritesWithin(input.audit_log, criticalHours, now);
+  const source = (input.spine_writes_24h != null || input.spine_writes_48h != null) ? "spine_table" : "audit_log_buffer";
 
   if (writes48 < criticalMin) {
     return [
@@ -75,6 +80,7 @@ export function detectSpineWriteRate(input: PulseDetectorInput): PulseDetection[
           writes_in_window: writes48,
           window_hours: criticalHours,
           critical_min: criticalMin,
+          source,
         },
       },
     ];
@@ -94,6 +100,7 @@ export function detectSpineWriteRate(input: PulseDetectorInput): PulseDetection[
           writes_in_window: writes24,
           window_hours: warningHours,
           warning_min: warningMin,
+          source,
         },
       },
     ];
