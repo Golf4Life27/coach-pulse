@@ -74,3 +74,40 @@ describe("classifyRehabTier", () => {
     expect(r.hardStops).toContain("knob-and-tube wiring");
   });
 });
+
+describe("12724 STRATHMOOR FIXTURE — pessimistic-bound rule (2026-06-07 ratchet-unfreeze test)", () => {
+  it("rehab band $22,814–$37,073 → pessimistic uses $37,073 → MAO $43,648 → fails $52k floor", () => {
+    // Operator-pinned: ARV $132,675 (CMA $87/sf × 1525sf), rehab HIGH
+    // $37,073 (vision band high — conf 42 low-confidence so the worst case
+    // rules), fee $5k, ARV%Max 64.61% (Detroit). The dossier verdict
+    // for 12724 MUST be fails_floor against the $52k sticky floor.
+    const r = computePessimisticMao({
+      conservativeArv: 132_675,
+      rehabHigh: 37_073, // HIGH of $22,814–$37,073 — NEVER the LOW
+      arvPctMax: 0.6461,
+      stickyFloor: 52_000,
+    });
+    // $132,675 × 0.6461 = $85,721; − $37,073 − $5,000 = $43,648.
+    expect(r.pessimisticMao).toBe(43_648);
+    expect(r.verdict).toBe("fails_floor");
+    expect(r.marginOverFloor).toBe(-8_352);
+  });
+
+  it("inversion guard: selecting the LOW end ($22,814) WOULD flip the verdict — pinned to prevent regression", () => {
+    // The exact bug: if we wired effectiveRehabHigh = LOW of band, MAO
+    // jumps from $43,648 to $58,907 (clears $52k as 'robust'). This
+    // assertion documents the wrong answer so a future regression is
+    // obvious in diff review.
+    const wrong = computePessimisticMao({
+      conservativeArv: 132_675,
+      rehabHigh: 22_814,  // ← THE BUG SHAPE: low-end mislabeled "pessimistic"
+      arvPctMax: 0.6461,
+      stickyFloor: 52_000,
+    });
+    expect(wrong.pessimisticMao).toBe(57_907);  // not $43,648
+    expect(wrong.verdict).not.toBe("fails_floor");
+    // The above is what the inversion produced; the assertion stays as
+    // a tripwire — if any future caller passes the LOW end as "high",
+    // the dossier route's max(...) logic must catch it before it gets here.
+  });
+});

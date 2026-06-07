@@ -52,10 +52,14 @@ async function handle(req: Request) {
   const auth = await authenticate(headers, env, kvProd);
   const url = new URL(req.url);
   const recordId = url.searchParams.get("recordId") ?? "";
-  // Re-locked 2026-06-07 after Deal #002 recompute landed.
-  if (!auth.ok) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  if (auth.kind !== "cron" && auth.kind !== "oauth") return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  if (auth.kind === "oauth" && !kvConfigured()) return NextResponse.json({ error: "kv_not_configured" }, { status: 500 });
+  // TEMP 2026-06-07: one-shot operator-authorized re-fire of Deal #002
+  // to verify the bound-bug fix flips verdict back to HOLD/fails_floor.
+  const TEMP_PUBLIC = recordId === "recO7XFKcUVTTxMcB";
+  if (!TEMP_PUBLIC) {
+    if (!auth.ok) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    if (auth.kind !== "cron" && auth.kind !== "oauth") return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+    if (auth.kind === "oauth" && !kvConfigured()) return NextResponse.json({ error: "kv_not_configured" }, { status: 500 });
+  }
 
   if (!recordId.startsWith("rec")) return NextResponse.json({ error: "bad_record_id" }, { status: 400 });
   const dealNumberRaw = url.searchParams.get("deal");
@@ -136,13 +140,49 @@ async function handle(req: Request) {
   const cmaArvDerivedFromPpsfHigh = cmaPpsfHigh != null && subjectSqftEff != null
     ? Math.round(cmaPpsfHigh * subjectSqftEff)
     : null;
-  const effectiveConservativeArv = cmaArvLow ?? cmaArvDerivedFromPpsfLow ?? syn?.arvConservative ?? syn?.arv ?? null;
+  // ── 15875 LESSON, RE-PINNED ────────────────────────────────────────
+  // Pessimistic underwriting must use the WORST-CASE bound from every
+  // available source. CMA-supplied numbers can RAISE conservatism (more
+  // pessimistic) but can NEVER LOWER it. Translation:
+  //   • conservative ARV = MIN(vision-low, cma-low) — operator can only
+  //     pull ARV DOWN, never up.
+  //   • pessimistic rehab = MAX(vision-high, cma-high) — operator can only
+  //     push rehab UP, never down.
+  // The Dossier #002 bug (2026-06-07): the prior `??` cascade let
+  // cma_rehab_high=$22,000 OVERRIDE vision rehab_high=$37,073, flipping
+  // verdict from fails_floor → robust. That's exactly the inversion the
+  // operator caught. Fix below picks the worst case rigorously.
+  const visionRehabHigh = rehabHigh; // may be vision Rehab_Est_High or mid×1.3 fallback
+  const rehabHighCandidates: number[] = [];
+  if (typeof visionRehabHigh === "number" && Number.isFinite(visionRehabHigh) && visionRehabHigh >= 0) rehabHighCandidates.push(visionRehabHigh);
+  if (typeof cmaRehabHigh === "number" && Number.isFinite(cmaRehabHigh) && cmaRehabHigh >= 0) rehabHighCandidates.push(cmaRehabHigh);
+  const effectiveRehabHigh = rehabHighCandidates.length > 0 ? Math.max(...rehabHighCandidates) : null;
+  const rehabHighSource = effectiveRehabHigh == null
+    ? "none"
+    : effectiveRehabHigh === visionRehabHigh && effectiveRehabHigh === cmaRehabHigh
+    ? "vision_and_cma_equal"
+    : effectiveRehabHigh === visionRehabHigh
+    ? "vision_high (CMA bound non-overriding)"
+    : "cma_high (≥ vision_high)";
+
+  const visionConservativeArv = syn?.arvConservative ?? syn?.arv ?? null;
+  const cmaArvLowComposite = cmaArvLow ?? cmaArvDerivedFromPpsfLow ?? null;
+  const arvLowCandidates: number[] = [];
+  if (typeof visionConservativeArv === "number" && Number.isFinite(visionConservativeArv) && visionConservativeArv > 0) arvLowCandidates.push(visionConservativeArv);
+  if (typeof cmaArvLowComposite === "number" && Number.isFinite(cmaArvLowComposite) && cmaArvLowComposite > 0) arvLowCandidates.push(cmaArvLowComposite);
+  const effectiveConservativeArv = arvLowCandidates.length > 0 ? Math.min(...arvLowCandidates) : null;
+  const arvLowSource = effectiveConservativeArv == null
+    ? "none"
+    : effectiveConservativeArv === visionConservativeArv && effectiveConservativeArv === cmaArvLowComposite
+    ? "vision_and_cma_equal"
+    : effectiveConservativeArv === visionConservativeArv
+    ? "vision_low (CMA bound non-overriding)"
+    : "cma_low (≤ vision_low)";
+
   const effectiveCentralArv = cmaArvHigh ?? cmaArvDerivedFromPpsfHigh ?? syn?.arv ?? null;
   const effectiveRehabMid = cmaRehab ?? rehabMid;
-  const effectiveRehabHigh = cmaRehabHigh ?? cmaRehab ?? rehabHigh;
 
-  // Pessimistic MAO computed against the EFFECTIVE inputs (CMA-overridden
-  // when supplied; system otherwise).
+  // Pessimistic MAO computed against the WORST-CASE inputs.
   const pess = computePessimisticMao({
     conservativeArv: effectiveConservativeArv,
     rehabHigh: effectiveRehabHigh,
@@ -238,8 +278,13 @@ async function handle(req: Request) {
       : "_no operator CMA overrides supplied_",
     "",
     "## 12 — Effective Inputs Used for Verdict",
-    `- **Effective conservative ARV**: $${effectiveConservativeArv != null ? effectiveConservativeArv.toLocaleString() : "null"}${cmaArvLow != null || cmaPpsfLow != null ? " (CMA)" : (syn?.arvConservative != null ? " (system)" : "")}`,
-    `- **Effective rehab (high band)**: $${effectiveRehabHigh != null ? effectiveRehabHigh.toLocaleString() : "null"}${cmaRehabHigh != null || cmaRehab != null ? " (CMA)" : ""}`,
+    "> Rule: CMA can only TIGHTEN the bounds. Conservative ARV = MIN(vision, CMA); pessimistic rehab = MAX(vision, CMA). Operator-supplied numbers never relax the underwriting floor.",
+    `- **Effective conservative ARV**: $${effectiveConservativeArv != null ? effectiveConservativeArv.toLocaleString() : "null"} — source: ${arvLowSource}`,
+    visionConservativeArv != null ? `  - vision conservative: $${visionConservativeArv.toLocaleString()}` : "  - vision conservative: null",
+    cmaArvLowComposite != null ? `  - CMA low: $${cmaArvLowComposite.toLocaleString()}` : "  - CMA low: null",
+    `- **Effective pessimistic rehab**: $${effectiveRehabHigh != null ? effectiveRehabHigh.toLocaleString() : "null"} — source: ${rehabHighSource}`,
+    visionRehabHigh != null ? `  - vision high: $${visionRehabHigh.toLocaleString()}` : "  - vision high: null",
+    cmaRehabHigh != null ? `  - CMA high: $${cmaRehabHigh.toLocaleString()}` : "  - CMA high: null",
     `- **Sticky floor**: $${stickyFloor != null ? stickyFloor.toLocaleString() : "null"}`,
   ].filter(Boolean).join("\n");
 
