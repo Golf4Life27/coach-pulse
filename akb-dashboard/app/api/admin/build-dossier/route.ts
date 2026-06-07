@@ -52,14 +52,10 @@ async function handle(req: Request) {
   const auth = await authenticate(headers, env, kvProd);
   const url = new URL(req.url);
   const recordId = url.searchParams.get("recordId") ?? "";
-  // TEMP 2026-06-07: operator-authorized re-fire of Deal #002 only
-  // (recO7XFKcUVTTxMcB, post-vision + radius-tuned).
-  const TEMP_PUBLIC = recordId === "recO7XFKcUVTTxMcB";
-  if (!TEMP_PUBLIC) {
-    if (!auth.ok) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-    if (auth.kind !== "cron" && auth.kind !== "oauth") return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-    if (auth.kind === "oauth" && !kvConfigured()) return NextResponse.json({ error: "kv_not_configured" }, { status: 500 });
-  }
+  // Re-locked 2026-06-07 after Deal #002 re-fire.
+  if (!auth.ok) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (auth.kind !== "cron" && auth.kind !== "oauth") return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  if (auth.kind === "oauth" && !kvConfigured()) return NextResponse.json({ error: "kv_not_configured" }, { status: 500 });
 
   if (!recordId.startsWith("rec")) return NextResponse.json({ error: "bad_record_id" }, { status: 400 });
   const dealNumberRaw = url.searchParams.get("deal");
