@@ -8,6 +8,7 @@ import { formatCurrency } from "@/lib/utils";
 import { ALL_DD_ITEMS } from "@/lib/actionQueue";
 import { showToast } from "@/components/Toast";
 import MaverickDealCommentary from "@/components/MaverickDealCommentary";
+import DealFilePanel from "@/components/DealFilePanel";
 import AppraiserArvPanel from "@/components/AppraiserArvPanel";
 import AppraiserRehabPanel from "@/components/AppraiserRehabPanel";
 import AppraiserBuyerIntelligencePanel from "@/components/AppraiserBuyerIntelligencePanel";
@@ -224,6 +225,9 @@ export default function DealWorkspace() {
           envelopeId: listing.envelopeId ?? null,
         }}
       />
+
+      {/* Wire #1 (SYSTEM_HANDOFF.md) — the Deal File / underwrite on the deal page */}
+      <DealFilePanel recordId={listing.id} />
 
       {/* Phase 5.3 — Scribe envelope panel */}
       <ScribeDealCommentary
