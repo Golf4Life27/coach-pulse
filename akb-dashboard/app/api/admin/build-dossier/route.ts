@@ -20,6 +20,7 @@ import {
   synthesizeArv,
 } from "@/lib/attom/property";
 import { computePessimisticMao, classifyRehabTier } from "@/lib/markets/pessimistic-mao";
+import { parseOperatorFigure } from "@/lib/markets/operator-input";
 import { defaultInvestorCapFor } from "@/lib/landlord-hydrate";
 import { listMarkets } from "@/lib/markets/registry";
 import { resolveCumulativeDom } from "@/lib/attom/cumulative-dom";
@@ -69,18 +70,26 @@ async function handle(req: Request) {
   // underwrites against. EVERY override is surfaced in Section 11 with its
   // source, so the dossier never silently passes operator-supplied numbers
   // off as system-derived.
-  const cmaArvLowRaw = url.searchParams.get("cma_arv_low");
-  const cmaArvHighRaw = url.searchParams.get("cma_arv_high");
-  const cmaArvLow = cmaArvLowRaw ? parseInt(cmaArvLowRaw, 10) : null;
-  const cmaArvHigh = cmaArvHighRaw ? parseInt(cmaArvHighRaw, 10) : null;
-  const cmaPpsfLowRaw = url.searchParams.get("cma_ppsf_low");
-  const cmaPpsfHighRaw = url.searchParams.get("cma_ppsf_high");
-  const cmaPpsfLow = cmaPpsfLowRaw ? parseFloat(cmaPpsfLowRaw) : null;
-  const cmaPpsfHigh = cmaPpsfHighRaw ? parseFloat(cmaPpsfHighRaw) : null;
-  const cmaRehabRaw = url.searchParams.get("cma_rehab_mid");
-  const cmaRehabHighRaw = url.searchParams.get("cma_rehab_high");
-  const cmaRehab = cmaRehabRaw ? parseInt(cmaRehabRaw, 10) : null;
-  const cmaRehabHigh = cmaRehabHighRaw ? parseInt(cmaRehabHighRaw, 10) : null;
+  // ── INPUT-INTEGRITY GUARD (operator brief 2026-06-07, test-pinned) ─────
+  // "CMA/operator inputs are operator-supplied figures verbatim or rejected
+  //  — prose never converts to numbers." Every numeric CMA override is run
+  // through parseOperatorFigure, which accepts ONLY clean verbatim figures
+  // ($/commas allowed) and REJECTS anything prose-shaped ("22k", "$22k high
+  // photo-informed", …). A rejected token is treated as NOT supplied (the
+  // value stays null and never reaches the verdict math) and is surfaced in
+  // Section 11 + the audit so it can never silently become a number again.
+  const cmaRejections: string[] = [];
+  const ingestFigure = (paramName: string, kind: "int" | "float"): number | null => {
+    const res = parseOperatorFigure(url.searchParams.get(paramName), kind);
+    if (!res.ok) cmaRejections.push(`${paramName}="${res.raw}" → REJECTED: ${res.reason}`);
+    return res.value;
+  };
+  const cmaArvLow = ingestFigure("cma_arv_low", "int");
+  const cmaArvHigh = ingestFigure("cma_arv_high", "int");
+  const cmaPpsfLow = ingestFigure("cma_ppsf_low", "float");
+  const cmaPpsfHigh = ingestFigure("cma_ppsf_high", "float");
+  const cmaRehab = ingestFigure("cma_rehab_mid", "int");
+  const cmaRehabHigh = ingestFigure("cma_rehab_high", "int");
   const cmaSource = url.searchParams.get("cma_source") ?? "operator_cma";
   const cmaTitleFlag = url.searchParams.get("title_flag");
   const cmaDomNote = url.searchParams.get("dom_note");
@@ -265,8 +274,13 @@ async function handle(req: Request) {
           cmaDomNote ? `- **DOM context**: ${cmaDomNote}` : "",
           cmaPriorCampaign ? `- **Prior campaign**: ${cmaPriorCampaign}` : "",
           "- ↑ All CMA inputs are operator-supplied. The system did not derive these.",
+          cmaRejections.length > 0
+            ? `- ⚠ **REJECTED at ingestion** (not verbatim numbers — prose is never coerced):\n${cmaRejections.map((r) => `  - ${r}`).join("\n")}`
+            : "",
         ].filter(Boolean).join("\n")
-      : "_no operator CMA overrides supplied_",
+      : (cmaRejections.length > 0
+          ? `⚠ **All supplied CMA numeric overrides were REJECTED** (prose is never coerced into a number):\n${cmaRejections.map((r) => `- ${r}`).join("\n")}`
+          : "_no operator CMA overrides supplied_"),
     "",
     "## 12 — Effective Inputs Used for Verdict",
     "> Rule: CMA can only TIGHTEN the bounds. Conservative ARV = MIN(vision, CMA); pessimistic rehab = MAX(vision, CMA). Operator-supplied numbers never relax the underwriting floor.",
@@ -313,8 +327,8 @@ async function handle(req: Request) {
     event: "deal_dossier_built",
     status: "confirmed_success",
     recordId,
-    inputSummary: { deal: dealNumber, sticky_floor: stickyFloor, auth: auth.ok ? auth.kind : "?" },
-    outputSummary: { verdict: pess.verdict, pessimistic_mao: pess.pessimisticMao, written, write_error: writeError, duration_ms: Date.now() - t0 },
+    inputSummary: { deal: dealNumber, sticky_floor: stickyFloor, auth: auth.ok ? auth.kind : "?", cma_rejections: cmaRejections },
+    outputSummary: { verdict: pess.verdict, pessimistic_mao: pess.pessimisticMao, written, write_error: writeError, cma_rejected_count: cmaRejections.length, duration_ms: Date.now() - t0 },
   });
 
   return NextResponse.json({
@@ -335,6 +349,7 @@ async function handle(req: Request) {
     contact_event_count: events.length,
     written_to_airtable: written,
     write_error: writeError,
+    cma_rejections: cmaRejections,
     dossier_markdown: md,
   });
 }
