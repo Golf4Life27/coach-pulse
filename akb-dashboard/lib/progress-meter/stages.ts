@@ -185,7 +185,6 @@ export const PIPELINE_STAGES: PipelineStage[] = [
       "Largely manual. Inbound seller-agent replies are relayed by the operator via Quo/Gmail. No autonomous negotiation-state machine; RESPONSE-DUE alerts have stage false-positives.",
     blockers: [
       { ref: "INV-020", text: "Inbox triage + auto-draft not wired" },
-      { ref: "INV-010", text: "RESPONSE DUE false-positive contradicting deal stage" },
       { ref: "INV-007", text: "Multi-listing-agent attribution layer (Step 2) not built" },
     ],
     pathTo100: [

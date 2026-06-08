@@ -170,12 +170,35 @@ export function mergeTimeline(
   return { timeline, ambiguous };
 }
 
-export function computeResponseStatus(timeline: TimelineEntry[]): {
+/** INV-010 — Pipeline stages where RESPONSE DUE is structurally
+ *  inappropriate. A signed contract / closed deal / dead record can
+ *  have an old inbound newer than the most recent outbound, but the
+ *  alert "agent waiting on you" is wrong: the operator is waiting on
+ *  title, on closing, on nothing. Suppress.
+ *
+ *  Negotiating / offer_drafted INTENTIONALLY stay open — an unanswered
+ *  inbound at those stages IS operator-actionable. */
+const RESPONSE_DUE_SUPPRESSED_STAGES: ReadonlySet<string> = new Set([
+  "under_contract",
+  "dispo_active",
+  "assignment_signed",
+  "closed",
+  "dead",
+]);
+
+export function computeResponseStatus(
+  timeline: TimelineEntry[],
+  pipelineStage?: string | null,
+): {
   lastInbound: string | null;
   lastOutbound: string | null;
   hoursSinceInbound: number | null;
   hoursSinceOutbound: number | null;
   responseDue: boolean;
+  /** INV-010 — set when responseDue was suppressed by stage gate. Lets
+   *  the UI distinguish "no inbound" from "inbound but past the
+   *  engagement window" if a future surface wants to. */
+  responseDueSuppressedByStage: boolean;
   lastInboundBody: string | null;
 } {
   let lastInbound: string | null = null;
@@ -198,7 +221,25 @@ export function computeResponseStatus(timeline: TimelineEntry[]): {
   const now = Date.now();
   const hoursSinceInbound = lastInbound ? Math.floor((now - new Date(lastInbound).getTime()) / 3_600_000) : null;
   const hoursSinceOutbound = lastOutbound ? Math.floor((now - new Date(lastOutbound).getTime()) / 3_600_000) : null;
-  const responseDue = lastInbound !== null && (lastOutbound === null || new Date(lastInbound) > new Date(lastOutbound));
+  const rawResponseDue =
+    lastInbound !== null && (lastOutbound === null || new Date(lastInbound) > new Date(lastOutbound));
 
-  return { lastInbound, lastOutbound, hoursSinceInbound, hoursSinceOutbound, responseDue, lastInboundBody };
+  // INV-010: stage-aware suppression. An old "thanks!" inbound on a
+  // record at "under_contract" should not light up the operator's deal
+  // page with "agent waiting on you" — the workflow has moved past the
+  // reply-due window.
+  const suppressed =
+    rawResponseDue &&
+    typeof pipelineStage === "string" &&
+    RESPONSE_DUE_SUPPRESSED_STAGES.has(pipelineStage);
+
+  return {
+    lastInbound,
+    lastOutbound,
+    hoursSinceInbound,
+    hoursSinceOutbound,
+    responseDue: rawResponseDue && !suppressed,
+    responseDueSuppressedByStage: suppressed,
+    lastInboundBody,
+  };
 }

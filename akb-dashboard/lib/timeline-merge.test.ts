@@ -5,7 +5,8 @@
 // H2 outbound bodies cite the offer ≈65% of list).
 
 import { describe, it, expect } from "vitest";
-import { scorePropertyMatch, mergeTimeline, type SiblingRecord } from "./timeline-merge";
+import { scorePropertyMatch, mergeTimeline, computeResponseStatus, type SiblingRecord } from "./timeline-merge";
+import type { TimelineEntry } from "@/types/jarvis";
 
 const SIBLINGS_NONE: SiblingRecord[] = [];
 
@@ -278,5 +279,82 @@ describe("mergeTimeline — multi-listing path (with siblings)", () => {
       },
     );
     expect(ambiguous).toHaveLength(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// INV-010 — RESPONSE DUE stage-aware suppression
+// ─────────────────────────────────────────────────────────────────────
+
+function tlEntry(over: Partial<TimelineEntry>): TimelineEntry {
+  return {
+    timestamp: "2026-06-08T12:00:00Z",
+    channel: "sms",
+    direction: "in",
+    body: "",
+    sender: "agent",
+    propertyMatch: { recordId: "recX", confidence: 1.0 },
+    ...over,
+  };
+}
+
+describe("computeResponseStatus — INV-010 stage suppression", () => {
+  // The classic INV-010 scenario: inbound > outbound, so the raw signal
+  // says responseDue=true, but the deal is past the engagement window.
+  const tl: TimelineEntry[] = [
+    tlEntry({ timestamp: "2026-06-07T10:00:00Z", direction: "out", body: "first" }),
+    tlEntry({ timestamp: "2026-06-08T12:00:00Z", direction: "in", body: "thanks" }),
+  ];
+
+  it("returns responseDue=true with no stage (current behavior preserved)", () => {
+    const r = computeResponseStatus(tl);
+    expect(r.responseDue).toBe(true);
+    expect(r.responseDueSuppressedByStage).toBe(false);
+  });
+
+  it("SUPPRESSES responseDue at under_contract (the INV-010 regression case)", () => {
+    const r = computeResponseStatus(tl, "under_contract");
+    expect(r.responseDue).toBe(false);
+    expect(r.responseDueSuppressedByStage).toBe(true);
+  });
+
+  it("SUPPRESSES at dispo_active / assignment_signed / closed / dead", () => {
+    for (const stage of ["dispo_active", "assignment_signed", "closed", "dead"]) {
+      const r = computeResponseStatus(tl, stage);
+      expect(r.responseDue).toBe(false);
+      expect(r.responseDueSuppressedByStage).toBe(true);
+    }
+  });
+
+  it("KEEPS responseDue=true at negotiating / offer_drafted (still operator-actionable)", () => {
+    for (const stage of ["negotiating", "offer_drafted", "responded"]) {
+      const r = computeResponseStatus(tl, stage);
+      expect(r.responseDue).toBe(true);
+      expect(r.responseDueSuppressedByStage).toBe(false);
+    }
+  });
+
+  it("does not invent responseDue when raw signal is false (suppression is one-way)", () => {
+    // outbound > inbound → raw is already false. The suppressed flag
+    // tracks "would have fired but was gated", not "was already off".
+    const noReply: TimelineEntry[] = [
+      tlEntry({ timestamp: "2026-06-08T12:00:00Z", direction: "in", body: "ok" }),
+      tlEntry({ timestamp: "2026-06-08T13:00:00Z", direction: "out", body: "thanks" }),
+    ];
+    const r = computeResponseStatus(noReply, "under_contract");
+    expect(r.responseDue).toBe(false);
+    expect(r.responseDueSuppressedByStage).toBe(false);
+  });
+
+  it("preserves all the other status fields unchanged when suppressing", () => {
+    const r = computeResponseStatus(tl, "under_contract");
+    expect(r.lastInbound).toBe("2026-06-08T12:00:00Z");
+    expect(r.lastOutbound).toBe("2026-06-07T10:00:00Z");
+    expect(r.lastInboundBody).toBe("thanks");
+  });
+
+  it("null stage = no suppression (defensive default)", () => {
+    expect(computeResponseStatus(tl, null).responseDue).toBe(true);
+    expect(computeResponseStatus(tl, undefined).responseDue).toBe(true);
   });
 });

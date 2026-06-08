@@ -111,7 +111,12 @@ export async function GET(
       },
     );
 
-    const status = computeResponseStatus(timeline);
+    // INV-010 — stage-aware RESPONSE DUE suppression. Pipeline_Stage is
+    // the source of truth (Spine recUS0oHqXLtEM3lG Track B); we pass it
+    // straight through, no fallback. Records without a stage stay open
+    // (current behavior — the gate only suppresses on a known terminal-
+    // ish stage).
+    const status = computeResponseStatus(timeline, listing.pipelineStage ?? null);
 
     const stageSignals = detectStageSignals(timeline);
     const dealStage = inferDealStage({
