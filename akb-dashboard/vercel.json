@@ -38,7 +38,7 @@
     },
     {
       "path": "/api/cron/listings-intake",
-      "schedule": "0 3 * * *"
+      "schedule": "*/10 * * * *"
     },
     {
       "path": "/api/cron/zip-approval-reply-scan",

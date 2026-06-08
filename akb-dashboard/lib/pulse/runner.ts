@@ -32,6 +32,7 @@ import { detectVerificationUrlCoverage } from "./detectors/verification-url-cove
 import { detectPaidApiSpend } from "./detectors/paid-api-spend";
 import { detectProgressMeterMovement } from "./detectors/progress-meter-movement";
 import { detectUnbackedReplyStatus } from "./detectors/unbacked-reply-status";
+import { detectIntakeRunDuration } from "./detectors/intake-run-duration";
 
 import { audit } from "@/lib/audit-log";
 import { writeState, type WriteStateDeps } from "@/lib/maverick/write-state";
@@ -69,6 +70,7 @@ export function runAllDetectors(input: PulseDetectorInput): PulseDetection[] {
     ...detectPaidApiSpend(input),
     ...detectProgressMeterMovement(input),
     ...detectUnbackedReplyStatus(input),
+    ...detectIntakeRunDuration(input),
   ];
 }
 

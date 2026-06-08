@@ -49,7 +49,7 @@ import {
 import { shouldAutoPromote, type AutoPromoteBlockReason } from "@/lib/crawler/auto-promote";
 import { SOURCE_VERSION_FIELD_NAME, SOURCE_VERSION_V2 } from "@/lib/source-version";
 import { rentcastQuotaAllows, computeBurnRate } from "@/lib/maverick/rentcast-burn-rate";
-import { selectDailyZipSlice, type ZipSliceResult } from "@/lib/crawler/zip-rotation";
+import { selectDueZips, type ZipDueResult } from "@/lib/crawler/zip-rotation";
 import { fetchExternalRentCastState } from "@/lib/maverick/sources/external-rentcast";
 import { fetchVercelKvAuditState } from "@/lib/maverick/sources/vercel-kv-audit";
 import { verifyListing, classifyVerifiedListing, FIRECRAWL_RATE_LIMIT_PER_MINUTE } from "@/lib/crawler/sources/firecrawl";
@@ -64,6 +64,18 @@ const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
 const LISTINGS_TABLE = "tbldMjKBgPiq45Jjs";
 
 const PER_RUN_CAP = Number(process.env.RENTCAST_INTAKE_MAX_CALLS_PER_RUN ?? "30");
+// Per-invocation ZIP cap (2026-06-08 timeout fix). The 30-ZIP daily slice
+// hit FUNCTION_INVOCATION_TIMEOUT (300s). Fix forward via FREQUENCY: a
+// SMALL cap per invocation + a frequent cron, advancing a freshness cursor.
+// Default 6 is a deliberately conservative starting point — the
+// self-limiting wall-clock budget below is the hard safety, and the
+// per-ZIP timing telemetry in the response lets us size this from
+// MEASUREMENT (not a guess): set ≈ floor(LAMBDA_BUDGET_MS / per_zip_avg_ms).
+const ZIPS_PER_RUN = Number(process.env.RENTCAST_INTAKE_ZIPS_PER_RUN ?? "6");
+// Freshness-cycle window: a ZIP is "due" when last ingested > this many
+// hours ago (or never). 24h → each ZIP gets one pass per day, spread
+// across many small frequent runs.
+const ZIP_CYCLE_HOURS = Number(process.env.RENTCAST_INTAKE_CYCLE_HOURS ?? "24");
 // Firecrawl verification budget — one /v2/search (inline scrape) per
 // accepted, non-duplicate candidate. Default 1000 covers the ~974 baseline
 // + headroom. Over budget → skip remainder + Spine-write.
@@ -71,11 +83,13 @@ const FIRECRAWL_MAX_SCRAPES_PER_RUN = Number(process.env.FIRECRAWL_MAX_SCRAPES_P
 // Bounded concurrency for the Firecrawl verify pool. Default 20 stays under
 // the 50-browser Standard ceiling with headroom; raise if tier upgrades.
 const FIRECRAWL_MAX_CONCURRENT = Number(process.env.FIRECRAWL_MAX_CONCURRENT ?? "20");
-// Wall-clock guard: Vercel Hobby caps maxDuration at 300s. Stop DISPATCHING
-// new Firecrawl calls at 270s (in-flight calls finish); the run ends cleanly
-// instead of being killed mid-write. With ~20-way concurrency a single ZIP
-// (~50-135 candidates) finishes well inside this.
-const FIRECRAWL_TIME_BUDGET_MS = 270_000;
+// SELF-LIMITING wall-clock budget (2026-06-08). maxDuration=300 (Pro max).
+// Budget = 180s = 60% of the ceiling → 40% margin per operator directive.
+// The route stops DISPATCHING new Firecrawl work at this mark so in-flight
+// calls + classify + registry-writeback finish well inside 300s. Combined
+// with the small ZIP cap, the run physically cannot hit the lambda timeout
+// regardless of per-ZIP variance.
+const LAMBDA_BUDGET_MS = Number(process.env.RENTCAST_INTAKE_BUDGET_MS ?? "180000");
 
 /** Manual ZIP override (comma-sep 5-digit) via `?zips=` or `?zip_override=`.
  *  When present it BYPASSES ZIP_Registry — used for manual per-ZIP dry-run
@@ -252,28 +266,36 @@ export async function GET(req: Request) {
   // post-run stats write-back find each ZIP's registry row. ───────────
   const overrideZips = readZipOverride(url);
   const overrideUsed = overrideZips.length > 0;
+  // Optional per-fire cap override (?cap=N) so a measurement run can pin
+  // an exact small slice without touching env.
+  const capOverrideRaw = Number(url.searchParams.get("cap"));
+  const zipCap = Number.isFinite(capOverrideRaw) && capOverrideRaw > 0
+    ? Math.floor(capOverrideRaw)
+    : ZIPS_PER_RUN;
   let zips: string[] = overrideZips;
   const zipToRecordId = new Map<string, string>();
   let zipSource: "override" | "registry" = "override";
-  // Rotation slice — populated only when the registry is bigger than the
-  // per-run cap; null for override fires (operator-explicit) and for tiny
-  // registries that don't need rotation.
-  let zipSlice: ZipSliceResult | null = null;
+  // Freshness-cursor selection diagnostic — populated for registry fires.
+  let zipDue: ZipDueResult | null = null;
   if (!overrideUsed) {
     zipSource = "registry";
     try {
       const rows = await getActiveIntakeRows();
-      const allEligible = Array.from(new Set(rows.map((r) => r.zip))).sort();
       for (const r of rows) if (!zipToRecordId.has(r.zip)) zipToRecordId.set(r.zip, r.recordId);
 
-      // Rotate when the registry exceeds the per-run cap. Without rotation
-      // the cron stalls on calls_needed > per_run_cap (2026-06-08 outage:
-      // 54 ZIPs vs cap 30 → six-day total intake outage). With rotation
-      // it sweeps the full registry over ceil(total/cap) days, deterministic
-      // per UTC day, and structurally addresses the cross-market breadth
-      // gap (every slice spans the sorted registry).
-      zipSlice = selectDailyZipSlice(allEligible, PER_RUN_CAP, new Date());
-      zips = zipSlice.selected;
+      // FRESHNESS CURSOR (2026-06-08 timeout fix). Pick the `zipCap` stalest
+      // DUE ZIPs (null or last-ingested > ZIP_CYCLE_HOURS ago). Many small
+      // frequent runs cover the registry; each run is bounded; a ZIP already
+      // freshened this cycle is skipped (no re-dig); an errored ZIP stays
+      // due for the next run. Replaces the day-index rotation, which picked
+      // the SAME slice on every sub-daily run and couldn't advance.
+      zipDue = selectDueZips(
+        rows.map((r) => ({ zip: r.zip, lastIngestedAt: r.lastIngestedAt })),
+        zipCap,
+        new Date(),
+        ZIP_CYCLE_HOURS,
+      );
+      zips = zipDue.selected;
     } catch (err) {
       return NextResponse.json(
         { error: "zip_registry_fetch_failed", message: err instanceof Error ? err.message : String(err) },
@@ -415,6 +437,8 @@ export async function GET(req: Request) {
   const seenKeys = new Set<string>(); // intra-run dedup across overlapping ZIPs
   const toVerify: Array<{ candidate: IntakeCandidate; zip: string }> = [];
 
+  // ── Phase 1 timing: RentCast collect (per-ZIP wall-time instrumentation) ──
+  const tCollectStart = Date.now();
   for (let i = 0; i < zips.length; i += ZIP_FETCH_CONCURRENCY) {
     const chunk = zips.slice(i, i + ZIP_FETCH_CONCURRENCY);
     const fetched = await Promise.all(
@@ -465,7 +489,10 @@ export async function GET(req: Request) {
     }
   }
 
+  const collectMs = Date.now() - tCollectStart;
+
   // ── Budget split: dispatch up to the per-run Firecrawl scrape budget. ──
+  const tVerifyStart = Date.now();
   const dispatchable = toVerify.slice(0, FIRECRAWL_MAX_SCRAPES_PER_RUN);
   const budgetSkipped = toVerify.slice(FIRECRAWL_MAX_SCRAPES_PER_RUN);
   if (budgetSkipped.length > 0) {
@@ -481,14 +508,16 @@ export async function GET(req: Request) {
     items: dispatchable,
     concurrency: FIRECRAWL_MAX_CONCURRENT,
     beforeDispatch: rateGate,
-    shouldStopDispatch: () => Date.now() - t0 > FIRECRAWL_TIME_BUDGET_MS,
+    shouldStopDispatch: () => Date.now() - t0 > LAMBDA_BUDGET_MS,
     worker: async (it) => verifyListing(it.candidate.address, { debug }),
   });
+  const verifyMs = Date.now() - tVerifyStart;
   const timeBudgetHit = pool.skipped.length > 0;
   if (timeBudgetHit) bump("firecrawl_skipped_time", pool.skipped.length);
 
   // ── Phase 3: classify completed results (sequential — accurate count
   // aggregation regardless of non-deterministic completion order). ──
+  const tClassifyStart = Date.now();
   const toWrite: Array<{
     candidate: IntakeCandidate;
     zip: string;
@@ -678,6 +707,28 @@ export async function GET(req: Request) {
 
   summary.firecrawl.time_budget_hit = timeBudgetHit;
 
+  // ── Run-duration telemetry (2026-06-08). Per-ZIP wall-time = total /
+  // ZIPs processed; phase split shows WHERE time goes (RentCast collect vs
+  // Firecrawl verify vs classify+write). This is the measurement that
+  // sizes ZIPS_PER_RUN: set ≈ floor(LAMBDA_BUDGET_MS / per_zip_avg_ms).
+  const classifyMs = Date.now() - tClassifyStart;
+  const totalMs = Date.now() - t0;
+  const zipsProcessed = zipsProcessedOk.size;
+  const timing = {
+    total_ms: totalMs,
+    collect_ms: collectMs,
+    verify_ms: verifyMs,
+    classify_write_ms: classifyMs,
+    zips_processed: zipsProcessed,
+    per_zip_avg_ms: zipsProcessed > 0 ? Math.round(totalMs / zipsProcessed) : null,
+    lambda_budget_ms: LAMBDA_BUDGET_MS,
+    max_duration_ms: 300_000,
+    budget_margin_pct: Math.round((1 - LAMBDA_BUDGET_MS / 300_000) * 100),
+    // True when the run consumed >80% of the lambda ceiling — the
+    // duration-creep tripwire the Pulse detector also watches.
+    near_timeout: totalMs > 0.8 * 300_000,
+  };
+
   // Firecrawl budget OR the 300s lambda wall-clock exceeded mid-run →
   // Spine-write so the operator knows the run was partial.
   if (summary.firecrawl.budget_hit || timeBudgetHit) {
@@ -688,13 +739,14 @@ export async function GET(req: Request) {
         attribution_agent: "scout",
         title: `Listings-intake PARTIAL run — stopped on ${cause}`,
         description:
-          `listings-intake stopped mid-run. cause=${cause}. ` +
+          `listings-intake stopped mid-run within its self-limiting budget. cause=${cause}. ` +
           `firecrawl scrapes_used=${summary.firecrawl.scrapes_used} (budget ${FIRECRAWL_MAX_SCRAPES_PER_RUN}), ` +
-          `credits_used=${summary.firecrawl.credits_used}, accepted=${summary.accepted}. ` +
-          `Remaining candidates skipped (firecrawl_skipped_time / firecrawl_skipped_budget). ` +
-          `A single Vercel Hobby 300s invocation cannot verify the full ~974 set (per-call Firecrawl ` +
-          `latency × volume far exceeds 300s, independent of Firecrawl tier). To validate all 15 ZIPs, ` +
-          `run the dry-run per-ZIP via ?zips=<zip>; live intake chips through via daily runs + address dedup.`,
+          `credits_used=${summary.firecrawl.credits_used}, accepted=${summary.accepted}, ` +
+          `zips_processed=${zipsProcessed}, per_zip_avg_ms=${timing.per_zip_avg_ms}. ` +
+          `This is EXPECTED, not an error: the wall-clock budget (${LAMBDA_BUDGET_MS}ms, ${timing.budget_margin_pct}% margin under 300s) ` +
+          `stopped dispatch so the run finished cleanly instead of timing out. The un-processed ZIPs stay DUE ` +
+          `(freshness cursor) and are picked up by the next frequent run. If per_zip_avg_ms is rising toward the ` +
+          `budget, lower RENTCAST_INTAKE_ZIPS_PER_RUN (currently ${zipCap}).`,
       });
     } catch (err) {
       console.error("[listings-intake] Spine write (partial-run) failed:", err);
@@ -718,6 +770,9 @@ export async function GET(req: Request) {
       firecrawl_credits: summary.firecrawl.credits_used,
       per_zip: summary.per_zip,
       auto_promote: summary.auto_promote,
+      // Run-duration telemetry → consumed by the Pulse
+      // intake_run_duration detector (creep alarm before timeout).
+      timing,
     },
     ms: Date.now() - t0,
   });
@@ -726,15 +781,16 @@ export async function GET(req: Request) {
     ok: true,
     auth_kind: authKind,
     duration_ms: Date.now() - t0,
+    timing,
     zip_source: zipSource,
-    zip_rotation: zipSlice
+    zip_due: zipDue
       ? {
-          total_eligible: zipSlice.totalEligible,
-          slice_size: zipSlice.selected.length,
-          start_index: zipSlice.startIndex,
-          cycle_days: zipSlice.cycleDays,
-          wrapped: zipSlice.wrapped,
-          per_run_cap: PER_RUN_CAP,
+          selected: zipDue.selected,
+          due_total: zipDue.dueTotal,
+          fresh_total: zipDue.freshTotal,
+          cap: zipDue.cap,
+          cycle_hours: zipDue.cycleHours,
+          runs_to_clear_backlog: zipDue.runsToClearBacklog,
         }
       : null,
     registry: registryWriteback,

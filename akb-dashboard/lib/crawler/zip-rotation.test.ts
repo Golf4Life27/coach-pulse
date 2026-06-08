@@ -109,3 +109,116 @@ describe("utcDayIndex", () => {
     expect(b - a).toBe(1);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// selectDueZips — freshness cursor (2026-06-08 timeout fix).
+// ─────────────────────────────────────────────────────────────────────
+
+import { selectDueZips, type ZipDueRow } from "./zip-rotation";
+
+const NOW = new Date("2026-06-08T18:00:00Z");
+const hoursAgo = (h: number) => new Date(NOW.getTime() - h * 3_600_000).toISOString();
+
+describe("selectDueZips — freshness cursor", () => {
+  it("treats never-ingested (null) ZIPs as the stalest — picked first", () => {
+    const rows: ZipDueRow[] = [
+      { zip: "48201", lastIngestedAt: null },
+      { zip: "78210", lastIngestedAt: hoursAgo(48) },
+    ];
+    const r = selectDueZips(rows, 5, NOW, 24);
+    expect(r.selected[0]).toBe("48201"); // null is oldest
+    expect(r.dueTotal).toBe(2);
+  });
+
+  it("excludes ZIPs freshened within the cycle window (never re-dig)", () => {
+    const rows: ZipDueRow[] = [
+      { zip: "48201", lastIngestedAt: hoursAgo(2) }, // fresh
+      { zip: "78210", lastIngestedAt: hoursAgo(30) }, // due
+    ];
+    const r = selectDueZips(rows, 5, NOW, 24);
+    expect(r.selected).toEqual(["78210"]);
+    expect(r.freshTotal).toBe(1);
+    expect(r.dueTotal).toBe(1);
+  });
+
+  it("caps the per-invocation set (the timeout fix — small runs)", () => {
+    const rows: ZipDueRow[] = Array.from({ length: 54 }, (_, i) => ({
+      zip: String(48200 + i),
+      lastIngestedAt: null,
+    }));
+    const r = selectDueZips(rows, 6, NOW, 24);
+    expect(r.selected).toHaveLength(6);
+    expect(r.dueTotal).toBe(54);
+    expect(r.runsToClearBacklog).toBe(9); // ceil(54/6)
+  });
+
+  it("advances across invocations as ZIPs get freshened", () => {
+    // Run 1: 54 stale, cap 6 → picks first 6.
+    const rows: ZipDueRow[] = Array.from({ length: 54 }, (_, i) => ({
+      zip: String(48200 + i),
+      lastIngestedAt: null,
+    }));
+    const run1 = selectDueZips(rows, 6, NOW, 24);
+    // Simulate freshening those 6.
+    const freshenedZips = new Set(run1.selected);
+    const after = rows.map((r) =>
+      freshenedZips.has(r.zip) ? { ...r, lastIngestedAt: NOW.toISOString() } : r,
+    );
+    const run2 = selectDueZips(after, 6, NOW, 24);
+    // Run 2 picks a DIFFERENT 6 (the next stalest) — no overlap.
+    expect(run2.selected.some((z) => freshenedZips.has(z))).toBe(false);
+    expect(run2.dueTotal).toBe(48);
+  });
+
+  it("no-ops when everything is fresh (cycle complete)", () => {
+    const rows: ZipDueRow[] = Array.from({ length: 10 }, (_, i) => ({
+      zip: String(48200 + i),
+      lastIngestedAt: hoursAgo(1),
+    }));
+    const r = selectDueZips(rows, 6, NOW, 24);
+    expect(r.selected).toEqual([]);
+    expect(r.dueTotal).toBe(0);
+    expect(r.freshTotal).toBe(10);
+  });
+
+  it("is idempotent within a cycle (same now + rows → same selection)", () => {
+    const rows: ZipDueRow[] = [
+      { zip: "48201", lastIngestedAt: hoursAgo(40) },
+      { zip: "48202", lastIngestedAt: hoursAgo(50) },
+      { zip: "48203", lastIngestedAt: null },
+    ];
+    const a = selectDueZips(rows, 2, NOW, 24);
+    const b = selectDueZips(rows, 2, NOW, 24);
+    expect(a.selected).toEqual(b.selected);
+    // Stalest-first: null (48203), then 50h (48202).
+    expect(a.selected).toEqual(["48203", "48202"]);
+  });
+
+  it("partial-safe: an un-freshened (errored) ZIP stays due next run", () => {
+    const rows: ZipDueRow[] = [
+      { zip: "48201", lastIngestedAt: null },
+      { zip: "48202", lastIngestedAt: null },
+    ];
+    const run1 = selectDueZips(rows, 2, NOW, 24);
+    // Simulate ONLY 48201 freshened (48202 errored mid-run).
+    const after = rows.map((r) =>
+      r.zip === "48201" ? { ...r, lastIngestedAt: NOW.toISOString() } : r,
+    );
+    const run2 = selectDueZips(after, 2, NOW, 24);
+    expect(run2.selected).toEqual(["48202"]); // errored ZIP still due
+  });
+
+  it("cap <= 0 returns empty (defensive)", () => {
+    const rows: ZipDueRow[] = [{ zip: "48201", lastIngestedAt: null }];
+    expect(selectDueZips(rows, 0, NOW, 24).selected).toEqual([]);
+  });
+
+  it("skips malformed ZIPs", () => {
+    const rows: ZipDueRow[] = [
+      { zip: "bad", lastIngestedAt: null },
+      { zip: "48201", lastIngestedAt: null },
+    ];
+    const r = selectDueZips(rows, 5, NOW, 24);
+    expect(r.selected).toEqual(["48201"]);
+  });
+});
