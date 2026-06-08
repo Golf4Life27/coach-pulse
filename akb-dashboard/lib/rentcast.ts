@@ -3,8 +3,46 @@
 // Existing /api/verify-listing already uses RentCast for active-listing
 // confirmation; here we add the AVM endpoints used by /api/arv-validate.
 
+import { auditPaidCall } from "@/lib/spend/audit-paid-call";
+
 const RENTCAST_API_KEY = process.env.RENTCAST_API_KEY;
 const BASE = "https://api.rentcast.io/v1";
+
+// Wraps a single RentCast fetch call with paid-call telemetry. Emits one
+// agent:audit entry per HTTP round-trip on the "rentcast" agent — the
+// shape lib/spend/derive.ts and the paid_api_spend_24h Pulse detector
+// consume. recordId is optional: present for appraiser-routed calls that
+// already know the listing id, absent for zip-level discovery scans.
+async function paidFetch(
+  endpoint: string,
+  url: string,
+  init: RequestInit,
+  recordId?: string,
+): Promise<Response> {
+  const t0 = Date.now();
+  try {
+    const res = await fetch(url, init);
+    await auditPaidCall({
+      source: "rentcast",
+      endpoint,
+      http: res.status,
+      ms: Date.now() - t0,
+      recordId,
+      error: res.ok ? undefined : `HTTP ${res.status}`,
+    });
+    return res;
+  } catch (err) {
+    await auditPaidCall({
+      source: "rentcast",
+      endpoint,
+      http: -1,
+      ms: Date.now() - t0,
+      recordId,
+      error: String(err),
+    });
+    throw err;
+  }
+}
 
 export interface RentCastAvmValue {
   price: number | null;
@@ -48,15 +86,20 @@ function buildAvmParams(input: AvmInput): URLSearchParams {
   return p;
 }
 
-export async function getAvmValue(input: AvmInput): Promise<RentCastAvmValue | null> {
+export async function getAvmValue(
+  input: AvmInput,
+  recordId?: string,
+): Promise<RentCastAvmValue | null> {
   if (!RENTCAST_API_KEY) {
     throw new Error("RENTCAST_API_KEY not set");
   }
   const url = `${BASE}/avm/value?${buildAvmParams(input).toString()}`;
-  const res = await fetch(url, {
-    headers: { "X-Api-Key": RENTCAST_API_KEY },
-    cache: "no-store",
-  });
+  const res = await paidFetch(
+    "avm/value",
+    url,
+    { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" },
+    recordId,
+  );
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
     throw new Error(`RentCast avm/value ${res.status}: ${errText}`);
@@ -77,15 +120,20 @@ export async function getAvmValue(input: AvmInput): Promise<RentCastAvmValue | n
 // Principle (Rule 5) forbids. Now we call /avm/value, throw on non-2xx
 // (caller surfaces to UI/audit), and let a zero-length comparables list
 // be visible as a yellow flag, not invisible success.
-export async function getSaleComparables(input: AvmInput): Promise<RentCastSaleComp[]> {
+export async function getSaleComparables(
+  input: AvmInput,
+  recordId?: string,
+): Promise<RentCastSaleComp[]> {
   if (!RENTCAST_API_KEY) {
     throw new Error("RENTCAST_API_KEY not set");
   }
   const url = `${BASE}/avm/value?${buildAvmParams(input).toString()}`;
-  const res = await fetch(url, {
-    headers: { "X-Api-Key": RENTCAST_API_KEY },
-    cache: "no-store",
-  });
+  const res = await paidFetch(
+    "avm/value",
+    url,
+    { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" },
+    recordId,
+  );
 
   const bodyText = await res.text();
   let data: Record<string, unknown>;
@@ -137,15 +185,20 @@ export interface RentCastRentEstimate {
   raw: unknown;
 }
 
-export async function getRentEstimate(input: AvmInput): Promise<RentCastRentEstimate> {
+export async function getRentEstimate(
+  input: AvmInput,
+  recordId?: string,
+): Promise<RentCastRentEstimate> {
   if (!RENTCAST_API_KEY) {
     throw new Error("RENTCAST_API_KEY not set");
   }
   const url = `${BASE}/avm/rent/long-term?${buildAvmParams(input).toString()}`;
-  const res = await fetch(url, {
-    headers: { "X-Api-Key": RENTCAST_API_KEY },
-    cache: "no-store",
-  });
+  const res = await paidFetch(
+    "avm/rent/long-term",
+    url,
+    { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" },
+    recordId,
+  );
 
   const bodyText = await res.text();
   let data: Record<string, unknown>;
@@ -261,10 +314,11 @@ export async function getRentCastAssessedValue(input: {
     zipCode: input.zip,
   });
   try {
-    const res = await fetch(`${BASE}/properties?${qp.toString()}`, {
-      headers: { "X-Api-Key": RENTCAST_API_KEY },
-      cache: "no-store",
-    });
+    const res = await paidFetch(
+      "properties",
+      `${BASE}/properties?${qp.toString()}`,
+      { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" },
+    );
     if (!res.ok) return null;
     const body = (await res.json()) as unknown;
     const rec = Array.isArray(body) ? (body[0] as Record<string, unknown> | undefined) : undefined;
@@ -293,10 +347,11 @@ export async function getAnnualPropertyTaxes(input: {
     zipCode: input.zip,
   });
   try {
-    const res = await fetch(`${BASE}/properties?${qp.toString()}`, {
-      headers: { "X-Api-Key": RENTCAST_API_KEY },
-      cache: "no-store",
-    });
+    const res = await paidFetch(
+      "properties",
+      `${BASE}/properties?${qp.toString()}`,
+      { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" },
+    );
     if (!res.ok) return null;
     const body = (await res.json()) as unknown;
     const rec = Array.isArray(body) ? (body[0] as Record<string, unknown> | undefined) : undefined;
@@ -330,10 +385,11 @@ export async function getSubjectFacts(input: {
 
   // 1. Active sale listing (covers the active cluster).
   try {
-    const res = await fetch(`${BASE}/listings/sale?${qp.toString()}&status=active`, {
-      headers: { "X-Api-Key": RENTCAST_API_KEY },
-      cache: "no-store",
-    });
+    const res = await paidFetch(
+      "listings/sale",
+      `${BASE}/listings/sale?${qp.toString()}&status=active`,
+      { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" },
+    );
     if (res.ok) {
       const body = (await res.json()) as unknown;
       const rec = Array.isArray(body) ? (body[0] as Record<string, unknown> | undefined) : undefined;
@@ -346,10 +402,11 @@ export async function getSubjectFacts(input: {
 
   // 2. Property record (off-market / inactive subjects).
   try {
-    const res = await fetch(`${BASE}/properties?${qp.toString()}`, {
-      headers: { "X-Api-Key": RENTCAST_API_KEY },
-      cache: "no-store",
-    });
+    const res = await paidFetch(
+      "properties",
+      `${BASE}/properties?${qp.toString()}`,
+      { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" },
+    );
     if (res.ok) {
       const body = (await res.json()) as unknown;
       const rec = Array.isArray(body) ? (body[0] as Record<string, unknown> | undefined) : undefined;
@@ -456,10 +513,11 @@ export async function getListingPhotosFromRentCast(
 
   // 1. Active sale listing.
   try {
-    const res = await fetch(`${BASE}/listings/sale?${qp.toString()}&status=active`, {
-      headers: { "X-Api-Key": RENTCAST_API_KEY },
-      cache: "no-store",
-    });
+    const res = await paidFetch(
+      "listings/sale",
+      `${BASE}/listings/sale?${qp.toString()}&status=active`,
+      { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" },
+    );
     empty.listingsSaleStatus = res.status;
     if (res.ok) {
       const body = (await res.json()) as unknown;
@@ -477,10 +535,11 @@ export async function getListingPhotosFromRentCast(
 
   // 2. Property record.
   try {
-    const res = await fetch(`${BASE}/properties?${qp.toString()}`, {
-      headers: { "X-Api-Key": RENTCAST_API_KEY },
-      cache: "no-store",
-    });
+    const res = await paidFetch(
+      "properties",
+      `${BASE}/properties?${qp.toString()}`,
+      { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" },
+    );
     empty.propertiesStatus = res.status;
     if (res.ok) {
       const body = (await res.json()) as unknown;
