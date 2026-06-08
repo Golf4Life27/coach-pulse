@@ -235,32 +235,52 @@ export const DISTRESS_CONDITION_KEYWORDS: readonly string[] = [
   "bring your contractor", "bring contractor",
 ];
 
-/** Portfolio / investor-seller language (operator 2026-06-08).
- *  Forward-only signal — DOWN-RANKS the candidate (not a veto). A
- *  portfolio seller is reachable but has a much lower hit rate than
- *  an individual motivated seller, so the H2 outreach should deprioritize
- *  these. Distress language overrides the down-rank: a 'portfolio
- *  motivated seller' is still motivated. Word-boundary matched. */
-export const PORTFOLIO_SELLER_KEYWORDS: readonly string[] = [
-  // direct portfolio/investor-seller phrasing
-  "investor selling", "investor seller", "investor-owned", "investor owned",
-  "portfolio sale", "portfolio seller", "portfolio liquidation",
-  "package deal", "package sale",
+/** Portfolio / multi-property language (operator 2026-06-08, NARROWED).
+ *  Forward-only DOWN-RANK signal (never a veto). Distress overrides.
+ *
+ *  NARROWING RATIONALE: the first cut also triggered on single-property
+ *  occupancy status (tenant-occupied, rent-ready, turnkey rental). That
+ *  catches MOTIVATED INDIVIDUAL LANDLORDS — the opposite of intent. So
+ *  only EXPLICIT multi-property / package language triggers now. Occupancy
+ *  and 1031/institutional are CO-FACTORS: they count only when they
+ *  co-occur with actual package language, never alone.
+ *
+ *  Bare "package" is deliberately NOT a keyword — listings say "appliance
+ *  package" / "upgrade package" constantly. Only property-bundle package
+ *  forms ("package deal", "investment package") + the structured patterns
+ *  below trigger. */
+export const PORTFOLIO_PACKAGE_KEYWORDS: readonly string[] = [
+  "portfolio",
+  "package deal", "package sale", "investment package", "property package",
   "bulk sale", "bulk portfolio",
-  "rental portfolio", "buy and hold portfolio",
-  // 1031 / institutional moves
-  "1031 exchange", "1031-exchange",
-  "institutional seller", "institutional owner",
-  "reit divestment", "fund liquidation",
-  // landlord-specific exit signals (NOT necessarily distress)
+];
+
+/** Structured multi-property phrasings (the operator's explicit examples:
+ *  "offered individually or as a portfolio", "purchase all N together",
+ *  "N single-family homes"). Each requires a count or the portfolio word,
+ *  so a single-property listing can't trip them. */
+export const PORTFOLIO_PACKAGE_PATTERNS: readonly RegExp[] = [
+  /offered\s+(?:individually\s+)?(?:or\s+)?as\s+a\s+portfolio/i,
+  /(?:purchase|buy|sold|available)\s+all\s+\d+\s+(?:together|as\s+a\s+package|properties|homes)/i,
+  /\b[2-9]\d*\s+single[- ]family\s+homes\b/i,
+  /\b\d+[- ]propert(?:y|ies)\s+(?:portfolio|package|bundle)/i,
+  /\bmultiple\s+properties\s+(?:available|for\s+sale|in\s+this)/i,
+];
+
+/** Co-factors — occupancy + 1031/institutional. NOT standalone triggers.
+ *  Counted (and reported) ONLY when package language is also present, so a
+ *  single tenant-occupied house from a motivated landlord is never flagged. */
+export const PORTFOLIO_COFACTOR_KEYWORDS: readonly string[] = [
+  // occupancy
   "tenant occupied", "tenant-occupied",
   "currently rented", "currently leased",
   "rent ready", "rent-ready",
   "turnkey rental", "turn-key rental",
   "stabilized rental",
-  // listing language pointing at scale rather than urgency
-  "see all our listings", "see all listings by",
-  "multiple properties available",
+  // 1031 / institutional
+  "1031 exchange", "1031-exchange",
+  "institutional seller", "institutional owner",
+  "reit divestment", "fund liquidation",
 ];
 
 function escapeRegex(s: string): string {
@@ -276,6 +296,47 @@ export function matchKeywordsWordBoundary(
 ): string[] {
   if (!text) return [];
   return keywords.filter((k) => new RegExp(`\\b${escapeRegex(k)}\\b`, "i").test(text));
+}
+
+/** Pure: regex patterns that match the text (returns the matched substrings
+ *  for surfacing in the audit note). */
+export function matchPatterns(
+  text: string | null | undefined,
+  patterns: readonly RegExp[],
+): string[] {
+  if (!text) return [];
+  const hits: string[] = [];
+  for (const p of patterns) {
+    const m = text.match(p);
+    if (m) hits.push(m[0].replace(/\s+/g, " ").trim().toLowerCase());
+  }
+  return hits;
+}
+
+export interface PortfolioEvaluation {
+  /** Multi-property/package language detected (the only thing that fires
+   *  the down-rank). FALSE when distress overrides. */
+  detected: boolean;
+  /** Package keywords + structured-pattern hits. */
+  packageMatches: string[];
+  /** Co-factor matches — only populated WHEN packageMatches is non-empty. */
+  cofactorMatches: string[];
+}
+
+/** Pure: portfolio detection per the operator's narrowed rule. Package
+ *  language is the sole trigger; co-factors enrich the match list ONLY
+ *  when package language is present. Distress override is applied by the
+ *  caller (evaluateListingContent). */
+export function evaluatePortfolioSignal(text: string | null | undefined): PortfolioEvaluation {
+  const packageKw = matchKeywordsWordBoundary(text, PORTFOLIO_PACKAGE_KEYWORDS);
+  const packagePat = matchPatterns(text, PORTFOLIO_PACKAGE_PATTERNS);
+  const packageMatches = [...packageKw, ...packagePat];
+  const hasPackage = packageMatches.length > 0;
+  // Co-factors count ONLY alongside real package language.
+  const cofactorMatches = hasPackage
+    ? matchKeywordsWordBoundary(text, PORTFOLIO_COFACTOR_KEYWORDS)
+    : [];
+  return { detected: hasPackage, packageMatches, cofactorMatches };
 }
 
 export interface ListingContentEvaluation {
@@ -298,11 +359,13 @@ export interface ListingContentEvaluation {
 export function evaluateListingContent(text: string | null | undefined): ListingContentEvaluation {
   const matchedWholesalerKeywords = matchKeywordsWordBoundary(text, WHOLESALER_EXCLUSION_KEYWORDS);
   const matchedDistressKeywords = matchKeywordsWordBoundary(text, DISTRESS_CONDITION_KEYWORDS);
-  const matchedPortfolioKeywords = matchKeywordsWordBoundary(text, PORTFOLIO_SELLER_KEYWORDS);
-  // Distress overrides — a portfolio listing that ALSO carries distress
-  // language is treated as a motivated portfolio (still high-priority).
-  const portfolioSellerDetected =
-    matchedPortfolioKeywords.length > 0 && matchedDistressKeywords.length === 0;
+  const portfolio = evaluatePortfolioSignal(text);
+  // matchedPortfolioKeywords = package hits + co-factors (co-factors only
+  // present when package language fired). Reported for the audit note.
+  const matchedPortfolioKeywords = [...portfolio.packageMatches, ...portfolio.cofactorMatches];
+  // Distress overrides — a multi-property listing that ALSO carries
+  // distress language is treated as a motivated portfolio (still high-prio).
+  const portfolioSellerDetected = portfolio.detected && matchedDistressKeywords.length === 0;
   return {
     wholesalerExcluded: matchedWholesalerKeywords.length > 0,
     matchedWholesalerKeywords,
