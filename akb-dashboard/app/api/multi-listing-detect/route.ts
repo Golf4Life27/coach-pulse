@@ -115,12 +115,21 @@ export async function GET(req: Request) {
       for (const target of listings) {
         const siblings = listings
           .filter((s) => s.id !== target.id)
-          .map((s) => ({ recordId: s.id, address: s.address, listPrice: s.listPrice }));
+          .map((s) => ({
+            recordId: s.id,
+            address: s.address,
+            candidatePrices: [s.listPrice, s.outreachOfferPrice ?? null].filter(
+              (n): n is number => typeof n === "number" && n > 0,
+            ),
+          }));
 
         const { ambiguous } = mergeTimeline(quoMessages, [], [], {
           recordId: target.id,
           targetAddress: target.address,
-          targetPrice: target.listPrice,
+          // INV-016: list + offer for price-match resolution.
+          targetPrices: [target.listPrice, target.outreachOfferPrice ?? null].filter(
+            (n): n is number => typeof n === "number" && n > 0,
+          ),
           agentName: target.agentName,
           siblings,
         });

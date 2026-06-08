@@ -27,13 +27,33 @@ interface NotesEntry {
 export interface SiblingRecord {
   recordId: string;
   address: string;
-  listPrice: number | null;
+  /** Candidate prices the body could plausibly match for THIS sibling —
+   *  typically [listPrice, outreachOfferPrice] minus nulls. The scorer
+   *  awards +0.3 if any candidate matches within $1000.
+   *  INV-016 fix (2026-06-08): the old scalar `listPrice` only matched
+   *  retail; H2 outbound bodies carry the OFFER (≈65% of list), so a
+   *  seller-agent reply citing our offer never triggered the bonus. */
+  candidatePrices: number[];
+}
+
+/** Pure: ±$1000 fuzzy match — body $-amounts vs any candidate price. */
+function bodyMatchesAnyPrice(body: string, candidates: readonly number[]): boolean {
+  if (candidates.length === 0) return false;
+  const matches = body.match(/\$[\d,]+/g) ?? [];
+  for (const pm of matches) {
+    const val = parseInt(pm.replace(/[$,]/g, ""), 10);
+    if (isNaN(val)) continue;
+    for (const c of candidates) {
+      if (c && Math.abs(val - c) <= 1000) return true;
+    }
+  }
+  return false;
 }
 
 export function scorePropertyMatch(
   messageBody: string,
   targetAddress: string,
-  targetPrice: number | null,
+  targetPrices: readonly number[],
   siblings: SiblingRecord[]
 ): { recordId: string; confidence: number } {
   const bodyLower = messageBody.toLowerCase();
@@ -51,13 +71,7 @@ export function scorePropertyMatch(
     if (addrTokens.some((t) => afterAt.includes(t))) targetScore += 0.2;
   }
 
-  if (targetPrice) {
-    const priceMatches = messageBody.match(/\$[\d,]+/g) ?? [];
-    for (const pm of priceMatches) {
-      const val = parseInt(pm.replace(/[$,]/g, ""), 10);
-      if (!isNaN(val) && Math.abs(val - targetPrice) <= 1000) { targetScore += 0.3; break; }
-    }
-  }
+  if (bodyMatchesAnyPrice(messageBody, targetPrices)) targetScore += 0.3;
 
   let bestSibling = { recordId: "", confidence: 0 };
   for (const sib of siblings) {
@@ -65,13 +79,7 @@ export function scorePropertyMatch(
     const sibTokens = sib.address.toLowerCase().split(/\s+/).filter((t) => t.length > 2);
     const sibHits = sibTokens.filter((t) => bodyLower.includes(t)).length;
     if (sibTokens.length > 0 && sibHits >= Math.ceil(sibTokens.length * 0.5)) sibScore += 0.6;
-    if (sib.listPrice) {
-      const priceMatches = messageBody.match(/\$[\d,]+/g) ?? [];
-      for (const pm of priceMatches) {
-        const val = parseInt(pm.replace(/[$,]/g, ""), 10);
-        if (!isNaN(val) && Math.abs(val - sib.listPrice) <= 1000) { sibScore += 0.3; break; }
-      }
-    }
+    if (bodyMatchesAnyPrice(messageBody, sib.candidatePrices)) sibScore += 0.3;
     if (sibScore > bestSibling.confidence) bestSibling = { recordId: sib.recordId, confidence: sibScore };
   }
 
@@ -89,7 +97,10 @@ function isDuplicate(entry: { body: string; direction: string }, existing: Timel
 export interface MergeOptions {
   recordId: string;
   targetAddress: string;
-  targetPrice: number | null;
+  /** All candidate prices the target listing's body could match — at
+   *  minimum [listPrice], ideally [listPrice, outreachOfferPrice]. Empty
+   *  array disables the +0.3 price-match bonus. */
+  targetPrices: readonly number[];
   agentName: string | null;
   siblings?: SiblingRecord[];
 }
@@ -108,7 +119,7 @@ export function mergeTimeline(
   for (const msg of quoMessages) {
     const direction = msg.direction === "incoming" ? "in" as const : "out" as const;
     const match = hasSiblings
-      ? scorePropertyMatch(msg.body, opts.targetAddress, opts.targetPrice, siblings)
+      ? scorePropertyMatch(msg.body, opts.targetAddress, opts.targetPrices, siblings)
       : { recordId: opts.recordId, confidence: 1.0 };
     const entry: TimelineEntry = {
       timestamp: msg.createdAt, channel: "sms", direction, body: msg.body,
@@ -124,7 +135,7 @@ export function mergeTimeline(
     const isInbound = !msg.from.toLowerCase().includes("alex") && !msg.from.toLowerCase().includes("akb");
     const direction = isInbound ? "in" as const : "out" as const;
     const match = hasSiblings
-      ? scorePropertyMatch(msg.body, opts.targetAddress, opts.targetPrice, siblings)
+      ? scorePropertyMatch(msg.body, opts.targetAddress, opts.targetPrices, siblings)
       : { recordId: opts.recordId, confidence: 1.0 };
     const entry: TimelineEntry = {
       timestamp: msg.date, channel: "email", direction, body: msg.body,

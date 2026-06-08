@@ -51,7 +51,13 @@ export async function GET(
         const target = cleanPhone(listing.agentPhone);
         siblings = all
           .filter((l) => l.id !== id && l.agentPhone && cleanPhone(l.agentPhone) === target)
-          .map((l) => ({ recordId: l.id, address: l.address, listPrice: l.listPrice }));
+          .map((l) => ({
+            recordId: l.id,
+            address: l.address,
+            candidatePrices: [l.listPrice, l.outreachOfferPrice ?? null].filter(
+              (n): n is number => typeof n === "number" && n > 0,
+            ),
+          }));
       } catch (err) {
         console.error(`[conversations] Sibling lookup failed for ${id}:`, err);
       }
@@ -92,7 +98,12 @@ export async function GET(
     const { timeline } = mergeTimeline(quoMessages, gmailMessages, notesEntries, {
       recordId: id,
       targetAddress: listing.address,
-      targetPrice: listing.listPrice,
+      // INV-016: include the OUTREACH OFFER alongside list price — H2
+      // bodies cite the offer (≈65% of list), so a seller-agent reply
+      // citing our number now triggers the +0.3 price-match bonus.
+      targetPrices: [listing.listPrice, listing.outreachOfferPrice ?? null].filter(
+        (n): n is number => typeof n === "number" && n > 0,
+      ),
       agentName: listing.agentName ?? null,
       siblings,
     });

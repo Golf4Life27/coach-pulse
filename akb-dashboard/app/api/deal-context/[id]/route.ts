@@ -42,14 +42,20 @@ export async function GET(
     }
 
     // Multi-listing detection — find sibling records with the same agent phone.
-    let siblings: { recordId: string; address: string; listPrice: number | null }[] = [];
+    let siblings: { recordId: string; address: string; candidatePrices: number[] }[] = [];
     if (listing.agentPhone) {
       try {
         const all = await getListings();
         const target = cleanPhone(listing.agentPhone);
         siblings = all
           .filter((l) => l.id !== id && l.agentPhone && cleanPhone(l.agentPhone) === target)
-          .map((l) => ({ recordId: l.id, address: l.address, listPrice: l.listPrice }));
+          .map((l) => ({
+            recordId: l.id,
+            address: l.address,
+            candidatePrices: [l.listPrice, l.outreachOfferPrice ?? null].filter(
+              (n): n is number => typeof n === "number" && n > 0,
+            ),
+          }));
       } catch (err) {
         console.error(`[deal-context] Sibling lookup failed for ${id}:`, err);
       }
@@ -96,7 +102,10 @@ export async function GET(
       {
         recordId: id,
         targetAddress: listing.address,
-        targetPrice: listing.listPrice,
+        // INV-016: list + offer; H2 outbound bodies cite the offer.
+        targetPrices: [listing.listPrice, listing.outreachOfferPrice ?? null].filter(
+          (n): n is number => typeof n === "number" && n > 0,
+        ),
         agentName: listing.agentName,
         siblings,
       },
