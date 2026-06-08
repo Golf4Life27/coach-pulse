@@ -52,6 +52,13 @@ export async function GET(
     const f = rec.fields;
     const mao = typeof f.Pessimistic_MAO === "number" ? f.Pessimistic_MAO : null;
     const floor = typeof f.Sticky_Floor === "number" ? f.Sticky_Floor : null;
+    const markdown = typeof f.Dossier_Markdown === "string" ? f.Dossier_Markdown : null;
+    // CMA signal for the offer-readiness checklist: the Deal File carries an
+    // Operator-CMA section that is either populated or the explicit
+    // "_no operator CMA overrides supplied_" placeholder.
+    const hasOperatorCma = markdown != null
+      && markdown.includes("Operator-CMA Overrides")
+      && !markdown.includes("_no operator CMA overrides supplied_");
     return NextResponse.json({
       found: true,
       dossierRecordId: rec.id,
@@ -63,7 +70,8 @@ export async function GET(
       marginOverFloor: mao != null && floor != null ? mao - floor : null,
       awaiting: typeof f.Awaiting === "string" ? f.Awaiting : null,
       createdAt: typeof f.Created_At === "string" ? f.Created_At : null,
-      markdown: typeof f.Dossier_Markdown === "string" ? f.Dossier_Markdown : null,
+      hasOperatorCma,
+      markdown,
     });
   } catch (err) {
     return NextResponse.json({ error: "fetch_failed", detail: String(err) }, { status: 500 });

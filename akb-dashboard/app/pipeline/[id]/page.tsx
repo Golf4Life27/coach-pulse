@@ -9,6 +9,7 @@ import { ALL_DD_ITEMS } from "@/lib/actionQueue";
 import { showToast } from "@/components/Toast";
 import MaverickDealCommentary from "@/components/MaverickDealCommentary";
 import DealFilePanel from "@/components/DealFilePanel";
+import OfferReadinessPanel from "@/components/OfferReadinessPanel";
 import AppraiserArvPanel from "@/components/AppraiserArvPanel";
 import AppraiserRehabPanel from "@/components/AppraiserRehabPanel";
 import AppraiserBuyerIntelligencePanel from "@/components/AppraiserBuyerIntelligencePanel";
@@ -223,6 +224,19 @@ export default function DealWorkspace() {
           // Phase 11.4 (INV-004) — drives isUnderContract() guard on
           // Crier silence. Populated by "Track in Scribe" affordance.
           envelopeId: listing.envelopeId ?? null,
+        }}
+      />
+
+      {/* Offer-readiness checklist — the four-data gate before an offer */}
+      <OfferReadinessPanel
+        recordId={listing.id}
+        listing={{
+          realArvMedian: listing.realArvMedian ?? null,
+          arvConfidence: listing.arvConfidence ?? null,
+          arvCompCount: listing.arvCompCount ?? null,
+          estRehab: listing.estRehab ?? null,
+          estRehabMid: listing.estRehabMid ?? null,
+          rehabConfidenceScore: listing.rehabConfidenceScore ?? null,
         }}
       />
 
