@@ -31,6 +31,7 @@ import { detectIntakeSignal } from "./detectors/intake-signal";
 import { detectVerificationUrlCoverage } from "./detectors/verification-url-coverage";
 import { detectPaidApiSpend } from "./detectors/paid-api-spend";
 import { detectProgressMeterMovement } from "./detectors/progress-meter-movement";
+import { detectUnbackedReplyStatus } from "./detectors/unbacked-reply-status";
 
 import { audit } from "@/lib/audit-log";
 import { writeState, type WriteStateDeps } from "@/lib/maverick/write-state";
@@ -67,6 +68,7 @@ export function runAllDetectors(input: PulseDetectorInput): PulseDetection[] {
     ...detectVerificationUrlCoverage(input),
     ...detectPaidApiSpend(input),
     ...detectProgressMeterMovement(input),
+    ...detectUnbackedReplyStatus(input),
   ];
 }
 
