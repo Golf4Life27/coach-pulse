@@ -150,11 +150,11 @@ async function createIntakeListing(
   // Station 2 ENRICH (intake-time, zero new API calls) — persist the
   // structural facts the vendor response already carried. Skipped silently
   // when null so the record is still creatable for vendors that omit the
-  // field. Year_Built is intentionally NOT written: the Airtable field
-  // doesn't exist yet (Listing type carries no yearBuilt slot) — operator
-  // schema addition would unblock that write.
+  // field. The structural-facts provenance rides the audit entry below
+  // (ENRICHMENT_SOURCE), keyed to whichever vendor the intake run used.
   if (c.bathrooms != null) fields["Bathrooms"] = c.bathrooms;
   if (c.squareFootage != null) fields["Building_SqFt"] = c.squareFootage;
+  if (c.yearBuilt != null) fields["Year_Built"] = c.yearBuilt;
   // Agent contact (INV-CRAWLER-AGENT-ENRICHMENT) — written as-is; H2 normalizes
   // phone format. Set only when present; never synthesize.
   if (c.agentName) fields["Agent_Name"] = c.agentName;

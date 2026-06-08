@@ -32,6 +32,7 @@ function mkListing(over: Partial<Listing> = {}): Listing {
     bedrooms: null,
     bathrooms: null,
     buildingSqFt: null,
+    yearBuilt: null,
     stageCalc: null,
     approvedForOutreach: false,
     flipScore: null,

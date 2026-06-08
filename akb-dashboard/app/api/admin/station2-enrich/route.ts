@@ -19,16 +19,17 @@
 //                              think before burning credits in bulk.
 //
 // Source attribution: every write emits a station2_enrich audit entry
-// with agent="rentcast", inputSummary.source="rentcast_facts", and the
-// HTTP boundary fires a paid_api_call audit through the wrapped fetch
-// in lib/rentcast.ts. Per-deal runaway thus shows up in Pulse's
-// paid_api_spend_24h detector immediately.
+// with agent="rentcast", inputSummary.enrichment_source=
+// ENRICHMENT_SOURCE.RENTCAST_FACTS (the canonical provenance label,
+// standardized in lib/conveyor/enrichment-source.ts), and the HTTP
+// boundary fires a paid_api_call audit through the wrapped fetch in
+// lib/rentcast.ts. Per-deal runaway shows up in Pulse's
+// paid_api_spend_24h detector.
 //
-// Year_Built: extracted from getSubjectFacts for the report (so the
-// operator can see what would be unlocked) but NOT written — the
-// Airtable schema doesn't carry a Year_Built field yet (the Listing
-// type carries no yearBuilt slot). Adding that column is a separate
-// operator action.
+// Year_Built: NOW WRITTEN (Airtable field fldXf7Xhw5sBqNRWk added
+// 2026-06-08). Eligibility includes missing-Year_Built, so a record
+// that already has sqft+baths but no year is still picked up — that's
+// the path that backfills the cohort enriched before the field existed.
 //
 // Auth: dashboard cookie / CRON_SECRET / OAuth waterfall.
 
@@ -43,6 +44,7 @@ import {
 } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { getSubjectFacts } from "@/lib/rentcast";
+import { ENRICHMENT_SOURCE } from "@/lib/conveyor/enrichment-source";
 import type { Listing } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -52,24 +54,25 @@ const DEFAULT_LIMIT = 100;
 const THRESHOLD_FOR_CONFIRM = 100;
 const WALL_CLOCK_BUDGET_MS = 270_000;
 
-function missingFacts(l: Listing): { missingSqft: boolean; missingBaths: boolean } {
+function missingFacts(l: Listing): { missingSqft: boolean; missingBaths: boolean; missingYear: boolean } {
   return {
     missingSqft: !(l.buildingSqFt != null && l.buildingSqFt > 0),
     missingBaths: !(l.bathrooms != null && l.bathrooms > 0),
+    missingYear: !(l.yearBuilt != null && l.yearBuilt > 0),
   };
 }
 
 function needsEnrichment(l: Listing): boolean {
   const m = missingFacts(l);
-  return m.missingSqft || m.missingBaths;
+  return m.missingSqft || m.missingBaths || m.missingYear;
 }
 
 interface EnrichWrite {
   recordId: string;
   address: string;
+  /** RentCast endpoint that resolved (listings_sale | properties | null). */
   source: string | null;
-  wrote: { sqft?: number; baths?: number };
-  yearBuiltSeen: number | null;
+  wrote: { sqft?: number; baths?: number; yearBuilt?: number };
   error: string | null;
 }
 
@@ -114,10 +117,15 @@ export async function GET(req: Request) {
   const eligible = active.filter(needsEnrichment);
   const missingSqftCount = active.filter((l) => missingFacts(l).missingSqft).length;
   const missingBathsCount = active.filter((l) => missingFacts(l).missingBaths).length;
+  const missingYearCount = active.filter((l) => missingFacts(l).missingYear).length;
 
-  // getSubjectFacts makes 1-2 fetches (listings_sale first, /properties
-  // fallback when the active path returns null). 1.5 is the empirical
-  // average we use for the projected-spend estimate.
+  // getSubjectFacts makes 1 fetch when /listings/sale resolves sqft (the
+  // common case for ACTIVE records), 2 when it falls back to /properties.
+  // 1.5 is the conservative midpoint for the projected-spend estimate;
+  // ACTUAL calls trend toward 1×eligible for active subjects and are
+  // recoverable exactly from writes[].source post-run (listings_sale = 1,
+  // properties|null = 2). Reconcile against the spend meter's
+  // bySource.rentcast counter.
   const projectedCalls = Math.ceil(eligible.length * 1.5);
 
   const dryRunSummary = {
@@ -125,7 +133,10 @@ export async function GET(req: Request) {
     eligible_for_enrich: eligible.length,
     missing_sqft: missingSqftCount,
     missing_baths: missingBathsCount,
+    missing_year: missingYearCount,
     projected_rentcast_calls: projectedCalls,
+    projected_calls_lower_bound: eligible.length,
+    projected_calls_upper_bound: eligible.length * 2,
     threshold_for_confirm: THRESHOLD_FOR_CONFIRM,
     over_threshold: projectedCalls > THRESHOLD_FOR_CONFIRM,
     eligible_records: eligible.map((l) => ({
@@ -133,6 +144,7 @@ export async function GET(req: Request) {
       address: l.address,
       missing_sqft: missingFacts(l).missingSqft,
       missing_baths: missingFacts(l).missingBaths,
+      missing_year: missingFacts(l).missingYear,
     })),
   };
 
@@ -170,7 +182,6 @@ export async function GET(req: Request) {
         address: l.address,
         source: null,
         wrote: {},
-        yearBuiltSeen: null,
         error: "address_parts_missing",
       });
       continue;
@@ -194,6 +205,10 @@ export async function GET(req: Request) {
         fieldsToWrite["Bathrooms"] = facts.bathrooms;
         wrote.baths = facts.bathrooms;
       }
+      if (m.missingYear && facts.yearBuilt != null) {
+        fieldsToWrite["Year_Built"] = facts.yearBuilt;
+        wrote.yearBuilt = facts.yearBuilt;
+      }
       if (Object.keys(fieldsToWrite).length > 0) {
         await updateListingRecord(l.id, fieldsToWrite);
       }
@@ -202,7 +217,6 @@ export async function GET(req: Request) {
         address: l.address,
         source: facts.source,
         wrote,
-        yearBuiltSeen: facts.yearBuilt,
         error: Object.keys(fieldsToWrite).length === 0 ? "rentcast_no_facts" : null,
       });
       await audit({
@@ -212,12 +226,12 @@ export async function GET(req: Request) {
         recordId: l.id,
         ms: Date.now() - t1,
         inputSummary: {
-          source: "rentcast_facts",
+          enrichment_source: ENRICHMENT_SOURCE.RENTCAST_FACTS,
           address: l.address,
           missing: m,
         },
         outputSummary: {
-          rentcast_source: facts.source,
+          rentcast_endpoint: facts.source,
           wrote,
           year_built_seen: facts.yearBuilt,
         },
@@ -230,7 +244,6 @@ export async function GET(req: Request) {
         address: l.address,
         source: null,
         wrote: {},
-        yearBuiltSeen: null,
         error: msg.slice(0, 200),
       });
       await audit({
@@ -239,7 +252,7 @@ export async function GET(req: Request) {
         status: "confirmed_failure",
         recordId: l.id,
         ms: Date.now() - t1,
-        inputSummary: { source: "rentcast_facts", address: l.address },
+        inputSummary: { enrichment_source: ENRICHMENT_SOURCE.RENTCAST_FACTS, address: l.address },
         error: msg.slice(0, 200),
       });
     }
@@ -247,7 +260,12 @@ export async function GET(req: Request) {
 
   const sqftWritten = writes.filter((w) => w.wrote.sqft != null).length;
   const bathsWritten = writes.filter((w) => w.wrote.baths != null).length;
-  const yearBuiltAvailable = writes.filter((w) => w.yearBuiltSeen != null).length;
+  const yearBuiltWritten = writes.filter((w) => w.wrote.yearBuilt != null).length;
+  // Exact RentCast call count from the per-record source: listings_sale
+  // resolved on the first call (1); properties|null fell back (2).
+  const actualRentcastCalls = writes
+    .filter((w) => w.error !== "address_parts_missing")
+    .reduce((n, w) => n + (w.source === "listings_sale" ? 1 : 2), 0);
 
   return NextResponse.json({
     ok: true,
@@ -258,7 +276,13 @@ export async function GET(req: Request) {
       attempted: writes.length,
       sqft_written: sqftWritten,
       baths_written: bathsWritten,
-      year_built_seen_but_not_written: yearBuiltAvailable,
+      year_built_written: yearBuiltWritten,
+      // Reconciliation: projected (summary.projected_rentcast_calls) vs the
+      // exact count derived from per-record source. Compare actual against
+      // the spend meter's bySource.rentcast delta over the same window.
+      actual_rentcast_calls: actualRentcastCalls,
+      projected_rentcast_calls: dryRunSummary.projected_rentcast_calls,
+      enrichment_source: ENRICHMENT_SOURCE.RENTCAST_FACTS,
       writes,
     },
     duration_ms: Date.now() - t0,

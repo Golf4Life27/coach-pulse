@@ -21,6 +21,7 @@ export interface Listing {
   bedrooms: number | null;
   bathrooms: number | null;
   buildingSqFt: number | null;
+  yearBuilt: number | null;
   stageCalc: string | null;
   approvedForOutreach: boolean;
   flipScore: number | null;
