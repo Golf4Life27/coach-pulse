@@ -49,6 +49,7 @@ import {
 import { shouldAutoPromote, type AutoPromoteBlockReason } from "@/lib/crawler/auto-promote";
 import { SOURCE_VERSION_FIELD_NAME, SOURCE_VERSION_V2 } from "@/lib/source-version";
 import { rentcastQuotaAllows, computeBurnRate } from "@/lib/maverick/rentcast-burn-rate";
+import { selectDailyZipSlice, type ZipSliceResult } from "@/lib/crawler/zip-rotation";
 import { fetchExternalRentCastState } from "@/lib/maverick/sources/external-rentcast";
 import { fetchVercelKvAuditState } from "@/lib/maverick/sources/vercel-kv-audit";
 import { verifyListing, classifyVerifiedListing, FIRECRAWL_RATE_LIMIT_PER_MINUTE } from "@/lib/crawler/sources/firecrawl";
@@ -243,12 +244,25 @@ export async function GET(req: Request) {
   let zips: string[] = overrideZips;
   const zipToRecordId = new Map<string, string>();
   let zipSource: "override" | "registry" = "override";
+  // Rotation slice — populated only when the registry is bigger than the
+  // per-run cap; null for override fires (operator-explicit) and for tiny
+  // registries that don't need rotation.
+  let zipSlice: ZipSliceResult | null = null;
   if (!overrideUsed) {
     zipSource = "registry";
     try {
       const rows = await getActiveIntakeRows();
-      zips = Array.from(new Set(rows.map((r) => r.zip))).sort();
+      const allEligible = Array.from(new Set(rows.map((r) => r.zip))).sort();
       for (const r of rows) if (!zipToRecordId.has(r.zip)) zipToRecordId.set(r.zip, r.recordId);
+
+      // Rotate when the registry exceeds the per-run cap. Without rotation
+      // the cron stalls on calls_needed > per_run_cap (2026-06-08 outage:
+      // 54 ZIPs vs cap 30 → six-day total intake outage). With rotation
+      // it sweeps the full registry over ceil(total/cap) days, deterministic
+      // per UTC day, and structurally addresses the cross-market breadth
+      // gap (every slice spans the sorted registry).
+      zipSlice = selectDailyZipSlice(allEligible, PER_RUN_CAP, new Date());
+      zips = zipSlice.selected;
     } catch (err) {
       return NextResponse.json(
         { error: "zip_registry_fetch_failed", message: err instanceof Error ? err.message : String(err) },
@@ -688,6 +702,16 @@ export async function GET(req: Request) {
     auth_kind: authKind,
     duration_ms: Date.now() - t0,
     zip_source: zipSource,
+    zip_rotation: zipSlice
+      ? {
+          total_eligible: zipSlice.totalEligible,
+          slice_size: zipSlice.selected.length,
+          start_index: zipSlice.startIndex,
+          cycle_days: zipSlice.cycleDays,
+          wrapped: zipSlice.wrapped,
+          per_run_cap: PER_RUN_CAP,
+        }
+      : null,
     registry: registryWriteback,
     ...summary,
     ...(debug
