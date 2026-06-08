@@ -305,19 +305,54 @@ export async function GET(req: Request) {
   }
 
   if (zips.length === 0) {
+    // Disambiguate the two reasons for zero ZIPs:
+    //  (a) registry has 0 eligible (launch/active, non-wholesale-restricted)
+    //      → REAL misconfiguration; operator action required.
+    //  (b) freshness cursor has 0 DUE this cycle (every ZIP was freshened
+    //      within ZIP_CYCLE_HOURS) → STEADY-STATE SUCCESS; do nothing.
+    // The 2026-06-08 confusion: case (b) was returning the same
+    // `blocked: no_target_zips` label as case (a), making a healthy no-op
+    // look like a regression. Now they're distinct outcomes with distinct
+    // audit + response shapes.
+    const allFresh = zipSource === "registry" && zipDue != null && zipDue.dueTotal === 0 && zipDue.freshTotal > 0;
+    const outcome = allFresh ? "all_fresh_no_due" : "no_target_zips";
+    const auditStatus = allFresh ? "confirmed_success" : "uncertain";
+    const detail = allFresh
+      ? `All ${zipDue?.freshTotal ?? 0} eligible ZIPs were freshened within the last ${ZIP_CYCLE_HOURS}h. No work this run; the next ZIP becomes due ${ZIP_CYCLE_HOURS}h after its last ingest. This is the steady state, not a blocker.`
+      : "No launch/active, non-wholesale-restricted ZIPs in ZIP_Registry. Add/activate ZIPs there, or pass ?zips=78201 for a manual run.";
     await audit({
       agent: "scout",
       event: "listings_intake_no_zips",
-      status: "uncertain",
-      inputSummary: { auth_kind: authKind, dry_run: dryRun, zip_source: zipSource },
-      outputSummary: { blocker: "no active ZIPs in ZIP_Registry", duration_ms: Date.now() - t0 },
+      status: auditStatus,
+      inputSummary: { auth_kind: authKind, dry_run: dryRun, zip_source: zipSource, outcome },
+      outputSummary: {
+        outcome,
+        blocker: allFresh ? null : "no active ZIPs in ZIP_Registry",
+        fresh_total: zipDue?.freshTotal ?? null,
+        due_total: zipDue?.dueTotal ?? null,
+        cycle_hours: zipDue?.cycleHours ?? null,
+        duration_ms: Date.now() - t0,
+      },
     });
     return NextResponse.json({
       ok: true,
-      blocked: "no_target_zips",
-      detail:
-        "No launch/active, non-wholesale-restricted ZIPs in ZIP_Registry. Add/activate ZIPs there, or pass ?zips=78201 for a manual run.",
+      outcome,
+      // Keep `blocked` populated only for the REAL blocker case so
+      // existing operators / dashboards reading that key see "blocked" only
+      // when action is actually needed.
+      blocked: allFresh ? null : "no_target_zips",
+      detail,
       zip_source: zipSource,
+      zip_due: zipDue
+        ? {
+            selected: [],
+            due_total: zipDue.dueTotal,
+            fresh_total: zipDue.freshTotal,
+            cap: zipDue.cap,
+            cycle_hours: zipDue.cycleHours,
+            runs_to_clear_backlog: zipDue.runsToClearBacklog,
+          }
+        : null,
       dry_run: dryRun,
       auth_kind: authKind,
       duration_ms: Date.now() - t0,
