@@ -71,6 +71,14 @@ export interface IntakeCandidate {
   /** A price reduction was detected in the listing history (RentCast).
    *  Optional; defaults to false. Phase-2 distress accept signal. */
   priceReduced?: boolean;
+  /** Structural facts carried from the vendor response when present —
+   *  saves a per-record enrichment call (Station 2 ENRICH). Source-
+   *  agnostic by design: ATTOM snapshot, RentCast listings, and any
+   *  future feed populate the same slots. Optional / nullable; the
+   *  intake-cron write skips them when absent. */
+  squareFootage?: number | null;
+  bathrooms?: number | null;
+  yearBuilt?: number | null;
 }
 
 export type IntakeRejectReason =

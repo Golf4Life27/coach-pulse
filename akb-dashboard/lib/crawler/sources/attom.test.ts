@@ -54,6 +54,41 @@ describe("mapSnapshotToCandidate", () => {
       mapSnapshotToCandidate({ address: { line1: "5 Oak", postal1: "78205" } }).sourceId,
     ).toBe("attom:5 Oak:78205");
   });
+
+  it("carries Station 2 ENRICH facts from the snapshot response (zero new calls)", () => {
+    const c = mapSnapshotToCandidate({
+      identifier: { attomId: 7 },
+      summary: { yearbuilt: 1955 },
+      building: {
+        rooms: { beds: 3, bathstotal: 2 },
+        size: { livingsize: 1450 },
+      },
+    });
+    expect(c.squareFootage).toBe(1450);
+    expect(c.bathrooms).toBe(2);
+    expect(c.yearBuilt).toBe(1955);
+  });
+
+  it("falls back to bathsfull when bathstotal is absent", () => {
+    const c = mapSnapshotToCandidate({
+      building: { rooms: { bathsfull: 1 } },
+    });
+    expect(c.bathrooms).toBe(1);
+  });
+
+  it("falls back to universalsize when livingsize is absent", () => {
+    const c = mapSnapshotToCandidate({
+      building: { size: { universalsize: 1800 } },
+    });
+    expect(c.squareFootage).toBe(1800);
+  });
+
+  it("leaves ENRICH facts null when neither path resolves", () => {
+    const c = mapSnapshotToCandidate({ identifier: { attomId: 1 } });
+    expect(c.squareFootage).toBeNull();
+    expect(c.bathrooms).toBeNull();
+    expect(c.yearBuilt).toBeNull();
+  });
 });
 
 describe("mapSnapshotResponse", () => {

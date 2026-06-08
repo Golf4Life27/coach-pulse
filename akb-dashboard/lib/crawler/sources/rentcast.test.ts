@@ -117,6 +117,25 @@ describe("mapListingToCandidate", () => {
     expect(c.address).toBeNull();
     expect(c.listPrice).toBeNull();
   });
+
+  it("carries Station 2 ENRICH facts from the /listings/sale payload", () => {
+    const c = mapListingToCandidate({
+      ...raw,
+      squareFootage: 1400,
+      bathrooms: 2,
+      yearBuilt: 1965,
+    });
+    expect(c.squareFootage).toBe(1400);
+    expect(c.bathrooms).toBe(2);
+    expect(c.yearBuilt).toBe(1965);
+  });
+
+  it("leaves ENRICH facts null when RentCast omits them", () => {
+    const c = mapListingToCandidate({});
+    expect(c.squareFootage).toBeNull();
+    expect(c.bathrooms).toBeNull();
+    expect(c.yearBuilt).toBeNull();
+  });
 });
 
 describe("mapListingsResponse", () => {

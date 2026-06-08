@@ -50,6 +50,10 @@ interface RentCastListing {
   bedrooms?: number;
   bathrooms?: number;
   squareFootage?: number;
+  /** Year built — RentCast returns this on some /listings/sale payloads;
+   *  absent on others. Optional; Station 2 ENRICH backfill picks up the
+   *  null records via the per-record /properties query. */
+  yearBuilt?: number;
   status?: string;
   price?: number;
   listedDate?: string;
@@ -129,6 +133,13 @@ export function mapListingToCandidate(l: RentCastListing): IntakeCandidate {
     // API call. priceReduced reuses the existing history primitive.
     daysOnMarket: l.daysOnMarket ?? null,
     priceReduced: detectPriceReduction(l.history, l.price ?? null),
+    // Station 2 ENRICH — structural facts pass through from the same
+    // /listings/sale payload we already pay for (zero new API calls). The
+    // Station 2 per-record backfill only fires for records that LAND with
+    // these fields null (older intake, RentCast omitted them, etc).
+    squareFootage: l.squareFootage ?? null,
+    bathrooms: l.bathrooms ?? null,
+    yearBuilt: l.yearBuilt ?? null,
   };
 }
 

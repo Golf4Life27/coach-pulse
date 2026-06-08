@@ -45,7 +45,10 @@ interface AttomProperty {
   identifier?: { attomId?: number; Id?: number };
   address?: { line1?: string; locality?: string; countrySubd?: string; postal1?: string };
   summary?: { proptype?: string; propclass?: string; propsubtype?: string; yearbuilt?: number };
-  building?: { rooms?: { beds?: number }; size?: { livingsize?: number; universalsize?: number } };
+  building?: {
+    rooms?: { beds?: number; bathstotal?: number; bathsfull?: number };
+    size?: { livingsize?: number; universalsize?: number };
+  };
   sale?: { amount?: { saleamt?: number }; salesearchdate?: string };
   assessment?: unknown;
   vintage?: unknown;
@@ -84,6 +87,13 @@ export function mapSnapshotToCandidate(p: AttomProperty): IntakeCandidate {
     agentPhone: null,
     agentEmail: null,
     brokerageName: null,
+    // Station 2 ENRICH — structural facts carried through from the same
+    // /property/snapshot response we already pay for (zero new API calls).
+    // bathstotal preferred over bathsfull when both are present (full-bath
+    // count alone systematically under-counts 3/2 properties as 3/1).
+    squareFootage: p.building?.size?.livingsize ?? p.building?.size?.universalsize ?? null,
+    bathrooms: p.building?.rooms?.bathstotal ?? p.building?.rooms?.bathsfull ?? null,
+    yearBuilt: p.summary?.yearbuilt ?? null,
   };
 }
 
