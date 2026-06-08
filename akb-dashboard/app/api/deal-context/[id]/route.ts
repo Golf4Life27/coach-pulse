@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getListing, getListings } from "@/lib/airtable";
-import { getMessagesForParticipant } from "@/lib/quo";
+import { getThreadVerified } from "@/lib/quo";
 import { getThreadsForEmail } from "@/lib/gmail";
 import { parseConversation } from "@/lib/notes";
 import { mergeTimeline, computeResponseStatus } from "@/lib/timeline-merge";
@@ -55,14 +55,17 @@ export async function GET(
       }
     }
 
-    // Pull Quo messages.
-    let quoMessages: Awaited<ReturnType<typeof getMessagesForParticipant>> = [];
+    // Pull Quo messages — RELIABLE read path (wire #3): verify each by id so
+    // the "response due" / stage signals can't be fooled by a lossy feed.
+    let quoMessages: Awaited<ReturnType<typeof getThreadVerified>>["messages"] = [];
     if (listing.agentPhone && process.env.QUO_API_KEY) {
       try {
-        quoMessages = await getMessagesForParticipant(
+        const thread = await getThreadVerified(
           cleanPhone(listing.agentPhone),
           60 * 24 * 90, // 90 days
+          60,
         );
+        quoMessages = thread.messages;
       } catch (err) {
         console.error(`[deal-context] Quo fetch failed for ${id}:`, err);
       }

@@ -1,7 +1,8 @@
 import { getListing, getListings } from "@/lib/airtable";
 import { getThreadVerified } from "@/lib/quo";
+import { getThreadsForEmail } from "@/lib/gmail";
 import { parseConversation } from "@/lib/notes";
-import { scorePropertyMatch, type SiblingRecord } from "@/lib/timeline-merge";
+import { mergeTimeline, type SiblingRecord } from "@/lib/timeline-merge";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -14,6 +15,7 @@ interface UnifiedMessage {
   timestamp: string;
   from: string;
   to: string;
+  subject?: string;
 }
 
 function cleanPhone(phone: string): string {
@@ -39,11 +41,9 @@ export async function GET(
       return Response.json({ error: "Listing not found" }, { status: 404 });
     }
 
-    // INV-007 Step 1 attribution filter: pull sibling listings (same Agent_Phone)
-    // so we can attribute each Quo message to a specific property. Filter out
-    // messages that score to a sibling OR fall below the 0.6 confidence floor
-    // (same threshold the AMBIGUOUS banner uses in /api/deal-context/[id]).
-    // Step 2 (unified attribution layer at ingest) deferred to belt MVP sprint.
+    // Sibling listings (same Agent_Phone) so each cross-channel message is
+    // attributed to a specific property — keeps THIS property's thread clean
+    // when an agent holds several listings.
     let siblings: SiblingRecord[] = [];
     if (listing.agentPhone) {
       try {
@@ -56,102 +56,73 @@ export async function GET(
         console.error(`[conversations] Sibling lookup failed for ${id}:`, err);
       }
     }
-    const hasSiblings = siblings.length > 0;
 
-    const messages: UnifiedMessage[] = [];
-
-    // 1. Pull Quo SMS messages if agent phone exists
+    // 1. Texts — RELIABLE read path (wire #3): verify each message by id.
+    let quoMessages: Awaited<ReturnType<typeof getThreadVerified>>["messages"] = [];
     if (listing.agentPhone && process.env.QUO_API_KEY) {
       try {
         const phone = cleanPhone(listing.agentPhone);
-        // Wire #3 (SYSTEM_HANDOFF.md): use the RELIABLE read path. The old
-        // getMessagesForParticipant feed silently dropped delivered messages;
-        // getThreadVerified re-looks-up each id (drops phantoms, catches body
-        // divergence). The notes-merge below remains the durable backstop for
-        // anything the live feed still misses (the sync cron writes verified
-        // messages into Verification_Notes).
-        const thread = await getThreadVerified(phone, 60 * 24 * 90, 60); // 90 days, cap lookups for page-load latency
-        const quoMessages = thread.messages;
-        for (const msg of quoMessages) {
-          // Attribute via scorePropertyMatch when this agent holds multiple listings.
-          // match.recordId === "" means target won; empty fallback to current id.
-          // Sibling-attributed OR low-confidence (<0.6) messages are excluded from
-          // this property's thread. They remain visible via the AMBIGUOUS banner
-          // on /pipeline/[id] and the disambiguation queue.
-          if (hasSiblings) {
-            const match = scorePropertyMatch(
-              msg.body,
-              listing.address,
-              listing.listPrice,
-              siblings,
-            );
-            const attributedRecordId = match.recordId || id;
-            if (attributedRecordId !== id || match.confidence < 0.6) continue;
-          }
-          messages.push({
-            id: `quo-${msg.id}`,
-            source: "quo",
-            direction: msg.direction === "incoming" ? "inbound" : "outbound",
-            body: msg.body,
-            timestamp: msg.createdAt,
-            from: msg.direction === "incoming" ? (listing.agentName ?? msg.from) : "Alex (AKB)",
-            to: msg.direction === "incoming" ? "Alex (AKB)" : (listing.agentName ?? msg.to),
-          });
-        }
+        const thread = await getThreadVerified(phone, 60 * 24 * 90, 60); // 90 days
+        quoMessages = thread.messages;
       } catch (err) {
         console.error(`[conversations] Quo error for ${id}:`, err);
       }
     }
 
-    // 2. Parse Notes for conversation entries (covers emails + manual logs)
-    if (listing.notes) {
-      const entries = parseConversation(listing.notes);
-      for (let i = 0; i < entries.length; i++) {
-        const entry = entries[i];
-
-        if (entry.type === "system") {
-          messages.push({
-            id: `notes-sys-${i}`,
-            source: "notes",
-            direction: "system",
-            body: entry.text,
-            timestamp: entry.timestamp ?? "",
-            from: "System",
-            to: "",
-          });
-          continue;
-        }
-
-        // Dedup: skip if a Quo message with similar body exists
-        const isDupe = messages.some(
-          (m) =>
-            m.source === "quo" &&
-            m.direction === (entry.type === "inbound" ? "inbound" : "outbound") &&
-            entry.text.length > 10 &&
-            (m.body.includes(entry.text.slice(0, 30)) || entry.text.includes(m.body.slice(0, 30)))
-        );
-
-        if (!isDupe) {
-          messages.push({
-            id: `notes-${i}`,
-            source: "notes",
-            direction: entry.type === "inbound" ? "inbound" : entry.type === "outbound" ? "outbound" : "system",
-            body: entry.text,
-            timestamp: entry.timestamp ?? "",
-            from: entry.type === "inbound" ? (listing.agentName ?? "Agent") : "Alex (AKB)",
-            to: entry.type === "inbound" ? "Alex (AKB)" : (listing.agentName ?? "Agent"),
-          });
-        }
+    // 2. Gmail — live email thread with the agent (returns [] if Gmail not
+    // configured). Wire #4: email now threads INTO the conversation, not just
+    // status signals.
+    let gmailMessages: Awaited<ReturnType<typeof getThreadsForEmail>> = [];
+    if (listing.agentEmail) {
+      try {
+        gmailMessages = await getThreadsForEmail(listing.agentEmail);
+      } catch (err) {
+        console.error(`[conversations] Gmail error for ${id}:`, err);
       }
     }
 
-    // 3. Sort by timestamp (oldest first)
-    messages.sort((a, b) => {
-      if (!a.timestamp && !b.timestamp) return 0;
-      if (!a.timestamp) return -1;
-      if (!b.timestamp) return 1;
-      return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+    // 3. Notes — emails/SMS/manual entries already logged to the record
+    // (durable backstop; deduped against the live pulls by the merge engine).
+    const notesEntries = listing.notes ? parseConversation(listing.notes) : [];
+
+    // Single merge engine: texts + Gmail + notes, deduped, attributed, and
+    // SORTED STRICTLY BY TIMESTAMP — so a $100 text 5:00, a $101 email 5:01,
+    // and an "ok send it" text 5:02 thread in that exact order regardless of
+    // channel. This sequencing is the source of truth downstream logic reads.
+    const { timeline } = mergeTimeline(quoMessages, gmailMessages, notesEntries, {
+      recordId: id,
+      targetAddress: listing.address,
+      targetPrice: listing.listPrice,
+      agentName: listing.agentName ?? null,
+      siblings,
     });
+
+    // Keep only entries confidently attributed to THIS property (sibling- or
+    // low-confidence messages stay out of this thread; they remain visible via
+    // the AMBIGUOUS banner on /pipeline/[id]). Notes/system carry confidence
+    // 1.0 for this record, so they always pass.
+    const channelToSource: Record<string, "quo" | "email" | "notes"> = {
+      sms: "quo", email: "email", note: "notes", system: "notes",
+    };
+    const messages: UnifiedMessage[] = timeline
+      .filter((e) => e.propertyMatch.recordId === id && e.propertyMatch.confidence >= 0.6)
+      .map((e, i) => {
+        const source = channelToSource[e.channel] ?? "notes";
+        const direction: UnifiedMessage["direction"] =
+          e.channel === "system" ? "system" : e.direction === "in" ? "inbound" : "outbound";
+        const rawId = (e.raw as { id?: string } | undefined)?.id;
+        const msg: UnifiedMessage = {
+          id: `${e.channel}-${i}-${rawId ?? "x"}`,
+          source,
+          direction,
+          body: e.body,
+          timestamp: e.timestamp,
+          from: e.sender,
+          to: direction === "inbound" ? "Alex (AKB)" : (listing.agentName ?? "Agent"),
+        };
+        if (e.subject) msg.subject = e.subject;
+        return msg;
+      });
 
     return Response.json({
       recordId: id,
@@ -161,6 +132,7 @@ export async function GET(
       agentEmail: listing.agentEmail,
       messageCount: messages.length,
       quoCount: messages.filter((m) => m.source === "quo").length,
+      emailCount: messages.filter((m) => m.source === "email").length,
       notesCount: messages.filter((m) => m.source === "notes").length,
       messages,
     });
