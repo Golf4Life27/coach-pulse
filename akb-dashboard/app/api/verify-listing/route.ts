@@ -1,3 +1,6 @@
+import { canAutoDispose, disposeDeal, parkDeal } from "@/lib/conveyor/park";
+import { hasDeliveredOfferFor, hasOpenThreadFrom } from "@/lib/conveyor/off-market";
+
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
@@ -15,6 +18,9 @@ const F = {
   executionPath: "fldOrWvqKcc1g6Lka",
   liveStatus: "fldCKnC1nnXEnTUKL",
   notes: "fldwKGxZly6O8qyPu",
+  outreachStatus: "fldGIgqwyCJg4uFyv",
+  lastInboundAt: "fld3IhR1DXzcVuq6F",
+  lastOutboundAt: "fldaK4lR5UNvycg11",
 };
 
 const W = {
@@ -205,6 +211,52 @@ const NEVER_RESURFACE = new Set([
   "707 n pine st", "8641 craige dr", "910 green st",
 ]);
 
+// --- Off-market veto (conveyor wiring) ----------------------------------
+//
+// When verify-listing flips a record to Off Market we now ALSO surface it
+// on the Queue via the conveyor park/dispose helpers — the existing patch
+// already writes Live_Status=Off Market + Execution_Path=Reject, but no
+// operator-facing card was created, so a listing-gone event was invisible
+// in the dashboard until somebody hunted through the listing detail page.
+//
+// The safety guard per the operator condition: auto-dispose ONLY when the
+// deal had no delivered offer AND no open conversation thread. If either
+// holds, the deal is parked with a "listing status changed mid-negotiation"
+// queue item instead, so the operator decides.
+
+async function applyOffMarketVeto(
+  recordId: string,
+  address: string,
+  fields: Record<string, unknown>,
+  source: string,
+): Promise<void> {
+  const guard = {
+    hasDeliveredOffer: hasDeliveredOfferFor(fields[F.outreachStatus] as string | undefined),
+    hasOpenThread: hasOpenThreadFrom(
+      fields[F.lastInboundAt] as string | undefined,
+      fields[F.lastOutboundAt] as string | undefined,
+    ),
+  };
+  if (canAutoDispose(guard)) {
+    await disposeDeal({
+      recordId,
+      address,
+      reason: "listing_off_market",
+      reasoning: `verify-listing detected off-market via ${source}; no delivered offer and no open thread, auto-dispose proceeds.`,
+    });
+    return;
+  }
+  await parkDeal({
+    recordId,
+    address,
+    reason: "listing_changed_mid_negotiation",
+    reasoning:
+      `verify-listing detected off-market via ${source}, but ${guard.hasDeliveredOffer ? "an offer has been delivered" : ""}${guard.hasDeliveredOffer && guard.hasOpenThread ? " and " : ""}${guard.hasOpenThread ? "an open conversation thread exists" : ""} — operator should decide whether to keep working it or dispose.`,
+    priority: "HIGH",
+    payload: { source, guard },
+  });
+}
+
 // --- Main verification ---
 
 interface VerifyResult {
@@ -281,6 +333,7 @@ async function verifyOne(
       [W.lastVerified]: new Date().toISOString(),
       [W.notes]: appendNote(existingNotes, `RentCast error: ${String(err)}.`),
     });
+    await applyOffMarketVeto(recordId, address, fields, "rentcast_error");
     return emptyResult({ liveStatus: "Off Market", source: "RentCast-error", error: String(err) });
   }
 
@@ -293,6 +346,7 @@ async function verifyOne(
       [W.lastVerified]: new Date().toISOString(),
       [W.notes]: appendNote(existingNotes, "RentCast: no active listing found. Off Market."),
     });
+    await applyOffMarketVeto(recordId, address, fields, "rentcast_no_active_listing");
     return emptyResult({ liveStatus: "Off Market", source: "RentCast" });
   }
 
@@ -331,6 +385,7 @@ async function verifyOne(
       [W.lastVerified]: new Date().toISOString(),
       [W.notes]: appendNote(existingNotes, `RentCast returned listing but status="${rcStatus}" (not Active). Off Market.`),
     });
+    await applyOffMarketVeto(recordId, address, fields, `rentcast_status_${rcStatus ?? "null"}`);
     return {
       recordId, address, liveStatus: "Off Market", executionPath: "Reject",
       source: "RentCast", flipDetected: false, flipScore: 0,
@@ -351,6 +406,7 @@ async function verifyOne(
       [W.lastVerified]: new Date().toISOString(),
       [W.notes]: appendNote(existingNotes, `RentCast status Active but data stale. ${staleNote} Rejecting.`),
     });
+    await applyOffMarketVeto(recordId, address, fields, "rentcast_stale_data");
     return {
       recordId, address, liveStatus: "Off Market", executionPath: "Reject",
       source: "RentCast-stale", flipDetected: false, flipScore: flip.flipScore,
