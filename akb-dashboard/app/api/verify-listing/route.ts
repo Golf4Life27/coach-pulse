@@ -1,5 +1,6 @@
 import { canAutoDispose, disposeDeal, parkDeal } from "@/lib/conveyor/park";
 import { hasDeliveredOfferFor, hasOpenThreadFrom } from "@/lib/conveyor/off-market";
+import { auditPaidCall } from "@/lib/spend/audit-paid-call";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -37,16 +38,39 @@ const W = {
 // --- RentCast API ---
 
 async function queryRentCast(
-  address: string, city: string, state: string, zip: string
+  address: string, city: string, state: string, zip: string,
+  recordId?: string,
 ): Promise<Record<string, unknown>[]> {
   const params = new URLSearchParams({
     address, city, state, zipCode: zip, status: "active",
   });
 
-  const res = await fetch(
-    `https://api.rentcast.io/v1/listings/sale?${params.toString()}`,
-    { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" }
-  );
+  const t0 = Date.now();
+  let res: Response;
+  try {
+    res = await fetch(
+      `https://api.rentcast.io/v1/listings/sale?${params.toString()}`,
+      { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" }
+    );
+  } catch (err) {
+    await auditPaidCall({
+      source: "rentcast",
+      endpoint: "listings/sale",
+      http: -1,
+      ms: Date.now() - t0,
+      recordId,
+      error: String(err),
+    });
+    throw err;
+  }
+  await auditPaidCall({
+    source: "rentcast",
+    endpoint: "listings/sale",
+    http: res.status,
+    ms: Date.now() - t0,
+    recordId,
+    error: res.ok ? undefined : `HTTP ${res.status}`,
+  });
 
   if (!res.ok) {
     if (res.status === 404 || res.status === 422) return [];
@@ -323,7 +347,7 @@ async function verifyOne(
   // RentCast query
   let rcListings: Record<string, unknown>[] = [];
   try {
-    rcListings = await queryRentCast(address, city, state, zip);
+    rcListings = await queryRentCast(address, city, state, zip, recordId);
   } catch (err) {
     await patchRecord(recordId, {
       [W.liveStatus]: "Off Market",
