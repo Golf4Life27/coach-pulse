@@ -22,6 +22,10 @@ export interface Listing {
   bathrooms: number | null;
   buildingSqFt: number | null;
   yearBuilt: number | null;
+  /** Portfolio / investor-seller language detected at intake (operator
+   *  2026-06-08). Down-rank signal — H2 cadence deprioritizes within
+   *  the eligible band; never a veto. Forward-only intake flag. */
+  portfolioDetected: boolean;
   stageCalc: string | null;
   approvedForOutreach: boolean;
   flipScore: number | null;

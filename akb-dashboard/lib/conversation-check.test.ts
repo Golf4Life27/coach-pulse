@@ -97,3 +97,102 @@ describe("classifyConversation — the 19 unverified verdict engine", () => {
     expect(r.verdict).toBe("keep_response_received");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// Self-echo + bot-autoreply downgrade classes (operator 2026-06-08).
+// Forward-only — applies to NEW conversation checks; no back-cohort run.
+// ─────────────────────────────────────────────────────────────────────
+
+describe("classifyConversation — self-echo downgrade", () => {
+  it("DOWNGRADES to Texted when the only inbound echoes our H2 template", () => {
+    const r = classifyConversation(
+      [msg({ body: "This is Alex with AKB Solutions. I am interested in your listing at 346 Modder Ave." })],
+      OUT_AT,
+    );
+    expect(r.verdict).toBe("downgrade_to_texted");
+    if (r.verdict === "downgrade_to_texted") {
+      expect(r.reason).toContain("echo_or_autoreply");
+    }
+  });
+
+  it("catches the 'cash offer / quick close' template echo", () => {
+    const r = classifyConversation(
+      [msg({ body: "I would like to make a cash offer at $65,000 with a quick close. Is the seller open to offers in that range?" })],
+      OUT_AT,
+    );
+    expect(r.verdict).toBe("downgrade_to_texted");
+  });
+
+  it("KEEPS Response Received when echo is alongside a real reply", () => {
+    const r = classifyConversation(
+      [
+        msg({ body: "This is Alex with AKB Solutions...", createdAt: "2026-05-07T12:00:00Z" }),
+        msg({ body: "Yeah I can do 70k", createdAt: "2026-05-07T13:00:00Z" }),
+      ],
+      OUT_AT,
+    );
+    expect(r.verdict).toBe("keep_response_received");
+    if (r.verdict === "keep_response_received") {
+      expect(r.inboundCount).toBe(1);
+      expect(r.reason).toContain("filtered 1 echo/autoreply");
+    }
+  });
+});
+
+describe("classifyConversation — bot-autoreply downgrade", () => {
+  it("DOWNGRADES on a classic out-of-office", () => {
+    const r = classifyConversation(
+      [msg({ body: "I'm currently out of the office and will respond to you as soon as I return." })],
+      OUT_AT,
+    );
+    expect(r.verdict).toBe("downgrade_to_texted");
+  });
+
+  it("DOWNGRADES on 'number no longer in service'", () => {
+    const r = classifyConversation(
+      [msg({ body: "This number is no longer in service." })],
+      OUT_AT,
+    );
+    expect(r.verdict).toBe("downgrade_to_texted");
+  });
+
+  it("DOWNGRADES on 'thank you for your interest' brokerage autoreply", () => {
+    const r = classifyConversation(
+      [msg({ body: "Thank you for your interest in this property. An agent will respond shortly." })],
+      OUT_AT,
+    );
+    expect(r.verdict).toBe("downgrade_to_texted");
+  });
+
+  it("DOWNGRADES on explicit 'do not reply'", () => {
+    const r = classifyConversation(
+      [msg({ body: "DO NOT REPLY — this is an automated message." })],
+      OUT_AT,
+    );
+    expect(r.verdict).toBe("downgrade_to_texted");
+  });
+
+  it("KEEPS Response Received when autoreply precedes a real follow-up reply", () => {
+    const r = classifyConversation(
+      [
+        msg({ body: "Out of office until Monday.", createdAt: "2026-05-07T09:00:00Z" }),
+        msg({ body: "OK so I'm back — what's your offer again?", createdAt: "2026-05-08T10:00:00Z" }),
+      ],
+      OUT_AT,
+    );
+    expect(r.verdict).toBe("keep_response_received");
+    if (r.verdict === "keep_response_received") expect(r.inboundCount).toBe(1);
+  });
+
+  it("DOWNGRADES when echo + autoreply are the ONLY messages (no real human reply)", () => {
+    const r = classifyConversation(
+      [
+        msg({ body: "This is Alex with AKB Solutions...", createdAt: "2026-05-07T09:00:00Z" }),
+        msg({ body: "Auto-reply: out of office.", createdAt: "2026-05-07T10:00:00Z" }),
+      ],
+      OUT_AT,
+    );
+    expect(r.verdict).toBe("downgrade_to_texted");
+    if (r.verdict === "downgrade_to_texted") expect(r.reason).toContain("2 filtered");
+  });
+});

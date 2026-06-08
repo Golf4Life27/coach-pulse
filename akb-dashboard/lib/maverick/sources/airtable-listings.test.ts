@@ -30,6 +30,7 @@ function listing(over: Partial<Listing> & { id: string }): Listing {
     bathrooms: null,
     buildingSqFt: null,
     yearBuilt: null,
+    portfolioDetected: false,
     stageCalc: null,
     approvedForOutreach: false,
     flipScore: null,

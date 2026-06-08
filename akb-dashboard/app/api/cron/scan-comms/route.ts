@@ -1,6 +1,9 @@
 import { getListings, updateListingRecord } from "@/lib/airtable";
 import { getMessagesForParticipant } from "@/lib/quo";
 import { synthesize } from "@/lib/maverick/synthesizer";
+// toE164 moved to lib/phone.ts on 2026-06-08 — conversation-check shares it
+// (it was calling Quo without normalization → empty threads on every record).
+import { toE164 } from "@/lib/phone";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -17,13 +20,6 @@ function getProposalsTableId(): string | null {
 
 function cleanPhone(phone: string): string {
   return phone.replace(/[^0-9]/g, "").slice(-10);
-}
-
-function toE164(phone: string): string {
-  const digits = phone.replace(/[^0-9]/g, "");
-  if (digits.length === 10) return `+1${digits}`;
-  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
-  return `+${digits}`;
 }
 
 function formatCurrency(n: number | null | undefined): string {
@@ -207,7 +203,13 @@ export async function GET(req: Request) {
     let inboundFound = 0;
     let matched = 0;
     const newProposals: ProposalRecord[] = [];
-    const timestampUpdates: string[] = [];
+    // 2026-06-08: was string[]. Now carries the INBOUND's actual createdAt,
+    // not wall-clock now — the prior shape stamped Last_Inbound_At with
+    // "right now" on every cron tick (line 278 used new Date()), so the
+    // timestamp was always wrong by however long since the agent replied.
+    // This breaks the conversation-check classifier (inbounds AFTER an
+    // outbound look like they happened after a future outbound).
+    const timestampUpdates: Array<{ id: string; inboundCreatedAt: string }> = [];
     const errors: string[] = [];
 
     for (const phone of phones) {
@@ -230,7 +232,10 @@ export async function GET(req: Request) {
 
           if (existingPending.has(`${listing.id}:jarvis_reply`)) continue;
 
-          timestampUpdates.push(listing.id);
+          // INV — stamp the INBOUND's actual createdAt, not wall-clock now.
+          // (Was the source of the unbacked-reply pattern + breaks
+          // conversation-check's outbound-vs-inbound ordering.)
+          timestampUpdates.push({ id: listing.id, inboundCreatedAt: inbound.createdAt });
 
           const draftResponse = await generateDraftResponse(
             listing,
@@ -271,11 +276,12 @@ export async function GET(req: Request) {
         ? await batchCreateProposals(proposalsTableId, newProposals)
         : 0;
 
-    // Update Last_Inbound_At on matched listings
-    for (const id of timestampUpdates) {
+    // Stamp Last_Inbound_At with the inbound's ACTUAL createdAt — was
+    // wall-clock new Date() before 2026-06-08, breaking timeline ordering.
+    for (const { id, inboundCreatedAt } of timestampUpdates) {
       try {
         await updateListingRecord(id, {
-          fld3IhR1DXzcVuq6F: new Date().toISOString(),
+          fld3IhR1DXzcVuq6F: inboundCreatedAt,
         });
       } catch (err) {
         console.error(

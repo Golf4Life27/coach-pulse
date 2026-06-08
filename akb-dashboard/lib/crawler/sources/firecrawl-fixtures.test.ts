@@ -44,7 +44,8 @@ function verifyFromText(markdown: string): FirecrawlVerifyResult {
     isNewConstruction: false,
     matchedNewConstructionSignals: [],
     matchedInactiveMarkers: [],
-    creditsUsed: 1,
+    portfolioSellerDetected: false,
+    matchedPortfolioKeywords: [],    creditsUsed: 1,
     rateLimited: false,
     error: null,
   };

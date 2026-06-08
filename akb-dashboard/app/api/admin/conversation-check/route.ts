@@ -32,6 +32,7 @@ import {
 } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { getMessagesForParticipant, type QuoMessage } from "@/lib/quo";
+import { toE164, isPlausibleUsPhone } from "@/lib/phone";
 import {
   classifyConversation,
   type ConversationVerdict,
@@ -134,20 +135,27 @@ export async function GET(req: Request) {
   for (const f of unverified) {
     const listing = listings.find((l) => l.id === f.id);
     if (!listing) continue;
-    const phone = listing.agentPhone;
-    if (!phone) {
+    // Quo /v1/messages wants E.164 — without normalization every call
+    // returned 0 messages (the 2026-06-08 forensic finding). Guard +
+    // normalize before hitting the API.
+    const rawPhone = listing.agentPhone;
+    if (!rawPhone || !isPlausibleUsPhone(rawPhone)) {
       proposals.push({
         recordId: f.id,
         address: f.address,
         state: f.state,
-        agentPhone: null,
+        agentPhone: rawPhone ?? null,
         currentStatus: f.outreachStatus,
         lastOutboundAt: listing.lastOutboundAt ?? null,
         quo_message_count: 0,
-        verdict: { verdict: "uncertain", reason: "no_agent_phone" },
+        verdict: {
+          verdict: "uncertain",
+          reason: rawPhone ? "agent_phone_not_us_e164_normalizable" : "no_agent_phone",
+        },
       });
       continue;
     }
+    const phone = toE164(rawPhone);
     let thread = threadCache.get(phone);
     if (!thread) {
       try {

@@ -105,3 +105,63 @@ describe("keyword lists carry the operator-specified terms", () => {
     expect(DISTRESS_CONDITION_KEYWORDS).not.toContain("no financing");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// Portfolio-seller down-rank signal (operator 2026-06-08).
+// Forward-only — applies to NEW intake; not retroactive.
+// ─────────────────────────────────────────────────────────────────────
+
+import { PORTFOLIO_SELLER_KEYWORDS } from "./intake-filter";
+
+describe("portfolio-seller detector", () => {
+  it("fires on direct portfolio/investor-seller language", () => {
+    const e = evaluateListingContent("This property is part of an investor portfolio liquidation.");
+    expect(e.portfolioSellerDetected).toBe(true);
+    expect(e.matchedPortfolioKeywords).toContain("portfolio liquidation");
+  });
+
+  it("fires on the most common landlord exit signals (tenant-occupied, rent-ready, 1031)", () => {
+    expect(evaluateListingContent("Tenant occupied, lease in place.").portfolioSellerDetected).toBe(true);
+    expect(evaluateListingContent("Rent ready turnkey rental.").portfolioSellerDetected).toBe(true);
+    expect(evaluateListingContent("Seller doing a 1031 exchange.").portfolioSellerDetected).toBe(true);
+  });
+
+  it("does NOT fire on plain owner-occupied / residential language", () => {
+    const e = evaluateListingContent("Beautiful family home with updated kitchen.");
+    expect(e.portfolioSellerDetected).toBe(false);
+    expect(e.matchedPortfolioKeywords).toEqual([]);
+  });
+
+  it("DISTRESS OVERRIDES the down-rank — motivated portfolio = still motivated", () => {
+    // The operator rule: a portfolio liquidation that ALSO says "as-is /
+    // motivated" stays high-priority (motivated wins, no down-rank).
+    const e = evaluateListingContent("Investor portfolio liquidation. Sold as-is, motivated seller.");
+    expect(e.matchedPortfolioKeywords.length).toBeGreaterThan(0);
+    expect(e.matchedDistressKeywords.length).toBeGreaterThan(0);
+    expect(e.portfolioSellerDetected).toBe(false); // overridden
+    expect(e.hasConditionSignal).toBe(true); // distress wins
+  });
+
+  it("is word-boundary matched — 'rental' alone doesn't trip 'turnkey rental'", () => {
+    const e = evaluateListingContent("Single rental in a quiet neighborhood.");
+    expect(e.portfolioSellerDetected).toBe(false);
+  });
+
+  it("the keyword set carries the documented categories", () => {
+    const all = PORTFOLIO_SELLER_KEYWORDS.join(" ");
+    // Spot-check that each category is represented (regression guard).
+    expect(all).toContain("portfolio");
+    expect(all).toContain("tenant occupied");
+    expect(all).toContain("rent ready");
+    expect(all).toContain("1031 exchange");
+    expect(all).toContain("institutional");
+  });
+
+  it("co-exists with the wholesaler veto (wholesaler is still the hard reject)", () => {
+    const e = evaluateListingContent("No wholesalers. Investor portfolio liquidation.");
+    expect(e.wholesalerExcluded).toBe(true);
+    // portfolio still surfaces in matchedPortfolioKeywords, but veto wins
+    // at the cron layer (current code rejects on wholesalerExcluded first).
+    expect(e.matchedPortfolioKeywords.length).toBeGreaterThan(0);
+  });
+});

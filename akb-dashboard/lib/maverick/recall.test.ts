@@ -286,6 +286,7 @@ describe("filterListings", () => {
       bathrooms: null,
       buildingSqFt: null,
       yearBuilt: null,
+      portfolioDetected: false,
       stageCalc: null,
       approvedForOutreach: false,
       flipScore: null,

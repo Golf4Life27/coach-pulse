@@ -75,7 +75,8 @@ function verifyFromText(markdown: string): FirecrawlVerifyResult {
     isNewConstruction: nc.isNew,
     matchedNewConstructionSignals: nc.signals,
     matchedInactiveMarkers: inactive,
-    creditsUsed: 1,
+    portfolioSellerDetected: false,
+    matchedPortfolioKeywords: [],    creditsUsed: 1,
     rateLimited: false,
     error: null,
   };

@@ -235,6 +235,34 @@ export const DISTRESS_CONDITION_KEYWORDS: readonly string[] = [
   "bring your contractor", "bring contractor",
 ];
 
+/** Portfolio / investor-seller language (operator 2026-06-08).
+ *  Forward-only signal — DOWN-RANKS the candidate (not a veto). A
+ *  portfolio seller is reachable but has a much lower hit rate than
+ *  an individual motivated seller, so the H2 outreach should deprioritize
+ *  these. Distress language overrides the down-rank: a 'portfolio
+ *  motivated seller' is still motivated. Word-boundary matched. */
+export const PORTFOLIO_SELLER_KEYWORDS: readonly string[] = [
+  // direct portfolio/investor-seller phrasing
+  "investor selling", "investor seller", "investor-owned", "investor owned",
+  "portfolio sale", "portfolio seller", "portfolio liquidation",
+  "package deal", "package sale",
+  "bulk sale", "bulk portfolio",
+  "rental portfolio", "buy and hold portfolio",
+  // 1031 / institutional moves
+  "1031 exchange", "1031-exchange",
+  "institutional seller", "institutional owner",
+  "reit divestment", "fund liquidation",
+  // landlord-specific exit signals (NOT necessarily distress)
+  "tenant occupied", "tenant-occupied",
+  "currently rented", "currently leased",
+  "rent ready", "rent-ready",
+  "turnkey rental", "turn-key rental",
+  "stabilized rental",
+  // listing language pointing at scale rather than urgency
+  "see all our listings", "see all listings by",
+  "multiple properties available",
+];
+
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -255,18 +283,32 @@ export interface ListingContentEvaluation {
   matchedWholesalerKeywords: string[];
   hasConditionSignal: boolean;
   matchedDistressKeywords: string[];
+  /** Portfolio/investor-seller language detected (operator directive
+   *  2026-06-08). FALSE when distress overrides — a portfolio motivated
+   *  seller is still motivated. Consumers DOWN-RANK on this, never veto. */
+  portfolioSellerDetected: boolean;
+  matchedPortfolioKeywords: string[];
 }
 
 /** Pure: evaluate scraped portal text for wholesaler-exclusion +
- *  distress/condition signal. Caller applies the reject ordering
- *  (wholesaler first, then condition-missing). */
+ *  distress/condition signal + portfolio-seller signal. Caller applies
+ *  the reject ordering (wholesaler first, then condition-missing). The
+ *  portfolio flag is informational — H2 cadence reads it to deprioritize
+ *  the candidate within the eligible band, never to reject. */
 export function evaluateListingContent(text: string | null | undefined): ListingContentEvaluation {
   const matchedWholesalerKeywords = matchKeywordsWordBoundary(text, WHOLESALER_EXCLUSION_KEYWORDS);
   const matchedDistressKeywords = matchKeywordsWordBoundary(text, DISTRESS_CONDITION_KEYWORDS);
+  const matchedPortfolioKeywords = matchKeywordsWordBoundary(text, PORTFOLIO_SELLER_KEYWORDS);
+  // Distress overrides — a portfolio listing that ALSO carries distress
+  // language is treated as a motivated portfolio (still high-priority).
+  const portfolioSellerDetected =
+    matchedPortfolioKeywords.length > 0 && matchedDistressKeywords.length === 0;
   return {
     wholesalerExcluded: matchedWholesalerKeywords.length > 0,
     matchedWholesalerKeywords,
     hasConditionSignal: matchedDistressKeywords.length > 0,
     matchedDistressKeywords,
+    portfolioSellerDetected,
+    matchedPortfolioKeywords,
   };
 }

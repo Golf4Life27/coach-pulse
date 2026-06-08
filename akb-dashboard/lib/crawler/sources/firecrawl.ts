@@ -161,6 +161,13 @@ export interface FirecrawlVerifyResult {
   matchedNewConstructionSignals: string[];
   /** Matched inactive markers (the phrases behind stillActive=false). */
   matchedInactiveMarkers: string[];
+  /** Portfolio / investor-seller language (operator 2026-06-08). DOWN-RANK
+   *  signal — NOT a veto. False when distress overrides (motivated wins).
+   *  H2 cadence consumes this to deprioritize portfolio sellers in the
+   *  eligible band. Forward-only: applies to all new intake; no cohort
+   *  backfill. */
+  portfolioSellerDetected: boolean;
+  matchedPortfolioKeywords: string[];
   creditsUsed: number;
   /** true when Firecrawl returned 429 even after exhausting retries —
    *  distinct from a generic error (caller → firecrawl_rate_limited). */
@@ -325,6 +332,8 @@ export async function verifyListing(
     matchedDistressKeywords: [],
     isNewConstruction: false,
     matchedNewConstructionSignals: [],
+    portfolioSellerDetected: false,
+    matchedPortfolioKeywords: [],
     matchedInactiveMarkers: [],
     creditsUsed: 0,
     rateLimited: false,
@@ -390,6 +399,8 @@ export async function verifyListing(
       isNewConstruction: newConstruction.isNew,
       matchedNewConstructionSignals: newConstruction.signals,
       matchedInactiveMarkers: inactiveMarkers,
+      portfolioSellerDetected: content.portfolioSellerDetected,
+      matchedPortfolioKeywords: content.matchedPortfolioKeywords,
       creditsUsed,
       rateLimited: false,
       error: null,

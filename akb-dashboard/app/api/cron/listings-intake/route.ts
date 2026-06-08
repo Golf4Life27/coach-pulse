@@ -116,6 +116,8 @@ async function createIntakeListing(
   c: IntakeCandidate,
   promote: boolean,
   firecrawlUrl: string | null,
+  portfolioDetected: boolean = false,
+  matchedPortfolioKeywords: string[] = [],
 ): Promise<string> {
   if (!AIRTABLE_PAT) throw new Error("AIRTABLE_PAT not set");
   const url = `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}`;
@@ -176,6 +178,15 @@ async function createIntakeListing(
     fields["Outreach_Status"] = "Review";
     fields["Verification_Notes"] =
       `[${iso}] RentCast auto-intake (${c.sourceId}) — queued for Review.`;
+  }
+  // Portfolio/investor-seller signal (operator 2026-06-08). DOWN-RANK
+  // only — never a veto, never alters Outreach_Status. Lands as a
+  // checkbox so H2 cadence can deprioritize within the eligible band.
+  // Distress override is enforced upstream in evaluateListingContent.
+  if (portfolioDetected) {
+    fields["Portfolio_Detected"] = true;
+    fields["Verification_Notes"] =
+      `${fields["Verification_Notes"] ?? ""}\n[${iso}] PORTFOLIO_DETECTED: ${matchedPortfolioKeywords.slice(0, 6).join(", ")}.`;
   }
   const res = await fetch(url, {
     method: "POST",
@@ -368,7 +379,7 @@ export async function GET(req: Request) {
       missing_agent_phone: 0,
       reasons_blocked: {} as Record<string, number>,
     },
-    would_write: [] as Array<{ sourceId: string; address: string | null; zip: string | null; listPrice: number | null; firecrawlUrl: string | null; outreachStatus: "" | "Review"; promote: boolean; agentPhonePresent: boolean }>,
+    would_write: [] as Array<{ sourceId: string; address: string | null; zip: string | null; listPrice: number | null; firecrawlUrl: string | null; outreachStatus: "" | "Review"; promote: boolean; agentPhonePresent: boolean; portfolioDetected: boolean }>,
     reject_reason_counts: {} as Record<string, number>,
     per_zip_errors: [] as Array<{ zip: string; error: string }>,
     credentialed: true,
@@ -478,7 +489,14 @@ export async function GET(req: Request) {
 
   // ── Phase 3: classify completed results (sequential — accurate count
   // aggregation regardless of non-deterministic completion order). ──
-  const toWrite: Array<{ candidate: IntakeCandidate; zip: string; promote: boolean; firecrawlUrl: string | null }> = [];
+  const toWrite: Array<{
+    candidate: IntakeCandidate;
+    zip: string;
+    promote: boolean;
+    firecrawlUrl: string | null;
+    portfolioDetected: boolean;
+    matchedPortfolioKeywords: string[];
+  }> = [];
   const bumpBlocked = (reason: AutoPromoteBlockReason | "auto_promote_disabled" | "auto_promote_dry_run") => {
     summary.auto_promote.reasons_blocked[reason] = (summary.auto_promote.reasons_blocked[reason] ?? 0) + 1;
   };
@@ -519,7 +537,9 @@ export async function GET(req: Request) {
           inactive: fc.matchedInactiveMarkers,
           wholesaler: fc.matchedWholesalerKeywords,
           distress: fc.matchedDistressKeywords,
+          portfolio: fc.matchedPortfolioKeywords,
         },
+        portfolioSellerDetected: fc.portfolioSellerDetected,
         contexts: fc.debugContexts ?? [],
         page_excerpt: fc.pageExcerpt ?? null,
       });
@@ -591,18 +611,23 @@ export async function GET(req: Request) {
         sourceId: c.sourceId, address: c.address, zip: c.zip, listPrice: c.listPrice,
         firecrawlUrl: fc.url, outreachStatus: promote ? "" : "Review",
         promote, agentPhonePresent: !!c.agentPhone,
+        portfolioDetected: fc.portfolioSellerDetected,
       });
     } else {
-      toWrite.push({ candidate: c, zip, promote, firecrawlUrl: fc.url });
+      toWrite.push({
+        candidate: c, zip, promote, firecrawlUrl: fc.url,
+        portfolioDetected: fc.portfolioSellerDetected,
+        matchedPortfolioKeywords: fc.matchedPortfolioKeywords,
+      });
     }
   }
 
   // ── Phase 4: writes (live only; sequential, post-pool — no concurrent
   // Airtable writes / intra-run dup races). ──
   if (!dryRun) {
-    for (const { candidate: c, zip, promote, firecrawlUrl } of toWrite) {
+    for (const { candidate: c, zip, promote, firecrawlUrl, portfolioDetected, matchedPortfolioKeywords } of toWrite) {
       try {
-        await createIntakeListing(c, promote, firecrawlUrl);
+        await createIntakeListing(c, promote, firecrawlUrl, portfolioDetected, matchedPortfolioKeywords);
         summary.written++;
       } catch (err) {
         summary.per_zip_errors.push({
