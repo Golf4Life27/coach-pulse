@@ -27,6 +27,7 @@
 //      assessment package. Flagged.
 
 import type { IntakeCandidate } from "@/lib/crawler/intake-filter";
+import { auditPaidCall } from "@/lib/spend/audit-paid-call";
 
 const ATTOM_API_KEY = process.env.ATTOM_API_KEY;
 const ATTOM_BASE = "https://api.gateway.attomdata.com/propertyapi/v1.0.0";
@@ -107,10 +108,18 @@ export async function fetchListingsByZip(zip: string): Promise<AttomFetchResult>
   if (!ATTOM_API_KEY) {
     return { candidates: [], credentialed: false, error: "ATTOM_API_KEY not set", raw_count: 0 };
   }
+  const t0 = Date.now();
   try {
     const res = await fetch(buildSnapshotUrl(zip), {
       headers: { apikey: ATTOM_API_KEY, accept: "application/json" },
       cache: "no-store",
+    });
+    await auditPaidCall({
+      source: "attom",
+      endpoint: "property/snapshot",
+      http: res.status,
+      ms: Date.now() - t0,
+      error: res.ok ? undefined : `HTTP ${res.status}`,
     });
     if (!res.ok) {
       return {
@@ -124,6 +133,13 @@ export async function fetchListingsByZip(zip: string): Promise<AttomFetchResult>
     const candidates = mapSnapshotResponse(body);
     return { candidates, credentialed: true, error: null, raw_count: candidates.length };
   } catch (err) {
+    await auditPaidCall({
+      source: "attom",
+      endpoint: "property/snapshot",
+      http: -1,
+      ms: Date.now() - t0,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return {
       candidates: [],
       credentialed: true,
