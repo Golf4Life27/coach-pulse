@@ -244,6 +244,8 @@ const DEAL_FIELDS: Record<string, string> = {
   fld00Ag0rvgtUu48R: "arv",
   fldned9bMeMSKWruL: "status",
   fldTvNokAK5AEqz9z: "closingStatus",
+  fldIPt7nba0nRom66: "assignmentExecutedAt",
+  fldetLaT9GjdOFFKE: "closingScheduledDate",
   fld7KTawggpBzGwzh: "dispoReady",
   fldACzlhQcnEfy4D4: "propertyImageUrl",
   fldxsnwsG1wExkW96: "beds",

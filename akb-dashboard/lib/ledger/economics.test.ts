@@ -23,6 +23,8 @@ function mkDeal(over: Partial<Deal> = {}): Deal {
     arv: null,
     status: "Active",
     closingStatus: "Closed",
+    assignmentExecutedAt: null,
+    closingScheduledDate: null,
     dispoReady: false,
     propertyImageUrl: null,
     beds: null,

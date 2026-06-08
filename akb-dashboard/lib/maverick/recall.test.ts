@@ -341,6 +341,8 @@ describe("filterDeals", () => {
       arv: null,
       status: "active",
       closingStatus: null,
+      assignmentExecutedAt: null,
+      closingScheduledDate: null,
       dispoReady: false,
       propertyImageUrl: null,
       beds: null,

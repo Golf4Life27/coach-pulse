@@ -177,6 +177,10 @@ export interface Deal {
   arv: number | null;
   status: string | null;
   closingStatus: string | null;
+  /** Date the assignment was executed (deal realized). INV-026 velocity. */
+  assignmentExecutedAt: string | null;
+  /** Scheduled closing date — velocity fallback when no assignment date. */
+  closingScheduledDate: string | null;
   dispoReady: boolean;
   propertyImageUrl: string | null;
   beds: number | null;
