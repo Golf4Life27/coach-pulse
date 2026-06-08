@@ -17,6 +17,7 @@
 // Pulse state to keep I/O cheap).
 
 import type { PulseDetection } from "./types";
+import type { ProgressMeterSnapshot } from "./detector-input";
 
 export interface PulseActiveEntry {
   detection: PulseDetection;
@@ -33,6 +34,10 @@ export interface PulseActiveState {
   active: Record<string, PulseActiveEntry>;
   /** Most-recent test_count Pulse anchored. Null on first scan. */
   test_count_anchor: number | null;
+  /** Most-recent INV-026 meter snapshot Pulse anchored. Null on first
+   *  scan. The movement detector reads this as previous_progress_meter
+   *  to fire on material moves. */
+  progress_meter_anchor: ProgressMeterSnapshot | null;
   /** ISO of the last scan that wrote this state. Surfaced in
    *  Pulse-room UI for freshness. */
   last_scan_at: string | null;
@@ -45,6 +50,7 @@ const KV_TOKEN = process.env.KV_REST_API_TOKEN;
 const EMPTY_STATE: PulseActiveState = {
   active: {},
   test_count_anchor: null,
+  progress_meter_anchor: null,
   last_scan_at: null,
 };
 
@@ -85,6 +91,10 @@ export async function readPulseState(): Promise<PulseActiveState> {
       active,
       test_count_anchor:
         typeof parsed.test_count_anchor === "number" ? parsed.test_count_anchor : null,
+      progress_meter_anchor:
+        parsed.progress_meter_anchor && typeof parsed.progress_meter_anchor === "object"
+          ? (parsed.progress_meter_anchor as ProgressMeterSnapshot)
+          : null,
       last_scan_at: typeof parsed.last_scan_at === "string" ? parsed.last_scan_at : null,
     };
   } catch {

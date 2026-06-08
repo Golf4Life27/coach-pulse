@@ -40,7 +40,27 @@ export interface PulseDetectorInput {
     withoutUrl: number;
     coveragePct: number;
   } | null;
+  /** Current INV-026 meter snapshot (stall count + monthly net + build%).
+   *  Provided by the scan route; null when meter computation was
+   *  skipped/failed and the detector degrades silently. */
+  progress_meter?: ProgressMeterSnapshot | null;
+  /** Previous Pulse-anchored meter snapshot from KV — set after a
+   *  successful scan; null on first run. Material movement is the
+   *  current vs previous diff. */
+  previous_progress_meter?: ProgressMeterSnapshot | null;
   /** Now-clock for deterministic detection timestamps + age
    *  computations. */
   now: () => Date;
+}
+
+/** Slim INV-026 meter shape carried into Pulse. Mirrors the fields the
+ *  movement detector needs — not the full meter (per-stage detail lives
+ *  on the dashboard, not the detection card). */
+export interface ProgressMeterSnapshot {
+  stall_count: number;
+  high_risk_stalls: number;
+  monthly_net_usd: number;
+  build_pct: number;
+  /** ISO timestamp of when this snapshot was computed. */
+  as_of: string;
 }

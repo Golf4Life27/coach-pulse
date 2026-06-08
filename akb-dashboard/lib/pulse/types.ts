@@ -30,7 +30,8 @@ export type PulseDetectorId =
   | "outreach_volume_drop"
   | "quo_quota_burn"
   | "verification_url_coverage"
-  | "paid_api_spend_24h";
+  | "paid_api_spend_24h"
+  | "progress_meter_movement";
 
 export interface PulseDetection {
   /** Unique per-detection-fire ID; for steady-state detections this

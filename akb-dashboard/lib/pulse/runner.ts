@@ -30,6 +30,7 @@ import { detectQuoQuotaBurn } from "./detectors/quo-quota-burn";
 import { detectIntakeSignal } from "./detectors/intake-signal";
 import { detectVerificationUrlCoverage } from "./detectors/verification-url-coverage";
 import { detectPaidApiSpend } from "./detectors/paid-api-spend";
+import { detectProgressMeterMovement } from "./detectors/progress-meter-movement";
 
 import { audit } from "@/lib/audit-log";
 import { writeState, type WriteStateDeps } from "@/lib/maverick/write-state";
@@ -65,6 +66,7 @@ export function runAllDetectors(input: PulseDetectorInput): PulseDetection[] {
     ...detectIntakeSignal(input),
     ...detectVerificationUrlCoverage(input),
     ...detectPaidApiSpend(input),
+    ...detectProgressMeterMovement(input),
   ];
 }
 
@@ -214,6 +216,11 @@ export async function runPulseScan(
   const nextState: PulseActiveState = {
     active: nextActive,
     test_count_anchor: input.test_count ?? previousState.test_count_anchor,
+    // Anchor the meter snapshot for the next scan's movement detection.
+    // Preserve the previous anchor when the meter wasn't computed this
+    // scan (so a transient meter-fetch failure doesn't lose the baseline).
+    progress_meter_anchor:
+      input.progress_meter ?? previousState.progress_meter_anchor,
     last_scan_at: now.toISOString(),
   };
   await writeFn(nextState);

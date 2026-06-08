@@ -25,6 +25,9 @@ import { getActiveListingsForBrief, getActiveVerificationUrlCoverage } from "@/l
 import { fetchCodebaseMetadataState } from "@/lib/maverick/sources/codebase-metadata";
 import { readPulseState } from "@/lib/pulse/active-store";
 import { runPulseScan } from "@/lib/pulse/runner";
+import { getDeals } from "@/lib/airtable";
+import { buildMeterSnapshot, type ClosedDeal } from "@/lib/progress-meter/compute";
+import type { ProgressMeterSnapshot } from "@/lib/pulse/detector-input";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -43,7 +46,7 @@ export async function GET() {
     const nowMs = Date.now();
     const since24Iso = new Date(nowMs - 24 * 3_600_000).toISOString();
     const since48Iso = new Date(nowMs - 48 * 3_600_000).toISOString();
-    const [audit, listings, metadata, previousState, urlCoverage, spine24, spine48] = await Promise.all([
+    const [audit, listings, metadata, previousState, urlCoverage, spine24, spine48, deals] = await Promise.all([
       readRecentFromKv(DEFAULT_AUDIT_LIMIT),
       getActiveListingsForBrief({ recentDays: 14 }),
       fetchCodebaseMetadataState({ timeoutMs: 3_000 }).catch(() => null),
@@ -51,10 +54,35 @@ export async function GET() {
       getActiveVerificationUrlCoverage().catch(() => null),
       countSpineRowsSince(since24Iso),
       countSpineRowsSince(since48Iso),
+      // Best-effort — meter degrades to null on fetch failure so the
+      // movement detector goes silent (no false positive), but the rest
+      // of Pulse keeps running.
+      getDeals().catch(() => null),
     ]);
 
     const testCount =
       metadata && metadata.ok && metadata.data ? metadata.data.test_count : null;
+
+    // INV-026 meter snapshot — closed deals = status==="Closed" with
+    // either assignment_executed_at or closing_scheduled_date as the
+    // realized timestamp. Matches the progress-meter route's mapper.
+    let progressMeter: ProgressMeterSnapshot | null = null;
+    if (deals) {
+      const closed: ClosedDeal[] = deals
+        .filter((d) => d.status === "Closed" || d.closingStatus === "Closed")
+        .map((d) => ({
+          closedAt: d.assignmentExecutedAt ?? d.closingScheduledDate ?? null,
+          assignmentFee: d.assignmentFee,
+        }));
+      const snap = buildMeterSnapshot({ deals: closed });
+      progressMeter = {
+        stall_count: snap.lostPhone.stallCount,
+        high_risk_stalls: snap.lostPhone.high,
+        monthly_net_usd: snap.velocity.monthlyNetUsd,
+        build_pct: snap.completion.overallPct,
+        as_of: snap.asOf,
+      };
+    }
 
     const result = await runPulseScan({
       audit_log: audit,
@@ -65,6 +93,8 @@ export async function GET() {
       verification_url_coverage: urlCoverage,
       spine_writes_24h: spine24,
       spine_writes_48h: spine48,
+      progress_meter: progressMeter,
+      previous_progress_meter: previousState.progress_meter_anchor,
       now: () => new Date(),
     });
 

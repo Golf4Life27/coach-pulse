@@ -124,7 +124,7 @@ describe("runPulseScan", () => {
     const readState = vi.fn().mockResolvedValue({
       active: {},
       test_count_anchor: null,
-      last_scan_at: null,
+      progress_meter_anchor: null,      last_scan_at: null,
     } as PulseActiveState);
     const writeStore = vi.fn().mockResolvedValue(undefined);
 
@@ -166,7 +166,7 @@ describe("runPulseScan", () => {
         },
       },
       test_count_anchor: 700,
-      last_scan_at: "2026-05-18T00:00:00Z",
+      progress_meter_anchor: null,      last_scan_at: "2026-05-18T00:00:00Z",
     } as PulseActiveState);
     const writeStore = vi.fn().mockResolvedValue(undefined);
 
@@ -227,7 +227,7 @@ describe("runPulseScan", () => {
           },
         },
         test_count_anchor: null,
-        last_scan_at: firstSeen,
+        progress_meter_anchor: null,        last_scan_at: firstSeen,
       }),
       writeStateStore: writeStore,
     });
@@ -259,7 +259,7 @@ describe("runPulseScan", () => {
         readState: async () => ({
           active: {},
           test_count_anchor: 700,
-          last_scan_at: null,
+          progress_meter_anchor: null,          last_scan_at: null,
         }),
         writeStateStore: writeStore,
       },
@@ -282,7 +282,7 @@ describe("runPulseScan", () => {
         readState: async () => ({
           active: {},
           test_count_anchor: 700,
-          last_scan_at: null,
+          progress_meter_anchor: null,          last_scan_at: null,
         }),
         writeStateStore: writeStore,
       },
