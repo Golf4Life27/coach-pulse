@@ -34,6 +34,8 @@
 import type { Listing } from "@/lib/types";
 import { normalizePhone } from "@/lib/phone-normalize";
 import { SOURCE_VERSION_V2 } from "@/lib/source-version";
+import { isActionableMarket } from "@/lib/markets/actionable";
+import { isOutreachFresh, DEFAULT_FRESHNESS_HOURS } from "@/lib/outreach-freshness";
 
 export const AUTO_PROCEED = "Auto Proceed";
 export const LIVE_ACTIVE = "Active";
@@ -90,6 +92,35 @@ export function isH2Eligible(l: Listing): boolean {
 
 export function selectH2Eligible(listings: Listing[]): Listing[] {
   return listings.filter(isH2Eligible);
+}
+
+/** Stricter outreach gate (operator 2026-06-08, item 3): H2-eligible AND
+ *  confirmed on-market within the freshness window AND in an actionable
+ *  market (not paused Memphis / excluded states). This is the "confirmed-
+ *  live leads only" selector the controlled batch fires on, so the stale
+ *  backlog is never texted blind. */
+export interface OutreachReadyReason {
+  ready: boolean;
+  reason: string | null;
+}
+export function outreachReadyReason(
+  l: Listing,
+  now: Date = new Date(),
+  maxAgeHours = DEFAULT_FRESHNESS_HOURS,
+): OutreachReadyReason {
+  if (!isH2Eligible(l)) return { ready: false, reason: ineligibleReasonForListing(l) ?? "not_h2_eligible" };
+  const market = isActionableMarket({ state: l.state, city: l.city, zip: l.zip });
+  if (!market.actionable) return { ready: false, reason: market.reason };
+  const fresh = isOutreachFresh({ lastVerified: l.lastVerified, liveStatus: l.liveStatus }, now, maxAgeHours);
+  if (!fresh.fresh) return { ready: false, reason: fresh.reason };
+  return { ready: true, reason: null };
+}
+export function selectOutreachReady(
+  listings: Listing[],
+  now: Date = new Date(),
+  maxAgeHours = DEFAULT_FRESHNESS_HOURS,
+): Listing[] {
+  return listings.filter((l) => outreachReadyReason(l, now, maxAgeHours).ready);
 }
 
 /** Pure: human-readable reason a listing fails H2 eligibility, or null when

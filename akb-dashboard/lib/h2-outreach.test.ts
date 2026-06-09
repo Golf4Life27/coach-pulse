@@ -5,6 +5,8 @@ import {
   isH2Eligible,
   ineligibleReasonForListing,
   selectH2Eligible,
+  selectOutreachReady,
+  outreachReadyReason,
   buildPriorContactIndex,
   buildH2Message,
   firstNameOnly,
@@ -225,5 +227,45 @@ describe("ineligibleReasonForListing", () => {
     expect(ineligibleReasonForListing(listing({ ...eligible(), doNotText: true }))).toContain("Do_Not_Text");
     expect(ineligibleReasonForListing(listing({ ...eligible(), agentPhone: "" }))).toContain("Agent_Phone is empty");
     expect(ineligibleReasonForListing(listing({ ...eligible(), sourceVersion: "v1_legacy" }))).toContain("not v2");
+  });
+});
+
+describe("selectOutreachReady / outreachReadyReason — confirmed-live + actionable gate", () => {
+  const NOW = new Date("2026-06-09T12:00:00Z");
+  const hoursAgo = (h: number) => new Date(NOW.getTime() - h * 3_600_000).toISOString();
+  // A fully outreach-ready TX lead: H2-eligible + fresh + actionable.
+  const ready = (): Partial<Listing> => ({
+    outreachStatus: "", liveStatus: "Active", executionPath: "Auto Proceed",
+    doNotText: false, agentPhone: "(210) 555-1234", sourceVersion: "v2_post_2026-05-26",
+    state: "TX", city: "San Antonio", zip: "78201",
+    lastVerified: hoursAgo(2),
+  });
+
+  it("ready when H2-eligible + fresh + actionable", () => {
+    expect(outreachReadyReason(listing(ready()), NOW).ready).toBe(true);
+  });
+  it("NOT ready when verify is stale (>48h)", () => {
+    const r = outreachReadyReason(listing({ ...ready(), lastVerified: hoursAgo(72) }), NOW);
+    expect(r.ready).toBe(false);
+    expect(r.reason).toBe("verify_stale");
+  });
+  it("NOT ready when never verified", () => {
+    expect(outreachReadyReason(listing({ ...ready(), lastVerified: null }), NOW).reason).toBe("never_verified");
+  });
+  it("NOT ready in a PAUSED Memphis market even if fresh + H2-eligible", () => {
+    const r = outreachReadyReason(listing({ ...ready(), state: "TN", city: "Memphis", zip: "38109" }), NOW);
+    expect(r.ready).toBe(false);
+    expect(r.reason).toContain("paused_memphis");
+  });
+  it("NOT ready when not H2-eligible (already texted)", () => {
+    expect(outreachReadyReason(listing({ ...ready(), outreachStatus: "Texted" }), NOW).reason).toContain("Outreach_Status already set");
+  });
+  it("selectOutreachReady filters a mixed set down to the ready ones", () => {
+    const set = [
+      listing({ id: "ready", ...ready() }),
+      listing({ id: "stale", ...ready(), lastVerified: hoursAgo(99) }),
+      listing({ id: "memphis", ...ready(), state: "TN", city: "Memphis", zip: "38109" }),
+    ];
+    expect(selectOutreachReady(set, NOW).map((l) => l.id)).toEqual(["ready"]);
   });
 });

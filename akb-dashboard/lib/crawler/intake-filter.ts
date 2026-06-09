@@ -42,6 +42,26 @@ const DISTRESS_DOM_CAP =
     ? Number(process.env.DISTRESS_DOM_CAP)
     : null;
 
+// ── Conversion-era pre-filter tightening (operator 2026-06-08, item 1d).
+// Both DEFAULT OFF so they don't silently reverse the "fire on every active
+// band listing" policy — the operator opts in to cut Firecrawl scrape
+// volume when conversion (not lead-gen) is the constraint.
+//
+// INTAKE_DOM_FLOOR: reject candidates with daysOnMarket < N (too fresh to
+//   be motivated). Unset → no floor.
+const INTAKE_DOM_FLOOR =
+  process.env.INTAKE_DOM_FLOOR && /^\d+$/.test(process.env.INTAKE_DOM_FLOOR)
+    ? Number(process.env.INTAKE_DOM_FLOOR)
+    : null;
+// INTAKE_REQUIRE_DISTRESS="true": reject a candidate carrying NO distress
+//   signal (no price reduction AND DOM below the distress-DOM mark). Unset/
+//   anything-else → off.
+const INTAKE_REQUIRE_DISTRESS = process.env.INTAKE_REQUIRE_DISTRESS === "true";
+const INTAKE_DISTRESS_DOM_MARK =
+  process.env.INTAKE_DISTRESS_DOM_MARK && /^\d+$/.test(process.env.INTAKE_DISTRESS_DOM_MARK)
+    ? Number(process.env.INTAKE_DISTRESS_DOM_MARK)
+    : 60;
+
 export interface IntakeCandidate {
   /** Vendor-stable id for trace/dedup (e.g. ATTOM attomId). */
   sourceId: string;
@@ -89,7 +109,9 @@ export type IntakeRejectReason =
   | "listed_date_missing"
   | "listed_date_too_old"
   | "excluded_state"
-  | "state_missing";
+  | "state_missing"
+  | "dom_below_floor"
+  | "no_distress_signal";
 
 export interface IntakeEvaluation {
   accept: boolean;
@@ -161,6 +183,19 @@ export function evaluateIntakeCandidate(
     reasons.push("state_missing");
   } else if (EXCLUDED_STATES.has(c.state.trim().toUpperCase())) {
     reasons.push("excluded_state");
+  }
+
+  // ── Conversion-era pre-filters (default OFF; cut scrape volume) ──
+  // DOM resolves from the explicit daysOnMarket, falling back to the
+  // listedDate derivation (the same source the cron uses).
+  const dom = c.daysOnMarket ?? daysOnMarketFrom(c.listedDate, now);
+  if (INTAKE_DOM_FLOOR != null && dom != null && dom < INTAKE_DOM_FLOOR) {
+    reasons.push("dom_below_floor");
+  }
+  if (INTAKE_REQUIRE_DISTRESS) {
+    const hasPriceCut = c.priceReduced === true;
+    const hasAgedDom = dom != null && dom >= INTAKE_DISTRESS_DOM_MARK;
+    if (!hasPriceCut && !hasAgedDom) reasons.push("no_distress_signal");
   }
 
   return { accept: reasons.length === 0, reasons };

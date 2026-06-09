@@ -535,6 +535,66 @@ export async function verifyListing(
   }
 }
 
+/** Freshness re-verify of a KNOWN listing URL — ONE /v2/scrape, ~1 credit
+ *  (operator 2026-06-08, item 1). Skips the discovery /search entirely: once
+ *  a property's URL is cached (Verification_URL), re-confirming it's still
+ *  on-market is a single scrape, not a 2-credit search-then-scrape. Same
+ *  classify path (buildResolvedResult) + the same street-number post-scrape
+ *  confirmation. Used by the freshness re-verify pass to keep the
+ *  outreach-eligible set "live within 24-48h" cheaply. */
+export async function verifyListingByUrl(
+  knownUrl: string | null,
+  formattedAddress: string | null,
+  opts: { debug?: boolean } = {},
+): Promise<FirecrawlVerifyResult> {
+  const base: FirecrawlVerifyResult = {
+    credentialed: true,
+    resolved: false,
+    url: knownUrl,
+    stillActive: false,
+    hasRenovatedLanguage: false,
+    matchedKeywords: [],
+    wholesalerExcluded: false,
+    matchedWholesalerKeywords: [],
+    hasConditionSignal: false,
+    matchedDistressKeywords: [],
+    isNewConstruction: false,
+    matchedNewConstructionSignals: [],
+    matchedInactiveMarkers: [],
+    portfolioSellerDetected: false,
+    matchedPortfolioKeywords: [],
+    creditsUsed: 0,
+    rateLimited: false,
+    paymentRequired: false,
+    error: null,
+  };
+  if (!FIRECRAWL_API_KEY) return { ...base, credentialed: false, error: "FIRECRAWL_API_KEY not set" };
+  if (!knownUrl) return { ...base, resolved: false, error: "no known url" };
+  try {
+    const { response: scrapeRes } = await fetchWithBackoff({
+      doFetch: () =>
+        fetch(FIRECRAWL_SCRAPE_URL, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${FIRECRAWL_API_KEY}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ url: knownUrl, formats: [{ type: "markdown" }] }),
+          cache: "no-store",
+        }),
+    });
+    if (scrapeRes.status !== 200 && !scrapeRes.ok) {
+      if (scrapeRes.status === 429) return { ...base, rateLimited: true, error: "Firecrawl scrape 429 after retries" };
+      if (scrapeRes.status === 402) return { ...base, paymentRequired: true, error: "Firecrawl scrape 402 Payment Required" };
+      return { ...base, error: `Firecrawl scrape ${scrapeRes.status}` };
+    }
+    const body = (await scrapeRes.json()) as { data?: { markdown?: string }; creditsUsed?: number };
+    const credits = typeof body.creditsUsed === "number" ? body.creditsUsed : 0;
+    const markdown = body.data?.markdown;
+    if (!markdown) return { ...base, creditsUsed: credits, resolved: false };
+    return buildResolvedResult(markdown, knownUrl, formattedAddress, credits, opts.debug ?? false);
+  } catch (err) {
+    return { ...base, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 // ── Verified-listing classification (pure; testable decision logic) ─────
 //
 // Precedence (top to bottom), locked by operator amendment 2026-05-27

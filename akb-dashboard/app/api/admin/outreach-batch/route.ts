@@ -45,11 +45,11 @@ import {
 } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import {
-  selectH2Eligible,
+  selectOutreachReady,
+  outreachReadyReason,
   buildPriorContactIndex,
   planQueue,
   buildSentNote,
-  ineligibleReasonForListing,
 } from "@/lib/h2-outreach";
 import { evaluateSendWindow } from "@/lib/h2-working-hours";
 import type { Listing } from "@/lib/types";
@@ -145,13 +145,14 @@ async function handle(req: Request): Promise<Response> {
       for (let i = 0; i < explicitIds.length; i++) {
         const l = fetched[i];
         if (!l) { ineligible.push({ recordId: explicitIds[i], reason: "not_found" }); continue; }
-        const reason = ineligibleReasonForListing(l);
-        if (reason) { ineligible.push({ recordId: l.id, reason }); continue; }
+        // STRICT gate: H2-eligible AND confirmed-fresh AND actionable market.
+        const rr = outreachReadyReason(l);
+        if (!rr.ready) { ineligible.push({ recordId: l.id, reason: rr.reason ?? "not_outreach_ready" }); continue; }
         leads.push(l);
       }
     } else {
       const all = await getListings();
-      leads = selectH2Eligible(all);
+      leads = selectOutreachReady(all); // confirmed-live, actionable-market only
     }
   } catch (err) {
     return NextResponse.json({ error: "select_failed", message: err instanceof Error ? err.message : String(err) }, { status: 502 });
