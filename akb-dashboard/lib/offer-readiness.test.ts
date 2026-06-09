@@ -32,9 +32,37 @@ describe("computeOfferReadiness", () => {
   });
 
   it("no CMA and no buyer ceiling → both flagged (the common Detroit case)", () => {
-    const r = computeOfferReadiness({ ...FULL, hasOperatorCma: false, buyerCeiling: null });
+    // Detroit is MI — a disclosure state, so the ceiling source is InvestorBase.
+    const r = computeOfferReadiness({ ...FULL, state: "MI", hasOperatorCma: false, buyerCeiling: null, investorBaseMedian: null });
     expect(r.ready).toBe(false);
     expect(r.missing).toEqual(expect.arrayContaining(["CMA", "Buyer ceiling (InvestorBase)"]));
+  });
+
+  it("disclosure state (MI) with no explicit ceiling resolves off InvestorBase median", () => {
+    const r = computeOfferReadiness({ ...FULL, state: "MI", buyerCeiling: null, investorBaseMedian: 118_000 });
+    const bc = r.items.find((i) => i.key === "buyer_ceiling");
+    expect(bc?.ok).toBe(true);
+    expect(bc?.label).toBe("Buyer ceiling (InvestorBase)");
+    expect(bc?.detail).toContain("$118,000");
+    expect(bc?.detail).toContain("InvestorBase");
+  });
+
+  it("non-disclosure state (TX) with no explicit ceiling resolves off ARV median, ignores InvestorBase", () => {
+    // San Antonio (TX): InvestorBase exports are ~zero, so the ceiling must
+    // come from ARV comps and never cross the streams.
+    const r = computeOfferReadiness({ ...FULL, state: "TX", buyerCeiling: null, realArvMedian: 265_846, investorBaseMedian: 9_999 });
+    const bc = r.items.find((i) => i.key === "buyer_ceiling");
+    expect(bc?.ok).toBe(true);
+    expect(bc?.label).toBe("Buyer ceiling (ARV comps)");
+    expect(bc?.detail).toContain("$265,846");
+    expect(bc?.detail).not.toContain("9,999");
+  });
+
+  it("non-disclosure state (TX) with no ARV → buyer ceiling HOLDs (never fabricated)", () => {
+    const r = computeOfferReadiness({ ...FULL, state: "TX", buyerCeiling: null, realArvMedian: null, investorBaseMedian: 120_000 });
+    const bc = r.items.find((i) => i.key === "buyer_ceiling");
+    expect(bc?.ok).toBe(false);
+    expect(r.missing).toContain("Buyer ceiling (ARV comps)");
   });
 
   it("zero / negative values do not count as present", () => {

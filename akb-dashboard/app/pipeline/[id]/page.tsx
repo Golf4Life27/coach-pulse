@@ -237,6 +237,7 @@ export default function DealWorkspace() {
           estRehab: listing.estRehab ?? null,
           estRehabMid: listing.estRehabMid ?? null,
           rehabConfidenceScore: listing.rehabConfidenceScore ?? null,
+          state: listing.state ?? null,
         }}
       />
 

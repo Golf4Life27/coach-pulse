@@ -13,6 +13,8 @@
 // `ready` is true only when all four are present. Advisory today; this is
 // the gate a future auto-offer must pass.
 
+import { resolveBuyerCeiling, pricingPathForState } from "@/lib/markets/disclosure";
+
 export interface OfferReadinessInput {
   realArvMedian?: number | null;
   arvConfidence?: "HIGH" | "MED" | "LOW" | null;
@@ -22,8 +24,13 @@ export interface OfferReadinessInput {
   rehabConfidenceScore?: number | null;
   /** True when a Deal File exists carrying operator-supplied CMA inputs. */
   hasOperatorCma?: boolean | null;
-  /** Cash-buyer ceiling (InvestorBase). No persisted source yet → usually null. */
+  /** Cash-buyer ceiling — explicit override. When omitted, it's resolved by
+   *  STATE: disclosure → InvestorBase median, non-disclosure → ARV median. */
   buyerCeiling?: number | null;
+  /** Property state — drives the buyer-ceiling source branch (item 2). */
+  state?: string | null;
+  /** InvestorBase Buyer_Median (Property_Intel) — used in disclosure states. */
+  investorBaseMedian?: number | null;
 }
 
 export interface ReadinessItem {
@@ -59,15 +66,28 @@ export function computeOfferReadiness(input: OfferReadinessInput): OfferReadines
   const cmaOk = input.hasOperatorCma === true;
   const cmaDetail = cmaOk ? "on file (Deal File)" : "no CMA captured";
 
-  const bcVal = typeof input.buyerCeiling === "number" && input.buyerCeiling > 0 ? input.buyerCeiling : null;
+  // Buyer ceiling branches on state (item 2): an explicit buyerCeiling wins;
+  // otherwise disclosure states use the InvestorBase median, non-disclosure
+  // states (TX, …) use the ARV median — InvestorBase can't price them.
+  let bcVal: number | null = null;
+  let bcSourceLabel = "";
+  if (typeof input.buyerCeiling === "number" && input.buyerCeiling > 0) {
+    bcVal = input.buyerCeiling;
+    bcSourceLabel = "operator";
+  } else {
+    const resolved = resolveBuyerCeiling(input.state, { investorBaseMedian: input.investorBaseMedian, arvMedian: arvVal });
+    bcVal = resolved.ceiling;
+    bcSourceLabel = resolved.source === "arv_comps" ? "ARV comps" : resolved.source === "investorbase_median" ? "InvestorBase" : "";
+  }
   const bcOk = bcVal != null;
-  const bcDetail = bcOk ? `$${bcVal.toLocaleString()}` : "no buyer ceiling captured";
+  const bcDetail = bcVal != null ? `$${bcVal.toLocaleString()}${bcSourceLabel ? ` · ${bcSourceLabel}` : ""}` : "no buyer ceiling captured";
+  const bcLabel = pricingPathForState(input.state) === "arv_comps" ? "Buyer ceiling (ARV comps)" : "Buyer ceiling (InvestorBase)";
 
   const items: ReadinessItem[] = [
     { key: "arv", label: "Comps / ARV", ok: arvOk, detail: arvDetail },
     { key: "rehab", label: "Rehab estimate", ok: rehabOk, detail: rehabDetail },
     { key: "cma", label: "CMA", ok: cmaOk, detail: cmaDetail },
-    { key: "buyer_ceiling", label: "Buyer ceiling (InvestorBase)", ok: bcOk, detail: bcDetail },
+    { key: "buyer_ceiling", label: bcLabel, ok: bcOk, detail: bcDetail },
   ];
   const missing = items.filter((i) => !i.ok).map((i) => i.label);
   return { items, ready: missing.length === 0, missing };

@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { computeOfferReadiness, type OfferReadiness } from "@/lib/offer-readiness";
+import { isDisclosureState } from "@/lib/markets/disclosure";
 
 interface ListingBits {
   realArvMedian?: number | null;
@@ -16,6 +17,10 @@ interface ListingBits {
   estRehab?: number | null;
   estRehabMid?: number | null;
   rehabConfidenceScore?: number | null;
+  /** Property state — drives the buyer-ceiling source branch (item 2): a
+   *  disclosure state prices off the InvestorBase median, a non-disclosure
+   *  state (TX, …) off the ARV median. */
+  state?: string | null;
 }
 
 export default function OfferReadinessPanel({
@@ -66,7 +71,11 @@ export default function OfferReadinessPanel({
         estRehabMid: listing.estRehabMid,
         rehabConfidenceScore: listing.rehabConfidenceScore,
         hasOperatorCma: hasOperatorCma ?? false,
-        buyerCeiling: buyerMedian.value, // now real — Property_Intel γ-path
+        state: listing.state,
+        // The γ-path manual value is an InvestorBase median, so feed it as
+        // such — the state branch trusts it only in disclosure states. In a
+        // non-disclosure state (TX) the ceiling resolves off the ARV median.
+        investorBaseMedian: buyerMedian.value,
       }),
     );
   }, [listing, hasOperatorCma, buyerMedian.value]);
@@ -128,7 +137,10 @@ export default function OfferReadinessPanel({
               <span className={it.ok ? "text-emerald-400" : "text-red-400"}>{it.ok ? "✓" : "✗"}</span>
               <span className="text-gray-300 font-medium min-w-[150px]">{it.label}</span>
               <span className={it.ok ? "text-gray-400" : "text-red-400/80"}>
-                {it.key === "buyer_ceiling" && buyerMedian.value != null
+                {/* Show the InvestorBase manual provenance only in disclosure
+                    states; in a non-disclosure state the branch prices off ARV
+                    comps and it.detail already carries the right number. */}
+                {it.key === "buyer_ceiling" && buyerMedian.value != null && isDisclosureState(listing.state)
                   ? `$${buyerMedian.value.toLocaleString()}${buyerMedian.source ? ` · ${buyerMedian.source}` : ""}${buyerMedian.fetchedAt ? ` · ${buyerMedian.fetchedAt.slice(0, 10)}` : ""}`
                   : it.detail}
               </span>
