@@ -47,22 +47,35 @@ describe("computeOfferReadiness", () => {
     expect(bc?.detail).toContain("InvestorBase");
   });
 
-  it("non-disclosure state (TX) with no explicit ceiling resolves off ARV median, ignores InvestorBase", () => {
-    // San Antonio (TX): InvestorBase exports are ~zero, so the ceiling must
-    // come from ARV comps and never cross the streams.
-    const r = computeOfferReadiness({ ...FULL, state: "TX", buyerCeiling: null, realArvMedian: 265_846, investorBaseMedian: 9_999 });
+  it("non-disclosure state (TX) discounts ARV by the SOURCED buy-box, ignores InvestorBase", () => {
+    // Dallas (TX 75201) has a sourced buy-box (arv_pct_max 0.5883). The
+    // ceiling is ARV × 0.5883 — a buyer PURCHASE price, never the raw resale
+    // ARV — and InvestorBase is ignored in a non-disclosure state.
+    const r = computeOfferReadiness({ ...FULL, state: "TX", zip: "75201", buyerCeiling: null, realArvMedian: 265_846, investorBaseMedian: 9_999 });
     const bc = r.items.find((i) => i.key === "buyer_ceiling");
     expect(bc?.ok).toBe(true);
-    expect(bc?.label).toBe("Buyer ceiling (ARV comps)");
-    expect(bc?.detail).toContain("$265,846");
+    expect(bc?.label).toBe("Buyer ceiling (ARV buy-box)");
+    // 265,846 × 0.5883 = 156,397 — NOT the raw $265,846 resale value.
+    expect(bc?.detail).toContain("$156,397");
+    expect(bc?.detail).toContain("buy-box");
+    expect(bc?.detail).not.toContain("265,846");
     expect(bc?.detail).not.toContain("9,999");
   });
 
-  it("non-disclosure state (TX) with no ARV → buyer ceiling HOLDs (never fabricated)", () => {
-    const r = computeOfferReadiness({ ...FULL, state: "TX", buyerCeiling: null, realArvMedian: null, investorBaseMedian: 120_000 });
+  it("San Antonio (TX 78210, no sourced buy-box) HOLDs — never prices resale ARV as a purchase ceiling", () => {
+    // The 1219 E Highland anchor case: SA has buyer_params:null, so there is
+    // NO sourced discount. The ceiling must HOLD rather than return raw ARV.
+    const r = computeOfferReadiness({ ...FULL, state: "TX", zip: "78210", buyerCeiling: null, realArvMedian: 265_846, investorBaseMedian: 9_999 });
     const bc = r.items.find((i) => i.key === "buyer_ceiling");
     expect(bc?.ok).toBe(false);
-    expect(r.missing).toContain("Buyer ceiling (ARV comps)");
+    expect(r.missing).toContain("Buyer ceiling (ARV buy-box)");
+  });
+
+  it("non-disclosure state (TX) with no ARV → buyer ceiling HOLDs (never fabricated)", () => {
+    const r = computeOfferReadiness({ ...FULL, state: "TX", zip: "75201", buyerCeiling: null, realArvMedian: null, investorBaseMedian: 120_000 });
+    const bc = r.items.find((i) => i.key === "buyer_ceiling");
+    expect(bc?.ok).toBe(false);
+    expect(r.missing).toContain("Buyer ceiling (ARV buy-box)");
   });
 
   it("zero / negative values do not count as present", () => {

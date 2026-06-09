@@ -19,8 +19,10 @@ interface ListingBits {
   rehabConfidenceScore?: number | null;
   /** Property state — drives the buyer-ceiling source branch (item 2): a
    *  disclosure state prices off the InvestorBase median, a non-disclosure
-   *  state (TX, …) off the ARV median. */
+   *  state (TX, …) off ARV × the sourced buy-box discount. */
   state?: string | null;
+  /** Property ZIP — resolves the market's sourced buy-box discount. */
+  zip?: string | null;
 }
 
 export default function OfferReadinessPanel({
@@ -72,6 +74,7 @@ export default function OfferReadinessPanel({
         rehabConfidenceScore: listing.rehabConfidenceScore,
         hasOperatorCma: hasOperatorCma ?? false,
         state: listing.state,
+        zip: listing.zip,
         // The γ-path manual value is an InvestorBase median, so feed it as
         // such — the state branch trusts it only in disclosure states. In a
         // non-disclosure state (TX) the ceiling resolves off the ARV median.

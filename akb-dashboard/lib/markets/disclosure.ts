@@ -36,10 +36,19 @@ export function pricingPathForState(state: string | null | undefined): PricingPa
 }
 
 export interface BuyerCeilingInputs {
-  /** InvestorBase Buyer_Median (Property_Intel) — trusted only in disclosure states. */
+  /** InvestorBase Buyer_Median (Property_Intel) — already a real buyer
+   *  PURCHASE price in a disclosure state, so used directly. */
   investorBaseMedian?: number | null;
-  /** ARV median (Appraiser station, RentCast comps) — the non-disclosure source. */
+  /** ARV median (Appraiser station, RentCast comps). This is RESALE value,
+   *  NOT a purchase price — it must be transformed by a sourced buy-box
+   *  discount before it can serve as a buyer ceiling (see arvDiscountPct). */
   arvMedian?: number | null;
+  /** Sourced per-market buy-box ARV%Max (e.g. Detroit 0.6461, Dallas 0.5883)
+   *  from the BBC registry. REQUIRED to turn a non-disclosure ARV (resale)
+   *  into a buyer purchase ceiling: ceiling = ARV × arvDiscountPct. Absent
+   *  → HOLD. This is the guard against treating resale value as a purchase
+   *  price; San Antonio (buyer_params:null) has no sourced discount → HOLD. */
+  arvDiscountPct?: number | null;
 }
 
 export interface BuyerCeilingResult {
@@ -50,10 +59,12 @@ export interface BuyerCeilingResult {
 }
 
 /** Pure: resolve the buyer ceiling for a property by its state. Disclosure
- *  states use the InvestorBase median; non-disclosure states use the ARV
- *  median. Never crosses the streams — a TX property is NOT priced off a
- *  (likely-zero) InvestorBase export, and the absence of the state-correct
- *  source returns null (HOLD), never a fabricated number. */
+ *  states use the InvestorBase median (already a purchase price). Non-
+ *  disclosure states transform the ARV median (RESALE value) into a buyer
+ *  purchase ceiling via a SOURCED buy-box discount — never the raw ARV.
+ *  Never crosses the streams, and the absence of the state-correct source
+ *  (or, for non-disclosure, the sourced discount) returns null (HOLD),
+ *  never a fabricated number. */
 export function resolveBuyerCeiling(
   state: string | null | undefined,
   inputs: BuyerCeilingInputs,
@@ -64,7 +75,16 @@ export function resolveBuyerCeiling(
     if (positive(inputs.investorBaseMedian)) return { ceiling: inputs.investorBaseMedian, source: "investorbase_median", reason: null };
     return { ceiling: null, source: null, reason: "disclosure_state_missing_investorbase_median" };
   }
-  // non-disclosure → ARV comps
-  if (positive(inputs.arvMedian)) return { ceiling: inputs.arvMedian, source: "arv_comps", reason: null };
-  return { ceiling: null, source: null, reason: "non_disclosure_state_missing_arv" };
+  // Non-disclosure → ARV comps, but ARV is RESALE value: it must be
+  // discounted by the sourced buy-box %, never used raw. Missing ARV or a
+  // missing sourced discount both HOLD (no fabricated number, no resale-as-
+  // purchase). arvDiscountPct must be in (0, 1].
+  if (!positive(inputs.arvMedian)) {
+    return { ceiling: null, source: null, reason: "non_disclosure_state_missing_arv" };
+  }
+  if (!positive(inputs.arvDiscountPct) || (inputs.arvDiscountPct as number) > 1) {
+    return { ceiling: null, source: null, reason: "non_disclosure_state_missing_sourced_buybox_discount" };
+  }
+  const ceiling = Math.round((inputs.arvMedian as number) * (inputs.arvDiscountPct as number));
+  return { ceiling, source: "arv_comps", reason: null };
 }
