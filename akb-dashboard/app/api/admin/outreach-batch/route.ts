@@ -52,6 +52,7 @@ import {
   buildSentNote,
 } from "@/lib/h2-outreach";
 import { evaluateSendWindow } from "@/lib/h2-working-hours";
+import { openerMaoGuard, resolveOpenerCeiling } from "@/lib/outreach-economics";
 import type { Listing } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -157,6 +158,23 @@ async function handle(req: Request): Promise<Response> {
   } catch (err) {
     return NextResponse.json({ error: "select_failed", message: err instanceof Error ? err.message : String(err) }, { status: 502 });
   }
+
+  // Opener-vs-MAO guard (priceable markets only): the 65%-of-list door-opener
+  // carried on Listings_V1 as MAO_V1 (lead.mao) must never exceed the deal's
+  // underwritten MAO. Cap the opener down to MAO, or skip + flag the listing.
+  // Unpriceable markets pass through untouched (no MAO to compare against).
+  const guardedLeads: Listing[] = [];
+  for (const l of leads) {
+    const ceiling = resolveOpenerCeiling(l);
+    const guard = openerMaoGuard({ baseOpener: l.mao, mao: ceiling.mao, priceable: ceiling.priceable });
+    if (!guard.ok) {
+      ineligible.push({ recordId: l.id, reason: guard.reason ?? "opener_exceeds_mao" });
+      continue;
+    }
+    if (guard.capped && guard.opener != null) l.mao = guard.opener; // send the opener at MAO, not 65%-of-list
+    guardedLeads.push(l);
+  }
+  leads = guardedLeads;
 
   // Plan (message + route) and keep only the sendable first-touch leads, capped.
   const priorIndex = buildPriorContactIndex(await getListings().catch(() => []));

@@ -23,6 +23,9 @@
 //
 // Both checks are PURE — no I/O. Caller passes listing + message body.
 
+import { getMarketForListing } from "@/lib/markets/registry";
+import { evaluateDeal } from "@/lib/markets/deal-math";
+
 /** The 85% threshold. Operator-tunable via env without a deploy. The
  *  intake script targets 65%, so 85% gives operator headroom for
  *  per-deal upward adjustments — but never further than 85%. */
@@ -92,6 +95,125 @@ export function checkOfferOverList(
     };
   }
   return { ok: true, offerAmount, listPrice: lp, ratio: Math.round(ratio * 1000) / 1000, blockedBecause: null };
+}
+
+// ── Opener-vs-MAO guard (2026-06-09) ─────────────────────────────────
+// The 65%-of-list door-opener must NEVER exceed the deal's underwritten
+// MAO. On efficiently-priced on-market inventory where list ≈ ARV, a flat
+// 65%-of-list opener can sit ABOVE our own ceiling — worse than a lowball,
+// because we'd be offering more than we can pay. Where 65%-list > MAO we
+// cap the opener at MAO (rounded down to the nearest $250 so it never
+// exceeds), or skip + flag when the capped number falls below a sane floor.
+//
+// Runs ONLY in priceable markets (a sourced buy-box discount exists, so a
+// real MAO can be computed). Unpriceable markets pass through unchanged —
+// they have no MAO to compare against and are gated elsewhere.
+
+/** Minimum opener we'll send. Mirrors the $5K floor the H2 selector uses. */
+export const MIN_OPENER_USD = 5000;
+
+export interface OpenerMaoGuard {
+  /** false = skip the listing (do not send). */
+  ok: boolean;
+  /** The opener to send — capped to MAO when needed; null when skipping. */
+  opener: number | null;
+  /** The raw 65%-of-list opener that was checked. */
+  baseOpener: number | null;
+  /** The deal's underwritten MAO the opener was checked against. */
+  mao: number | null;
+  /** True when the opener was reduced down to the MAO ceiling. */
+  capped: boolean;
+  /** Surfaced reason for a cap or skip; null when no action was needed. */
+  reason: string | null;
+}
+
+const positiveNum = (n: number | null | undefined): n is number =>
+  typeof n === "number" && Number.isFinite(n) && n > 0;
+
+/** Pure: cap or skip the door-opener so it never exceeds the deal's MAO.
+ *  Only acts in priceable markets; elsewhere the opener passes through. */
+export function openerMaoGuard(input: {
+  baseOpener: number | null | undefined;
+  mao: number | null | undefined;
+  priceable: boolean;
+}): OpenerMaoGuard {
+  const base = positiveNum(input.baseOpener) ? input.baseOpener : null;
+  const mao = positiveNum(input.mao) ? input.mao : null;
+
+  // Guard only runs in priceable markets.
+  if (!input.priceable) {
+    return { ok: true, opener: base, baseOpener: base, mao, capped: false, reason: null };
+  }
+  if (base == null) {
+    return { ok: true, opener: base, baseOpener: base, mao, capped: false, reason: null };
+  }
+  // Priceable but no MAO → we cannot guarantee opener ≤ MAO, and a priceable
+  // market is exactly where we CAN price. Don't send blind: skip + flag.
+  if (mao == null) {
+    return {
+      ok: false,
+      opener: null,
+      baseOpener: base,
+      mao: null,
+      capped: false,
+      reason: "priceable_market_mao_unknown — underwrite (ARV + rehab) before sending an opener",
+    };
+  }
+  if (base <= mao) {
+    return { ok: true, opener: base, baseOpener: base, mao, capped: false, reason: null };
+  }
+  // base > mao → cap to MAO, rounded DOWN to $250 so we never exceed it.
+  const cappedOpener = Math.floor(mao / 250) * 250;
+  if (cappedOpener < MIN_OPENER_USD) {
+    return {
+      ok: false,
+      opener: null,
+      baseOpener: base,
+      mao,
+      capped: false,
+      reason: `opener $${base.toLocaleString()} (65% list) > MAO $${mao.toLocaleString()}; capped $${cappedOpener.toLocaleString()} below min $${MIN_OPENER_USD.toLocaleString()} — skip + flag`,
+    };
+  }
+  return {
+    ok: true,
+    opener: cappedOpener,
+    baseOpener: base,
+    mao,
+    capped: true,
+    reason: `opener capped: 65%-list $${base.toLocaleString()} > MAO $${mao.toLocaleString()} → send at MAO $${cappedOpener.toLocaleString()}`,
+  };
+}
+
+export interface OpenerCeiling {
+  /** Underwritten MAO (deal-math) — null on HOLD / unpriceable. */
+  mao: number | null;
+  /** Whether the deal's market has a sourced buy-box discount. */
+  priceable: boolean;
+  /** Resolved market id for audit, or null when no market matched. */
+  market: string | null;
+}
+
+/** Pure: resolve the deal's MAO ceiling + market priceability from the
+ *  registry buy-box + deal-math engine. The MAO here is the underwritten
+ *  ceiling (ARV × arv_pct_max − rehab − fee), NOT the 65%-of-list opener
+ *  (Listings_V1 MAO_V1, which is the door-opener). */
+export function resolveOpenerCeiling(listing: {
+  state?: string | null;
+  zip?: string | null;
+  realArvMedian?: number | null;
+  estRehab?: number | null;
+  listPrice?: number | null;
+}): OpenerCeiling {
+  const market = getMarketForListing({ state: listing.state, zip: listing.zip });
+  const priceable = market?.buyer_params?.arv_pct_max != null;
+  if (!priceable) {
+    return { mao: null, priceable: false, market: market?.id ?? null };
+  }
+  const res = evaluateDeal(
+    { arv: listing.realArvMedian, rehab: listing.estRehab, listPrice: listing.listPrice },
+    market,
+  );
+  return { mao: res.mao, priceable: true, market: market?.id ?? null };
 }
 
 export interface FirstOutreachHydrationCheck {

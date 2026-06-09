@@ -40,7 +40,7 @@ import { NextResponse } from "next/server";
 import { getListings, getListing, updateListingRecord } from "@/lib/airtable";
 import { sendMessageWithId } from "@/lib/quo";
 import { audit } from "@/lib/audit-log";
-import { checkFirstOutreachHydration, checkOfferOverList } from "@/lib/outreach-economics";
+import { checkFirstOutreachHydration, checkOfferOverList, openerMaoGuard, resolveOpenerCeiling } from "@/lib/outreach-economics";
 import {
   authenticate,
   hasDashboardSession,
@@ -237,6 +237,25 @@ async function handle(req: Request): Promise<Response> {
   }
 
   const eligibleCount = recordId ? queue.length : selectH2Eligible(allListings).length;
+
+  // Opener-vs-MAO guard (priceable markets only): the 65%-of-list door-opener
+  // (MAO_V1 = l.mao) must never exceed the deal's underwritten MAO. Cap to MAO,
+  // or skip + flag. Unpriceable markets pass through unchanged.
+  const openerGuarded: Array<{ recordId: string; action: "capped" | "skipped"; reason: string | null; from: number | null; to: number | null }> = [];
+  queue = queue.filter((l) => {
+    const ceiling = resolveOpenerCeiling(l);
+    const guard = openerMaoGuard({ baseOpener: l.mao, mao: ceiling.mao, priceable: ceiling.priceable });
+    if (!guard.ok) {
+      openerGuarded.push({ recordId: l.id, action: "skipped", reason: guard.reason, from: guard.baseOpener, to: null });
+      return false;
+    }
+    if (guard.capped && guard.opener != null) {
+      openerGuarded.push({ recordId: l.id, action: "capped", reason: guard.reason, from: guard.baseOpener, to: guard.opener });
+      l.mao = guard.opener; // send the opener at MAO, not 65%-of-list
+    }
+    return true;
+  });
+
   const priorIndex = buildPriorContactIndex(allListings);
   const plans = planQueue(queue, priorIndex);
   const byId = new Map(queue.map((l) => [l.id, l] as const));
@@ -453,6 +472,7 @@ async function handle(req: Request): Promise<Response> {
     eligible_count: eligibleCount,
     processed,
     summary,
+    opener_guarded: openerGuarded,
     auth_kind: authKind,
     duration_ms: Date.now() - t0,
   });

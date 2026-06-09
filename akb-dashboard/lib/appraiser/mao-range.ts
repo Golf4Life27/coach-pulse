@@ -132,6 +132,17 @@ export interface MaoRangeInputs {
   /** Phase 4C.1 — Listing.State, used to resolve per-market cap rate
    *  for the landlord track. Ignored when monthlyRent is null. */
   state?: string | null;
+  /** Sourced per-market buy-box ARV%Max (registry, e.g. Detroit 0.6461).
+   *  Its PRESENCE marks the market as priceable — the value is not applied
+   *  to the floor here (the V2.1 floor stays the never-go-below), it gates
+   *  whether a floor may surface at all. See requireSourcedDiscount. */
+  arvDiscountPct?: number | null;
+  /** When true, HOLD (null floor + target) unless arvDiscountPct is a sourced
+   *  fraction in (0, 1] — so no resale-minus-rehab floor can surface on the
+   *  deal page for an UNPRICEABLE market (e.g. San Antonio, buyer_params:null).
+   *  Opt-in: existing callers default to false and are unaffected. Mirrors the
+   *  same HOLD posture as resolveBuyerCeiling. */
+  requireSourcedDiscount?: boolean;
 }
 
 export interface MaoRange {
@@ -151,6 +162,10 @@ export interface MaoRange {
   soft_ceiling: number | null;
   /** True when target exceeds soft_ceiling — caller surfaces caution flag. */
   exceeds_soft_ceiling: boolean;
+  /** Set when the floor/target were forced to HOLD because the market is
+   *  unpriceable (requireSourcedDiscount with no sourced buy-box discount).
+   *  null in the normal (priceable / not-gated) case. */
+  hold_reason?: string | null;
   /** Phase 4C.1 — dual-track sub-payload when monthlyRent + state were
    *  both present at compute time. Surfaces both track values so the UI
    *  can render the breakdown without re-running the math. Null when
@@ -184,6 +199,35 @@ export function computeMaoRange(opts: MaoRangeInputs): MaoRange {
       ? Math.round(opts.listPrice * SOFT_CEILING_FRACTION_OF_LIST)
       : null;
 
+  // Unpriceable-market HOLD (opt-in). When the caller requires a sourced
+  // buy-box discount and the market has none, HOLD floor + target so no
+  // resale-minus-rehab number can surface on the deal page. The V2.1 floor
+  // is ARV − rehab − fee; without a sourced discount we cannot stand behind
+  // it as an offer, so we show nothing rather than a misleading number.
+  const hasSourcedDiscount =
+    typeof opts.arvDiscountPct === "number" && opts.arvDiscountPct > 0 && opts.arvDiscountPct <= 1;
+  if (opts.requireSourcedDiscount && !hasSourcedDiscount) {
+    return {
+      floor: null,
+      target: null,
+      list_price: opts.listPrice,
+      soft_ceiling: softCeiling,
+      exceeds_soft_ceiling: false,
+      hold_reason: "unpriceable_market_no_sourced_buybox_discount",
+      dual_track: null,
+      modifier_inputs: {
+        arv_mid: opts.arvMid,
+        est_rehab: opts.estRehab,
+        wholesale_fee: wholesaleFee,
+        buyer_profit: buyerProfit,
+        list_price: opts.listPrice,
+        seller_motivation_score: opts.sellerMotivationScore,
+        monthly_rent: opts.monthlyRent ?? null,
+        state: opts.state ?? null,
+      },
+    };
+  }
+
   // Phase 4C.1 — run dual-track when monthlyRent + state both present.
   // dominant_value (the higher of flipper vs landlord MAO) becomes the
   // floor. When dual-track inputs are missing, fall back to flipper-only
@@ -214,6 +258,7 @@ export function computeMaoRange(opts: MaoRangeInputs): MaoRange {
       list_price: opts.listPrice,
       soft_ceiling: softCeiling,
       exceeds_soft_ceiling: false,
+      hold_reason: null,
       dual_track: dualTrack,
       modifier_inputs: {
         arv_mid: opts.arvMid,
@@ -245,6 +290,7 @@ export function computeMaoRange(opts: MaoRangeInputs): MaoRange {
     list_price: opts.listPrice,
     soft_ceiling: softCeiling,
     exceeds_soft_ceiling: exceedsSoftCeiling,
+    hold_reason: null,
     dual_track: dualTrack,
     modifier_inputs: {
       arv_mid: opts.arvMid,

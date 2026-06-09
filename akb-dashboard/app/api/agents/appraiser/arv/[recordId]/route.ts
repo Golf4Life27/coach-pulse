@@ -31,6 +31,7 @@ import {
   computeMaoRange,
   pickCalibratedRehab,
 } from "@/lib/appraiser/mao-range";
+import { getMarketForListing } from "@/lib/markets/registry";
 import { audit } from "@/lib/audit-log";
 import {
   authenticate,
@@ -169,6 +170,11 @@ export async function GET(
     estRehabMid: listing.estRehabMid,
     estRehab: listing.estRehab,
   });
+  // Resolve the deal's market so the MAO range HOLDs (no resale-minus-rehab
+  // floor surfaces) when the market has no sourced buy-box discount — e.g.
+  // San Antonio (buyer_params:null). Priceable markets (Detroit 0.6461) pass
+  // the discount and compute normally.
+  const market = getMarketForListing({ state: listing.state, zip: listing.zip });
   const range = computeMaoRange({
     arvMid: arv.arv_mid,
     estRehab: rehabPick.value,
@@ -181,6 +187,9 @@ export async function GET(
     // Falls back to flipper-only floor when rent is null.
     monthlyRent: listing.estimatedMonthlyRent ?? null,
     state: listing.state,
+    // Unpriceable-market HOLD gate (sourced-discount requirement).
+    arvDiscountPct: market?.buyer_params?.arv_pct_max ?? null,
+    requireSourcedDiscount: true,
   });
 
   // ── Airtable write (skippable) ──────────────────────────────────

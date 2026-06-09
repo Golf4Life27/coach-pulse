@@ -1,6 +1,7 @@
 import { getListings, updateListingRecord } from "@/lib/airtable";
 import { sendMessage } from "@/lib/quo";
 import { evaluateSendWindow } from "@/lib/h2-working-hours";
+import { openerMaoGuard, resolveOpenerCeiling } from "@/lib/outreach-economics";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -186,7 +187,18 @@ async function handleNewOutreach(
   for (const listing of toSend) {
     const phone = toE164(listing.agentPhone!);
     const cleanedPhone = phone.replace(/[^0-9]/g, "").slice(-10);
-    const offerNum = roundToNearest250(listing.listPrice! * 0.65);
+    let offerNum = roundToNearest250(listing.listPrice! * 0.65);
+
+    // Opener-vs-MAO guard (priceable markets): the 65%-of-list door-opener
+    // must never exceed the deal's underwritten MAO. Cap to MAO, or skip+flag.
+    const ceiling = resolveOpenerCeiling(listing);
+    const guard = openerMaoGuard({ baseOpener: offerNum, mao: ceiling.mao, priceable: ceiling.priceable });
+    if (!guard.ok) {
+      results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer: formatOffer(listing.listPrice!), status: "skipped", error: guard.reason ?? "opener exceeds MAO" });
+      skipped++;
+      continue;
+    }
+    if (guard.capped && guard.opener != null) offerNum = guard.opener;
 
     if (offerNum < 5000) {
       results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer: formatOffer(listing.listPrice!), status: "skipped", error: "Offer below $5K floor" });
@@ -226,7 +238,9 @@ async function handleNewOutreach(
     }
     phoneSeen.add(cleanedPhone);
 
-    const offer = formatOffer(listing.listPrice!);
+    // Build the message offer from the GUARDED opener (offerNum), not a fresh
+    // 65%-of-list recompute — so a capped opener is what the seller sees.
+    const offer = "$" + offerNum.toLocaleString("en-US");
     const message = buildFirstContactText(listing.agentName ?? "there", listing.address, offer);
 
     // SAFETY GATE (item 0): hard quiet-hours floor — no SMS outside 8–20
@@ -312,7 +326,17 @@ async function handleMultiListing(
 
   for (const listing of toSend) {
     const phone = toE164(listing.agentPhone!);
-    const offerNum = roundToNearest250(listing.listPrice! * 0.65);
+    let offerNum = roundToNearest250(listing.listPrice! * 0.65);
+
+    // Opener-vs-MAO guard (priceable markets): never offer above our MAO.
+    const ceiling = resolveOpenerCeiling(listing);
+    const guard = openerMaoGuard({ baseOpener: offerNum, mao: ceiling.mao, priceable: ceiling.priceable });
+    if (!guard.ok) {
+      results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer: formatOffer(listing.listPrice!), status: "skipped", error: guard.reason ?? "opener exceeds MAO" });
+      skipped++;
+      continue;
+    }
+    if (guard.capped && guard.opener != null) offerNum = guard.opener;
 
     if (offerNum < 5000) {
       results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer: formatOffer(listing.listPrice!), status: "skipped", error: "Offer below $5K floor" });
@@ -320,7 +344,7 @@ async function handleMultiListing(
       continue;
     }
 
-    const offer = formatOffer(listing.listPrice!);
+    const offer = "$" + offerNum.toLocaleString("en-US");
     const message = buildMultiListingText(listing.agentName ?? "there", listing.address, offer);
 
     // SAFETY GATE (item 0): hard quiet-hours floor (same as the first loop).

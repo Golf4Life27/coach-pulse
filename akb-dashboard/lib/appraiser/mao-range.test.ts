@@ -283,6 +283,66 @@ describe("computeMaoRange — V2.1 floor math", () => {
   });
 });
 
+describe("computeMaoRange — unpriceable-market HOLD (sourced-discount gate)", () => {
+  it("HOLDs floor + target when requireSourcedDiscount but no sourced discount (San Antonio case)", () => {
+    const r = computeMaoRange({
+      arvMid: 265_000,
+      estRehab: 54_000,
+      wholesaleFee: 5_000,
+      listPrice: 250_000,
+      sellerMotivationScore: null,
+      requireSourcedDiscount: true,
+      arvDiscountPct: null, // SA: buyer_params null → no sourced discount
+    });
+    expect(r.floor).toBeNull();
+    expect(r.target).toBeNull();
+    expect(r.hold_reason).toBe("unpriceable_market_no_sourced_buybox_discount");
+    // inputs still surfaced so the operator sees why it held
+    expect(r.modifier_inputs.arv_mid).toBe(265_000);
+  });
+
+  it("does NOT hold when a sourced discount is present (Detroit 0.6461) — floor computes as before", () => {
+    const r = computeMaoRange({
+      arvMid: 200_000,
+      estRehab: 30_000,
+      wholesaleFee: 5_000,
+      listPrice: 175_000,
+      sellerMotivationScore: null,
+      requireSourcedDiscount: true,
+      arvDiscountPct: 0.6461,
+    });
+    expect(r.floor).toBe(200_000 - 30_000 - 5_000); // V2.1 floor, discount not applied to it
+    expect(r.hold_reason).toBeNull();
+  });
+
+  it("ignores an out-of-range discount (>1) — treats as unpriceable → HOLD", () => {
+    const r = computeMaoRange({
+      arvMid: 200_000,
+      estRehab: 30_000,
+      wholesaleFee: 5_000,
+      listPrice: 175_000,
+      sellerMotivationScore: null,
+      requireSourcedDiscount: true,
+      arvDiscountPct: 2.0,
+    });
+    expect(r.floor).toBeNull();
+    expect(r.hold_reason).toBe("unpriceable_market_no_sourced_buybox_discount");
+  });
+
+  it("backward compat: without requireSourcedDiscount, the flipper floor still computes (no gate)", () => {
+    const r = computeMaoRange({
+      arvMid: 200_000,
+      estRehab: 30_000,
+      wholesaleFee: 5_000,
+      listPrice: 175_000,
+      sellerMotivationScore: null,
+      // requireSourcedDiscount omitted → defaults off
+    });
+    expect(r.floor).toBe(165_000);
+    expect(r.hold_reason).toBeNull();
+  });
+});
+
 describe("computeMaoRange — soft ceiling (75% of List)", () => {
   it("computes soft_ceiling as 75% of list_price rounded", () => {
     const r = computeMaoRange({
