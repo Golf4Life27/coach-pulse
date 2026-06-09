@@ -201,3 +201,44 @@ describe("classifyVerifiedListing — new construction is a HARD reject (no over
     expect(d).toEqual({ outcome: "reject", reason: "new_construction_excluded" });
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// buildResolvedResult — the search→scrape rework's markdown classifier
+// (operator 2026-06-08). Post-scrape street-number confirmation guards
+// against classifying the wrong listing now that we pick BEFORE scraping.
+// ─────────────────────────────────────────────────────────────────────
+
+import { buildResolvedResult } from "./firecrawl";
+
+describe("buildResolvedResult", () => {
+  const md = "346 Modder Ave, Memphis TN. Sold as-is, motivated seller. 3 bed 2 bath.";
+
+  it("resolves + classifies when the street number is present in the markdown", () => {
+    const r = buildResolvedResult(md, "https://redfin.com/.../346-Modder-Ave", "346 Modder Ave", 2, false);
+    expect(r.resolved).toBe(true);
+    expect(r.url).toContain("346-Modder-Ave");
+    expect(r.hasConditionSignal).toBe(true); // "as-is / motivated"
+    expect(r.creditsUsed).toBe(2);
+  });
+
+  it("returns UNRESOLVED when the scraped page lacks the subject street number (wrong listing)", () => {
+    // The scrape landed on a different property — don't classify it.
+    const wrong = "9999 Someother St. Beautiful turnkey new construction.";
+    const r = buildResolvedResult(wrong, "https://redfin.com/.../9999-Someother", "346 Modder Ave", 2, false);
+    expect(r.resolved).toBe(false);
+    // credits still counted (we paid for the scrape)
+    expect(r.creditsUsed).toBe(2);
+  });
+
+  it("does NOT block when the subject address has no leading street number", () => {
+    const r = buildResolvedResult("Some condo listing, as-is.", "https://x", "Unit B Riverside", 2, false);
+    // no street number to confirm → trust the pick, classify
+    expect(r.resolved).toBe(true);
+  });
+
+  it("renovation language still hard-vetoes via the shared classifier", () => {
+    const r = buildResolvedResult("346 Modder Ave. Fully remodeled, renovated kitchen.", "https://x/346", "346 Modder Ave", 2, false);
+    expect(r.resolved).toBe(true);
+    expect(r.hasRenovatedLanguage).toBe(true);
+  });
+});

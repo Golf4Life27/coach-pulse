@@ -26,6 +26,7 @@ import { scopeSubjectText, scopeStatusText } from "@/lib/crawler/sources/listing
 
 const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY;
 const FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v2/search";
+const FIRECRAWL_SCRAPE_URL = "https://api.firecrawl.dev/v2/scrape";
 const FIRECRAWL_CREDIT_URL = "https://api.firecrawl.dev/v2/team/credit-usage";
 const SEARCH_LIMIT = 5;
 
@@ -355,8 +356,99 @@ export function pickListingResult(
   return pool[0] ?? null;
 }
 
-/** Resolve + scrape + verify one candidate via Firecrawl search. One
- *  /v2/search call (inline scrape). Throws are caught → error field. */
+/** Pure: turn a scraped listing's markdown into the classified verify
+ *  result. Shared by verifyListing (search→scrape) and any future
+ *  scrape-known-URL path. `formattedAddress` is used for a post-scrape
+ *  street-number confirmation: if the scraped page doesn't carry the
+ *  subject's street number we treat it as unresolved rather than
+ *  classifying the wrong page (this preserves the match accuracy the old
+ *  scrape-all-5-then-pick gave us, now that we pick BEFORE scraping). */
+export function buildResolvedResult(
+  markdown: string,
+  url: string | null,
+  formattedAddress: string | null,
+  creditsUsed: number,
+  debug: boolean,
+): FirecrawlVerifyResult {
+  const base: FirecrawlVerifyResult = {
+    credentialed: true,
+    resolved: false,
+    url,
+    stillActive: false,
+    hasRenovatedLanguage: false,
+    matchedKeywords: [],
+    wholesalerExcluded: false,
+    matchedWholesalerKeywords: [],
+    hasConditionSignal: false,
+    matchedDistressKeywords: [],
+    isNewConstruction: false,
+    matchedNewConstructionSignals: [],
+    matchedInactiveMarkers: [],
+    portfolioSellerDetected: false,
+    matchedPortfolioKeywords: [],
+    creditsUsed,
+    rateLimited: false,
+    paymentRequired: false,
+    error: null,
+  };
+  const streetNum = (formattedAddress ?? "").trim().match(/^\d+/)?.[0] ?? null;
+  if (streetNum && !markdown.toLowerCase().includes(streetNum)) {
+    // Scraped page doesn't match the subject → don't classify a wrong listing.
+    return { ...base, resolved: false };
+  }
+  const subjectText = scopeSubjectText(markdown);
+  const statusText = scopeStatusText(markdown);
+  const reno = detectRenovationLanguage(subjectText);
+  const content = evaluateListingContent(subjectText);
+  const newConstruction = detectNewConstruction(subjectText);
+  const inactiveMarkers = detectInactiveMarkers(statusText);
+  return {
+    ...base,
+    resolved: true,
+    stillActive: inactiveMarkers.length === 0,
+    hasRenovatedLanguage: reno.matched,
+    matchedKeywords: reno.matchedKeywords,
+    wholesalerExcluded: content.wholesalerExcluded,
+    matchedWholesalerKeywords: content.matchedWholesalerKeywords,
+    hasConditionSignal: content.hasConditionSignal,
+    matchedDistressKeywords: content.matchedDistressKeywords,
+    isNewConstruction: newConstruction.isNew,
+    matchedNewConstructionSignals: newConstruction.signals,
+    matchedInactiveMarkers: inactiveMarkers,
+    portfolioSellerDetected: content.portfolioSellerDetected,
+    matchedPortfolioKeywords: content.matchedPortfolioKeywords,
+    ...(debug
+      ? {
+          pageExcerpt: markdown.replace(/\s+/g, " ").trim().slice(0, PAGE_EXCERPT_CHARS),
+          debugContexts: [
+            ...buildDebugContexts(subjectText, [
+              { category: "new_construction", phrases: newConstruction.isNew ? ["new construction"] : [] },
+              { category: "renovation", phrases: reno.matchedKeywords },
+              { category: "wholesaler", phrases: content.matchedWholesalerKeywords },
+              { category: "distress", phrases: content.matchedDistressKeywords },
+              { category: "portfolio", phrases: content.matchedPortfolioKeywords },
+            ]),
+            ...buildDebugContexts(statusText, [
+              { category: "inactive", phrases: inactiveMarkers },
+            ]),
+          ],
+        }
+      : {}),
+  };
+}
+
+/** Verify one candidate: SEARCH (URLs only, no inline scrape) → pick the
+ *  best listing URL from metadata → SCRAPE that ONE page.
+ *
+ *  CREDIT REWORK (operator 2026-06-08): the old path called /v2/search
+ *  with inline scrapeOptions, which scraped ALL `SEARCH_LIMIT` (5) results
+ *  and used 1 — ~6 credits/candidate, and the dominant Firecrawl burn
+ *  (97.5% /search). RentCast supplies no listing URL, so we still SEARCH
+ *  to discover it — but with NO scrapeOptions (URLs only, ~1 credit), then
+ *  /scrape only the single picked URL (~1 credit). ~2 credits/candidate,
+ *  a ~67% cut, with accuracy preserved by picking on url/title pre-scrape
+ *  and confirming the street number in the scraped markdown post-scrape.
+ *  Throws are caught → error field. */
 export async function verifyListing(
   formattedAddress: string | null,
   opts: { debug?: boolean } = {},
@@ -385,99 +477,59 @@ export async function verifyListing(
   if (!FIRECRAWL_API_KEY) {
     return { ...base, credentialed: false, error: "FIRECRAWL_API_KEY not set" };
   }
+  // Map a Firecrawl HTTP status to an early-return verify result (shared by
+  // the search and scrape legs — a 402/429 on either halts the candidate).
+  const httpFail = async (res: Response, leg: "search" | "scrape", credits: number): Promise<FirecrawlVerifyResult> => {
+    if (res.status === 429) return { ...base, creditsUsed: credits, rateLimited: true, error: `Firecrawl ${leg} 429 after retries exhausted` };
+    if (res.status === 402) {
+      // Payment Required — wallet empty. Flag distinctly so the caller keeps
+      // the ZIP DUE + fires the CRITICAL alert instead of silently no-opping.
+      return { ...base, creditsUsed: credits, paymentRequired: true, error: `Firecrawl ${leg} 402 Payment Required: ${await res.text().catch(() => "")}`.slice(0, 300) };
+    }
+    return { ...base, creditsUsed: credits, error: `Firecrawl ${leg} ${res.status}: ${await res.text().catch(() => "")}`.slice(0, 300) };
+  };
+
   try {
-    // Retry 429s with Retry-After / exponential backoff before giving up.
-    const { response: res } = await fetchWithBackoff({
+    // ── Leg 1: SEARCH (URLs only, NO inline scrape) — ~1 credit. ──
+    const { response: searchRes } = await fetchWithBackoff({
       doFetch: () =>
         fetch(FIRECRAWL_SEARCH_URL, {
           method: "POST",
-          headers: {
-            Authorization: `Bearer ${FIRECRAWL_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            query: buildSearchQuery(formattedAddress),
-            limit: SEARCH_LIMIT,
-            scrapeOptions: { formats: [{ type: "markdown" }] },
-          }),
+          headers: { Authorization: `Bearer ${FIRECRAWL_API_KEY}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ query: buildSearchQuery(formattedAddress), limit: SEARCH_LIMIT }),
           cache: "no-store",
         }),
     });
-    if (res.status === 429) {
-      // Still rate-limited after exhausting retries — distinct signal.
-      return { ...base, rateLimited: true, error: "Firecrawl 429 after retries exhausted" };
+    if (searchRes.status !== 200 && !searchRes.ok) return httpFail(searchRes, "search", 0);
+    const searchBody = (await searchRes.json()) as { data?: { web?: WebResult[] }; creditsUsed?: number };
+    const searchCredits = typeof searchBody.creditsUsed === "number" ? searchBody.creditsUsed : 0;
+
+    // Pick the best listing URL from metadata (url/title) — no markdown yet.
+    const pick = pickListingResult(searchBody.data?.web ?? [], formattedAddress);
+    if (!pick || !pick.url) {
+      return { ...base, creditsUsed: searchCredits, resolved: false };
     }
-    if (res.status === 402) {
-      // Payment Required — wallet empty. Every other verify this run will
-      // hit the same wall, so flag it distinctly: the caller keeps the ZIP
-      // DUE and fires a CRITICAL alert instead of silently no-opping.
-      return {
-        ...base,
-        paymentRequired: true,
-        error: `Firecrawl 402 Payment Required: ${await res.text().catch(() => "")}`.slice(0, 300),
-      };
+
+    // ── Leg 2: SCRAPE the ONE picked URL — ~1 credit. ──
+    const { response: scrapeRes } = await fetchWithBackoff({
+      doFetch: () =>
+        fetch(FIRECRAWL_SCRAPE_URL, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${FIRECRAWL_API_KEY}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ url: pick.url, formats: [{ type: "markdown" }] }),
+          cache: "no-store",
+        }),
+    });
+    if (scrapeRes.status !== 200 && !scrapeRes.ok) return httpFail(scrapeRes, "scrape", searchCredits);
+    const scrapeBody = (await scrapeRes.json()) as { data?: { markdown?: string }; creditsUsed?: number };
+    const scrapeCredits = typeof scrapeBody.creditsUsed === "number" ? scrapeBody.creditsUsed : 0;
+    const markdown = scrapeBody.data?.markdown;
+    const totalCredits = searchCredits + scrapeCredits;
+    if (!markdown) {
+      return { ...base, creditsUsed: totalCredits, url: pick.url ?? null, resolved: false };
     }
-    if (!res.ok) {
-      return { ...base, error: `Firecrawl search ${res.status}: ${await res.text().catch(() => "")}`.slice(0, 300) };
-    }
-    const body = (await res.json()) as {
-      data?: { web?: WebResult[] };
-      creditsUsed?: number;
-    };
-    const creditsUsed = typeof body.creditsUsed === "number" ? body.creditsUsed : 0;
-    const pick = pickListingResult(body.data?.web ?? [], formattedAddress);
-    if (!pick || !pick.markdown) {
-      return { ...base, creditsUsed, resolved: false };
-    }
-    // Scope to the subject listing before keyword scanning: comps sidebar +
-    // empty facts rows for renovation/content; comps + sale-history for the
-    // inactive check. Raw cross-listing noise was the 0%-accept root cause.
-    const subjectText = scopeSubjectText(pick.markdown);
-    const statusText = scopeStatusText(pick.markdown);
-    const reno = detectRenovationLanguage(subjectText);
-    const content = evaluateListingContent(subjectText);
-    const newConstruction = detectNewConstruction(subjectText);
-    const inactiveMarkers = detectInactiveMarkers(statusText);
-    return {
-      credentialed: true,
-      resolved: true,
-      url: pick.url ?? null,
-      stillActive: inactiveMarkers.length === 0,
-      hasRenovatedLanguage: reno.matched,
-      matchedKeywords: reno.matchedKeywords,
-      wholesalerExcluded: content.wholesalerExcluded,
-      matchedWholesalerKeywords: content.matchedWholesalerKeywords,
-      hasConditionSignal: content.hasConditionSignal,
-      matchedDistressKeywords: content.matchedDistressKeywords,
-      isNewConstruction: newConstruction.isNew,
-      matchedNewConstructionSignals: newConstruction.signals,
-      matchedInactiveMarkers: inactiveMarkers,
-      portfolioSellerDetected: content.portfolioSellerDetected,
-      matchedPortfolioKeywords: content.matchedPortfolioKeywords,
-      creditsUsed,
-      rateLimited: false,
-      paymentRequired: false,
-      error: null,
-      ...(opts.debug
-        ? {
-            // pageExcerpt stays RAW (shows what Firecrawl actually scraped);
-            // contexts come from the SCOPED text each category was scanned
-            // against, so a snippet reflects the real match site.
-            pageExcerpt: pick.markdown.replace(/\s+/g, " ").trim().slice(0, PAGE_EXCERPT_CHARS),
-            debugContexts: [
-              ...buildDebugContexts(subjectText, [
-                { category: "new_construction", phrases: newConstruction.isNew ? ["new construction"] : [] },
-                { category: "renovation", phrases: reno.matchedKeywords },
-                { category: "wholesaler", phrases: content.matchedWholesalerKeywords },
-                { category: "distress", phrases: content.matchedDistressKeywords },
-              ]),
-              ...buildDebugContexts(statusText, [
-                { category: "inactive", phrases: inactiveMarkers },
-              ]),
-            ],
-          }
-        : {}),
-    };
+
+    return buildResolvedResult(markdown, pick.url ?? null, formattedAddress, totalCredits, opts.debug ?? false);
   } catch (err) {
     return { ...base, error: err instanceof Error ? err.message : String(err) };
   }

@@ -55,6 +55,7 @@ import { fetchVercelKvAuditState } from "@/lib/maverick/sources/vercel-kv-audit"
 import { verifyListing, classifyVerifiedListing, probeFirecrawlBalance, FIRECRAWL_RATE_LIMIT_PER_MINUTE } from "@/lib/crawler/sources/firecrawl";
 import { runAsyncPool, makeRateGate } from "@/lib/crawler/async-pool";
 import { getActiveIntakeRows, updateZipStats } from "@/lib/zip-registry";
+import { getVerifiedThisCycle, markVerifiedThisCycle } from "@/lib/crawler/verify-cache";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -544,6 +545,23 @@ export async function GET(req: Request) {
 
   const collectMs = Date.now() - tCollectStart;
 
+  // ── Guard (3): drop candidates already verified THIS cycle (KV cache)
+  // BEFORE any paid Firecrawl call. Catches partial-ZIP-retry re-searches
+  // of prior rejects + cross-ZIP-boundary dups. KV-down → empty set →
+  // verifies everything (today's behavior). ──
+  let verifyCacheSkipped = 0;
+  if (!overrideUsed) {
+    const cachedNorm = await getVerifiedThisCycle(toVerify.map((it) => it.candidate.address));
+    if (cachedNorm.size > 0) {
+      const before = toVerify.length;
+      const kept = toVerify.filter((it) => !cachedNorm.has(normalizeAddressKey(it.candidate.address)));
+      verifyCacheSkipped = before - kept.length;
+      toVerify.length = 0;
+      toVerify.push(...kept);
+      if (verifyCacheSkipped > 0) bump("verify_cache_hit", verifyCacheSkipped);
+    }
+  }
+
   // ── Budget split: dispatch up to the per-run Firecrawl scrape budget. ──
   const tVerifyStart = Date.now();
   const dispatchable = toVerify.slice(0, FIRECRAWL_MAX_SCRAPES_PER_RUN);
@@ -732,6 +750,24 @@ export async function GET(req: Request) {
     }
   }
 
+  // ── Guard (3) write-side: mark every candidate that reached a REAL
+  // verify verdict this cycle (resolved page → accept/review/legit-reject),
+  // so it isn't re-searched on a partial-ZIP retry. EXCLUDE infra failures
+  // (402/429/error/unresolved) — those didn't actually verify and must stay
+  // re-checkable. ──
+  if (!overrideUsed && !dryRun) {
+    const verifiedAddrs = pool.results
+      .filter(({ value: fc }) => fc.resolved && !fc.paymentRequired && !fc.rateLimited && !fc.error)
+      .map(({ item }) => item.candidate.address);
+    if (verifiedAddrs.length > 0) {
+      try {
+        await markVerifiedThisCycle(verifiedAddrs, ZIP_CYCLE_HOURS);
+      } catch (err) {
+        console.error("[listings-intake] verify-cache mark failed:", err);
+      }
+    }
+  }
+
   // ── Phase 4: writes (live only; sequential, post-pool — no concurrent
   // Airtable writes / intra-run dup races). ──
   if (!dryRun) {
@@ -888,6 +924,8 @@ export async function GET(req: Request) {
       firecrawl_payment_required_count: summary.firecrawl.payment_required_count,
       firecrawl_balance_remaining: summary.firecrawl.balance_remaining,
       zips_kept_due_blocked: registryWriteback.skipped_blocked,
+      // Guard (3): candidates skipped because already verified this cycle.
+      verify_cache_skipped: verifyCacheSkipped,
       per_zip: summary.per_zip,
       auto_promote: summary.auto_promote,
       // Run-duration telemetry → consumed by the Pulse
@@ -902,6 +940,7 @@ export async function GET(req: Request) {
     auth_kind: authKind,
     duration_ms: Date.now() - t0,
     timing,
+    verify_cache_skipped: verifyCacheSkipped,
     zip_source: zipSource,
     zip_due: zipDue
       ? {
