@@ -48,6 +48,8 @@ import {
   type IntakeCandidate,
 } from "@/lib/crawler/intake-filter";
 import { shouldAutoPromote, type AutoPromoteBlockReason } from "@/lib/crawler/auto-promote";
+import { getZipBuyerMedian } from "@/lib/buyer-median-store";
+import { computeTrackAwareMao, defaultBuyerTrack, type BuyerTrack } from "@/lib/buyer-median-input";
 import { SOURCE_VERSION_FIELD_NAME, SOURCE_VERSION_V2 } from "@/lib/source-version";
 import { rentcastQuotaAllows, computeBurnRate } from "@/lib/maverick/rentcast-burn-rate";
 import { selectDueZips, type ZipDueResult } from "@/lib/crawler/zip-rotation";
@@ -135,6 +137,7 @@ async function createIntakeListing(
   firecrawlUrl: string | null,
   portfolioDetected: boolean = false,
   matchedPortfolioKeywords: string[] = [],
+  underwrittenMao: number | null = null,
 ): Promise<string> {
   if (!AIRTABLE_PAT) throw new Error("AIRTABLE_PAT not set");
   const url = `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}`;
@@ -204,6 +207,14 @@ async function createIntakeListing(
     fields["Portfolio_Detected"] = true;
     fields["Verification_Notes"] =
       `${fields["Verification_Notes"] ?? ""}\n[${iso}] PORTFOLIO_DETECTED: ${matchedPortfolioKeywords.slice(0, 6).join(", ")}.`;
+  }
+  // Persist the underwritten MAO ceiling computed at promote time so the
+  // outreach guard can read it without re-deriving (and so a future
+  // appraiser run doesn't overwrite a clean track-aware number with
+  // an ARV-less HOLD). Contract_Offer_Price is the operative-ceiling field
+  // per Phase 20.2 v1.3 (operator 2026-06-09).
+  if (typeof underwrittenMao === "number" && Number.isFinite(underwrittenMao) && underwrittenMao > 0) {
+    fields["Contract_Offer_Price"] = underwrittenMao;
   }
   const res = await fetch(url, {
     method: "POST",
@@ -699,10 +710,29 @@ export async function GET(req: Request) {
     firecrawlUrl: string | null;
     portfolioDetected: boolean;
     matchedPortfolioKeywords: string[];
+    underwrittenMao: number | null;
+    underwrittenMaoTrack: BuyerTrack | null;
   }> = [];
   const bumpBlocked = (reason: AutoPromoteBlockReason | "auto_promote_disabled" | "auto_promote_dry_run") => {
     summary.auto_promote.reasons_blocked[reason] = (summary.auto_promote.reasons_blocked[reason] ?? 0) + 1;
   };
+
+  // Pre-load ZIP-store medians once (cohort-default track + the OTHER track
+  // as fallback) so the underwrite-then-promote gate is one O(N) lookup.
+  // Operator 2026-06-09: a lead must never be outreach-eligible without a
+  // computed MAO on it. Belt order: intake → enrich → verify → underwrite →
+  // promote → outreach. Seeded ZIPs are loaded once for the priceable gate.
+  const zipMedians = new Map<string, { value: number; track: BuyerTrack }>();
+  for (const zip of seededZips) {
+    for (const track of ["landlord", "flipper"] as const) {
+      try {
+        const m = await getZipBuyerMedian(zip, track);
+        if (m) zipMedians.set(`${zip}:${track}`, { value: m.value, track });
+      } catch {
+        /* best-effort; absence → mao_not_underwritten downstream */
+      }
+    }
+  }
   for (const { item, value: fc } of pool.results) {
     const { candidate: c, zip } = item;
     summary.firecrawl.scrapes_used++;
@@ -797,8 +827,24 @@ export async function GET(req: Request) {
       }
     }
 
+    // ── Underwrite BEFORE promote (operator 2026-06-09) ──
+    // Pick the cohort-default track (fresh intake → no distress info → flipper),
+    // fall back to whichever track has a seeded median for the ZIP. Compute
+    // track-aware Your_MAO; null → mao_not_underwritten blocks promote.
+    const candZip = (c.zip ?? "").trim();
+    const defaultTrack = defaultBuyerTrack({});
+    const preferred = zipMedians.get(`${candZip}:${defaultTrack}`);
+    const fallback = preferred ?? zipMedians.get(`${candZip}:${defaultTrack === "flipper" ? "landlord" : "flipper"}`) ?? null;
+    let underwrittenMao: number | null = null;
+    let underwrittenMaoTrack: BuyerTrack | null = null;
+    if (fallback) {
+      const uw = computeTrackAwareMao({ track: fallback.track, buyerMedian: fallback.value, estRehab: null });
+      underwrittenMao = uw.yourMao;
+      underwrittenMaoTrack = fallback.track;
+    }
+
     // Intrinsic auto-promote eligibility, then layer the feature flags.
-    const ap = shouldAutoPromote({ accepted, agentPhone: c.agentPhone, state: c.state, listPrice: c.listPrice });
+    const ap = shouldAutoPromote({ accepted, agentPhone: c.agentPhone, state: c.state, listPrice: c.listPrice, underwrittenMao });
     if (ap.promote) summary.auto_promote.eligible++;
     if (accepted && !ap.promote && ap.reason) {
       bumpBlocked(ap.reason);
@@ -832,6 +878,8 @@ export async function GET(req: Request) {
         candidate: c, zip, promote, firecrawlUrl: fc.url,
         portfolioDetected: fc.portfolioSellerDetected,
         matchedPortfolioKeywords: fc.matchedPortfolioKeywords,
+        underwrittenMao,
+        underwrittenMaoTrack,
       });
     }
   }
@@ -857,9 +905,9 @@ export async function GET(req: Request) {
   // ── Phase 4: writes (live only; sequential, post-pool — no concurrent
   // Airtable writes / intra-run dup races). ──
   if (!dryRun) {
-    for (const { candidate: c, zip, promote, firecrawlUrl, portfolioDetected, matchedPortfolioKeywords } of toWrite) {
+    for (const { candidate: c, zip, promote, firecrawlUrl, portfolioDetected, matchedPortfolioKeywords, underwrittenMao } of toWrite) {
       try {
-        await createIntakeListing(c, promote, firecrawlUrl, portfolioDetected, matchedPortfolioKeywords);
+        await createIntakeListing(c, promote, firecrawlUrl, portfolioDetected, matchedPortfolioKeywords, underwrittenMao);
         summary.written++;
       } catch (err) {
         summary.per_zip_errors.push({

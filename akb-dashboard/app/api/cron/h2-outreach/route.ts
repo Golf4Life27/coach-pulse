@@ -41,6 +41,7 @@ import { getListings, getListing, updateListingRecord } from "@/lib/airtable";
 import { sendMessageWithId } from "@/lib/quo";
 import { audit } from "@/lib/audit-log";
 import { checkFirstOutreachHydration, checkOfferOverList, openerMaoGuard, resolveOpenerCeiling } from "@/lib/outreach-economics";
+import { loadUnderwriteContextForListings } from "@/lib/track-aware-underwrite";
 import {
   authenticate,
   hasDashboardSession,
@@ -242,8 +243,9 @@ async function handle(req: Request): Promise<Response> {
   // (MAO_V1 = l.mao) must never exceed the deal's underwritten MAO. Cap to MAO,
   // or skip + flag. Unpriceable markets pass through unchanged.
   const openerGuarded: Array<{ recordId: string; action: "capped" | "skipped"; reason: string | null; from: number | null; to: number | null }> = [];
+  const uwCtxCron = await loadUnderwriteContextForListings(queue);
   queue = queue.filter((l) => {
-    const ceiling = resolveOpenerCeiling(l);
+    const ceiling = resolveOpenerCeiling(l, uwCtxCron);
     const guard = openerMaoGuard({ baseOpener: l.mao, mao: ceiling.mao, priceable: ceiling.priceable });
     if (!guard.ok) {
       openerGuarded.push({ recordId: l.id, action: "skipped", reason: guard.reason, from: guard.baseOpener, to: null });

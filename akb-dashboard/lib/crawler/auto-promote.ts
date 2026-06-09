@@ -27,7 +27,8 @@ export type AutoPromoteBlockReason =
   | "not_accepted"
   | "list_price_missing"
   | "wholesale_restricted_state"
-  | "no_agent_phone";
+  | "no_agent_phone"
+  | "mao_not_underwritten";
 
 export interface AutoPromoteInput {
   /** classifyVerifiedListing outcome === "accept". */
@@ -35,6 +36,11 @@ export interface AutoPromoteInput {
   agentPhone: string | null;
   state: string | null;
   listPrice: number | null;
+  /** Track-aware Your_MAO underwritten BEFORE promote (operator 2026-06-09).
+   *  A lead must NEVER be outreach-eligible without a computed MAO on it —
+   *  the new belt order is intake → enrich → verify → underwrite → promote
+   *  → outreach. null/undefined here blocks promote with mao_not_underwritten. */
+  underwrittenMao?: number | null;
 }
 
 export interface AutoPromoteDecision {
@@ -50,5 +56,7 @@ export function shouldAutoPromote(i: AutoPromoteInput): AutoPromoteDecision {
     return { promote: false, reason: "wholesale_restricted_state" };
   if (!normalizePhone(i.agentPhone))
     return { promote: false, reason: "no_agent_phone" };
+  if (i.underwrittenMao == null || !Number.isFinite(i.underwrittenMao) || i.underwrittenMao <= 0)
+    return { promote: false, reason: "mao_not_underwritten" };
   return { promote: true, reason: null };
 }

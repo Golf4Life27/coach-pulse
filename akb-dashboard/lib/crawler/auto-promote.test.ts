@@ -9,13 +9,24 @@ function input(over: Partial<AutoPromoteInput> = {}): AutoPromoteInput {
     agentPhone: "(210) 555-1234",
     state: "TX",
     listPrice: 185000,
+    // Operator 2026-06-09: a lead is never outreach-eligible without a
+    // computed MAO. Default the fixture to a clean track-aware MAO so the
+    // pre-existing tests keep their original intent (the new gate has its
+    // own coverage below).
+    underwrittenMao: 50000,
     ...over,
   };
 }
 
 describe("shouldAutoPromote", () => {
-  it("promotes a clean accept with a normalizable phone in a non-restricted state", () => {
+  it("promotes a clean accept with a normalizable phone, non-restricted state, AND an underwritten MAO", () => {
     expect(shouldAutoPromote(input())).toEqual({ promote: true, reason: null });
+  });
+
+  it("blocks promote when MAO is not underwritten (intake → underwrite → promote belt)", () => {
+    expect(shouldAutoPromote(input({ underwrittenMao: null })).reason).toBe("mao_not_underwritten");
+    expect(shouldAutoPromote(input({ underwrittenMao: 0 })).reason).toBe("mao_not_underwritten");
+    expect(shouldAutoPromote(input({ underwrittenMao: -1 })).reason).toBe("mao_not_underwritten");
   });
 
   it("blocks a record the classifier did not accept (Review/condition-missing)", () => {

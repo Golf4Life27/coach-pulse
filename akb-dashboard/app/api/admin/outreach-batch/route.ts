@@ -53,6 +53,7 @@ import {
 } from "@/lib/h2-outreach";
 import { evaluateSendWindow } from "@/lib/h2-working-hours";
 import { openerMaoGuard, resolveOpenerCeiling } from "@/lib/outreach-economics";
+import { loadUnderwriteContextForListings } from "@/lib/track-aware-underwrite";
 import type { Listing } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -175,9 +176,13 @@ async function handle(req: Request): Promise<Response> {
   // carried on Listings_V1 as MAO_V1 (lead.mao) must never exceed the deal's
   // underwritten MAO. Cap the opener down to MAO, or skip + flag the listing.
   // Unpriceable markets pass through untouched (no MAO to compare against).
+  // Pre-load the ZIP-store medians for the cohort once so the resolver uses
+  // track-aware math (landlord as-is median is a purchase price) rather than
+  // the flipper-only ARV×arv_pct_max path that needs ARV/rehab on file.
+  const uwCtx = await loadUnderwriteContextForListings(leads);
   const guardedLeads: Listing[] = [];
   for (const l of leads) {
-    const ceiling = resolveOpenerCeiling(l);
+    const ceiling = resolveOpenerCeiling(l, uwCtx);
     const guard = openerMaoGuard({ baseOpener: l.mao, mao: ceiling.mao, priceable: ceiling.priceable });
     if (!guard.ok) {
       ineligible.push({ recordId: l.id, reason: guard.reason ?? "opener_exceeds_mao" });

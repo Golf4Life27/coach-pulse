@@ -25,6 +25,7 @@
 
 import { getMarketForListing } from "@/lib/markets/registry";
 import { evaluateDeal } from "@/lib/markets/deal-math";
+import { computeListingMao, type UnderwriteContext } from "@/lib/track-aware-underwrite";
 
 /** The 85% threshold. Operator-tunable via env without a deploy. The
  *  intake script targets 65%, so 85% gives operator headroom for
@@ -193,21 +194,46 @@ export interface OpenerCeiling {
   market: string | null;
 }
 
-/** Pure: resolve the deal's MAO ceiling + market priceability from the
- *  registry buy-box + deal-math engine. The MAO here is the underwritten
- *  ceiling (ARV × arv_pct_max − rehab − fee), NOT the 65%-of-list opener
- *  (Listings_V1 MAO_V1, which is the door-opener). */
-export function resolveOpenerCeiling(listing: {
-  state?: string | null;
-  zip?: string | null;
-  realArvMedian?: number | null;
-  estRehab?: number | null;
-  listPrice?: number | null;
-}): OpenerCeiling {
+/** Pure: resolve the deal's MAO ceiling + market priceability. Prefers the
+ *  TRACK-AWARE ZIP-store path (the seeded landlord/flipper median) when the
+ *  caller passes a pre-loaded UnderwriteContext — the landlord as-is median
+ *  is already a purchase price, so the deal-math evaluateDeal path (flipper-
+ *  only: ARV × arv_pct_max − rehab − fee) was rejecting every ZIP-priced lead
+ *  with no ARV/rehab on file. Falls back to evaluateDeal when no context is
+ *  passed (existing call sites) or when no ZIP-store median exists. */
+export function resolveOpenerCeiling(
+  listing: {
+    state?: string | null;
+    zip?: string | null;
+    realArvMedian?: number | null;
+    estRehab?: number | null;
+    listPrice?: number | null;
+    redFlags?: string[] | string | null;
+    distressBucket?: string | null;
+    distressScore?: number | null;
+  },
+  ctx?: UnderwriteContext,
+): OpenerCeiling {
   const market = getMarketForListing({ state: listing.state, zip: listing.zip });
   const priceable = market?.buyer_params?.arv_pct_max != null;
   if (!priceable) {
     return { mao: null, priceable: false, market: market?.id ?? null };
+  }
+  if (ctx) {
+    const uw = computeListingMao(
+      {
+        state: listing.state ?? null,
+        zip: listing.zip ?? null,
+        redFlags: listing.redFlags ?? null,
+        distressBucket: listing.distressBucket ?? null,
+        distressScore: listing.distressScore ?? null,
+        estRehab: listing.estRehab ?? null,
+      },
+      ctx,
+    );
+    if (uw.yourMao != null) {
+      return { mao: uw.yourMao, priceable: true, market: market?.id ?? null };
+    }
   }
   const res = evaluateDeal(
     { arv: listing.realArvMedian, rehab: listing.estRehab, listPrice: listing.listPrice },
