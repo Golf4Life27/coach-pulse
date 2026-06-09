@@ -34,6 +34,7 @@ import {
   upsertPropertyIntel,
 } from "@/lib/federation/property-intel-store";
 import { validateBuyerMedianInput, defaultBuyerTrack } from "@/lib/buyer-median-input";
+import { getZipBuyerMedian } from "@/lib/buyer-median-store";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -62,13 +63,39 @@ export async function GET(req: Request, { params }: { params: Promise<{ recordId
   const { recordId } = await params;
 
   try {
+    // ZIP-level store is the SOURCE OF TRUTH: a deal reads its ZIP's median
+    // for its track (distressed as-is → landlord) instead of a hand-entered
+    // per-deal value. Per-deal Property_Intel is only a legacy fallback.
+    const listing = await getListing(recordId).catch(() => null);
+    if (listing?.zip) {
+      const redFlagsText = Array.isArray(listing.redFlags) ? listing.redFlags.join(" ") : (listing.redFlags ?? "");
+      const track = defaultBuyerTrack({
+        condition: `${redFlagsText} ${listing.distressBucket ?? ""}`,
+        distressed: (listing.distressScore ?? 0) > 0,
+      });
+      const zipMedian = await getZipBuyerMedian(listing.zip, track).catch(() => null);
+      if (zipMedian) {
+        return NextResponse.json({
+          found: true,
+          origin: "zip_store",
+          zip: zipMedian.zip,
+          value: zipMedian.value,
+          source: zipMedian.source,
+          track: zipMedian.track,
+          fetchedAt: zipMedian.fetchedAt,
+          sampleSize: zipMedian.compCount,
+        });
+      }
+    }
+
     const pi = await findPropertyIntelRecordByListing(recordId);
     if (!pi) {
-      return NextResponse.json({ found: false, value: null, source: null, fetchedAt: null, sampleSize: null });
+      return NextResponse.json({ found: false, value: null, source: null, track: null, fetchedAt: null, sampleSize: null });
     }
     const f = pi.fields;
     return NextResponse.json({
       found: true,
+      origin: "property_intel_legacy",
       propertyIntelId: pi.recordId,
       value: num(f["Buyer_Median_Value"]),
       source: (f["Buyer_Median_Source"] as string) ?? null,
