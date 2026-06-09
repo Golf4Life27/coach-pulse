@@ -92,6 +92,20 @@ export function selectH2Eligible(listings: Listing[]): Listing[] {
   return listings.filter(isH2Eligible);
 }
 
+/** Pure: human-readable reason a listing fails H2 eligibility, or null when
+ *  it IS eligible. Shared by the h2-outreach cron (record_id smoke test) and
+ *  the controlled-batch route (explicit record_ids), so both report the same
+ *  rejection. Order matches isH2Eligible. */
+export function ineligibleReasonForListing(l: Listing): string | null {
+  if (!outreachStatusEmpty(l)) return `Outreach_Status already set ('${l.outreachStatus}')`;
+  if (l.liveStatus !== LIVE_ACTIVE) return `Live_Status is '${l.liveStatus}', not Active`;
+  if (l.executionPath !== AUTO_PROCEED) return `Execution_Path is '${l.executionPath}', not Auto Proceed`;
+  if (l.doNotText === true) return "Do_Not_Text is set";
+  if (!agentPhonePresent(l)) return "Agent_Phone is empty";
+  if (l.sourceVersion !== SOURCE_VERSION_V2) return `Source_Version is '${l.sourceVersion}', not ${SOURCE_VERSION_V2}`;
+  return null;
+}
+
 /** Key used to detect "same agent" across listings. */
 function phoneKey(raw: string | null | undefined): string | null {
   if (MATCH_NORMALIZED) return normalizePhone(raw);

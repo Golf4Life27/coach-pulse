@@ -3,6 +3,7 @@
 import { describe, it, expect } from "vitest";
 import {
   isH2Eligible,
+  ineligibleReasonForListing,
   selectH2Eligible,
   buildPriorContactIndex,
   buildH2Message,
@@ -198,5 +199,31 @@ describe("firstNameOnly — proven 5/8 outreach rule (greet on first name)", () 
     expect(firstNameOnly(null)).toBe("there");
     expect(firstNameOnly("")).toBe("there");
     expect(firstNameOnly("   ")).toBe("there");
+  });
+});
+
+describe("ineligibleReasonForListing", () => {
+  const eligible = (): Partial<Listing> => ({
+    outreachStatus: "",
+    liveStatus: "Active",
+    executionPath: "Auto Proceed",
+    doNotText: false,
+    agentPhone: "9015551234",
+    sourceVersion: "v2_post_2026-05-26",
+  });
+
+  it("returns null for a fully eligible listing (mirrors isH2Eligible)", () => {
+    const l = listing(eligible());
+    expect(ineligibleReasonForListing(l)).toBeNull();
+    expect(isH2Eligible(l)).toBe(true);
+  });
+
+  it("names each failing gate in isH2Eligible order", () => {
+    expect(ineligibleReasonForListing(listing({ ...eligible(), outreachStatus: "Texted" }))).toContain("Outreach_Status already set");
+    expect(ineligibleReasonForListing(listing({ ...eligible(), liveStatus: "Off Market" }))).toContain("not Active");
+    expect(ineligibleReasonForListing(listing({ ...eligible(), executionPath: "Reject" }))).toContain("not Auto Proceed");
+    expect(ineligibleReasonForListing(listing({ ...eligible(), doNotText: true }))).toContain("Do_Not_Text");
+    expect(ineligibleReasonForListing(listing({ ...eligible(), agentPhone: "" }))).toContain("Agent_Phone is empty");
+    expect(ineligibleReasonForListing(listing({ ...eligible(), sourceVersion: "v1_legacy" }))).toContain("not v2");
   });
 });

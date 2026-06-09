@@ -4,6 +4,7 @@ import { synthesize } from "@/lib/maverick/synthesizer";
 // toE164 moved to lib/phone.ts on 2026-06-08 — conversation-check shares it
 // (it was calling Quo without normalization → empty threads on every record).
 import { toE164 } from "@/lib/phone";
+import { isSelfEchoOrAutoreply } from "@/lib/conversation-check";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -220,8 +221,15 @@ export async function GET(req: Request) {
           SCAN_WINDOW_MINUTES
         );
 
-        // Find the most recent inbound message
-        const inbound = messages.find((m) => m.direction === "incoming");
+        // Find the most recent GENUINE inbound — skip self-echoes (our H2
+        // template reflected back on some carriers) and bot autoreplies
+        // (out-of-office / "no longer in service" / brokerage autoreply).
+        // Treating those as replies created false "Response Received" +
+        // bogus triage proposals (the conversation-check fix, now live on
+        // the inbound path, not just the back-cohort tool).
+        const inbound = messages.find(
+          (m) => m.direction === "incoming" && !isSelfEchoOrAutoreply(m.body),
+        );
         if (!inbound) continue;
         inboundFound++;
 

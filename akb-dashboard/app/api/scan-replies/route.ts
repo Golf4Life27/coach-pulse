@@ -1,5 +1,6 @@
 import { getListings, updateListingRecord } from "@/lib/airtable";
 import { getMessagesForParticipant } from "@/lib/quo";
+import { isSelfEchoOrAutoreply } from "@/lib/conversation-check";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -226,8 +227,12 @@ async function handleScan() {
       try {
         const messages = await getMessagesForParticipant(phone, SCAN_WINDOW_MINUTES);
 
-        // Find the most recent inbound message
-        const inbound = messages.find((m) => m.direction === "incoming");
+        // Find the most recent GENUINE inbound — skip self-echo + bot
+        // autoreply so they don't false-transition Texted → Response
+        // Received (the conversation-check fix, live on the inbound path).
+        const inbound = messages.find(
+          (m) => m.direction === "incoming" && !isSelfEchoOrAutoreply(m.body),
+        );
         if (!inbound) continue;
         inboundFound++;
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyConversation, type InboundCheckMessage } from "./conversation-check";
+import { classifyConversation, isSelfEchoOrAutoreply, type InboundCheckMessage } from "./conversation-check";
 
 const OUT_AT = "2026-05-06T18:00:00Z";
 
@@ -194,5 +194,25 @@ describe("classifyConversation — bot-autoreply downgrade", () => {
     );
     expect(r.verdict).toBe("downgrade_to_texted");
     if (r.verdict === "downgrade_to_texted") expect(r.reason).toContain("2 filtered");
+  });
+});
+
+describe("isSelfEchoOrAutoreply (live-triage export)", () => {
+  it("true on our H2 template reflected back (self-echo)", () => {
+    expect(isSelfEchoOrAutoreply("This is Alex with AKB Solutions. Interested in your listing at 1 Main St.")).toBe(true);
+    expect(isSelfEchoOrAutoreply("I would like to make a cash offer at $65,000 with a quick close.")).toBe(true);
+  });
+  it("true on bot autoreplies", () => {
+    expect(isSelfEchoOrAutoreply("Out of office until Monday.")).toBe(true);
+    expect(isSelfEchoOrAutoreply("This number is no longer in service.")).toBe(true);
+    expect(isSelfEchoOrAutoreply("Thank you for your interest in this property.")).toBe(true);
+  });
+  it("false on a genuine human reply", () => {
+    expect(isSelfEchoOrAutoreply("Yeah I can do 70k, call me")).toBe(false);
+    expect(isSelfEchoOrAutoreply("not interested")).toBe(false); // a real (if negative) human reply
+  });
+  it("false on null/empty", () => {
+    expect(isSelfEchoOrAutoreply(null)).toBe(false);
+    expect(isSelfEchoOrAutoreply("")).toBe(false);
   });
 });

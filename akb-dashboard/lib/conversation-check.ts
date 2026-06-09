@@ -75,6 +75,18 @@ function looksLikeBotAutoreply(body: string): boolean {
   return BOT_AUTOREPLY_PATTERNS.some((p) => p.test(body));
 }
 
+/** Pure: true when an inbound body is NOT a genuine human reply — either
+ *  our own H2 template reflected back as incoming (self-echo) or an
+ *  automated responder (out-of-office, "no longer in service", brokerage
+ *  autoreply). The LIVE reply-triage path (scan-comms) uses this to avoid
+ *  turning an echo/autoreply into a false "Response Received" + a bogus
+ *  triage proposal. Exported so the same rule guards the live path and the
+ *  back-cohort conversation-check. */
+export function isSelfEchoOrAutoreply(body: string | null | undefined): boolean {
+  if (!body) return false;
+  return looksLikeSelfEcho(body) || looksLikeBotAutoreply(body);
+}
+
 /** Pure: decide what the record's Outreach_Status SHOULD be based on
  *  the conversation. `lastOutboundAt` is the H2-send time; inbounds
  *  AFTER that are real replies to our outreach. Inbounds before are
