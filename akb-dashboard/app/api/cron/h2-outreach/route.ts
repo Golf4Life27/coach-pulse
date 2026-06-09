@@ -60,8 +60,7 @@ import {
   type H2Plan,
 } from "@/lib/h2-outreach";
 import {
-  evaluateWorkingHours,
-  parseWorkingHoursConfig,
+  evaluateSendWindow,
   type WorkingHoursMeta,
 } from "@/lib/h2-working-hours";
 import { SOURCE_VERSION_V2 } from "@/lib/source-version";
@@ -179,14 +178,9 @@ async function handle(req: Request): Promise<Response> {
     ? Math.floor(sendDelayRaw)
     : DEFAULT_SEND_DELAY_MS;
 
-  // Working-hours gate config (INV-H2-WORKING-HOURS). Defaults 8am–8pm,
-  // all 7 days, enabled — env-tunable without code changes.
-  const whConfig = parseWorkingHoursConfig({
-    enabled: process.env.H2_WORKING_HOURS_ENABLED,
-    start: process.env.H2_WORKING_HOURS_START,
-    end: process.env.H2_WORKING_HOURS_END,
-    days: process.env.H2_WORKING_HOURS_DAYS,
-  });
+  // Quiet-hours gate is the non-disableable evaluateSendWindow (hard 8–20
+  // property-local floor; H2_WORKING_HOURS_* env can only NARROW it). Read
+  // per-record below, just before each send.
 
   // ── Read listings (full set — prior-contact index needs all rows) ─
   let allListings: Listing[];
@@ -302,8 +296,12 @@ async function handle(req: Request): Promise<Response> {
     // Working-hours gate — first_touch ONLY. prior_contact_stall and
     // bad_phone_quarantine don't send SMS, so their Airtable bookkeeping runs
     // 24/7. Applies in BOTH dry and live so the reported route reflects reality.
-    if (p.route === "first_touch" && whConfig.enabled) {
-      const wh = evaluateWorkingHours(listing?.state ?? null, whConfig);
+    if (p.route === "first_touch") {
+      // Non-disableable hard floor (8–20 property-local). Env can only
+      // NARROW the window, never widen or disable it — a quiet-hours guard
+      // you can flip off is not a guard (TCPA). evaluateSendWindow folds the
+      // H2_WORKING_HOURS_* env into the hard floor internally.
+      const wh = evaluateSendWindow(listing?.state ?? null);
       row.working_hours_meta = wh.meta;
       if (wh.meta.tz_defaulted) {
         console.warn(

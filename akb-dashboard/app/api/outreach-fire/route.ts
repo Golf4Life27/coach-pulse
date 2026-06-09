@@ -1,5 +1,6 @@
 import { getListings, updateListingRecord } from "@/lib/airtable";
 import { sendMessage } from "@/lib/quo";
+import { evaluateSendWindow } from "@/lib/h2-working-hours";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -228,6 +229,15 @@ async function handleNewOutreach(
     const offer = formatOffer(listing.listPrice!);
     const message = buildFirstContactText(listing.agentName ?? "there", listing.address, offer);
 
+    // SAFETY GATE (item 0): hard quiet-hours floor — no SMS outside 8–20
+    // property-local. Non-disableable; checked just before the send.
+    const wh = evaluateSendWindow(listing.state ?? null);
+    if (!wh.inside) {
+      results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer, status: "skipped", error: `Outside send window (local_hour=${wh.meta.local_hour} tz=${wh.meta.timezone})` });
+      skipped++;
+      continue;
+    }
+
     if (dryRun) {
       results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer, status: "skipped", error: `Dry run — message: "${message}"` });
       skipped++;
@@ -312,6 +322,14 @@ async function handleMultiListing(
 
     const offer = formatOffer(listing.listPrice!);
     const message = buildMultiListingText(listing.agentName ?? "there", listing.address, offer);
+
+    // SAFETY GATE (item 0): hard quiet-hours floor (same as the first loop).
+    const wh = evaluateSendWindow(listing.state ?? null);
+    if (!wh.inside) {
+      results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer, status: "skipped", error: `Outside send window (local_hour=${wh.meta.local_hour} tz=${wh.meta.timezone})` });
+      skipped++;
+      continue;
+    }
 
     if (dryRun) {
       results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer, status: "skipped", error: `Dry run — message: "${message}"` });

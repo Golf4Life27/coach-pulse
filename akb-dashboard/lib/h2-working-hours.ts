@@ -140,6 +140,50 @@ export function parseWorkingHoursConfig(env: {
   };
 }
 
+// ── HARD TCPA send-window floor (operator 2026-06-08) ─────────────────
+//
+// The window above is operator-configurable AND disableable (enabled flag).
+// For OUTBOUND TEXTING that is a bypass: a quiet-hours guard you can flip
+// off is not a guard. evaluateSendWindow is the NON-disableable floor every
+// send path MUST pass — 8am–8pm property-local, all 7 days, ALWAYS on.
+// Env can only NARROW it (e.g. 9–19), never widen past 8–20 or disable it.
+
+/** TCPA-safe absolute floor. Env config may tighten but never loosen this. */
+export const SEND_WINDOW_FLOOR = { startHour: 8, endHour: 20 } as const;
+
+/** Pure: the effective send window = the hard 8–20 floor intersected with
+ *  any (narrowing-only) env config. `enabled:false` is IGNORED here — the
+ *  floor cannot be disabled. */
+export function effectiveSendWindow(envCfg?: WorkingHoursConfig): WorkingHoursConfig {
+  const cfg = envCfg ?? DEFAULT_WORKING_HOURS;
+  return {
+    enabled: true, // non-disableable
+    // Intersection: a later start and an earlier end both NARROW the window.
+    startHour: Math.max(SEND_WINDOW_FLOOR.startHour, cfg.startHour),
+    endHour: Math.min(SEND_WINDOW_FLOOR.endHour, cfg.endHour),
+    // Days can only be restricted to a subset of all-7; an empty/garbage
+    // days list falls back to all-7 (parseDays already guarantees this).
+    days: cfg.days.length > 0 ? cfg.days : DEFAULT_WORKING_HOURS.days,
+  };
+}
+
+/** The single guard EVERY outbound-text path calls before sending. Reads the
+ *  H2_WORKING_HOURS_* env (narrowing-only), applies the hard 8–20 floor, and
+ *  evaluates the property's local time. inside=false → DO NOT SEND. */
+export function evaluateSendWindow(
+  state: string | null | undefined,
+  now: Date = new Date(),
+  env: NodeJS.ProcessEnv = process.env,
+): WorkingHoursResult {
+  const envCfg = parseWorkingHoursConfig({
+    enabled: env.H2_WORKING_HOURS_ENABLED,
+    start: env.H2_WORKING_HOURS_START,
+    end: env.H2_WORKING_HOURS_END,
+    days: env.H2_WORKING_HOURS_DAYS,
+  });
+  return evaluateWorkingHours(state, effectiveSendWindow(envCfg), now);
+}
+
 function parseHour(raw: string | undefined, fallback: number): number {
   if (raw == null || raw.trim() === "") return fallback;
   const n = Number(raw);

@@ -51,6 +51,7 @@ import {
   buildSentNote,
   ineligibleReasonForListing,
 } from "@/lib/h2-outreach";
+import { evaluateSendWindow } from "@/lib/h2-working-hours";
 import type { Listing } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -84,6 +85,9 @@ interface BatchRow {
   delivered: boolean;
   confirmed: boolean;
   marked_texted: boolean;
+  /** SAFETY GATE (item 0): true when the send was BLOCKED because the
+   *  property's local time is outside the 8–20 TCPA send window. */
+  blocked_quiet_hours: boolean;
   error: string | null;
 }
 
@@ -158,6 +162,8 @@ async function handle(req: Request): Promise<Response> {
   const plans = planQueue(leads, priorIndex)
     .filter((p) => p.route === "first_touch" && p.toE164 && p.message)
     .slice(0, limit);
+  // Property state (for the quiet-hours timezone) — the plan carries city, not state.
+  const stateById = new Map(leads.map((l) => [l.id, l.state]));
 
   // ── DRY-RUN short-circuit ─────────────────────────────────────────
   if (!live) {
@@ -192,8 +198,21 @@ async function handle(req: Request): Promise<Response> {
       recordId: p.recordId, address: p.address, agentName: p.agentName,
       toE164: p.toE164, message: p.message,
       sent: false, quo_message_id: null, send_status: null, confirmed_status: null,
-      delivered: false, confirmed: false, marked_texted: false, error: null,
+      delivered: false, confirmed: false, marked_texted: false,
+      blocked_quiet_hours: false, error: null,
     };
+
+    // ── SAFETY GATE (item 0): hard quiet-hours floor, non-disableable.
+    // No SMS fires outside 8–20 in the property's local timezone. This is
+    // checked HERE (per-lead, just before the Quo call) so it can't be
+    // bypassed by the route's gate flags. ──
+    const wh = evaluateSendWindow(stateById.get(p.recordId) ?? null);
+    if (!wh.inside) {
+      row.blocked_quiet_hours = true;
+      row.error = `outside_send_window (local_hour=${wh.meta.local_hour} tz=${wh.meta.timezone}, window ${wh.meta.window_start}-${wh.meta.window_end})`;
+      rows.push(row);
+      continue; // no claim, no send, no write
+    }
 
     // Per-record dispatch claim — atomic, shared with the H2 cron.
     let claimed = false;
@@ -277,6 +296,7 @@ async function handle(req: Request): Promise<Response> {
   const delivered = rows.filter((r) => r.delivered).length;
   const sentUnconfirmed = rows.filter((r) => r.sent && !r.confirmed).length;
   const failed = rows.filter((r) => r.confirmed && !r.delivered).length;
+  const blockedQuietHours = rows.filter((r) => r.blocked_quiet_hours).length;
 
   return NextResponse.json({
     ok: true,
@@ -286,6 +306,7 @@ async function handle(req: Request): Promise<Response> {
       delivered,
       delivery_failed: failed,
       sent_unconfirmed: sentUnconfirmed,
+      blocked_quiet_hours: blockedQuietHours,
       marked_texted: rows.filter((r) => r.marked_texted).length,
     },
     rows,

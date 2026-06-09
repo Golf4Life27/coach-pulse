@@ -6,6 +6,9 @@ import {
   localHourAndWeekday,
   evaluateWorkingHours,
   parseWorkingHoursConfig,
+  effectiveSendWindow,
+  evaluateSendWindow,
+  SEND_WINDOW_FLOOR,
   DEFAULT_WORKING_HOURS,
   type WorkingHoursConfig,
 } from "./h2-working-hours";
@@ -107,5 +110,55 @@ describe("parseWorkingHoursConfig", () => {
   });
   it("falls back to defaults on invalid hours / days", () => {
     expect(parseWorkingHoursConfig({ start: "abc", end: "", days: "9,banana" })).toEqual(DEFAULT_WORKING_HOURS);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// SAFETY GATE (item 0): the non-disableable send-window floor.
+// ─────────────────────────────────────────────────────────────────────
+
+describe("effectiveSendWindow — env can NARROW, never widen/disable", () => {
+  it("is always enabled (the floor can't be turned off)", () => {
+    expect(effectiveSendWindow({ enabled: false, startHour: 8, endHour: 20, days: [0,1,2,3,4,5,6] }).enabled).toBe(true);
+  });
+  it("clamps a too-wide configured window back to the 8–20 floor", () => {
+    const w = effectiveSendWindow({ enabled: true, startHour: 0, endHour: 24, days: [0,1,2,3,4,5,6] });
+    expect(w.startHour).toBe(SEND_WINDOW_FLOOR.startHour); // 8
+    expect(w.endHour).toBe(SEND_WINDOW_FLOOR.endHour); // 20
+  });
+  it("honors a NARROWER configured window (9–19)", () => {
+    const w = effectiveSendWindow({ enabled: true, startHour: 9, endHour: 19, days: [1,2,3,4,5] });
+    expect(w.startHour).toBe(9);
+    expect(w.endHour).toBe(19);
+    expect(w.days).toEqual([1,2,3,4,5]);
+  });
+  it("falls back to all-7 days on an empty days list", () => {
+    expect(effectiveSendWindow({ enabled: true, startHour: 8, endHour: 20, days: [] }).days).toEqual(DEFAULT_WORKING_HOURS.days);
+  });
+});
+
+describe("evaluateSendWindow — the universal pre-send guard", () => {
+  // Texas property; 10am Central is INSIDE, 11pm Central is OUTSIDE.
+  const tenAmCentral = new Date("2026-06-09T15:00:00Z"); // 10:00 CDT
+  const elevenPmCentral = new Date("2026-06-10T04:00:00Z"); // 23:00 CDT
+
+  it("allows a send at 10am local", () => {
+    expect(evaluateSendWindow("TX", tenAmCentral, {} as NodeJS.ProcessEnv).inside).toBe(true);
+  });
+  it("BLOCKS a send at 11pm local", () => {
+    expect(evaluateSendWindow("TX", elevenPmCentral, {} as NodeJS.ProcessEnv).inside).toBe(false);
+  });
+  it("BLOCKS at 11pm EVEN when env tries to disable the guard", () => {
+    const r = evaluateSendWindow("TX", elevenPmCentral, { H2_WORKING_HOURS_ENABLED: "false" } as unknown as NodeJS.ProcessEnv);
+    expect(r.inside).toBe(false); // the floor ignores the disable flag
+  });
+  it("BLOCKS at 11pm EVEN when env tries to widen to 24h", () => {
+    const r = evaluateSendWindow("TX", elevenPmCentral, { H2_WORKING_HOURS_START: "0", H2_WORKING_HOURS_END: "24" } as unknown as NodeJS.ProcessEnv);
+    expect(r.inside).toBe(false); // clamped back to 8–20
+  });
+  it("uses the property's own timezone (MI = Eastern)", () => {
+    // 8:30pm Eastern = OUTSIDE for a Michigan property...
+    const eightThirtyPmEastern = new Date("2026-06-10T00:30:00Z");
+    expect(evaluateSendWindow("MI", eightThirtyPmEastern, {} as NodeJS.ProcessEnv).inside).toBe(false);
   });
 });
