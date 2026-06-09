@@ -25,6 +25,8 @@
 // offer). Volume up substantially — intentional. Price-reduction detection
 // is a SEPARATE downstream re-engagement trigger (INV-030), NOT intake.
 
+import { isPriceableMarket } from "@/lib/markets/actionable";
+
 export const EXCLUDED_STATES: ReadonlySet<string> = new Set([
   "IL", "MO", "SC", "NC", "OK", "ND",
 ]);
@@ -111,11 +113,23 @@ export type IntakeRejectReason =
   | "excluded_state"
   | "state_missing"
   | "dom_below_floor"
-  | "no_distress_signal";
+  | "no_distress_signal"
+  | "market_not_priceable";
 
 export interface IntakeEvaluation {
   accept: boolean;
   reasons: IntakeRejectReason[];
+}
+
+/** Optional priceability context. When requirePriceable is set, intake only
+ *  accepts candidates in a PRICEABLE market (sourced arv_pct_max + a seeded
+ *  ZIP buyer-median) — so we never scrape/verify a market we can't make an
+ *  MAO-checked offer in (e.g. TX: San Antonio / Dallas / Houston). The cron
+ *  loads seededZips once (lib/buyer-median-store.listSeededZips) and passes
+ *  it; pure callers that omit it keep the legacy state-only gate. */
+export interface IntakePriceabilityOpts {
+  seededZips?: ReadonlySet<string>;
+  requirePriceable?: boolean;
 }
 
 const DAY_MS = 86_400_000;
@@ -149,6 +163,7 @@ export function isSingleFamily(propertyType: string | null): boolean {
 export function evaluateIntakeCandidate(
   c: IntakeCandidate,
   now: Date = new Date(),
+  priceability: IntakePriceabilityOpts = {},
 ): IntakeEvaluation {
   const reasons: IntakeRejectReason[] = [];
 
@@ -183,6 +198,14 @@ export function evaluateIntakeCandidate(
     reasons.push("state_missing");
   } else if (EXCLUDED_STATES.has(c.state.trim().toUpperCase())) {
     reasons.push("excluded_state");
+  } else if (priceability.requirePriceable) {
+    // Tighten to PRICEABLE markets only — don't scrape/verify a market we
+    // can't price (sourced arv_pct_max + a seeded ZIP buyer-median).
+    const verdict = isPriceableMarket(
+      { state: c.state, city: c.city, zip: c.zip },
+      priceability.seededZips ?? new Set<string>(),
+    );
+    if (!verdict.actionable) reasons.push("market_not_priceable");
   }
 
   // ── Conversion-era pre-filters (default OFF; cut scrape volume) ──
@@ -210,11 +233,12 @@ export interface IntakeFilterResult {
 export function filterIntakeCandidates(
   candidates: IntakeCandidate[],
   now: Date = new Date(),
+  priceability: IntakePriceabilityOpts = {},
 ): IntakeFilterResult {
   const accepted: IntakeCandidate[] = [];
   const rejected: IntakeFilterResult["rejected"] = [];
   for (const c of candidates) {
-    const ev = evaluateIntakeCandidate(c, now);
+    const ev = evaluateIntakeCandidate(c, now, priceability);
     if (ev.accept) accepted.push(c);
     else rejected.push({ candidate: c, reasons: ev.reasons });
   }

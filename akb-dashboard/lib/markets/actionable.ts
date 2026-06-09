@@ -17,6 +17,8 @@
 // freshness re-verify pass AND the outreach selector. NO mass registry
 // edit — the pause lives in code, reversible by editing PAUSED_MARKETS.
 
+import { getMarketForListing } from "./registry";
+
 /** Wholesale-restrictive — never operate. */
 export const HARD_EXCLUDED_STATES: ReadonlySet<string> = new Set([
   "IL", "MO", "SC", "NC", "OK", "ND",
@@ -64,5 +66,24 @@ export function isActionableMarket(input: MarketInput): MarketVerdict {
     const zipHit = zip !== "" && m.zips.includes(zip);
     if (cityHit || zipHit) return { actionable: false, reason: `paused_${m.label.toLowerCase()}_${m.reason}` };
   }
+  return { actionable: true, reason: null };
+}
+
+/** Pure: is this market PRICEABLE — can we actually make an MAO-checked offer
+ *  in it? Stricter than isActionableMarket: in addition to not being excluded
+ *  or paused, the market must have (a) a SOURCED arv_pct_max in the buy-box
+ *  registry AND (b) a SEEDED ZIP buyer-median (passed in as `seededZips`).
+ *  Allowed-but-unpriceable markets — TX (San Antonio / Dallas / Houston),
+ *  non-disclosure with no usable ARV source and no seeded median — are
+ *  excluded so we never spend Firecrawl on a deal we can't price. The
+ *  caller loads `seededZips` once (lib/buyer-median-store.listSeededZips). */
+export function isPriceableMarket(input: MarketInput, seededZips: ReadonlySet<string>): MarketVerdict {
+  const base = isActionableMarket(input);
+  if (!base.actionable) return base;
+  const market = getMarketForListing({ state: input.state, zip: input.zip });
+  const arvPct = market?.buyer_params?.arv_pct_max ?? null;
+  if (arvPct == null) return { actionable: false, reason: "no_sourced_arv_pct_max" };
+  const zip = (input.zip ?? "").trim();
+  if (!zip || !seededZips.has(zip)) return { actionable: false, reason: "no_seeded_buyer_median" };
   return { actionable: true, reason: null };
 }

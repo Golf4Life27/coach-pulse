@@ -145,6 +145,31 @@ async function findRowByKey(key: string): Promise<AirtableRow | null> {
   return body.records?.[0] ?? null;
 }
 
+/** The set of ZIPs that have at least one seeded, positive buyer-median
+ *  (either track). Loaded once per run so the priceable-market gate can
+ *  stay pure. Used by the freshness re-verify + intake to confirm a market
+ *  is priceable before spending Firecrawl. */
+export async function listSeededZips(): Promise<Set<string>> {
+  const pat = requirePat();
+  const zips = new Set<string>();
+  let offset: string | undefined;
+  do {
+    const url = new URL(`https://api.airtable.com/v0/${BASE_ID}/${BUYER_MEDIAN_ZIP_TABLE}`);
+    url.searchParams.set("pageSize", "100");
+    if (offset) url.searchParams.set("offset", offset);
+    const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${pat}` }, cache: "no-store" });
+    if (!res.ok) throw new Error(`Buyer_Median_ZIP list ${res.status}: ${await res.text().catch(() => "")}`);
+    const body = (await res.json()) as { records?: AirtableRow[]; offset?: string };
+    for (const rec of body.records ?? []) {
+      const zip = typeof rec.fields["ZIP"] === "string" ? (rec.fields["ZIP"] as string).trim() : "";
+      const value = typeof rec.fields["Buyer_Median_Value"] === "number" ? (rec.fields["Buyer_Median_Value"] as number) : 0;
+      if (/^\d{5}$/.test(zip) && value > 0) zips.add(zip);
+    }
+    offset = body.offset;
+  } while (offset);
+  return zips;
+}
+
 /** Read the median for a ZIP + track. Null when none on record. */
 export async function getZipBuyerMedian(zip: string | null | undefined, track: BuyerTrack): Promise<ZipBuyerMedian | null> {
   const z = String(zip ?? "").trim();

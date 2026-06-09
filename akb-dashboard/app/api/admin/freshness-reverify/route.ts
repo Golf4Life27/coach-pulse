@@ -29,7 +29,8 @@ import {
 } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { verifyListingByUrl } from "@/lib/crawler/sources/firecrawl";
-import { isActionableMarket } from "@/lib/markets/actionable";
+import { isPriceableMarket } from "@/lib/markets/actionable";
+import { listSeededZips } from "@/lib/buyer-median-store";
 import { isOutreachFresh, DEFAULT_FRESHNESS_HOURS } from "@/lib/outreach-freshness";
 import type { Listing } from "@/lib/types";
 
@@ -63,23 +64,39 @@ export async function GET(req: Request) {
   const limit = Math.min(MAX_LIMIT, Number.isFinite(limitRaw) && limitRaw > 0 ? Math.floor(limitRaw) : DEFAULT_LIMIT);
   const maxAgeRaw = Number(url.searchParams.get("max_age_hours"));
   const maxAgeHours = Number.isFinite(maxAgeRaw) && maxAgeRaw > 0 ? maxAgeRaw : DEFAULT_FRESHNESS_HOURS;
+  // Scope: ?zips=48227,48228 (comma list) and/or ?state=MI restrict the pass
+  // to a market. Empty = whole actionable cohort.
+  const zipScope = new Set(
+    (url.searchParams.get("zips") ?? "")
+      .split(",")
+      .map((z) => z.trim())
+      .filter((z) => /^\d{5}$/.test(z)),
+  );
+  const stateScope = (url.searchParams.get("state") ?? "").trim().toUpperCase();
   const now = new Date();
 
   let active: Listing[];
+  let seededZips: Set<string>;
   try {
-    active = await getActiveListingsForBrief();
+    [active, seededZips] = await Promise.all([getActiveListingsForBrief(), listSeededZips()]);
   } catch (err) {
     return NextResponse.json({ error: "active_fetch_failed", message: err instanceof Error ? err.message : String(err) }, { status: 502 });
   }
 
-  // Candidate set: has a cached URL, in an actionable market, and NOT
+  // Candidate set: in the requested zip/state scope, has a cached URL, in a
+  // PRICEABLE market (sourced arv_pct_max + seeded buyer-median — never spend
+  // Firecrawl on a market we can't make an MAO-checked offer in), and NOT
   // currently outreach-fresh (stale or never re-verified).
   const skippedNonActionable: Array<{ recordId: string; reason: string }> = [];
+  let outOfScope = 0;
   const candidates = active.filter((l) => {
+    const zip = (l.zip ?? "").trim();
+    if (zipScope.size > 0 && !zipScope.has(zip)) { outOfScope++; return false; }
+    if (stateScope && (l.state ?? "").trim().toUpperCase() !== stateScope) { outOfScope++; return false; }
     if (!(l.verificationUrl && l.verificationUrl.trim() !== "")) return false;
-    const market = isActionableMarket({ state: l.state, city: l.city, zip: l.zip });
+    const market = isPriceableMarket({ state: l.state, city: l.city, zip: l.zip }, seededZips);
     if (!market.actionable) {
-      skippedNonActionable.push({ recordId: l.id, reason: market.reason ?? "non_actionable" });
+      skippedNonActionable.push({ recordId: l.id, reason: market.reason ?? "non_priceable" });
       return false;
     }
     return !isOutreachFresh({ lastVerified: l.lastVerified, liveStatus: l.liveStatus }, now, maxAgeHours).fresh;
@@ -99,9 +116,11 @@ export async function GET(req: Request) {
       mode: "dry_run",
       auth_kind: authKind,
       max_age_hours: maxAgeHours,
+      scope: { zips: [...zipScope], state: stateScope || null, out_of_scope: outOfScope },
+      seeded_zips: [...seededZips],
       active_total: active.length,
       due_total: candidates.length,
-      skipped_non_actionable: skippedNonActionable.length,
+      skipped_non_priceable: skippedNonActionable.length,
       batch: batch.map((l) => ({ recordId: l.id, address: l.address, state: l.state, zip: l.zip, lastVerified: l.lastVerified ?? null, url: l.verificationUrl })),
       duration_ms: Date.now() - t0,
     });

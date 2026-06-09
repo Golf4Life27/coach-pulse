@@ -152,3 +152,37 @@ describe("EXCLUDED_STATES", () => {
     expect([...EXCLUDED_STATES].sort()).toEqual(["IL", "MO", "NC", "ND", "OK", "SC"]);
   });
 });
+
+describe("evaluateIntakeCandidate — priceable-market gate (opt-in)", () => {
+  const seeded = new Set(["48227"]);
+
+  it("default (no priceability opts) does NOT apply the gate — backward compatible", () => {
+    // SA TX passes when the gate is off (existing behavior).
+    expect(evaluateIntakeCandidate(cand(), NOW).accept).toBe(true);
+  });
+
+  it("requirePriceable rejects TX San Antonio (no sourced arv_pct_max)", () => {
+    const r = evaluateIntakeCandidate(cand(), NOW, { seededZips: seeded, requirePriceable: true });
+    expect(r.accept).toBe(false);
+    expect(r.reasons).toContain("market_not_priceable");
+  });
+
+  it("requirePriceable accepts Detroit 48227 (sourced + seeded)", () => {
+    const r = evaluateIntakeCandidate(
+      cand({ state: "MI", city: "Detroit", zip: "48227" }),
+      NOW,
+      { seededZips: seeded, requirePriceable: true },
+    );
+    expect(r.accept).toBe(true);
+  });
+
+  it("requirePriceable rejects a Detroit ZIP with no seeded median", () => {
+    const r = evaluateIntakeCandidate(
+      cand({ state: "MI", city: "Detroit", zip: "48228" }),
+      NOW,
+      { seededZips: seeded, requirePriceable: true },
+    );
+    expect(r.accept).toBe(false);
+    expect(r.reasons).toContain("market_not_priceable");
+  });
+});

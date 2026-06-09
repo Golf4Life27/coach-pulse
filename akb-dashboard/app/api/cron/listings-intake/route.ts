@@ -40,6 +40,7 @@ import {
 } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { fetchListingsByZip } from "@/lib/crawler/sources/rentcast";
+import { listSeededZips } from "@/lib/buyer-median-store";
 import {
   filterIntakeCandidates,
   normalizeAddressKey,
@@ -491,6 +492,24 @@ export async function GET(req: Request) {
   const seenKeys = new Set<string>(); // intra-run dedup across overlapping ZIPs
   const toVerify: Array<{ candidate: IntakeCandidate; zip: string }> = [];
 
+  // ── Priceable-market gate (operator 2026-06-09) ───────────────────
+  // Intake only verifies markets we can actually price: a sourced
+  // arv_pct_max + a seeded ZIP buyer-median. Don't spend Firecrawl on a
+  // market we can't make an MAO-checked offer in (e.g. TX SA/Dallas/Houston,
+  // or any not-yet-seeded ZIP). Reversible via INTAKE_REQUIRE_PRICEABLE.
+  // If the seeded-ZIP store read fails, the gate disables itself rather than
+  // halt all intake (fail-open on infra, not fail-closed).
+  let requirePriceable = process.env.INTAKE_REQUIRE_PRICEABLE !== "false";
+  let seededZips: ReadonlySet<string> = new Set<string>();
+  if (requirePriceable) {
+    try {
+      seededZips = await listSeededZips();
+    } catch (e) {
+      requirePriceable = false;
+      summary.per_zip_errors.push({ zip: "*", error: `seeded_zip_load_failed_priceable_gate_disabled: ${e instanceof Error ? e.message : String(e)}` });
+    }
+  }
+
   // ── Phase 1 timing: RentCast collect (per-ZIP wall-time instrumentation) ──
   const tCollectStart = Date.now();
   for (let i = 0; i < zips.length; i += ZIP_FETCH_CONCURRENCY) {
@@ -522,7 +541,7 @@ export async function GET(req: Request) {
       summary.raw_candidates += fetchResult.candidates.length;
       perZipRaw.set(zip, fetchResult.candidates.length);
 
-      const { accepted, rejected } = filterIntakeCandidates(fetchResult.candidates, now);
+      const { accepted, rejected } = filterIntakeCandidates(fetchResult.candidates, now, { seededZips, requirePriceable });
       summary.rejected += rejected.length;
       for (const r of rejected) {
         for (const reason of r.reasons) bump(reason);
