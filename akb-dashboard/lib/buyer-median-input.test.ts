@@ -171,6 +171,19 @@ describe("computeTrackAwareMao — track decides rehab subtraction", () => {
   it("HOLDs when buyer median missing", () => {
     expect(computeTrackAwareMao({ track: "landlord", buyerMedian: null, estRehab: 10_000 }).yourMao).toBeNull();
   });
+
+  it("12724 Strathmoor verdict: $50k MAO < $52k sticky opener → fails the floor (matches the held verdict)", () => {
+    // Validation by VERDICT, not by a fitted figure. The clean track-aware
+    // landlord MAO is $55k ceiling − $5k fee = $50,000. The sticky opener on
+    // record is $52,000. $52k > $50k → the offer exceeds our ceiling, the
+    // deal fails the floor — the SAME verdict the system already held. No
+    // flat-%-of-list worst-case is used; no anchor to the legacy $43,648.
+    const r = computeTrackAwareMao({ track: "landlord", buyerMedian: 55_000, estRehab: 28_518, wholesaleFee: 5_000 });
+    expect(r.yourMao).toBe(50_000);
+    const stickyOpener = 52_000;
+    const passesFloor = stickyOpener <= (r.yourMao as number);
+    expect(passesFloor).toBe(false); // fail-floor verdict
+  });
 });
 
 describe("validateBuyerMedianInput — sample size", () => {
