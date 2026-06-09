@@ -36,11 +36,13 @@ export default function OfferReadinessPanel({
   const [readiness, setReadiness] = useState<OfferReadiness | null>(null);
 
   // Buyer_Median (γ-path) — read from Property_Intel via the deal route.
-  const [buyerMedian, setBuyerMedian] = useState<{ value: number | null; source: string | null; fetchedAt: string | null }>(
-    { value: null, source: null, fetchedAt: null },
+  const [buyerMedian, setBuyerMedian] = useState<{ value: number | null; source: string | null; track: string | null; fetchedAt: string | null }>(
+    { value: null, source: null, track: null, fetchedAt: null },
   );
   const [showInput, setShowInput] = useState(false);
   const [bmValue, setBmValue] = useState("");
+  // Distressed as-is inventory defaults to the LANDLORD track (bimodal pool).
+  const [bmTrack, setBmTrack] = useState<"flipper" | "landlord">("landlord");
   const [bmExportDate, setBmExportDate] = useState("");
   const [bmSample, setBmSample] = useState("");
   const [bmError, setBmError] = useState<string | null>(null);
@@ -49,7 +51,7 @@ export default function OfferReadinessPanel({
   const loadBuyerMedian = useCallback(() => {
     fetch(`/api/deal/${recordId}/buyer-median`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (d) setBuyerMedian({ value: d.value ?? null, source: d.source ?? null, fetchedAt: d.fetchedAt ?? null }); })
+      .then((d) => { if (d) setBuyerMedian({ value: d.value ?? null, source: d.source ?? null, track: d.track ?? null, fetchedAt: d.fetchedAt ?? null }); })
       .catch(() => {});
   }, [recordId]);
 
@@ -95,6 +97,7 @@ export default function OfferReadinessPanel({
         body: JSON.stringify({
           value: bmValue,
           source: "investorbase_manual",
+          track: bmTrack,
           exportDate: bmExportDate,
           sampleSize: bmSample || undefined,
         }),
@@ -144,7 +147,7 @@ export default function OfferReadinessPanel({
                     states; in a non-disclosure state the branch prices off ARV
                     comps and it.detail already carries the right number. */}
                 {it.key === "buyer_ceiling" && buyerMedian.value != null && isDisclosureState(listing.state)
-                  ? `$${buyerMedian.value.toLocaleString()}${buyerMedian.source ? ` · ${buyerMedian.source}` : ""}${buyerMedian.fetchedAt ? ` · ${buyerMedian.fetchedAt.slice(0, 10)}` : ""}`
+                  ? `$${buyerMedian.value.toLocaleString()}${buyerMedian.track ? ` · ${buyerMedian.track}` : ""}${buyerMedian.source ? ` · ${buyerMedian.source}` : ""}${buyerMedian.fetchedAt ? ` · ${buyerMedian.fetchedAt.slice(0, 10)}` : ""}`
                   : it.detail}
               </span>
               {it.key === "buyer_ceiling" && (
@@ -161,10 +164,19 @@ export default function OfferReadinessPanel({
               <div className="mt-2 ml-6 p-3 bg-[#161b22] rounded border border-[#30363d] space-y-2">
                 <p className="text-[10px] text-amber-300/90">
                   InvestorBase exports only. The value is stamped
-                  <span className="font-mono"> investorbase_manual</span> + export date —
-                  unsourced numbers are refused.
+                  <span className="font-mono"> investorbase_manual</span> + track + export date —
+                  unsourced or blended numbers are refused.
                 </p>
                 <div className="flex flex-wrap gap-2">
+                  <select
+                    value={bmTrack}
+                    onChange={(e) => setBmTrack(e.target.value as "flipper" | "landlord")}
+                    title="Buyer track — the pool is bimodal; never enter a blended number"
+                    className="bg-[#0d1117] border border-[#30363d] rounded px-2 py-1 text-xs text-white"
+                  >
+                    <option value="landlord">Landlord (as-is)</option>
+                    <option value="flipper">Flipper (renovated)</option>
+                  </select>
                   <input
                     value={bmValue}
                     onChange={(e) => setBmValue(e.target.value)}

@@ -33,7 +33,7 @@ import {
   findPropertyIntelRecordByListing,
   upsertPropertyIntel,
 } from "@/lib/federation/property-intel-store";
-import { validateBuyerMedianInput } from "@/lib/buyer-median-input";
+import { validateBuyerMedianInput, defaultBuyerTrack } from "@/lib/buyer-median-input";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -72,6 +72,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ recordId
       propertyIntelId: pi.recordId,
       value: num(f["Buyer_Median_Value"]),
       source: (f["Buyer_Median_Source"] as string) ?? null,
+      track: (f["Buyer_Median_Track"] as string) ?? null,
       fetchedAt: (f["Buyer_Median_FetchedAt"] as string) ?? null,
       sampleSize: num(f["Buyer_Median_SampleSize"]),
     });
@@ -88,15 +89,41 @@ export async function POST(req: Request, { params }: { params: Promise<{ recordI
   if (!g.ok) return g.res;
   const { recordId } = await params;
 
-  let body: unknown;
+  let body: Record<string, unknown>;
   try {
-    body = await req.json();
+    body = (await req.json()) as Record<string, unknown>;
   } catch {
     return NextResponse.json({ error: "invalid_json" }, { status: 400 });
   }
 
-  // HARD RULE chokepoint — unsourced / unstamped values never get past here.
-  const validation = validateBuyerMedianInput(body as Record<string, unknown>);
+  // Fetch the listing first — its cohort sets the DEFAULT track when the
+  // caller didn't pass one (distressed as-is → landlord), and we need the
+  // subject address for the upsert.
+  let subjectAddress: string;
+  let cohortDefaultTrack: "flipper" | "landlord";
+  try {
+    const listing = await getListing(recordId);
+    if (!listing) return NextResponse.json({ error: "listing_not_found", recordId }, { status: 404 });
+    subjectAddress = listing.address ?? "";
+    const redFlagsText = Array.isArray(listing.redFlags) ? listing.redFlags.join(" ") : (listing.redFlags ?? "");
+    cohortDefaultTrack = defaultBuyerTrack({
+      condition: `${redFlagsText} ${listing.distressBucket ?? ""}`,
+      distressed: (listing.distressScore ?? 0) > 0,
+    });
+  } catch (err) {
+    return NextResponse.json(
+      { error: "listing_read_failed", message: err instanceof Error ? err.message : String(err) },
+      { status: 502 },
+    );
+  }
+
+  // Default the track from the cohort when the caller omitted it (distressed
+  // as-is → landlord). An explicit track in the body always wins.
+  if (body.track == null || body.track === "") body.track = cohortDefaultTrack;
+
+  // HARD RULE chokepoint — unsourced/unstamped or BLENDED values never get
+  // past here (track is now required and a blended number is refused).
+  const validation = validateBuyerMedianInput(body);
   if (!validation.ok) {
     await audit({
       agent: "appraiser",
@@ -107,24 +134,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ recordI
     });
     return NextResponse.json({ error: "validation_failed", reason: validation.error }, { status: 422 });
   }
-  const { value, source, exportDate, sampleSize } = validation.data;
-
-  let subjectAddress: string;
-  try {
-    const listing = await getListing(recordId);
-    if (!listing) return NextResponse.json({ error: "listing_not_found", recordId }, { status: 404 });
-    subjectAddress = listing.address ?? "";
-  } catch (err) {
-    return NextResponse.json(
-      { error: "listing_read_failed", message: err instanceof Error ? err.message : String(err) },
-      { status: 502 },
-    );
-  }
+  const { value, source, track, exportDate, sampleSize } = validation.data;
 
   try {
     const fields: Record<string, unknown> = {
       Buyer_Median_Value: value,
       Buyer_Median_Source: source, // "investorbase_manual" — typecast mints the option
+      Buyer_Median_Track: track, // "flipper" | "landlord" — typecast mints the option
       Buyer_Median_FetchedAt: exportDate,
     };
     if (sampleSize != null) fields["Buyer_Median_SampleSize"] = sampleSize;
@@ -136,8 +152,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ recordI
       event: "buyer_median_set",
       status: "confirmed_success",
       recordId,
-      inputSummary: { source, export_date: exportDate, sample_size: sampleSize, subject_address: subjectAddress },
-      outputSummary: { value, property_intel_id: piId, created },
+      inputSummary: { source, track, export_date: exportDate, sample_size: sampleSize, subject_address: subjectAddress },
+      outputSummary: { value, track, property_intel_id: piId, created },
       decision: "buyer_median_hydrated",
     });
 
@@ -147,6 +163,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ recordI
       created,
       value,
       source,
+      track,
       fetchedAt: exportDate,
       sampleSize,
     });

@@ -22,9 +22,22 @@ export const BUYER_MEDIAN_ALLOWED_SOURCE = "investorbase_manual" as const;
  *  fat-finger (e.g. cents entered as dollars, or a total-portfolio figure). */
 export const BUYER_MEDIAN_MAX = 5_000_000;
 
+/** Which buyer track a median represents. The pool is BIMODAL (operator
+ *  2026-06-09, Detroit 48227: flippers median ~$150k, landlords ~$55k), so a
+ *  Buyer_Median is meaningless without its track — a blended number averages
+ *  two different buyer economics and is REFUSED. */
+export type BuyerTrack = "flipper" | "landlord";
+export const BUYER_TRACKS: readonly BuyerTrack[] = ["flipper", "landlord"] as const;
+
+/** Tokens that signal a blended / mixed number — explicitly refused so a
+ *  two-population average can never be stored as a single median. */
+const BLENDED_TRACK_TOKENS = new Set(["blended", "blend", "both", "mixed", "combined", "all", "average", "avg", "overall"]);
+
 export interface BuyerMedianValidated {
   value: number;
   source: typeof BUYER_MEDIAN_ALLOWED_SOURCE;
+  /** Which buyer track this value represents — never blended. */
+  track: BuyerTrack;
   /** ISO date of the InvestorBase export the value was read from. */
   exportDate: string;
   sampleSize: number | null;
@@ -46,7 +59,7 @@ function coerceNumber(v: unknown): number | null {
 /** Validate a raw manual Buyer_Median submission. Pure; no I/O.
  *  Rejects (never throws) on any rule violation with a specific message. */
 export function validateBuyerMedianInput(
-  raw: { value?: unknown; source?: unknown; exportDate?: unknown; sampleSize?: unknown },
+  raw: { value?: unknown; source?: unknown; track?: unknown; exportDate?: unknown; sampleSize?: unknown },
   now: Date = new Date(),
 ): BuyerMedianValidation {
   // 1. Source stamp — THE hard rule. Must be present and exactly the
@@ -60,6 +73,22 @@ export function validateBuyerMedianInput(
       error: `source_invalid: only "${BUYER_MEDIAN_ALLOWED_SOURCE}" is accepted (got "${String(raw.source)}") — values come only from InvestorBase exports`,
     };
   }
+
+  // 1b. Track — THE bimodal-pool hard rule. Must be exactly "flipper" or
+  //     "landlord". A blended / mixed / averaged number is REFUSED: the
+  //     flipper and landlord pools have different economics and a single
+  //     median across both is meaningless.
+  if (raw.track == null || raw.track === "") {
+    return { ok: false, error: "track_required: Buyer_Median must declare its buyer track (\"flipper\" or \"landlord\") — the pool is bimodal" };
+  }
+  const trackStr = String(raw.track).trim().toLowerCase();
+  if (BLENDED_TRACK_TOKENS.has(trackStr)) {
+    return { ok: false, error: `track_blended: a blended/averaged Buyer_Median is refused (got "${String(raw.track)}") — enter the flipper and landlord medians separately` };
+  }
+  if (trackStr !== "flipper" && trackStr !== "landlord") {
+    return { ok: false, error: `track_invalid: track must be "flipper" or "landlord" (got "${String(raw.track)}")` };
+  }
+  const track = trackStr as BuyerTrack;
 
   // 2. Export date — required, parseable, not in the future.
   if (raw.exportDate == null || raw.exportDate === "") {
@@ -100,8 +129,97 @@ export function validateBuyerMedianInput(
     data: {
       value,
       source: BUYER_MEDIAN_ALLOWED_SOURCE,
+      track,
       exportDate: new Date(t).toISOString(),
       sampleSize,
     },
+  };
+}
+
+// ── Track defaulting + track-aware MAO ────────────────────────────────
+
+/** Pure: the default buyer track for a listing's cohort. The DISTRESSED
+ *  AS-IS cohort defaults to LANDLORD (operator 2026-06-09) — those houses
+ *  trade to buy-and-hold investors at the as-is landlord median, not the
+ *  renovated-resale flipper median. Everything else defaults to flipper. */
+export function defaultBuyerTrack(input: {
+  /** Rehab scope tier (lib/markets/pessimistic-mao.classifyRehabTier). */
+  arvTier?: "as_is" | "light_retail" | "full_retail" | "unknown" | null;
+  /** Vision condition label, if no tier. */
+  condition?: string | null;
+  /** Any explicit distress signal (keyword/score). */
+  distressed?: boolean | null;
+}): BuyerTrack {
+  const cond = (input.condition ?? "").toLowerCase();
+  const asIs =
+    input.arvTier === "as_is" ||
+    /poor|disrepair|water[_ ]?damage|fire|gut|tear[- ]?down|shell/.test(cond);
+  if (asIs || input.distressed === true) return "landlord";
+  return "flipper";
+}
+
+export interface TrackAwareMao {
+  track: BuyerTrack;
+  /** Investor_MAO — the cash buyer's max. Flipper: median is a RENOVATED-
+   *  resale basis, so rehab is subtracted. Landlord: the as-is median is
+   *  ALREADY a purchase price for the as-is condition, so the flip rehab is
+   *  NOT subtracted again (that would double-count). */
+  investorMao: number | null;
+  /** Your_MAO = Investor_MAO − Wholesale_Fee. */
+  yourMao: number | null;
+  wholesaleFeeUsed: number;
+  formula: string;
+}
+
+/** Pure: track-aware Buyer_Median → MAO. The track decides whether the flip
+ *  rehab is subtracted (flipper: yes; landlord as-is: no). Never blends. */
+export function computeTrackAwareMao(input: {
+  track: BuyerTrack;
+  buyerMedian: number | null | undefined;
+  estRehab: number | null | undefined;
+  wholesaleFee?: number | null | undefined;
+}): TrackAwareMao {
+  const DEFAULT_FEE = 5_000;
+  const fee =
+    typeof input.wholesaleFee === "number" && Number.isFinite(input.wholesaleFee) && input.wholesaleFee >= 0
+      ? input.wholesaleFee
+      : DEFAULT_FEE;
+  const bm =
+    typeof input.buyerMedian === "number" && Number.isFinite(input.buyerMedian) && input.buyerMedian > 0
+      ? input.buyerMedian
+      : null;
+  if (bm == null) {
+    return { track: input.track, investorMao: null, yourMao: null, wholesaleFeeUsed: fee, formula: "HOLD — Buyer_Median missing" };
+  }
+
+  if (input.track === "flipper") {
+    const rehab =
+      typeof input.estRehab === "number" && Number.isFinite(input.estRehab) && input.estRehab >= 0
+        ? input.estRehab
+        : null;
+    if (rehab == null) {
+      return { track: input.track, investorMao: null, yourMao: null, wholesaleFeeUsed: fee, formula: "HOLD — flipper track needs Est_Rehab (renovated-resale basis)" };
+    }
+    const investorMao = Math.round(bm - rehab);
+    const yourMao = Math.round(investorMao - fee);
+    return {
+      track: input.track,
+      investorMao,
+      yourMao,
+      wholesaleFeeUsed: fee,
+      formula: `flipper: Investor_MAO = Buyer_Median $${bm.toLocaleString()} − Est_Rehab $${rehab.toLocaleString()} = $${investorMao.toLocaleString()}; Your_MAO = − fee $${fee.toLocaleString()} = $${yourMao.toLocaleString()}`,
+    };
+  }
+
+  // landlord (as-is): the median IS the buyer's as-is purchase price, so the
+  // flip rehab is NOT subtracted. Your_MAO = median − wholesale fee.
+  const investorMao = Math.round(bm);
+  const yourMao = Math.round(bm - fee);
+  return {
+    track: input.track,
+    investorMao,
+    yourMao,
+    wholesaleFeeUsed: fee,
+    formula: `landlord (as-is): Investor_MAO = Buyer_Median $${bm.toLocaleString()} (as-is purchase price, flip rehab NOT subtracted); Your_MAO = − fee $${fee.toLocaleString()} = $${yourMao.toLocaleString()}`,
   };
 }
