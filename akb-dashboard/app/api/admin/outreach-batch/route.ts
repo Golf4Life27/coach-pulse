@@ -159,6 +159,18 @@ async function handle(req: Request): Promise<Response> {
     return NextResponse.json({ error: "select_failed", message: err instanceof Error ? err.message : String(err) }, { status: 502 });
   }
 
+  // Optional ZIP scope (?zips=48227,48228): hard-constrain the batch to a
+  // market so a controlled proving run can't pull a lead from anywhere else.
+  const zipScope = new Set(
+    (url.searchParams.get("zips") ?? "").split(",").map((z) => z.trim()).filter((z) => /^\d{5}$/.test(z)),
+  );
+  if (zipScope.size > 0) {
+    for (const l of leads) {
+      if (!zipScope.has((l.zip ?? "").trim())) ineligible.push({ recordId: l.id, reason: `out_of_zip_scope (${l.zip ?? "?"})` });
+    }
+    leads = leads.filter((l) => zipScope.has((l.zip ?? "").trim()));
+  }
+
   // Opener-vs-MAO guard (priceable markets only): the 65%-of-list door-opener
   // carried on Listings_V1 as MAO_V1 (lead.mao) must never exceed the deal's
   // underwritten MAO. Cap the opener down to MAO, or skip + flag the listing.
