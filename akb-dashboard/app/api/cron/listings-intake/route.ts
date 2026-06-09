@@ -52,7 +52,7 @@ import { rentcastQuotaAllows, computeBurnRate } from "@/lib/maverick/rentcast-bu
 import { selectDueZips, type ZipDueResult } from "@/lib/crawler/zip-rotation";
 import { fetchExternalRentCastState } from "@/lib/maverick/sources/external-rentcast";
 import { fetchVercelKvAuditState } from "@/lib/maverick/sources/vercel-kv-audit";
-import { verifyListing, classifyVerifiedListing, FIRECRAWL_RATE_LIMIT_PER_MINUTE } from "@/lib/crawler/sources/firecrawl";
+import { verifyListing, classifyVerifiedListing, probeFirecrawlBalance, FIRECRAWL_RATE_LIMIT_PER_MINUTE } from "@/lib/crawler/sources/firecrawl";
 import { runAsyncPool, makeRateGate } from "@/lib/crawler/async-pool";
 import { getActiveIntakeRows, updateZipStats } from "@/lib/zip-registry";
 
@@ -448,6 +448,16 @@ export async function GET(req: Request) {
       budget_hit: false,
       time_budget_hit: false,
       rate_limit_per_minute: FIRECRAWL_RATE_LIMIT_PER_MINUTE,
+      // 402 wallet-empty signal (operator 2026-06-08). When true, the run
+      // did zero useful verify work — the CRITICAL Pulse alert fires and
+      // the affected ZIPs stay DUE (not stamped fresh).
+      payment_required: false,
+      payment_required_count: 0,
+      // Real Firecrawl account balance probed once per run (null when the
+      // balance endpoint is unavailable). The internal credits_used counter
+      // can read 0 while the account is actually drained — this is the
+      // ground-truth balance.
+      balance_remaining: null as number | null,
     },
   };
   const now = new Date();
@@ -469,6 +479,14 @@ export async function GET(req: Request) {
   const perZipDom = new Map<string, { sum: number; n: number }>();
   const perZipPrice = new Map<string, { sum: number; n: number }>();
   const zipsProcessedOk = new Set<string>(); // RentCast fetch succeeded (incl. 0 candidates)
+  // ZIPs whose verify phase was BLOCKED by an infra failure (Firecrawl
+  // 402/429/error) or left candidates unverified (scrape/time budget). These
+  // did NO real ingest work, so they are NOT stamped fresh — they stay DUE
+  // so the freshness cursor retries them next run (operator bug 2026-06-08:
+  // a fully-402'd ZIP was being marked fresh, idling the cron for 24h on a
+  // full wallet). A ZIP with zero candidates is NOT blocked — it legitimately
+  // scanned empty and is done.
+  const zipVerifyBlocked = new Set<string>();
   const seenKeys = new Set<string>(); // intra-run dedup across overlapping ZIPs
   const toVerify: Array<{ candidate: IntakeCandidate; zip: string }> = [];
 
@@ -533,6 +551,8 @@ export async function GET(req: Request) {
   if (budgetSkipped.length > 0) {
     summary.firecrawl.budget_hit = true;
     bump("firecrawl_skipped_budget", budgetSkipped.length);
+    // Candidates we never even dispatched → their ZIPs aren't complete.
+    for (const it of budgetSkipped) zipVerifyBlocked.add(it.zip);
   }
 
   // ── Phase 2: parallel Firecrawl verification — bounded concurrency +
@@ -548,7 +568,22 @@ export async function GET(req: Request) {
   });
   const verifyMs = Date.now() - tVerifyStart;
   const timeBudgetHit = pool.skipped.length > 0;
-  if (timeBudgetHit) bump("firecrawl_skipped_time", pool.skipped.length);
+  if (timeBudgetHit) {
+    bump("firecrawl_skipped_time", pool.skipped.length);
+    // Candidates dropped on the wall-clock budget → their ZIPs aren't done.
+    for (const it of pool.skipped) zipVerifyBlocked.add(it.zip);
+  }
+
+  // Real account balance — probe once when this run actually did (or tried)
+  // verify work. Ground truth vs the internal credits_used counter.
+  if (dispatchable.length > 0) {
+    try {
+      const bal = await probeFirecrawlBalance();
+      summary.firecrawl.balance_remaining = bal.remaining;
+    } catch {
+      /* best-effort; balance stays null */
+    }
+  }
 
   // ── Phase 3: classify completed results (sequential — accurate count
   // aggregation regardless of non-deterministic completion order). ──
@@ -612,11 +647,22 @@ export async function GET(req: Request) {
       bump(decision.reason);
       // Surface infra-class failures into per_zip_errors for triage.
       if (decision.reason === "firecrawl_not_configured") summary.firecrawl.credentialed = false;
+      if (decision.reason === "firecrawl_payment_required" || fc.paymentRequired) {
+        summary.firecrawl.payment_required = true;
+        summary.firecrawl.payment_required_count++;
+      }
+      // INFRA-class reject (402/429/error/not-configured): the verify could
+      // NOT determine the listing's status, so this ZIP did not complete its
+      // work. Mark it blocked → it stays DUE for retry. (A normal
+      // firecrawl_url_unresolved / firecrawl_inactive IS a real terminal
+      // outcome and does NOT block.)
       if (
         decision.reason === "firecrawl_not_configured" ||
+        decision.reason === "firecrawl_payment_required" ||
         decision.reason === "firecrawl_rate_limited" ||
         decision.reason === "firecrawl_error"
       ) {
+        zipVerifyBlocked.add(zip);
         summary.per_zip_errors.push({ zip, error: `${decision.reason}: ${c.sourceId}${fc.error ? ` (${fc.error})` : ""}` });
       }
       continue;
@@ -711,7 +757,7 @@ export async function GET(req: Request) {
   // never mutate. Writes the latest-run snapshot into the *_30d fields
   // (see lib/zip-registry ZipStatsUpdate note: true 30d rolling lands with
   // the saturation follow-up, the sole consumer of these fields).
-  const registryWriteback = { written: 0, skipped: false as boolean | string, errors: [] as string[] };
+  const registryWriteback = { written: 0, skipped: false as boolean | string, skipped_blocked: 0, errors: [] as string[] };
   if (overrideUsed) {
     registryWriteback.skipped = "manual_override";
   } else if (dryRun) {
@@ -721,6 +767,15 @@ export async function GET(req: Request) {
     for (const zip of zipsProcessedOk) {
       const recordId = zipToRecordId.get(zip);
       if (!recordId) continue;
+      // CRITICAL (operator 2026-06-08): do NOT stamp Last_Ingested_At for a
+      // ZIP whose verify phase was blocked (402/429/error or budget/time
+      // skip). Stamping it would mark it "fresh" → the freshness cursor
+      // skips it for ZIP_CYCLE_HOURS → the cron idles for 24h even with a
+      // refilled wallet. Leaving it un-stamped keeps it DUE for the next run.
+      if (zipVerifyBlocked.has(zip)) {
+        registryWriteback.skipped_blocked = (typeof registryWriteback.skipped_blocked === "number" ? registryWriteback.skipped_blocked : 0) + 1;
+        continue;
+      }
       const considered = perZipConsidered.get(zip) ?? 0;
       const accepted = perZipAccepted.get(zip) ?? 0;
       const dom = perZipDom.get(zip);
@@ -741,6 +796,30 @@ export async function GET(req: Request) {
   }
 
   summary.firecrawl.time_budget_hit = timeBudgetHit;
+
+  // ── Firecrawl 402 wallet-empty → CRITICAL Spine write (operator
+  // 2026-06-08). A drained wallet must SCREAM, not silently no-op. The
+  // affected ZIPs were already kept DUE above (zipVerifyBlocked); this is
+  // the loud, durable signal the Pulse firecrawl_payment_required detector
+  // also fires on.
+  if (summary.firecrawl.payment_required) {
+    try {
+      await writeState({
+        event_type: "decision",
+        attribution_agent: "scout",
+        title: "Firecrawl WALLET EMPTY (402) — intake verify is blocked",
+        description:
+          `listings-intake hit Firecrawl 402 Payment Required ${summary.firecrawl.payment_required_count}× this run. ` +
+          `Every verify is failing for lack of credits; ${zipVerifyBlocked.size} ZIP(s) did ZERO ingest work and ` +
+          `were intentionally left DUE (NOT stamped fresh) so the cron retries them the moment credits refill — ` +
+          `it will NOT idle for 24h. Real account balance probe: ` +
+          `${summary.firecrawl.balance_remaining == null ? "unavailable" : summary.firecrawl.balance_remaining + " credits remaining"}. ` +
+          `ACTION: refill the Firecrawl wallet. accepted_this_run=${summary.accepted}.`,
+      });
+    } catch (err) {
+      console.error("[listings-intake] Spine write (402 wallet) failed:", err);
+    }
+  }
 
   // ── Run-duration telemetry (2026-06-08). Per-ZIP wall-time = total /
   // ZIPs processed; phase split shows WHERE time goes (RentCast collect vs
@@ -803,6 +882,12 @@ export async function GET(req: Request) {
       reject_reasons: summary.reject_reason_counts,
       firecrawl_scrapes: summary.firecrawl.scrapes_used,
       firecrawl_credits: summary.firecrawl.credits_used,
+      // 402 + real balance → read by the Pulse firecrawl_payment_required
+      // detector for the CRITICAL alert.
+      firecrawl_payment_required: summary.firecrawl.payment_required,
+      firecrawl_payment_required_count: summary.firecrawl.payment_required_count,
+      firecrawl_balance_remaining: summary.firecrawl.balance_remaining,
+      zips_kept_due_blocked: registryWriteback.skipped_blocked,
       per_zip: summary.per_zip,
       auto_promote: summary.auto_promote,
       // Run-duration telemetry → consumed by the Pulse

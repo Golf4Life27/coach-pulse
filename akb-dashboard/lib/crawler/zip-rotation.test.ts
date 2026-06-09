@@ -222,3 +222,34 @@ describe("selectDueZips — freshness cursor", () => {
     expect(r.selected).toEqual(["48201"]);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// 402-stay-due guarantee (operator 2026-06-08): a ZIP whose verify phase
+// was blocked (Firecrawl 402) is NOT stamped, so its lastIngestedAt stays
+// null/stale → it remains DUE next run. This is the cron's contract that
+// selectDueZips upholds; pinned here at the selector level.
+// ─────────────────────────────────────────────────────────────────────
+
+describe("selectDueZips — 402-blocked ZIP stays due", () => {
+  it("a never-stamped (402-blocked) ZIP is picked again next run while a successful one is skipped", () => {
+    // Run 1: both null (due). Cron 402s ZIP A (not stamped) but succeeds on
+    // ZIP B (stamped now).
+    const afterRun1: ZipDueRow[] = [
+      { zip: "48201", lastIngestedAt: null }, // A: 402-blocked, stayed null
+      { zip: "48202", lastIngestedAt: NOW.toISOString() }, // B: succeeded, stamped
+    ];
+    const run2 = selectDueZips(afterRun1, 6, NOW, 24);
+    // Only the blocked ZIP is due; the successful one is fresh.
+    expect(run2.selected).toEqual(["48201"]);
+    expect(run2.freshTotal).toBe(1);
+  });
+
+  it("once credits refill and the ZIP finally stamps, it goes fresh (cron stops retrying)", () => {
+    const afterRefill: ZipDueRow[] = [
+      { zip: "48201", lastIngestedAt: NOW.toISOString() }, // finally ingested
+    ];
+    const r = selectDueZips(afterRefill, 6, NOW, 24);
+    expect(r.selected).toEqual([]);
+    expect(r.dueTotal).toBe(0);
+  });
+});

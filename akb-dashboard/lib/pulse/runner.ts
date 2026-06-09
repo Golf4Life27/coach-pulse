@@ -33,6 +33,7 @@ import { detectPaidApiSpend } from "./detectors/paid-api-spend";
 import { detectProgressMeterMovement } from "./detectors/progress-meter-movement";
 import { detectUnbackedReplyStatus } from "./detectors/unbacked-reply-status";
 import { detectIntakeRunDuration } from "./detectors/intake-run-duration";
+import { detectFirecrawlPaymentRequired } from "./detectors/firecrawl-payment-required";
 
 import { audit } from "@/lib/audit-log";
 import { writeState, type WriteStateDeps } from "@/lib/maverick/write-state";
@@ -71,6 +72,7 @@ export function runAllDetectors(input: PulseDetectorInput): PulseDetection[] {
     ...detectProgressMeterMovement(input),
     ...detectUnbackedReplyStatus(input),
     ...detectIntakeRunDuration(input),
+    ...detectFirecrawlPaymentRequired(input),
   ];
 }
 

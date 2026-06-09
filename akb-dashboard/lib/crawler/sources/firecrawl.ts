@@ -26,7 +26,43 @@ import { scopeSubjectText, scopeStatusText } from "@/lib/crawler/sources/listing
 
 const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY;
 const FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v2/search";
+const FIRECRAWL_CREDIT_URL = "https://api.firecrawl.dev/v2/team/credit-usage";
 const SEARCH_LIMIT = 5;
+
+/** Probe the REAL Firecrawl account balance (remaining credits), once per
+ *  run. The internal credits_used counter sums per-call usage and reads 0
+ *  when calls 402 — it never reflects the actual wallet. This hits the
+ *  account's credit-usage endpoint for ground truth. Best-effort: returns
+ *  null on any failure (unknown endpoint shape, network, auth) so a wrong
+ *  guess degrades to "unknown" rather than throwing. The 402 detection on
+ *  the verify path is the hard guarantee; this is the supplementary gauge. */
+export async function probeFirecrawlBalance(): Promise<{ remaining: number | null; error: string | null }> {
+  if (!FIRECRAWL_API_KEY) return { remaining: null, error: "FIRECRAWL_API_KEY not set" };
+  try {
+    const res = await fetch(FIRECRAWL_CREDIT_URL, {
+      headers: { Authorization: `Bearer ${FIRECRAWL_API_KEY}` },
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      return { remaining: null, error: `credit-usage ${res.status}` };
+    }
+    const body = (await res.json()) as Record<string, unknown>;
+    // Tolerate either {data:{remaining_credits}} or {remaining_credits} or
+    // {data:{remainingCredits}} — Firecrawl has shifted this shape across
+    // versions. Pull the first numeric "remaining" field we recognize.
+    const data = (body.data as Record<string, unknown>) ?? body;
+    const candidates = [
+      data.remaining_credits,
+      data.remainingCredits,
+      data.remaining,
+      (body as Record<string, unknown>).remaining_credits,
+    ];
+    const remaining = candidates.find((v) => typeof v === "number") as number | undefined;
+    return { remaining: remaining ?? null, error: remaining == null ? "no recognized remaining-credits field" : null };
+  } catch (err) {
+    return { remaining: null, error: err instanceof Error ? err.message : String(err) };
+  }
+}
 
 /** Proactive throttle: max Firecrawl calls/minute. Default 90 stays under
  *  the free-tier 100/min cap with margin. The cron paces its loop to this. */
@@ -172,6 +208,12 @@ export interface FirecrawlVerifyResult {
   /** true when Firecrawl returned 429 even after exhausting retries —
    *  distinct from a generic error (caller → firecrawl_rate_limited). */
   rateLimited: boolean;
+  /** true when Firecrawl returned 402 Payment Required — the wallet is
+   *  empty (operator 2026-06-08). DISTINCT from a generic error: a 402
+   *  means EVERY subsequent verify in this run will also fail, the ZIP
+   *  did NO real work, and it must stay DUE for retry once credits refill.
+   *  Also the trigger for the CRITICAL Pulse alert. */
+  paymentRequired: boolean;
   error: string | null;
   /** Populated ONLY when verifyListing is called with { debug: true } — a
    *  first-N-char excerpt of the scraped page + per-matched-phrase context
@@ -337,6 +379,7 @@ export async function verifyListing(
     matchedInactiveMarkers: [],
     creditsUsed: 0,
     rateLimited: false,
+    paymentRequired: false,
     error: null,
   };
   if (!FIRECRAWL_API_KEY) {
@@ -363,6 +406,16 @@ export async function verifyListing(
     if (res.status === 429) {
       // Still rate-limited after exhausting retries — distinct signal.
       return { ...base, rateLimited: true, error: "Firecrawl 429 after retries exhausted" };
+    }
+    if (res.status === 402) {
+      // Payment Required — wallet empty. Every other verify this run will
+      // hit the same wall, so flag it distinctly: the caller keeps the ZIP
+      // DUE and fires a CRITICAL alert instead of silently no-opping.
+      return {
+        ...base,
+        paymentRequired: true,
+        error: `Firecrawl 402 Payment Required: ${await res.text().catch(() => "")}`.slice(0, 300),
+      };
     }
     if (!res.ok) {
       return { ...base, error: `Firecrawl search ${res.status}: ${await res.text().catch(() => "")}`.slice(0, 300) };
@@ -403,6 +456,7 @@ export async function verifyListing(
       matchedPortfolioKeywords: content.matchedPortfolioKeywords,
       creditsUsed,
       rateLimited: false,
+      paymentRequired: false,
       error: null,
       ...(opts.debug
         ? {
@@ -475,6 +529,7 @@ export function classifyVerifiedListing(
   _signals: ListingDistressSignals = { daysOnMarket: null, priceReduced: false },
 ): VerifiedOutcome {
   if (!fc.credentialed) return { outcome: "reject", reason: "firecrawl_not_configured" };
+  if (fc.paymentRequired) return { outcome: "reject", reason: "firecrawl_payment_required" };
   if (fc.rateLimited) return { outcome: "reject", reason: "firecrawl_rate_limited" };
   if (fc.error) return { outcome: "reject", reason: "firecrawl_error" };
   if (!fc.resolved) return { outcome: "reject", reason: "firecrawl_url_unresolved" };

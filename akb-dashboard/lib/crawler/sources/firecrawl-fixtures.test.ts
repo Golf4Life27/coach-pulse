@@ -47,7 +47,7 @@ function verifyFromText(markdown: string): FirecrawlVerifyResult {
     portfolioSellerDetected: false,
     matchedPortfolioKeywords: [],    creditsUsed: 1,
     rateLimited: false,
-    error: null,
+    paymentRequired: false,    error: null,
   };
 }
 

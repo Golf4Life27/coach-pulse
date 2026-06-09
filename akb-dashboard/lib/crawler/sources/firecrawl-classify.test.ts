@@ -22,7 +22,7 @@ function fc(over: Partial<FirecrawlVerifyResult> = {}): FirecrawlVerifyResult {
     portfolioSellerDetected: false,
     matchedPortfolioKeywords: [],    creditsUsed: 1,
     rateLimited: false,
-    error: null,
+    paymentRequired: false,    error: null,
     ...over,
   };
 }
@@ -67,6 +67,14 @@ describe("classifyVerifiedListing", () => {
     expect(classifyVerifiedListing(fc({ error: "boom" }))).toEqual({ outcome: "reject", reason: "firecrawl_error" });
     expect(classifyVerifiedListing(fc({ resolved: false }))).toEqual({ outcome: "reject", reason: "firecrawl_url_unresolved" });
     expect(classifyVerifiedListing(fc({ stillActive: false }))).toEqual({ outcome: "reject", reason: "firecrawl_inactive" });
+  });
+
+  it("402 payment_required is a DISTINCT reason, ahead of the generic error path", () => {
+    // A 402 sets both paymentRequired AND error (the message). The classifier
+    // must surface firecrawl_payment_required, NOT firecrawl_error, so the
+    // cron keeps the ZIP DUE and the CRITICAL alert fires.
+    const d = classifyVerifiedListing(fc({ paymentRequired: true, error: "Firecrawl 402 Payment Required" }));
+    expect(d).toEqual({ outcome: "reject", reason: "firecrawl_payment_required" });
   });
 
   it("review path is NOT a skip — it carries a write status", () => {
