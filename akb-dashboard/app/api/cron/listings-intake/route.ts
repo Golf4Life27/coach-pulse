@@ -54,6 +54,7 @@ import { selectDueZips, type ZipDueResult } from "@/lib/crawler/zip-rotation";
 import { fetchExternalRentCastState } from "@/lib/maverick/sources/external-rentcast";
 import { fetchVercelKvAuditState } from "@/lib/maverick/sources/vercel-kv-audit";
 import { verifyListing, classifyVerifiedListing, probeFirecrawlBalance, FIRECRAWL_RATE_LIMIT_PER_MINUTE } from "@/lib/crawler/sources/firecrawl";
+import { checkFirecrawlBreaker, recordFirecrawlSpend } from "@/lib/crawler/firecrawl-circuit-breaker";
 import { runAsyncPool, makeRateGate } from "@/lib/crawler/async-pool";
 import { getActiveIntakeRows, updateZipStats } from "@/lib/zip-registry";
 import { getVerifiedThisCycle, markVerifiedThisCycle } from "@/lib/crawler/verify-cache";
@@ -460,6 +461,11 @@ export async function GET(req: Request) {
       // can read 0 while the account is actually drained — this is the
       // ground-truth balance.
       balance_remaining: null as number | null,
+      // Spend circuit-breaker (operator 2026-06-09): rolling-hour spend vs the
+      // hard cap. breaker_tripped=true means the verify phase was halted.
+      hourly_cap: 0,
+      spent_recent_hour: 0,
+      breaker_tripped: false,
     },
   };
   const now = new Date();
@@ -592,17 +598,70 @@ export async function GET(req: Request) {
     for (const it of budgetSkipped) zipVerifyBlocked.add(it.zip);
   }
 
+  // ── SPEND CIRCUIT-BREAKER (permanent, operator 2026-06-09) ──────────
+  // No background process touches Firecrawl without a brake. If we've already
+  // spent the hourly cap (across ticks), HALT the verify phase entirely —
+  // alert + audit, zero spend — so a repeating per-tick loop can't bleed the
+  // balance. The in-run cap below stops a single run mid-flight too.
+  const breaker = await checkFirecrawlBreaker();
+  summary.firecrawl.hourly_cap = breaker.cap;
+  summary.firecrawl.spent_recent_hour = breaker.spentRecent;
+  summary.firecrawl.breaker_tripped = false;
+  if (breaker.tripped && dispatchable.length > 0) {
+    summary.firecrawl.breaker_tripped = true;
+    for (const it of toVerify) zipVerifyBlocked.add(it.zip); // not done → cursor retries next window
+    bump("firecrawl_breaker_halted", dispatchable.length);
+    await audit({
+      agent: "scout",
+      event: "firecrawl_circuit_breaker",
+      status: "confirmed_failure",
+      inputSummary: { spent_recent_hour: breaker.spentRecent, hourly_cap: breaker.cap, would_dispatch: dispatchable.length },
+      outputSummary: { halted: true },
+      decision: "verify_phase_halted_on_spend_cap",
+    });
+    try {
+      await writeState({
+        event_type: "decision",
+        attribution_agent: "scout",
+        title: `🛑 Firecrawl spend circuit-breaker TRIPPED — intake verify HALTED (${breaker.spentRecent}/${breaker.cap} credits/hr)`,
+        description:
+          `listings-intake halted the Firecrawl verify phase: ~${breaker.spentRecent} credits spent in the last hour ≥ cap ${breaker.cap}. ` +
+          `${dispatchable.length} candidate(s) left unverified; their ZIPs stay DUE for the next window. ` +
+          `Investigate the burn before raising FIRECRAWL_HOURLY_CREDIT_CAP. No further Firecrawl spend this run.`,
+      });
+    } catch (err) {
+      console.error("[listings-intake] breaker Spine write failed:", err);
+    }
+  }
+
   // ── Phase 2: parallel Firecrawl verification — bounded concurrency +
-  // global rate gate + wall-clock guard. In-flight calls finish on stop;
-  // undispatched land in pool.skipped.
+  // global rate gate + wall-clock guard + spend cap. In-flight calls finish
+  // on stop; undispatched land in pool.skipped.
   const rateGate = makeRateGate(FIRECRAWL_RATE_LIMIT_PER_MINUTE);
-  const pool = await runAsyncPool({
-    items: dispatchable,
-    concurrency: FIRECRAWL_MAX_CONCURRENT,
-    beforeDispatch: rateGate,
-    shouldStopDispatch: () => Date.now() - t0 > LAMBDA_BUDGET_MS,
-    worker: async (it) => verifyListing(it.candidate.address, { debug }),
-  });
+  let creditsThisRun = 0; // exact in-run tally for the spend cap
+  const pool = breaker.tripped
+    ? { results: [] as Array<{ item: { candidate: IntakeCandidate; zip: string }; value: Awaited<ReturnType<typeof verifyListing>> }>, skipped: [] as Array<{ candidate: IntakeCandidate; zip: string }> }
+    : await runAsyncPool({
+        items: dispatchable,
+        concurrency: FIRECRAWL_MAX_CONCURRENT,
+        beforeDispatch: rateGate,
+        // Stop on the wall-clock budget OR once this hour's spend would cross
+        // the cap (prior-hour spend + what we've already spent this run).
+        shouldStopDispatch: () =>
+          Date.now() - t0 > LAMBDA_BUDGET_MS ||
+          breaker.spentRecent + creditsThisRun >= breaker.cap,
+        worker: async (it) => {
+          const fc = await verifyListing(it.candidate.address, { debug });
+          creditsThisRun += fc.creditsUsed;
+          return fc;
+        },
+      });
+  // Persist this run's spend into the rolling-hour bucket for the next tick.
+  await recordFirecrawlSpend(creditsThisRun);
+  if (!breaker.tripped && breaker.spentRecent + creditsThisRun >= breaker.cap && pool.skipped.length > 0) {
+    summary.firecrawl.breaker_tripped = true; // tripped mid-run
+    for (const it of pool.skipped) zipVerifyBlocked.add(it.zip);
+  }
   const verifyMs = Date.now() - tVerifyStart;
   const timeBudgetHit = pool.skipped.length > 0;
   if (timeBudgetHit) {
@@ -621,6 +680,14 @@ export async function GET(req: Request) {
       /* best-effort; balance stays null */
     }
   }
+  // Surface spend + balance + breaker every run so the burn is observable in
+  // runtime logs (the incident drained silently — never again).
+  console.log(
+    `[listings-intake][firecrawl] balance=${summary.firecrawl.balance_remaining ?? "?"} ` +
+    `credits_this_run=${creditsThisRun} spent_recent_hour=${summary.firecrawl.spent_recent_hour} ` +
+    `cap=${summary.firecrawl.hourly_cap} breaker_tripped=${summary.firecrawl.breaker_tripped} ` +
+    `dispatched=${dispatchable.length}`,
+  );
 
   // ── Phase 3: classify completed results (sequential — accurate count
   // aggregation regardless of non-deterministic completion order). ──
