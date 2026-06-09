@@ -5,6 +5,7 @@ import { synthesize } from "@/lib/maverick/synthesizer";
 // (it was calling Quo without normalization → empty threads on every record).
 import { toE164 } from "@/lib/phone";
 import { isSelfEchoOrAutoreply } from "@/lib/conversation-check";
+import { triageSellerReply } from "@/lib/reply-triage";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -250,22 +251,32 @@ export async function GET(req: Request) {
             inbound.body
           );
 
+          // Triage the genuine reply → route it into the needs-decision queue
+          // with WHAT decision it needs (pricing / engagement / review), the
+          // queue status it maps to, and a matching priority. Shared with
+          // scan-replies via lib/reply-triage.ts (one classifier, no drift).
+          const triage = triageSellerReply(inbound.body, listing.outreachStatus ?? null);
+
           const actionPayload = JSON.stringify({
             recordId: listing.id,
             action: "send_sms",
             to: phone,
             draftBody: draftResponse,
             inboundBody: inbound.body,
+            classification: triage.classification,
+            decisionKind: triage.decisionKind,
+            needsDecision: triage.needsDecision,
+            queueStatus: triage.queueStatus,
           });
 
           newProposals.push({
             fields: {
               Proposal_ID: `jarvis_reply-${Date.now()}-${newProposals.length}`,
               Proposal_Type: "jarvis_reply",
-              Priority: "HIGH",
+              Priority: triage.priority,
               Record_ID: listing.id,
               Record_Address: listing.address,
-              Reasoning: `Inbound from ${listing.agentName || "agent"}: "${inbound.body.slice(0, 200)}"`,
+              Reasoning: `Inbound from ${listing.agentName || "agent"} [${triage.classification}${triage.queueStatus ? ` → ${triage.queueStatus}` : ""}]: ${triage.reasoning}`,
               Suggested_Action_Payload: actionPayload,
               Status: "Pending",
             },

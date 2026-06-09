@@ -1,6 +1,11 @@
 import { getListings, updateListingRecord } from "@/lib/airtable";
 import { getMessagesForParticipant } from "@/lib/quo";
 import { isSelfEchoOrAutoreply } from "@/lib/conversation-check";
+import {
+  classifyReply,
+  determineNewStatus,
+  type ReplyClassification,
+} from "@/lib/reply-triage";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -40,120 +45,9 @@ function appendNote(existing: string | null, newNote: string): string {
 }
 
 // --- Reply classification ---
-
-const REJECTION_PATTERNS = [
-  /\bnot interested\b/i,
-  /\bno thanks?\b/i,
-  /\bstop\b/i,
-  /\btoo low\b/i,
-  /\bseller said no\b/i,
-  /\bfirm at\b/i,
-  /\bunder contract\b/i,
-  /\boff the market\b/i,
-  /\bsold\b/i,
-  /\bexpired\b/i,
-  /\bpass\b/i,
-  /\bnot for sale\b/i,
-  /\bremove\b.*\bnumber\b/i,
-  /\bdo not\b.*\b(text|contact|call)\b/i,
-  /\bunsubscribe\b/i,
-  /\bno longer\b.*\b(available|listed)\b/i,
-  /\bwithdrawn\b/i,
-  /\bpending\b/i,
-];
-
-const INTEREST_PATTERNS = [
-  /\byes\b/i,
-  /\binterested\b/i,
-  /\bsend\s*(me|it|the|a|your)\b/i,
-  /\bsend\s*offer\b/i,
-  /\bcounter\b/i,
-  /\bcome up\b/i,
-  /\bbest offer\b/i,
-  /\bproof of funds\b/i,
-  /\bemail\s*me\b/i,
-  /\bcall\s*me\b/i,
-  /\bsubmit\b/i,
-  /\bhow\s*(much|soon|quick)\b/i,
-  /\bwhat.*offer\b/i,
-  /\bcan you\s*(do|go|come)\b/i,
-  /\bwould\s*you\s*consider\b/i,
-  /\blet'?s\s*talk\b/i,
-  /\$\s*\d/i, // dollar amount mentioned
-];
-
-type Classification = "rejection" | "interest" | "counter" | "unknown";
-
-// A counter is detected when the agent quotes a specific number range or
-// floor — distinct from a generic interest signal. We require a price
-// reference plus counter language.
-const COUNTER_PRICE_RE = /\$\s*\d{1,3}[\s,.]?(?:\d{3}|k)\b/i;
-const COUNTER_LANGUAGE_PATTERNS = [
-  /\bcounter\b/i,
-  /\bcome\s+(?:up|down)\b/i,
-  /\bin\s+the\s+\$?\d/i,
-  /\b(?:looking|hoping)\s+(?:for|at)\s+\$?\d/i,
-  /\bbest\s+(?:and\s+)?final\b/i,
-  /\bnet\s+(?:to|of)\b/i,
-  /\bhighest\s+(?:we'?ll|i'?ll|they'?ll)\s+(?:go|do)\b/i,
-  /\b(?:lowest|min(?:imum)?)\s+(?:they|seller|we)\b/i,
-  /\bmeet\s+(?:in\s+the\s+)?middle\b/i,
-  /\bif\s+you\s+can\s+(?:do|come|go)\s+\$?\d/i,
-];
-
-function classifyReply(body: string): { classification: Classification; matchedPattern: string | null } {
-  const trimmed = body.trim();
-  if (!trimmed) return { classification: "unknown", matchedPattern: null };
-
-  // Rejection wins over everything — even if a price is mentioned, "not
-  // interested at $X" is still a rejection.
-  for (const pat of REJECTION_PATTERNS) {
-    if (pat.test(trimmed)) {
-      return { classification: "rejection", matchedPattern: pat.source };
-    }
-  }
-
-  // Counter detection: must have a price token AND counter-flavored language.
-  if (COUNTER_PRICE_RE.test(trimmed)) {
-    for (const pat of COUNTER_LANGUAGE_PATTERNS) {
-      if (pat.test(trimmed)) {
-        return { classification: "counter", matchedPattern: pat.source };
-      }
-    }
-  }
-
-  for (const pat of INTEREST_PATTERNS) {
-    if (pat.test(trimmed)) {
-      return { classification: "interest", matchedPattern: pat.source };
-    }
-  }
-
-  return { classification: "unknown", matchedPattern: null };
-}
-
-// --- Determine new Outreach_Status ---
-
-function determineNewStatus(
-  classification: Classification,
-  currentStatus: string | null
-): string | null {
-  if (classification === "rejection") return "Dead";
-  // A counter inbound on an active record promotes to "Counter Received".
-  // typecast=true on the update will create the option in Airtable on
-  // first use if it doesn't already exist.
-  if (classification === "counter") {
-    if (currentStatus === "Counter Received") return null; // already there
-    if (currentStatus === "Dead") return "Counter Received"; // resurrection
-    return "Counter Received";
-  }
-  if (classification === "interest") return "Negotiating";
-
-  // Unknown classification
-  if (currentStatus === "Texted") return "Response Received";
-
-  // If not Texted, don't change status — just log
-  return null;
-}
+// classifyReply + determineNewStatus moved to the shared lib/reply-triage.ts
+// (single source of truth; scan-comms consumes the same module for proposal
+// routing). Imported at the top of this file.
 
 // --- Route handlers ---
 
@@ -162,7 +56,7 @@ interface ScanResult {
   address: string;
   agentName: string | null;
   inboundBody: string;
-  classification: Classification;
+  classification: ReplyClassification;
   matchedPattern: string | null;
   previousStatus: string | null;
   newStatus: string | null;
