@@ -52,19 +52,21 @@ export interface FunnelSnapshotResult {
   source: "live" | "simulated";
 }
 
+// Labels pass the stranger test (round-2 rule 1); the system's bucket name
+// stays in `desc` alongside the plain explanation for provenance.
 export const BUCKET_META: Record<
   Disposition,
   { label: string; desc: string; tone: "go" | "hold" | "drop" }
 > = {
-  planned: { label: "PLANNED", desc: "first-touch plan complete — fires on next live run", tone: "go" },
-  planned_over_limit: { label: "OVER LIMIT", desc: "plan complete, dropped by batch limit — next batch", tone: "hold" },
-  prior_contact_stalled: { label: "AGENT STALL", desc: "same agent already in an open thread — releases on reply or window expiry", tone: "hold" },
-  pre_outreach_filter: { label: "NOT READY", desc: "failed outreach-ready check (status / approval / freshness)", tone: "drop" },
-  ineligible: { label: "INELIGIBLE", desc: "opener-vs-MAO guard or record-level block", tone: "drop" },
-  bad_phone_quarantined: { label: "BAD PHONE", desc: "agent phone would not normalize to E.164", tone: "drop" },
-  route_skipped: { label: "ROUTE SKIP", desc: "cadence router skipped (per-record reason attached)", tone: "drop" },
-  incomplete_plan: { label: "INCOMPLETE", desc: "first_touch plan missing phone or message — defect bucket", tone: "drop" },
-  out_of_zip_scope: { label: "OUT OF ZIP", desc: "outside the market scope of this run", tone: "drop" },
+  planned: { label: "READY TO SEND", desc: "text is written and cleared — goes out on the next live run (planned)", tone: "go" },
+  planned_over_limit: { label: "NEXT BATCH", desc: "cleared to send but this batch was full — queued for the next one (planned_over_limit)", tone: "hold" },
+  prior_contact_stalled: { label: "WAITING ON AGENT", desc: "this agent already has an open conversation with us — held so we don't double-text (prior_contact_stalled)", tone: "hold" },
+  pre_outreach_filter: { label: "NOT READY", desc: "missing something before we can text — status, approval, or freshness (pre_outreach_filter)", tone: "drop" },
+  ineligible: { label: "PRICE BLOCKED", desc: "our opener would exceed the max we should pay, or the record is blocked (ineligible)", tone: "drop" },
+  bad_phone_quarantined: { label: "BAD PHONE", desc: "the agent's phone number is unusable (bad_phone_quarantined)", tone: "drop" },
+  route_skipped: { label: "SKIPPED", desc: "the sender skipped it — each record carries its reason (route_skipped)", tone: "drop" },
+  incomplete_plan: { label: "DEFECT", desc: "the plan was missing a phone or message — a bug to look at, not a decision (incomplete_plan)", tone: "drop" },
+  out_of_zip_scope: { label: "OUT OF AREA", desc: "outside the market this run was limited to (out_of_zip_scope)", tone: "drop" },
 };
 
 // Representative fixture so the lane is reviewable before ops ships the

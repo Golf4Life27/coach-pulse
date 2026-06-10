@@ -207,8 +207,8 @@ function AgentCard({ a, expanded, onToggle }: { a: AgentRow; expanded: boolean; 
             <span>
               replied on: <span className="text-gray-300">{a.everReplied} of {a.texted} texted</span>
             </span>
-            <span title="same-agent stall windows live inside the H2 engine; surfacing them is ops request #5">
-              stall timers: <span className="text-gray-600">awaiting ops read</span>
+            <span title="the auto-release countdowns live inside the sending engine; a read for them is queued with ops (request #5)">
+              auto-release timers: <span className="text-gray-600">not wired up yet</span>
             </span>
           </div>
           <div className="space-y-1">

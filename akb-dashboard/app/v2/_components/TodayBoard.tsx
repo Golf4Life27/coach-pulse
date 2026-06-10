@@ -1,23 +1,23 @@
 "use client";
 
-// TODAY — the decision queue, restyled into AKBdash (V1's design system) and
-// mounted as a tab inside the V1 shell. Carries all four portable libs:
-//   decisions.ts   buttons are the stated options, not generic verbs
-//   translate.ts   plain English on the surface; raw entry under "system log"
-//   data.tsx       honest zero (no number without a wired source)
-//   policy.ts      queue hygiene (already-decided items leave the queue)
-// Deal links go to /pipeline/[id] — V1's canonical deal page.
+// TODAY — the decision queue, AKBdash-styled V1 tab.
+// Round-2 portfolio rules applied:
+//   1. Stranger test on every button — plain labels, consequence subtext
+//      wherever the effect isn't obvious ("Let it go — marks the lead dead").
+//   2. One merged queue sorted importance → recency: ACT NOW > HIGH > MEDIUM
+//      > LOW, with today's live items pinned above stale cold-sweep items.
+//   3. Maverick's recommended option is lit (subtle pulse + label) with the
+//      reasoning directly adjacent; other options render secondary.
 
 import Link from "next/link";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useV2Data } from "../_lib/data";
-import type { AuditEntry, OperatorItem, QueueCard } from "../_lib/types";
+import type { AuditEntry, ListingDetail, OperatorItem, QueueCard } from "../_lib/types";
 import { ago, money, timeStamp } from "../_lib/format";
-import { deriveDecisions } from "../_lib/decisions";
+import { deriveDecisions, type DecisionOption } from "../_lib/decisions";
 import { humanizeEvent, translateSystemText } from "../_lib/translate";
+import glow from "./glow.module.css";
 
-// Data comes from the shared V2DataProvider mounted by V2Frame in the root
-// layout (same fetch loop as the header health strip).
 export default function TodayBoard() {
   const {
     openCards,
@@ -25,6 +25,7 @@ export default function TodayBoard() {
     actionableItems,
     suppressedItems,
     queue,
+    listingsById,
     activityToday,
     loading,
     lastFetched,
@@ -32,18 +33,20 @@ export default function TodayBoard() {
     refresh,
   } = useV2Data();
 
-  const total = actionableItems.length + openCards.length;
+  const merged = useMemo(
+    () => mergeAndSort(actionableItems, openCards, listingsById),
+    [actionableItems, openCards, listingsById],
+  );
+  const total = merged.length;
   const heldCards = queue?.held ?? [];
   const suppressedTotal = suppressedItems.length + suppressedCards.length;
 
   return (
     <div className="space-y-6">
-      {/* Header — matches CommandCenter's title row */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-white">TODAY</h1>
           <p className="text-[10px] text-gray-600">
-            {/* Honest zero: wired sources only. */}
             {activityToday.sends == null ? "sends today: no signal" : `${activityToday.sends} texted today`}
             {" · "}
             {activityToday.replies == null ? "replies: no signal" : `${activityToday.replies} replies today`}
@@ -68,35 +71,29 @@ export default function TodayBoard() {
         </div>
       )}
 
-      {/* Decision queue */}
       <section className="bg-[#161b22] rounded-lg border border-[#30363d] p-4 space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-bold uppercase tracking-widest text-gray-400">
-            Needs You
-            {!loading && (
-              <span className="ml-2 text-amber-300 font-mono">{total}</span>
-            )}
-          </h2>
-        </div>
+        <h2 className="text-sm font-bold uppercase tracking-widest text-gray-400">
+          Needs You
+          {!loading && <span className="ml-2 text-amber-300 font-mono">{total}</span>}
+        </h2>
 
         {loading && <Skeletons />}
 
         {!loading && total === 0 && (
           <div className="text-center py-6">
             <p className="text-sm font-bold text-emerald-300">Queue is clear.</p>
-            <p className="mt-1 text-xs text-gray-500">
-              Nothing needs a decision. The machine keeps running.
-            </p>
+            <p className="mt-1 text-xs text-gray-500">Nothing needs a decision. The machine keeps running.</p>
           </div>
         )}
 
         <div className="space-y-3">
-          {actionableItems.map((item) => (
-            <OperatorItemCard key={item.id} item={item} />
-          ))}
-          {openCards.map((card) => (
-            <QueueCardView key={card.id} card={card} />
-          ))}
+          {merged.map((entry) =>
+            entry.type === "item" ? (
+              <OperatorItemCard key={entry.item.id} item={entry.item} live={entry.liveToday} />
+            ) : (
+              <QueueCardView key={entry.card.id} card={entry.card} live={entry.liveToday} />
+            ),
+          )}
         </div>
 
         {suppressedTotal > 0 && <AlreadyDecided items={suppressedItems} cards={suppressedCards} />}
@@ -105,6 +102,62 @@ export default function TodayBoard() {
 
       <OvernightDigest />
     </div>
+  );
+}
+
+// ── Merged queue ordering: today's live items first, then importance
+// (ACT NOW > HIGH > MEDIUM > LOW), then recency. ─────────────────────────
+
+type QueueEntry =
+  | { type: "item"; item: OperatorItem; liveToday: boolean; rank: number; recency: string }
+  | { type: "card"; card: QueueCard; liveToday: boolean; rank: number; recency: string };
+
+const ITEM_RANK: Record<string, number> = { high: 1, medium: 2, low: 3 };
+// Response cards are ACT NOW (an agent is waiting on us). Deals in flight
+// rank with HIGH; DD gaps with MEDIUM; cold stale sweeps with LOW.
+const CARD_RANK: Record<string, number> = { response: 0, deal: 1, dd: 2, stale: 3 };
+
+function isToday(iso: string | null | undefined): boolean {
+  return !!iso && iso.startsWith(new Date().toISOString().slice(0, 10));
+}
+
+function mergeAndSort(
+  items: OperatorItem[],
+  cards: QueueCard[],
+  listingsById: Map<string, ListingDetail>,
+): QueueEntry[] {
+  const entries: QueueEntry[] = [];
+
+  for (const item of items) {
+    entries.push({
+      type: "item",
+      item,
+      liveToday: isToday(item.createdAt),
+      rank: ITEM_RANK[item.priority] ?? 2,
+      recency: item.createdAt ?? "",
+    });
+  }
+  for (const card of cards) {
+    const listing = card.table === "listings" ? listingsById.get(card.recordId) : undefined;
+    const lastTouch =
+      [listing?.lastInboundAt, listing?.lastOutboundAt, card.lastOutreachDate]
+        .filter((v): v is string => !!v)
+        .sort()
+        .pop() ?? "";
+    entries.push({
+      type: "card",
+      card,
+      liveToday: isToday(listing?.lastInboundAt),
+      rank: CARD_RANK[card.kind] ?? 2,
+      recency: lastTouch,
+    });
+  }
+
+  return entries.sort(
+    (a, b) =>
+      Number(b.liveToday) - Number(a.liveToday) ||
+      a.rank - b.rank ||
+      b.recency.localeCompare(a.recency),
   );
 }
 
@@ -118,7 +171,45 @@ function Skeletons() {
   );
 }
 
-// Urgency-tinted card border — matches JarvisGreeting's URGENCY_BG.
+// ── Decision buttons — stranger-test labels, consequence subtext, the
+// recommended option lit with the reasoning adjacent. ────────────────────
+
+function DecisionButton({
+  option,
+  busy,
+  onChoose,
+}: {
+  option: DecisionOption;
+  busy: boolean;
+  onChoose: () => void;
+}) {
+  const base =
+    "flex flex-col items-start text-left px-4 py-2 rounded min-h-[36px] disabled:opacity-50 transition-colors";
+  const tone = option.recommended
+    ? `bg-emerald-700 hover:bg-emerald-600 text-white ${glow.recommend}`
+    : option.kind === "later"
+      ? "bg-[#30363d] hover:bg-[#3d444d] text-gray-300"
+      : "bg-[#1c2128] hover:bg-[#30363d] text-gray-200 border border-[#30363d]";
+  return (
+    <button type="button" onClick={onChoose} disabled={busy} className={`${base} ${tone}`}>
+      <span className="text-xs font-semibold leading-tight">{option.label}</span>
+      {option.consequence && (
+        <span className={`text-[9px] leading-tight ${option.recommended ? "text-emerald-200/80" : "text-gray-500"}`}>
+          {option.consequence}
+        </span>
+      )}
+    </button>
+  );
+}
+
+function RecommendsTag() {
+  return (
+    <span className="text-[9px] font-bold tracking-widest text-emerald-400 uppercase">
+      Maverick recommends
+    </span>
+  );
+}
+
 const PRIORITY_BORDER: Record<string, string> = {
   high: "border-red-500/40",
   medium: "border-amber-500/40",
@@ -130,23 +221,33 @@ const PRIORITY_BADGE: Record<string, string> = {
   low: "bg-gray-500/15 text-gray-300 border-gray-500/30",
 };
 
-// ── Operator action items — buttons ARE the stated options ──────────────
+function LiveBadge() {
+  return (
+    <span className="px-2 py-0.5 rounded text-[10px] font-medium border bg-emerald-500/15 text-emerald-300 border-emerald-500/30">
+      TODAY
+    </span>
+  );
+}
 
-function OperatorItemCard({ item }: { item: OperatorItem }) {
+// ── Operator action items ────────────────────────────────────────────────
+
+function OperatorItemCard({ item, live }: { item: OperatorItem; live: boolean }) {
   const { setOperatorItemStatus } = useV2Data();
   const [acting, setActing] = useState<string | null>(null);
   const [recorded, setRecorded] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
 
   const options = deriveDecisions(item);
+  const recommendedOpt = options.find((o) => o.recommended);
   const context = item.context ? translateSystemText(item.context) : null;
 
-  async function choose(label: string, kind: "record" | "later") {
-    setActing(label);
+  async function choose(o: DecisionOption) {
+    if (o.kind === "open") return;
+    setActing(o.label);
     setFailed(false);
-    const ok = await setOperatorItemStatus(item.id, kind === "later" ? "deferred" : "resolved");
+    const ok = await setOperatorItemStatus(item.id, o.kind === "later" ? "deferred" : "resolved");
     if (!ok) setFailed(true);
-    else if (kind === "record") setRecorded(label);
+    else if (o.kind === "record") setRecorded(o.label);
     setActing(null);
   }
 
@@ -155,6 +256,7 @@ function OperatorItemCard({ item }: { item: OperatorItem }) {
       <div className="flex items-start justify-between gap-3">
         <div className="space-y-1.5 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
+            {live && <LiveBadge />}
             <span className={`px-2 py-0.5 rounded text-[10px] font-medium border uppercase tracking-wider ${PRIORITY_BADGE[item.priority] ?? PRIORITY_BADGE.low}`}>
               {item.priority}
             </span>
@@ -170,11 +272,12 @@ function OperatorItemCard({ item }: { item: OperatorItem }) {
         </div>
       )}
 
+      {/* Reasoning sits directly above the lit button (round-2 rule 3). */}
       {item.actionRequired && (
-        <p className="text-sm text-gray-300 leading-relaxed">
-          <span className="font-semibold text-emerald-400">Maverick → </span>
-          {item.actionRequired}
-        </p>
+        <div className="space-y-0.5">
+          {recommendedOpt && <RecommendsTag />}
+          <p className="text-sm text-gray-300 leading-relaxed">{item.actionRequired}</p>
+        </div>
       )}
 
       {context && (
@@ -193,35 +296,19 @@ function OperatorItemCard({ item }: { item: OperatorItem }) {
                 <Link
                   key={o.label}
                   href={`/pipeline/${item.sourceRecordId}`}
-                  className="text-xs font-semibold bg-[#30363d] hover:bg-[#3d444d] text-gray-200 px-4 py-2 rounded min-h-[36px] flex items-center"
+                  className="flex flex-col items-start text-left px-4 py-2 rounded min-h-[36px] bg-[#1c2128] hover:bg-[#30363d] text-gray-200 border border-[#30363d] transition-colors"
                 >
-                  {o.label}
+                  <span className="text-xs font-semibold leading-tight">{o.label}</span>
+                  {o.consequence && <span className="text-[9px] leading-tight text-gray-500">{o.consequence}</span>}
                 </Link>
               )
             ) : (
-              <button
-                key={o.label}
-                type="button"
-                onClick={() => choose(o.label, o.kind === "later" ? "later" : "record")}
-                disabled={acting !== null}
-                className={
-                  o.kind === "later"
-                    ? "text-xs font-semibold bg-[#30363d] hover:bg-[#3d444d] text-gray-300 px-3 py-2 rounded min-h-[36px] disabled:opacity-50"
-                    : o.specific
-                      ? "text-xs font-semibold bg-emerald-700 hover:bg-emerald-600 text-white px-4 py-2 rounded min-h-[36px] disabled:opacity-50"
-                      : "text-xs font-semibold bg-[#30363d] hover:bg-[#3d444d] text-gray-200 px-4 py-2 rounded min-h-[36px] disabled:opacity-50"
-                }
-              >
-                {acting === o.label ? "…" : o.label}
-              </button>
+              <DecisionButton key={o.label} option={o} busy={acting !== null} onChoose={() => choose(o)} />
             ),
           )
         )}
         {!recorded && item.sourceRecordId && (
-          <Link
-            href={`/pipeline/${item.sourceRecordId}`}
-            className="text-xs text-blue-400 hover:underline ml-auto"
-          >
+          <Link href={`/pipeline/${item.sourceRecordId}`} className="text-xs text-blue-400 hover:underline ml-auto">
             deal page ↗
           </Link>
         )}
@@ -231,13 +318,20 @@ function OperatorItemCard({ item }: { item: OperatorItem }) {
   );
 }
 
-// ── Queue cards — each kind gets its real options ────────────────────────
+// ── Queue cards ──────────────────────────────────────────────────────────
 
 const KIND_META: Record<string, { label: string; border: string; badge: string }> = {
   response: { label: "AGENT REPLIED", border: "border-amber-500/40", badge: "bg-amber-500/15 text-amber-300 border-amber-500/30" },
-  dd: { label: "DD GATE OPEN", border: "border-purple-500/40", badge: "bg-purple-500/15 text-purple-300 border-purple-500/30" },
+  dd: { label: "ANSWERS MISSING", border: "border-purple-500/40", badge: "bg-purple-500/15 text-purple-300 border-purple-500/30" },
   stale: { label: "GONE QUIET", border: "border-[#30363d]", badge: "bg-gray-500/15 text-gray-300 border-gray-500/30" },
   deal: { label: "DEAL IN FLIGHT", border: "border-emerald-500/40", badge: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30" },
+};
+
+// Primary (recommended) action per card kind — plain label + consequence.
+const CARD_PRIMARY: Record<string, { label: string; consequence: string }> = {
+  response: { label: "Reply", consequence: "opens the deal page to answer them" },
+  dd: { label: "Finish the checklist", consequence: "opens the deal page" },
+  stale: { label: "Follow up", consequence: "opens the deal page to send it" },
 };
 
 function recommendation(card: QueueCard): { rec: string; why: string } {
@@ -249,12 +343,12 @@ function recommendation(card: QueueCard): { rec: string; why: string } {
       };
     case "dd":
       return {
-        rec: `Hold the offer — ${card.missingItems?.length ?? 0} of 12 DD answers still missing.`,
-        why: "The DD checklist must be complete before contract numbers move.",
+        rec: `Hold the offer — ${card.missingItems?.length ?? 0} of 12 property answers still missing.`,
+        why: "The checklist must be complete before contract numbers move.",
       };
     case "stale":
       return {
-        rec: `${card.daysSilent} days of silence — re-touch or release.`,
+        rec: `${card.daysSilent} days of silence — follow up or let it go.`,
         why: `Our ${money(card.mao)} offer stays on record either way.`,
       };
     case "deal":
@@ -267,11 +361,12 @@ function recommendation(card: QueueCard): { rec: string; why: string } {
   }
 }
 
-function QueueCardView({ card }: { card: QueueCard }) {
+function QueueCardView({ card, live }: { card: QueueCard; live: boolean }) {
   const [confirmRelease, setConfirmRelease] = useState(false);
   const [released, setReleased] = useState(false);
   const [releaseError, setReleaseError] = useState(false);
   const meta = KIND_META[card.kind] ?? KIND_META.stale;
+  const primary = CARD_PRIMARY[card.kind];
   const { rec, why } = recommendation(card);
   const place = [card.city, card.state].filter(Boolean).join(", ");
 
@@ -295,7 +390,7 @@ function QueueCardView({ card }: { card: QueueCard }) {
     return (
       <div className="bg-[#1c2128] rounded-lg border border-[#30363d] p-4">
         <p className="text-sm text-gray-400">
-          ✓ {card.address} released — marked dead. Offer stays on record if they come back.
+          ✓ {card.address} — let go and marked dead. Our offer stays on record if they come back.
         </p>
       </div>
     );
@@ -306,6 +401,7 @@ function QueueCardView({ card }: { card: QueueCard }) {
       <div className="flex items-start justify-between gap-3">
         <div className="space-y-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
+            {live && <LiveBadge />}
             <span className={`px-2 py-0.5 rounded text-[10px] font-medium border uppercase tracking-wider ${meta.badge}`}>
               {meta.label}
             </span>
@@ -330,22 +426,22 @@ function QueueCardView({ card }: { card: QueueCard }) {
         </p>
       )}
 
-      <div className="text-sm text-gray-300 leading-relaxed space-y-1">
-        <p>
-          <span className="font-semibold text-emerald-400">Maverick → </span>
-          {rec}
-        </p>
+      {/* Reasoning directly above the lit button. */}
+      <div className="space-y-0.5">
+        {primary && <RecommendsTag />}
+        <p className="text-sm text-gray-300 leading-relaxed">{rec}</p>
         {why && <p className="text-xs text-gray-500 italic">{why}</p>}
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        {card.table === "listings" ? (
+        {card.table === "listings" && primary ? (
           <>
             <Link
               href={`/pipeline/${card.recordId}`}
-              className="text-xs font-semibold bg-emerald-700 hover:bg-emerald-600 text-white px-4 py-2 rounded min-h-[36px] flex items-center"
+              className={`flex flex-col items-start text-left px-4 py-2 rounded min-h-[36px] bg-emerald-700 hover:bg-emerald-600 text-white transition-colors ${glow.recommend}`}
             >
-              {card.kind === "response" ? "Reply" : card.kind === "dd" ? "Complete DD" : "Re-touch"}
+              <span className="text-xs font-semibold leading-tight">{primary.label}</span>
+              <span className="text-[9px] leading-tight text-emerald-200/80">{primary.consequence}</span>
             </Link>
             {card.kind === "stale" &&
               (confirmRelease ? (
@@ -353,37 +449,40 @@ function QueueCardView({ card }: { card: QueueCard }) {
                   <button
                     type="button"
                     onClick={release}
-                    className="text-xs font-semibold bg-red-700 hover:bg-red-600 text-white px-4 py-2 rounded min-h-[36px]"
+                    className="flex flex-col items-start text-left px-4 py-2 rounded min-h-[36px] bg-red-700 hover:bg-red-600 text-white"
                   >
-                    Confirm — mark dead
+                    <span className="text-xs font-semibold leading-tight">Yes — mark it dead</span>
+                    <span className="text-[9px] leading-tight text-red-200/80">can&apos;t be undone from here</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setConfirmRelease(false)}
                     className="text-xs font-semibold bg-[#30363d] hover:bg-[#3d444d] text-gray-300 px-3 py-2 rounded min-h-[36px]"
                   >
-                    Keep
+                    Keep it
                   </button>
                 </>
               ) : (
                 <button
                   type="button"
                   onClick={() => setConfirmRelease(true)}
-                  className="text-xs font-semibold bg-[#30363d] hover:bg-[#3d444d] text-gray-300 px-3 py-2 rounded min-h-[36px]"
+                  className="flex flex-col items-start text-left px-4 py-2 rounded min-h-[36px] bg-[#1c2128] hover:bg-[#30363d] text-gray-200 border border-[#30363d]"
                 >
-                  Release
+                  <span className="text-xs font-semibold leading-tight">Let it go</span>
+                  <span className="text-[9px] leading-tight text-gray-500">marks the lead dead</span>
                 </button>
               ))}
           </>
         ) : (
           <Link
             href="/deals"
-            className="text-xs font-semibold bg-[#30363d] hover:bg-[#3d444d] text-gray-200 px-4 py-2 rounded min-h-[36px] flex items-center"
+            className="flex flex-col items-start text-left px-4 py-2 rounded min-h-[36px] bg-[#30363d] hover:bg-[#3d444d] text-gray-200"
           >
-            View in Deals
+            <span className="text-xs font-semibold leading-tight">Open the deal</span>
+            <span className="text-[9px] leading-tight text-gray-500">opens the Deals list</span>
           </Link>
         )}
-        {releaseError && <span className="text-[10px] text-red-400">release failed — try again</span>}
+        {releaseError && <span className="text-[10px] text-red-400">that didn&apos;t save — try again</span>}
         {card.table === "listings" && (
           <Link href={`/pipeline/${card.recordId}`} className="text-xs text-blue-400 hover:underline ml-auto">
             deal page ↗
@@ -394,7 +493,7 @@ function QueueCardView({ card }: { card: QueueCard }) {
   );
 }
 
-// ── Already decided — queue hygiene; out of the queue with the reference ──
+// ── Already decided / held ───────────────────────────────────────────────
 
 function AlreadyDecided({
   items,
@@ -408,7 +507,7 @@ function AlreadyDecided({
   return (
     <details className="group">
       <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300 select-none">
-        Already decided ({n}) — the spine settled these; no action needed
+        Already decided ({n}) — the system settled these; no action needed
       </summary>
       <div className="mt-2 space-y-1.5">
         {items.map(({ item, reference }) => (
@@ -422,8 +521,9 @@ function AlreadyDecided({
               type="button"
               onClick={() => setOperatorItemStatus(item.id, "resolved")}
               className="ml-auto text-[10px] font-semibold text-gray-500 hover:text-gray-200 border border-[#30363d] rounded px-2 py-1"
+              title="marks it handled and removes it from this list"
             >
-              Clear
+              Clear it
             </button>
           </div>
         ))}
@@ -445,7 +545,7 @@ function HeldSection({ cards }: { cards: QueueCard[] }) {
   return (
     <details className="group">
       <summary className="text-xs text-gray-500 cursor-pointer hover:text-gray-300 select-none">
-        Held ({cards.length}) — resurface when the hold expires
+        Held ({cards.length}) — come back when the hold expires
       </summary>
       <div className="mt-2 space-y-1.5">
         {cards.map((c) => (
@@ -464,7 +564,7 @@ function HeldSection({ cards }: { cards: QueueCard[] }) {
   );
 }
 
-// ── Overnight digest — plain-English event groups, raw under the fold ────
+// ── Overnight digest ─────────────────────────────────────────────────────
 
 function OvernightDigest() {
   const { audit, auditWindow } = useV2Data();
@@ -495,8 +595,8 @@ function OvernightDigest() {
 
       {recent.length === 0 ? (
         <p className="text-xs text-gray-500">
-          No events in the last 24h inside the log window — either a quiet day, or
-          high-frequency events pushed the window forward. Not the same as &ldquo;nothing ran&rdquo;.
+          No events in the last 24h inside the log window — either a quiet day, or high-frequency
+          events pushed the window forward. Not the same as &ldquo;nothing ran&rdquo;.
         </p>
       ) : (
         <div className="flex flex-wrap gap-2">
@@ -560,7 +660,6 @@ function FailureRow({ e }: { e: AuditEntry }) {
   );
 }
 
-// Translated line with the raw entry collapsed underneath (plain-English law).
 function SystemText({ summary, raw, collapsed }: { summary: string; raw: string; collapsed: boolean }) {
   const [open, setOpen] = useState(false);
   if (!collapsed) return <p className="text-xs text-gray-500 italic">{summary}</p>;
