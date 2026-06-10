@@ -7,6 +7,7 @@ import { toE164 } from "@/lib/phone";
 import { isSelfEchoOrAutoreply } from "@/lib/conversation-check";
 import { triageSellerReply } from "@/lib/reply-triage";
 import { sendReplyAlert, type ReplyAlertInput } from "@/lib/reply-alert";
+import { sendAutoClose } from "@/lib/auto-close";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -210,6 +211,9 @@ export async function GET(req: Request) {
     // Operator directive (2026-06-10): a reply that turns into a live
     // negotiation in 60 seconds means alerting is no longer optional.
     const alertQueue: ReplyAlertInput[] = [];
+    // Tier 0 auto-close outcomes (sent / skipped + reason), surfaced in the
+    // response so the daily digest + audit trail have the full picture.
+    const autoCloseResults: Array<{ recordId: string; sent: boolean; reason: string | null }> = [];
     // 2026-06-08: was string[]. Now carries the INBOUND's actual createdAt,
     // not wall-clock now — the prior shape stamped Last_Inbound_At with
     // "right now" on every cron tick (line 278 used new Date()), so the
@@ -251,16 +255,32 @@ export async function GET(req: Request) {
           // conversation-check's outbound-vs-inbound ordering.)
           timestampUpdates.push({ id: listing.id, inboundCreatedAt: inbound.createdAt });
 
+          // Triage FIRST (cheap, pure) — the tier decides the whole route.
+          // Shared with scan-replies via lib/reply-triage.ts (one classifier,
+          // no drift).
+          const triage = triageSellerReply(inbound.body, listing.outreachStatus ?? null);
+
+          // ── TIER 0: high-confidence rejection → system auto-close. ──
+          // No proposal, no alert, no Claude draft. The close rides the
+          // standard rails (quiet hours, DNT, one-per-thread KV claim) and
+          // is fully audited; idempotency across cron ticks is the KV claim.
+          if (triage.tier === "tier_0_auto_close") {
+            const ac = await sendAutoClose({
+              recordId: listing.id,
+              toE164: phone,
+              state: listing.state ?? null,
+              doNotText: listing.doNotText === true,
+              address: listing.address ?? null,
+            });
+            autoCloseResults.push({ recordId: listing.id, sent: ac.sent, reason: ac.reason });
+            continue;
+          }
+
+          // ── TIER 1 / 2: needs-decision proposal + decision-first alert. ──
           const draftResponse = await generateDraftResponse(
             listing,
             inbound.body
           );
-
-          // Triage the genuine reply → route it into the needs-decision queue
-          // with WHAT decision it needs (pricing / engagement / review), the
-          // queue status it maps to, and a matching priority. Shared with
-          // scan-replies via lib/reply-triage.ts (one classifier, no drift).
-          const triage = triageSellerReply(inbound.body, listing.outreachStatus ?? null);
 
           const actionPayload = JSON.stringify({
             recordId: listing.id,
@@ -272,6 +292,7 @@ export async function GET(req: Request) {
             decisionKind: triage.decisionKind,
             needsDecision: triage.needsDecision,
             queueStatus: triage.queueStatus,
+            tier: triage.tier,
           });
 
           newProposals.push({
@@ -287,20 +308,19 @@ export async function GET(req: Request) {
             },
           });
 
-          // Queue an alert for AFTER the batch-create succeeds. Gated on
-          // triage.needsDecision: rejections auto-route to Dead via
-          // determineNewStatus and do not need a wake-up; counter / interest
-          // / unknown ARE needs-decision and page Alex via SMS.
-          if (triage.needsDecision) {
-            alertQueue.push({
-              recordId: listing.id,
-              address: listing.address ?? null,
-              agentName: listing.agentName ?? null,
-              inboundBody: inbound.body,
-              classification: triage.classification,
-              decisionKind: triage.decisionKind,
-            });
-          }
+          // Queue the decision/urgent alert for AFTER batch-create succeeds.
+          // The body leads with the decision, never the inbound text (Quo
+          // already showed Alex the message). Counter recommendations carry
+          // the record's sticky opener + MAO — or fall back to "hold sticky
+          // opener" when missing (gap audited, never fabricated).
+          alertQueue.push({
+            recordId: listing.id,
+            address: listing.address ?? null,
+            tier: triage.tier,
+            classification: triage.classification,
+            outreachOfferPrice: listing.outreachOfferPrice ?? null,
+            underwrittenMao: listing.underwrittenMao ?? null,
+          });
 
           existingPending.add(`${listing.id}:jarvis_reply`);
         }
@@ -351,10 +371,13 @@ export async function GET(req: Request) {
       inboundFound,
       matched,
       proposalsCreated: created,
-      skippedDedupe: matched - newProposals.length,
+      skippedDedupe: matched - newProposals.length - autoCloseResults.length,
       alertsAttempted: alertResults.length,
       alertsSent: alertResults.filter((r) => r.sent).length,
       alertResults: alertResults.length > 0 ? alertResults : undefined,
+      autoCloseAttempted: autoCloseResults.length,
+      autoCloseSent: autoCloseResults.filter((r) => r.sent).length,
+      autoCloseResults: autoCloseResults.length > 0 ? autoCloseResults : undefined,
       errors: errors.length > 0 ? errors : undefined,
       timestamp: new Date().toISOString(),
     });
