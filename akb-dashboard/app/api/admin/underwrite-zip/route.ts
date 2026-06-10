@@ -3,7 +3,7 @@
 //
 // GET /api/admin/underwrite-zip
 //   ?zips=48227 (required, comma list of 5-digit ZIPs)
-//   ?apply=1&confirm=UNDERWRITE-ZIP-YYYY-MM-DD  → write Contract_Offer_Price
+//   ?apply=1&confirm=UNDERWRITE-ZIP-YYYY-MM-DD  → write Underwritten_MAO
 //   default: DRY-RUN — report per-lead track-aware MAO + opener-vs-MAO
 //
 // Underwrites each scoped listing off the seeded ZIP-store buyer-median for
@@ -149,10 +149,10 @@ export async function GET(req: Request) {
     let writeError: string | null = null;
     if (apply && uw.yourMao != null) {
       try {
-        // Persist the underwritten MAO ceiling to Contract_Offer_Price (the
+        // Persist the underwritten MAO ceiling to Underwritten_MAO (the
         // operative offer at negotiation/DD stage per Phase 20.2 v1.3 —
         // a sensible home for a track-aware landlord ceiling here).
-        await updateListingRecord(l.id, { Contract_Offer_Price: uw.yourMao });
+        await updateListingRecord(l.id, { Underwritten_MAO: uw.yourMao });
         wrote = true;
       } catch (err) {
         writeError = err instanceof Error ? err.message : String(err);

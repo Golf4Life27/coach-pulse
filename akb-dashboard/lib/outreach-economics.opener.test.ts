@@ -31,7 +31,10 @@ describe("openerMaoGuard", () => {
     const g = openerMaoGuard({ baseOpener: 100_000, mao: null, priceable: true });
     expect(g.ok).toBe(false);
     expect(g.opener).toBeNull();
-    expect(g.reason).toMatch(/mao_unknown/);
+    // Distinct error — distinguishes "lead was never underwritten" from the
+    // misleading "needs ARV + rehab" silent-fallback masquerade that caused
+    // the 2026-06-09 48227 dry-run-zero incident.
+    expect(g.reason).toMatch(/mao_not_underwritten/);
   });
 
   it("priceable + opener > MAO but capped value below the $5K floor → skip + flag", () => {
@@ -56,9 +59,49 @@ describe("resolveOpenerCeiling", () => {
     expect(c.mao).toBe(94_220);
   });
 
-  it("Detroit priceable but ARV missing → mao HOLDs null (deal-math)", () => {
+  it("Detroit priceable but ARV missing AND no underwritten MAO → null (NOT a silent fallback)", () => {
+    // Silent fallback to flipper deal-math was the 2026-06-09 incident — when
+    // there is no persisted Underwritten_MAO and no ZIP-store context, the
+    // resolver returns null AND the guard surfaces mao_not_underwritten, NOT
+    // the misleading "needs ARV + rehab" error.
     const c = resolveOpenerCeiling({ state: "MI", zip: "48227", realArvMedian: null, estRehab: 30_000, listPrice: 175_000 });
     expect(c.priceable).toBe(true);
+    expect(c.mao).toBeNull();
+  });
+
+  it("priority (1): persisted underwrittenMao wins over every other path", () => {
+    // The intake station wrote $50,000. Even with no ZIP store context and no
+    // ARV/rehab, the send-time resolver reads the persisted ceiling.
+    const c = resolveOpenerCeiling({
+      state: "MI",
+      zip: "48227",
+      underwrittenMao: 50_000,
+      realArvMedian: null,
+      estRehab: null,
+      listPrice: 79_900,
+    });
+    expect(c.priceable).toBe(true);
+    expect(c.mao).toBe(50_000);
+  });
+
+  it("persisted underwrittenMao wins even when ARV + rehab are also present", () => {
+    // The station's number is the operative ceiling — ARV-driven evaluateDeal
+    // is the FALLBACK, not the override. The underwrite station decides.
+    const c = resolveOpenerCeiling({
+      state: "MI",
+      zip: "48227",
+      underwrittenMao: 50_000,
+      realArvMedian: 200_000,
+      estRehab: 30_000,
+      listPrice: 175_000,
+    });
+    expect(c.mao).toBe(50_000); // station wins, not the $94,220 deal-math number
+  });
+
+  it("contractOfferPrice is NOT read — V2.1-reserved for DD-time contract number", () => {
+    // The resolver type doesn't even accept contractOfferPrice. Persisting an
+    // MAO ceiling into contractOfferPrice is the bug this fix prevents.
+    const c = resolveOpenerCeiling({ state: "MI", zip: "48227", realArvMedian: null, estRehab: null });
     expect(c.mao).toBeNull();
   });
 });

@@ -88,6 +88,12 @@ export interface Listing {
   lastStatusCheckSentAt?: string | null;
   outreachOfferPrice?: number | null;
   contractOfferPrice?: number | null;
+  // Computed underwritten MAO ceiling — the offer cap the opener-vs-MAO guard
+  // reads at send time. Written by the underwrite station (intake → enrich →
+  // verify → underwrite → promote). DISTINCT from contractOfferPrice: that is
+  // V2.1-reserved for the DD-time contract number set by the INV-023 gate
+  // after CMA + rehab; it must stay empty until DD sets it.
+  underwrittenMao?: number | null;
   sellerMotivationScore?: number | null;
   listPriceAtSend?: number | null;
   // ── Pre-Send Gate inputs (added 5/13 for orchestrator Gate 2)

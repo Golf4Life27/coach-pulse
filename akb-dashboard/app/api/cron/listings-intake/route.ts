@@ -211,10 +211,10 @@ async function createIntakeListing(
   // Persist the underwritten MAO ceiling computed at promote time so the
   // outreach guard can read it without re-deriving (and so a future
   // appraiser run doesn't overwrite a clean track-aware number with
-  // an ARV-less HOLD). Contract_Offer_Price is the operative-ceiling field
+  // an ARV-less HOLD). Underwritten_MAO is the operative-ceiling field
   // per Phase 20.2 v1.3 (operator 2026-06-09).
   if (typeof underwrittenMao === "number" && Number.isFinite(underwrittenMao) && underwrittenMao > 0) {
-    fields["Contract_Offer_Price"] = underwrittenMao;
+    fields["Underwritten_MAO"] = underwrittenMao;
   }
   const res = await fetch(url, {
     method: "POST",

@@ -157,7 +157,7 @@ export function openerMaoGuard(input: {
       baseOpener: base,
       mao: null,
       capped: false,
-      reason: "priceable_market_mao_unknown — underwrite (ARV + rehab) before sending an opener",
+      reason: "mao_not_underwritten — no persisted Underwritten_MAO and ZIP-store unavailable; run the underwrite station before sending an opener",
     };
   }
   if (base <= mao) {
@@ -194,13 +194,24 @@ export interface OpenerCeiling {
   market: string | null;
 }
 
-/** Pure: resolve the deal's MAO ceiling + market priceability. Prefers the
- *  TRACK-AWARE ZIP-store path (the seeded landlord/flipper median) when the
- *  caller passes a pre-loaded UnderwriteContext — the landlord as-is median
- *  is already a purchase price, so the deal-math evaluateDeal path (flipper-
- *  only: ARV × arv_pct_max − rehab − fee) was rejecting every ZIP-priced lead
- *  with no ARV/rehab on file. Falls back to evaluateDeal when no context is
- *  passed (existing call sites) or when no ZIP-store median exists. */
+/** Pure: resolve the deal's MAO ceiling + market priceability. PRIORITY:
+ *  (1) persisted listing.underwrittenMao — what the underwrite station wrote;
+ *      the resolver's primary read path so a send-time decision does NOT
+ *      depend on a live ZIP-store I/O round-trip.
+ *  (2) TRACK-AWARE ZIP-store via the pre-loaded UnderwriteContext — the
+ *      landlord as-is median is already a purchase price; legitimate fallback
+ *      when an intake row is too fresh for the station to have written yet.
+ *  (3) evaluateDeal (flipper-only: ARV × arv_pct_max − rehab − fee) — runs
+ *      ONLY when ARV+rehab are actually on the record. If neither (1) nor (2)
+ *      nor any ARV/rehab is present, the resolver SURFACES the failure
+ *      distinctly ("mao_not_underwritten") instead of silently falling through
+ *      and emitting the misleading "priceable_market_mao_unknown — underwrite
+ *      (ARV + rehab) before sending an opener" — that masquerade caused the
+ *      2026-06-09 48227 dry-run-zero incident.
+ *
+ *  NOTE: contractOfferPrice is INTENTIONALLY NOT read here — it is V2.1-
+ *  reserved for the DD-time contract number set by the INV-023 gate after
+ *  CMA + rehab, and must stay empty until DD sets it. */
 export function resolveOpenerCeiling(
   listing: {
     state?: string | null;
@@ -211,6 +222,7 @@ export function resolveOpenerCeiling(
     redFlags?: string[] | string | null;
     distressBucket?: string | null;
     distressScore?: number | null;
+    underwrittenMao?: number | null;
   },
   ctx?: UnderwriteContext,
 ): OpenerCeiling {
@@ -219,6 +231,13 @@ export function resolveOpenerCeiling(
   if (!priceable) {
     return { mao: null, priceable: false, market: market?.id ?? null };
   }
+  // (1) Persisted Underwritten_MAO — preferred. The send path reads what the
+  // underwrite station wrote; no live I/O dependency.
+  if (typeof listing.underwrittenMao === "number" && listing.underwrittenMao > 0) {
+    return { mao: listing.underwrittenMao, priceable: true, market: market?.id ?? null };
+  }
+  // (2) Track-aware ZIP-store via pre-loaded context — legitimate fallback
+  // for intake rows too fresh for the station to have written yet.
   if (ctx) {
     const uw = computeListingMao(
       {
@@ -235,11 +254,24 @@ export function resolveOpenerCeiling(
       return { mao: uw.yourMao, priceable: true, market: market?.id ?? null };
     }
   }
-  const res = evaluateDeal(
-    { arv: listing.realArvMedian, rehab: listing.estRehab, listPrice: listing.listPrice },
-    market,
-  );
-  return { mao: res.mao, priceable: true, market: market?.id ?? null };
+  // (3) evaluateDeal — ONLY when ARV+rehab are actually present. Otherwise we
+  // surface a DISTINCT failure rather than silently emit the misleading
+  // "needs ARV+rehab" error. Silent fallback = defect.
+  const hasArvRehab =
+    typeof listing.realArvMedian === "number" && listing.realArvMedian > 0 &&
+    typeof listing.estRehab === "number" && listing.estRehab >= 0;
+  if (hasArvRehab) {
+    const res = evaluateDeal(
+      { arv: listing.realArvMedian, rehab: listing.estRehab, listPrice: listing.listPrice },
+      market,
+    );
+    return { mao: res.mao, priceable: true, market: market?.id ?? null };
+  }
+  // No persisted MAO, no ZIP-store median, no ARV+rehab → distinct error.
+  // Distinguishes "the lead was never underwritten" from "ARV+rehab are
+  // missing for a deal-math run." The openerMaoGuard surfaces this reason
+  // verbatim so the cause is unmistakable.
+  return { mao: null, priceable: true, market: market?.id ?? null };
 }
 
 export interface FirstOutreachHydrationCheck {
