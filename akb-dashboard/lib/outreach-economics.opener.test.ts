@@ -158,3 +158,159 @@ describe("resolveAlertNumbers — ONE read path (the 2026-06-10 smoke-test fix)"
     expect(nums.mao).toBeNull();
   });
 });
+
+describe("resolveOpenerCeiling — lineage tagging (operator 2026-06-10)", () => {
+  it("(1) persisted Underwritten_MAO → source = buyer_underwrite_persisted", () => {
+    const c = resolveOpenerCeiling({ state: "MI", zip: "48227", underwrittenMao: 50_000, realArvMedian: 200_000, estRehab: 30_000, listPrice: 79_900 });
+    expect(c.mao).toBe(50_000);
+    expect(c.source).toBe("buyer_underwrite_persisted");
+  });
+
+  it("(3) Hunt-St-shape — 48207 no buyer median, ARV+rehab present → source = deal_math (NOT buyer-anchored)", () => {
+    // The actual breach: 48207 has no seeded buyer median, the ZIP-store ctx
+    // is empty for it, and deal-math (MI arv_pct_max 0.6461) prices off ARV.
+    const c = resolveOpenerCeiling({ state: "MI", zip: "48207", underwrittenMao: null, realArvMedian: 28_700, estRehab: 5_000, listPrice: 100_000 });
+    expect(c.priceable).toBe(true);
+    expect(c.source).toBe("deal_math");
+    // Hand-check the math: 28,700 × 0.6461 − 5,000 − 5,000 = 8,543. Matches
+    // the breach magnitude (the real Hunt St had different ARV/rehab inputs
+    // landing at $13,658, same lineage).
+    expect(c.mao).toBe(8_543);
+  });
+
+  it("unpriceable market → source null", () => {
+    const c = resolveOpenerCeiling({ state: "TX", zip: "78201", realArvMedian: 200_000, estRehab: 30_000, listPrice: 175_000 });
+    expect(c.source).toBeNull();
+  });
+
+  it("priceable + no MAO computable → source null (distinct from deal_math)", () => {
+    const c = resolveOpenerCeiling({ state: "MI", zip: "48207", underwrittenMao: null, realArvMedian: null, estRehab: null, listPrice: 100_000 });
+    expect(c.priceable).toBe(true);
+    expect(c.mao).toBeNull();
+    expect(c.source).toBeNull();
+  });
+});
+
+describe("openerMaoGuard — autonomous-cron rules (operator 2026-06-10, spine recjsLKqETfQ5r6zK)", () => {
+  it("RULE 1: requireBuyerAnchored REFUSES deal_math lineage", () => {
+    // 3684 Hunt St shape: opener $13,500 vs MAO $13,658, sourced via deal-math.
+    const g = openerMaoGuard({
+      baseOpener: 13_500,
+      mao: 13_658,
+      priceable: true,
+      source: "deal_math",
+      requireBuyerAnchored: true,
+      listPrice: 100_000,
+    });
+    expect(g.ok).toBe(false);
+    expect(g.reason).toMatch(/mao_lineage_not_buyer_anchored.*deal_math/);
+  });
+
+  it("RULE 1: requireBuyerAnchored REFUSES null source (no MAO computable)", () => {
+    const g = openerMaoGuard({
+      baseOpener: 50_000,
+      mao: 60_000,
+      priceable: true,
+      source: null,
+      requireBuyerAnchored: true,
+      listPrice: 100_000,
+    });
+    expect(g.ok).toBe(false);
+    expect(g.reason).toMatch(/mao_lineage_not_buyer_anchored.*null/);
+  });
+
+  it("RULE 1: requireBuyerAnchored ACCEPTS buyer_underwrite_persisted (48227 path)", () => {
+    const g = openerMaoGuard({
+      baseOpener: 48_750,
+      mao: 50_000,
+      priceable: true,
+      source: "buyer_underwrite_persisted",
+      requireBuyerAnchored: true,
+      listPrice: 74_900,
+    });
+    expect(g.ok).toBe(true);
+    expect(g.opener).toBe(48_750);
+  });
+
+  it("RULE 1: requireBuyerAnchored ACCEPTS buyer_zip_store_live (fresh intake path)", () => {
+    const g = openerMaoGuard({
+      baseOpener: 22_000,
+      mao: 50_000,
+      priceable: true,
+      source: "buyer_zip_store_live",
+      requireBuyerAnchored: true,
+      listPrice: 33_900,
+    });
+    expect(g.ok).toBe(true);
+  });
+
+  it("RULE 1 is OPT-IN: the controlled batch (no requireBuyerAnchored) still accepts deal_math", () => {
+    const g = openerMaoGuard({
+      baseOpener: 13_500,
+      mao: 13_658,
+      priceable: true,
+      source: "deal_math",
+      listPrice: 100_000,
+      // requireBuyerAnchored omitted — batch path
+    });
+    // Math gate still applies (capped), but lineage doesn't refuse here.
+    // The batch's own lowball floor isn't enabled either since listPrice
+    // is only used when the autonomous flag triggers a cap below 35%.
+    expect(g.ok).toBe(true);
+  });
+
+  it("RULE 2: capped opener below 35% of list HOLDs (Hunt St breach magnitude)", () => {
+    // base opener $65k (≥ MAO), MAO $13,658 → cap $13,500 (after $250 floor)
+    // / list $100,000 = 13.5%, below 35% → HOLD.
+    const g = openerMaoGuard({
+      baseOpener: 65_000,
+      mao: 13_658,
+      priceable: true,
+      source: "buyer_underwrite_persisted", // even on buyer-anchored, the lowball signal HOLDS
+      requireBuyerAnchored: true,
+      listPrice: 100_000,
+    });
+    expect(g.ok).toBe(false);
+    expect(g.reason).toMatch(/lowball_below_35pct_of_list/);
+    expect(g.reason).toContain("$35,000 floor");
+  });
+
+  it("RULE 2: opener ≤ MAO but still below 35% of list HOLDs", () => {
+    // Sub-cap path: base $12k, MAO $15k (so no cap), list $100k → 12%, HOLD.
+    const g = openerMaoGuard({
+      baseOpener: 12_000,
+      mao: 15_000,
+      priceable: true,
+      source: "buyer_underwrite_persisted",
+      requireBuyerAnchored: true,
+      listPrice: 100_000,
+    });
+    expect(g.ok).toBe(false);
+    expect(g.reason).toMatch(/lowball_below_35pct_of_list/);
+  });
+
+  it("RULE 2: 35.1% passes, 34.9% HOLDs (boundary)", () => {
+    expect(openerMaoGuard({ baseOpener: 35_100, mao: 50_000, priceable: true, source: "buyer_underwrite_persisted", requireBuyerAnchored: true, listPrice: 100_000 }).ok).toBe(true);
+    expect(openerMaoGuard({ baseOpener: 34_900, mao: 50_000, priceable: true, source: "buyer_underwrite_persisted", requireBuyerAnchored: true, listPrice: 100_000 }).ok).toBe(false);
+  });
+
+  it("RULE 2 is also opt-in: no listPrice → lowball check skipped (back-compat)", () => {
+    const g = openerMaoGuard({ baseOpener: 13_500, mao: 50_000, priceable: true, source: "buyer_underwrite_persisted" });
+    expect(g.ok).toBe(true);
+  });
+
+  it("Hunt St breach: BOTH rules trip with the autonomous flags on (defense in depth)", () => {
+    const g = openerMaoGuard({
+      baseOpener: 65_000,
+      mao: 13_658,
+      priceable: true,
+      source: "deal_math",
+      requireBuyerAnchored: true,
+      listPrice: 100_000,
+    });
+    expect(g.ok).toBe(false);
+    // Rule 1 wins the refusal order (lineage check is first), but the
+    // lowball would also have refused — the test ensures both are wired.
+    expect(g.reason).toMatch(/mao_lineage_not_buyer_anchored/);
+  });
+});
