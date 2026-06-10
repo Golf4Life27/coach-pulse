@@ -22,6 +22,11 @@ export interface UnderwriteContext {
   /** Pre-loaded ZIP+track medians, keyed by `${zip}:${track}`. The admin
    *  station and the batch fill this once per run to avoid N+1 reads. */
   zipMedians: Map<string, ZipBuyerMedian>;
+  /** Per-key store-read errors. Populated when a ZIP lookup fails (e.g. the
+   *  prod PAT is scoped before Buyer_Median_ZIP existed). The loader does
+   *  NOT silently swallow these — the underwrite station + send paths must
+   *  surface them so a scope-mismatch can't masquerade as 'no median seeded'. */
+  errors: Map<string, string>;
 }
 
 export interface ListingMaoFacts {
@@ -107,9 +112,11 @@ export function computeListingMao(
   };
 }
 
-/** Pre-load ZIP+track medians for a set of listings (batched I/O). */
+/** Pre-load ZIP+track medians for a set of listings (batched I/O). Errors
+ *  per key are captured on the context, never silently swallowed. */
 export async function loadUnderwriteContextForListings(listings: Listing[]): Promise<UnderwriteContext> {
   const zipMedians = new Map<string, ZipBuyerMedian>();
+  const errors = new Map<string, string>();
   const wanted = new Set<string>();
   for (const l of listings) {
     const zip = (l.zip ?? "").trim();
@@ -119,8 +126,12 @@ export async function loadUnderwriteContextForListings(listings: Listing[]): Pro
   }
   for (const key of wanted) {
     const [zip, trackRaw] = key.split(":");
-    const m = await getZipBuyerMedian(zip, trackRaw as BuyerTrack).catch(() => null);
-    if (m) zipMedians.set(key, m);
+    try {
+      const m = await getZipBuyerMedian(zip, trackRaw as BuyerTrack);
+      if (m) zipMedians.set(key, m);
+    } catch (e) {
+      errors.set(key, e instanceof Error ? e.message : String(e));
+    }
   }
-  return { zipMedians };
+  return { zipMedians, errors };
 }

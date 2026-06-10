@@ -40,7 +40,7 @@ import {
 } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { fetchListingsByZip } from "@/lib/crawler/sources/rentcast";
-import { listSeededZips } from "@/lib/buyer-median-store";
+import { listSeededZips, FALLBACK_SEEDED_ZIPS } from "@/lib/buyer-median-store";
 import {
   filterIntakeCandidates,
   normalizeAddressKey,
@@ -478,6 +478,11 @@ export async function GET(req: Request) {
       spent_recent_hour: 0,
       breaker_tripped: false,
     },
+    // Priceable-gate provenance (operator 2026-06-10): which seeded-ZIP
+    // allowlist the run used + where it came from. fallback = the store
+    // read failed and intake narrowed to FALLBACK_SEEDED_ZIPS.
+    seeded_zips_source: "store" as "store" | "fallback",
+    seeded_zips_count: 0,
   };
   const now = new Date();
   const bump = (reason: string, n = 1) => {
@@ -514,18 +519,41 @@ export async function GET(req: Request) {
   // arv_pct_max + a seeded ZIP buyer-median. Don't spend Firecrawl on a
   // market we can't make an MAO-checked offer in (e.g. TX SA/Dallas/Houston,
   // or any not-yet-seeded ZIP). Reversible via INTAKE_REQUIRE_PRICEABLE.
-  // If the seeded-ZIP store read fails, the gate disables itself rather than
-  // halt all intake (fail-open on infra, not fail-closed).
-  let requirePriceable = process.env.INTAKE_REQUIRE_PRICEABLE !== "false";
+  //
+  // FAIL-NARROW (operator 2026-06-10): if the seeded-ZIP store read fails
+  // (e.g. AIRTABLE_PAT scoped before Buyer_Median_ZIP existed), fall back to
+  // the hardcoded FALLBACK_SEEDED_ZIPS allowlist — NEVER disable the gate.
+  // Disabling widens scope to every priceable market in the registry; that's
+  // the wrong direction. The fallback always narrows (or stays the same).
+  // Fires a Pulse alert so the operator sees the PAT-scope drift.
+  const requirePriceable = process.env.INTAKE_REQUIRE_PRICEABLE !== "false";
   let seededZips: ReadonlySet<string> = new Set<string>();
+  let seededZipsSource: "store" | "fallback" = "store";
   if (requirePriceable) {
     try {
       seededZips = await listSeededZips();
     } catch (e) {
-      requirePriceable = false;
-      summary.per_zip_errors.push({ zip: "*", error: `seeded_zip_load_failed_priceable_gate_disabled: ${e instanceof Error ? e.message : String(e)}` });
+      seededZips = FALLBACK_SEEDED_ZIPS;
+      seededZipsSource = "fallback";
+      summary.per_zip_errors.push({ zip: "*", error: `seeded_zip_store_unavailable_falling_back_to_allowlist: ${e instanceof Error ? e.message : String(e)} (fallback=${[...FALLBACK_SEEDED_ZIPS].join(",")})` });
+      try {
+        await writeState({
+          event_type: "decision",
+          attribution_agent: "scout",
+          title: `⚠️ Buyer_Median_ZIP store unavailable — intake fell back to allowlist [${[...FALLBACK_SEEDED_ZIPS].join(", ")}]`,
+          description:
+            `listings-intake could not read Buyer_Median_ZIP (tbleoqYRBmnJq5V0Z). Likely cause: AIRTABLE_PAT scope excludes the table. ` +
+            `Intake remains priceable-gated against the hardcoded fallback allowlist (${[...FALLBACK_SEEDED_ZIPS].join(",")}); ` +
+            `no widening to all markets. Extend the PAT to include Buyer_Median_ZIP to restore the live store read. Error: ${e instanceof Error ? e.message : String(e)}`,
+        });
+      } catch (err) {
+        console.error("[listings-intake] fail-narrow Spine write failed:", err);
+      }
     }
   }
+  // Echoed in the response so dry-runs surface which path was taken.
+  summary.seeded_zips_source = seededZipsSource;
+  summary.seeded_zips_count = seededZips.size;
 
   // ── Phase 1 timing: RentCast collect (per-ZIP wall-time instrumentation) ──
   const tCollectStart = Date.now();

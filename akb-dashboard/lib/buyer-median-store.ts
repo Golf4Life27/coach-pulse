@@ -19,6 +19,13 @@ import { BUYER_TRACKS } from "@/lib/buyer-median-input";
 
 export const BUYER_MEDIAN_ZIP_TABLE = "tbleoqYRBmnJq5V0Z";
 
+/** Fail-narrow allowlist (operator 2026-06-10): if the store read fails (e.g.
+ *  the prod AIRTABLE_PAT is scoped before this table was created), callers
+ *  fall back to this hardcoded set of KNOWN-SEEDED ZIPs rather than opening
+ *  up to "all priceable markets per state." Keep this list in sync with the
+ *  ZIPs we know are seeded — never widen it on a store-read failure. */
+export const FALLBACK_SEEDED_ZIPS: ReadonlySet<string> = new Set(["48227"]);
+
 const AIRTABLE_PAT = process.env.AIRTABLE_PAT;
 const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
 

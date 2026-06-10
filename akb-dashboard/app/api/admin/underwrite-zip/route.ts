@@ -90,6 +90,21 @@ export async function GET(req: Request) {
 
   const uwCtx = await loadUnderwriteContextForListings(scoped);
 
+  // FAIL LOUDLY (operator 2026-06-10): if the ZIP-store load surfaced any
+  // errors, abort the station — the underwrite step is the chokepoint and a
+  // silent partial pass would write wrong MAOs. Apply-mode 502s; dry-run
+  // returns the errors so the operator can see exactly what's wrong (the
+  // AIRTABLE_PAT scope mismatch is the expected cause).
+  if (uwCtx.errors.size > 0) {
+    const errs = [...uwCtx.errors.entries()].map(([key, message]) => ({ key, message }));
+    const detail = `Buyer_Median_ZIP store read failed for ${errs.length} key(s); refusing to underwrite. ` +
+      `Likely cause: AIRTABLE_PAT scope excludes Buyer_Median_ZIP (tbleoqYRBmnJq5V0Z). Extend the PAT to include the table.`;
+    return NextResponse.json(
+      { ok: false, error: "zip_store_unavailable", detail, errors: errs, scope: [...zipScope], scoped_count: scoped.length, duration_ms: Date.now() - t0 },
+      { status: 502 },
+    );
+  }
+
   const results: Array<{
     recordId: string;
     address: string;
