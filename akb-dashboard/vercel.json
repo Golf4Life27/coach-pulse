@@ -13,6 +13,10 @@
       "schedule": "*/10 * * * *"
     },
     {
+      "path": "/api/cron/h2-outreach?dry_run=false&limit=10",
+      "schedule": "0 16 * * *"
+    },
+    {
       "path": "/api/scan-replies",
       "schedule": "0 11 * * *"
     },
