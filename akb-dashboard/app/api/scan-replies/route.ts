@@ -13,7 +13,12 @@ import {
 } from "@/lib/appraiser/auto-run-on-engaged";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+// 300 (plan ceiling) — raised from 60 with the auto-run-on-engaged kick
+// (2026-06-10 ruling): a Texted → Response Received transition now runs
+// ARV inline (~15s) and, budget permitting, an awaited vision rehab
+// (1-3 min). Transitions are rare (a few per day), so the Quo scan
+// itself still finishes in the old 60s envelope on a normal tick.
+export const maxDuration = 300;
 
 const AIRTABLE_PAT = process.env.AIRTABLE_PAT!;
 const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
@@ -122,10 +127,14 @@ async function handleScan(req: Request) {
     const errors: string[] = [];
     // 2026-06-10 ruling — auto-run Appraiser on Texted → Response Received.
     // ARV is awaited inline (fresh number needed before the alert lands);
-    // rehab is fire-and-forget (the panel's manual button is the prepared
-    // one-click fallback). See lib/appraiser/auto-run-on-engaged.ts.
+    // rehab is awaited too when the remaining lambda budget fits a vision
+    // run, else skipped with a recorded reason (the panel's manual button
+    // is the prepared one-click fallback). NO fire-and-forget — see
+    // lib/appraiser/auto-run-on-engaged.ts.
     const autoRunResults: EngagedAutoRunResult[] = [];
     const origin = originFromRequest(req);
+    // 10s reserve for the closing Airtable writes + JSON response.
+    const deadlineAtMs = Date.now() + maxDuration * 1000 - 10_000;
 
     for (const phone of phones) {
       phonesChecked++;
@@ -174,17 +183,20 @@ async function handleScan(req: Request) {
                 const r = await autoRunOnEngaged({
                   recordId: listing.id,
                   origin,
+                  deadlineAtMs,
                 });
                 autoRunResults.push(r);
               } catch (err) {
                 autoRunResults.push({
                   recordId: listing.id,
-                  arvAttempted: true,
                   arvOk: false,
                   arvHttpStatus: null,
                   arvElapsedMs: 0,
-                  rehabKicked: false,
-                  error: String(err).slice(0, 240),
+                  arvError: String(err).slice(0, 240),
+                  rehab: "failed",
+                  rehabHttpStatus: null,
+                  rehabElapsedMs: 0,
+                  rehabError: String(err).slice(0, 240),
                 });
               }
             }
@@ -218,7 +230,8 @@ async function handleScan(req: Request) {
       autoRunOnEngaged: autoRunResults.length > 0 ? {
         attempted: autoRunResults.length,
         arvOk: autoRunResults.filter((r) => r.arvOk).length,
-        rehabKicked: autoRunResults.filter((r) => r.rehabKicked).length,
+        rehabOk: autoRunResults.filter((r) => r.rehab === "ok").length,
+        rehabSkipped: autoRunResults.filter((r) => r.rehab.startsWith("skipped")).length,
         results: autoRunResults,
       } : undefined,
       errors: errors.length > 0 ? errors : undefined,

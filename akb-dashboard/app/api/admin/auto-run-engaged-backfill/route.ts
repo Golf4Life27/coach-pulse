@@ -12,8 +12,9 @@
 //   ?limit=N           cap candidates per invocation (default 8)
 //   ?force=1           include records that already have arvValidatedAt
 //                      (refresh instead of skip)
-//   ?skip_rehab=1      ARV only, don't fire rehab (faster + safer when
-//                      vision is hot)
+//   ?rehab=1           ALSO run an awaited vision rehab per record
+//                      (default ARV-only; rehab mode fits ~2 records
+//                      per invocation — budget guard adjusts)
 //   ?pace_ms=N         delay between records (default 2000)
 //
 // Auth posture mirrors admin/appraiser-backfill: no app-level guard,
@@ -42,9 +43,12 @@ export const maxDuration = 300;
 const DEFAULT_LIMIT = 8;
 const DEFAULT_PACE_MS = 2000;
 // Same budget guard pattern as admin/appraiser-backfill: stop the loop
-// when remaining time wouldn't fit a full ARV (worst-case ~25s) + the
-// pace gap + a 10s buffer for the closing audit + JSON response.
-const MAX_RECORD_BUDGET_MS = 30_000;
+// when remaining time wouldn't fit a full record + a 10s buffer for the
+// closing audit + JSON response. ARV-only records cost ~25s worst-case;
+// with ?rehab=1 an awaited vision run can take 1-3 min, so the guard
+// widens accordingly (≈2 records per invocation in rehab mode).
+const ARV_ONLY_RECORD_BUDGET_MS = 30_000;
+const WITH_REHAB_RECORD_BUDGET_MS = 200_000;
 const SAFETY_BUFFER_MS = 10_000;
 
 function sleep(ms: number): Promise<void> {
@@ -65,7 +69,12 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const apply = url.searchParams.get("apply") === "1";
   const force = url.searchParams.get("force") === "1";
-  const skipRehab = url.searchParams.get("skip_rehab") === "1";
+  // ARV-only by default: the cohort needs its negotiation numbers, and
+  // ARV-only fits ~8 records per invocation. Pass ?rehab=1 to also run
+  // an AWAITED vision rehab per record (~2 records per invocation —
+  // budget guard adjusts). Never fire-and-forget; see
+  // lib/appraiser/auto-run-on-engaged.ts.
+  const withRehab = url.searchParams.get("rehab") === "1";
   const limitParam = url.searchParams.get("limit");
   const limit =
     limitParam != null
@@ -107,7 +116,7 @@ export async function GET(req: Request) {
       agent: "appraiser",
       event: "auto_run_engaged_backfill_dry_run",
       status: "confirmed_success",
-      inputSummary: { limit, force, skip_rehab: skipRehab },
+      inputSummary: { limit, force, with_rehab: withRehab },
       outputSummary: {
         engaged_total: engaged.length,
         candidate_total: candidates.length,
@@ -130,13 +139,19 @@ export async function GET(req: Request) {
 
   // ── Apply mode ──────────────────────────────────────────────────────
   const origin = originFromRequest(req);
+  // Forward the operator's dashboard cookie so the sub-routes auth as
+  // dashboard_session when fired from Alex's logged-in browser.
+  const cookie = req.headers.get("cookie");
   const results: EngagedAutoRunResult[] = [];
   let truncatedByBudget = false;
+  const recordBudgetMs = withRehab
+    ? WITH_REHAB_RECORD_BUDGET_MS
+    : ARV_ONLY_RECORD_BUDGET_MS;
 
   for (let i = 0; i < subset.length; i++) {
     const elapsed = Date.now() - t0;
     const remaining = maxDuration * 1000 - elapsed - SAFETY_BUFFER_MS;
-    if (remaining < MAX_RECORD_BUDGET_MS) {
+    if (remaining < recordBudgetMs) {
       truncatedByBudget = true;
       break;
     }
@@ -144,7 +159,8 @@ export async function GET(req: Request) {
     const r = await autoRunOnEngaged({
       recordId: subset[i].recordId,
       origin,
-      skipRehab,
+      cookie,
+      skipRehab: !withRehab,
     });
     results.push(r);
 
@@ -157,11 +173,11 @@ export async function GET(req: Request) {
     agent: "appraiser",
     event: "auto_run_engaged_backfill_applied",
     status: results.every((r) => r.arvOk) ? "confirmed_success" : "uncertain",
-    inputSummary: { limit, force, skip_rehab: skipRehab, pace_ms: paceMs },
+    inputSummary: { limit, force, with_rehab: withRehab, pace_ms: paceMs },
     outputSummary: {
       attempted: results.length,
       arv_ok: results.filter((r) => r.arvOk).length,
-      rehab_kicked: results.filter((r) => r.rehabKicked).length,
+      rehab_ok: results.filter((r) => r.rehab === "ok").length,
       truncated_by_budget: truncatedByBudget,
     },
     decision: "applied",
@@ -175,7 +191,7 @@ export async function GET(req: Request) {
     examined: subset.length,
     attempted: results.length,
     arv_ok: results.filter((r) => r.arvOk).length,
-    rehab_kicked: results.filter((r) => r.rehabKicked).length,
+    rehab_ok: results.filter((r) => r.rehab === "ok").length,
     truncated_by_budget: truncatedByBudget,
     next_cursor:
       results.length > 0 ? results[results.length - 1].recordId : nextCursor,

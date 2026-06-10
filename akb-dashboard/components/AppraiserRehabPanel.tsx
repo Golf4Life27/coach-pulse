@@ -17,7 +17,10 @@
  *      photos / vision call failed) the "or set manually" expander
  *      surfaces — Constitution Rule 3, manual is fallback-only.
  *
- *   3. Compute in flight → button shows "Running… (15-30s — Vision call)".
+ *   3. Compute in flight → button shows "Running… (1-3 min — Vision
+ *      call, leave this open)". The rehab route has maxDuration=300
+ *      (Freeland P0, 2026-06-10) so the fetch is expected to hold for
+ *      minutes — that is honest, not hung.
  */
 
 import { useState } from "react";
@@ -274,7 +277,7 @@ export default function AppraiserRehabPanel({ recordId, listing }: AppraiserReha
           disabled={running}
           className="bg-emerald-700 hover:bg-emerald-600 text-white text-[11px] font-semibold px-3 py-1.5 rounded disabled:opacity-50"
         >
-          {running ? "Running… (15-30s — Vision call)" : "Run rehab"}
+          {running ? "Running… (1-3 min — Vision call, leave this open)" : "Run rehab"}
         </button>
         {error && <p className="text-[10px] text-red-400">{error}</p>}
         {/* INV-005 manual fallback — only renders after a vision/photo

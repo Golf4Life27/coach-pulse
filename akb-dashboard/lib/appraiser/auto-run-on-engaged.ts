@@ -14,16 +14,18 @@
 // header for the 2026-06-04 reconciliation history).
 //
 // Two-track posture:
-//   ARV  — awaited inline (10-20s). Operator needs the number fresh
-//          when the reply alert lands. ARV is also cheap enough that
-//          it fits the scan-replies 60s budget even with the existing
-//          per-phone Quo work.
-//   Rehab — fire-and-forget (15-30s via Anthropic vision). The
-//          AppraiserRehabPanel already surfaces a "Run rehab" one-click
-//          if the auto-kick doesn't land (no photos, vision down, lambda
-//          cut). Per the ruling: "Rehab auto-runs on the same transition
-//          if it can run unattended; otherwise surface as a prepared
-//          one-click."
+//   ARV   — awaited inline (10-20s). Operator needs the number fresh
+//           when the reply alert lands.
+//   Rehab — awaited too, when the caller's remaining lambda budget can
+//           fit it (vision runs 1-3 min; the rehab route itself has
+//           maxDuration=300 as of the Freeland P0 fix). NO fire-and-
+//           forget: a detached fetch can be aborted when the calling
+//           lambda freezes on return, which silently produces no rehab
+//           estimate — exactly the failure mode the Positive
+//           Confirmation Principle forbids. If the budget can't fit a
+//           rehab run, we SKIP it and say so in the result; the
+//           AppraiserRehabPanel's "Run rehab" button is the prepared
+//           one-click fallback per the ruling.
 //
 // Idempotent: the appraiser routes are safe to re-call; their write paths
 // only stamp ARV_Validated_At / Rehab_Estimated_At on a fresh successful
@@ -32,14 +34,22 @@
 
 const CRON_SECRET = process.env.CRON_SECRET;
 
+// Worst-case wall time we reserve before attempting an awaited rehab run
+// (photo scrape + vision + Airtable write). If the caller's remaining
+// budget is below this, rehab is skipped with an explicit reason.
+export const REHAB_BUDGET_MS = 180_000;
+
 export interface EngagedAutoRunResult {
   recordId: string;
-  arvAttempted: boolean;
   arvOk: boolean;
   arvHttpStatus: number | null;
   arvElapsedMs: number;
-  rehabKicked: boolean;
-  error: string | null;
+  arvError: string | null;
+  /** "ok" | "failed" | "skipped_budget" | "skipped_by_caller" */
+  rehab: "ok" | "failed" | "skipped_budget" | "skipped_by_caller";
+  rehabHttpStatus: number | null;
+  rehabElapsedMs: number;
+  rehabError: string | null;
 }
 
 export interface EngagedAutoRunInput {
@@ -48,61 +58,90 @@ export interface EngagedAutoRunInput {
   /** Forward an explicit cookie (operator-driven path); otherwise the
    *  CRON_SECRET bearer carries the auth. */
   cookie?: string | null;
-  /** Skip the rehab kick (callers that already know there are no
-   *  photos, or backfill loops trying to stay within budget). */
+  /** Skip the rehab run entirely (callers that already know there are
+   *  no photos, or ARV-only sweeps). */
   skipRehab?: boolean;
+  /** Epoch ms after which the CALLER's lambda budget is exhausted.
+   *  Rehab is only attempted when at least REHAB_BUDGET_MS remains.
+   *  Omit to always attempt (callers with their own budget loop). */
+  deadlineAtMs?: number;
+}
+
+async function callRoute(
+  url: string,
+  headers: Record<string, string>,
+): Promise<{ ok: boolean; status: number | null; elapsedMs: number; error: string | null }> {
+  const t0 = Date.now();
+  try {
+    const res = await fetch(url, { headers, cache: "no-store" });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      return {
+        ok: false,
+        status: res.status,
+        elapsedMs: Date.now() - t0,
+        error: body ? body.slice(0, 240) : `http_${res.status}`,
+      };
+    }
+    return { ok: true, status: res.status, elapsedMs: Date.now() - t0, error: null };
+  } catch (err) {
+    return {
+      ok: false,
+      status: null,
+      elapsedMs: Date.now() - t0,
+      error: err instanceof Error ? err.message.slice(0, 240) : String(err).slice(0, 240),
+    };
+  }
 }
 
 export async function autoRunOnEngaged(
   input: EngagedAutoRunInput,
 ): Promise<EngagedAutoRunResult> {
-  const { recordId, origin, cookie, skipRehab } = input;
+  const { recordId, origin, cookie, skipRehab, deadlineAtMs } = input;
 
   const headers: Record<string, string> = {};
   if (cookie) headers.cookie = cookie;
   if (CRON_SECRET) headers.authorization = `Bearer ${CRON_SECRET}`;
 
-  const arvT0 = Date.now();
-  let arvOk = false;
-  let arvHttpStatus: number | null = null;
-  let error: string | null = null;
-  try {
-    const res = await fetch(`${origin}/api/agents/appraiser/arv/${recordId}`, {
-      headers,
-      cache: "no-store",
-    });
-    arvHttpStatus = res.status;
-    arvOk = res.ok;
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      error = body ? body.slice(0, 240) : `arv_http_${res.status}`;
-    }
-  } catch (err) {
-    error = err instanceof Error ? err.message.slice(0, 240) : String(err).slice(0, 240);
-  }
-  const arvElapsedMs = Date.now() - arvT0;
+  const arv = await callRoute(
+    `${origin}/api/agents/appraiser/arv/${recordId}`,
+    headers,
+  );
 
-  // Fire-and-forget rehab. Failures (no photos, vision call failed, 60s
-  // timeout) are intentionally swallowed — the AppraiserRehabPanel's
-  // manual "Run rehab" CTA is the prepared one-click fallback. Errors
-  // still land in the rehab route's own audit log.
-  let rehabKicked = false;
-  if (!skipRehab) {
-    rehabKicked = true;
-    void fetch(`${origin}/api/agents/appraiser/rehab/${recordId}`, {
+  let rehab: EngagedAutoRunResult["rehab"];
+  let rehabHttpStatus: number | null = null;
+  let rehabElapsedMs = 0;
+  let rehabError: string | null = null;
+
+  if (skipRehab) {
+    rehab = "skipped_by_caller";
+  } else if (
+    deadlineAtMs != null &&
+    deadlineAtMs - Date.now() < REHAB_BUDGET_MS
+  ) {
+    rehab = "skipped_budget";
+    rehabError = "caller budget too low for an awaited vision run — use the panel's Run rehab button or the backfill route";
+  } else {
+    const r = await callRoute(
+      `${origin}/api/agents/appraiser/rehab/${recordId}`,
       headers,
-      cache: "no-store",
-    }).catch(() => {});
+    );
+    rehab = r.ok ? "ok" : "failed";
+    rehabHttpStatus = r.status;
+    rehabElapsedMs = r.elapsedMs;
+    rehabError = r.error;
   }
 
   return {
     recordId,
-    arvAttempted: true,
-    arvOk,
-    arvHttpStatus,
-    arvElapsedMs,
-    rehabKicked,
-    error,
+    arvOk: arv.ok,
+    arvHttpStatus: arv.status,
+    arvElapsedMs: arv.elapsedMs,
+    arvError: arv.error,
+    rehab,
+    rehabHttpStatus,
+    rehabElapsedMs,
+    rehabError,
   };
 }
 
