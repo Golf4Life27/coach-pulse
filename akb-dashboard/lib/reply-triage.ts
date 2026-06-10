@@ -15,7 +15,34 @@
 //
 // Pure. No I/O. Tested in lib/reply-triage.test.ts.
 
-export type ReplyClassification = "rejection" | "interest" | "counter" | "unknown";
+export type ReplyClassification = "rejection" | "interest" | "counter" | "acceptance" | "unknown";
+
+/** Alert routing tier (operator 2026-06-10). Maverick's SMS channel is
+ *  reserved for decisions and urgency; it MUST NOT announce that a text
+ *  arrived (Quo already does that). Three tiers, mutually exclusive:
+ *
+ *   tier_0_auto_close — high-confidence rejection. System sends a polite
+ *                       close (no prices, no numbers, max one per thread,
+ *                       standard send rails). NO ALERT, no proposal.
+ *   tier_1_decision   — interest, counter, unknown. Needs-decision proposal
+ *                       + SMS that LEADS with the decision (never the body).
+ *   tier_2_urgent     — acceptance / strong-buy signals. "ACT NOW:" prefix.
+ */
+export type AlertTier = "tier_0_auto_close" | "tier_1_decision" | "tier_2_urgent";
+
+/** Acceptance — the seller said yes / asked for the contract. Checked FIRST
+ *  (before rejection) because the rejection patches match "accepted ... offer"
+ *  shapes; a true "we accept your offer" must not be eaten by them. Patterns
+ *  are deliberately narrow: a strong-buy signal, not generic positivity. */
+const ACCEPTANCE_PATTERNS = [
+  /\bsend\s+(?:me\s+)?(?:the\s+|a\s+)?contract\b/i,
+  /\bseller\s+(?:will|would)\s+take\s+(?:it|that|your)\b/i,
+  /\bwe(?:'ll|\s+will)?\s+take\s+(?:it|that|your\s+offer)\b/i,
+  /\b(?:we|seller|they)\s+accepts?\s+(?:it|that|your\s+offer)\b/i,
+  /\byour\s+offer\s+(?:is|was|has\s+been)\s+accepted\b/i,
+  /\blet'?s\s+(?:do\s+it|move\s+forward|get\s+it\s+done)\b/i,
+  /\bwrite\s+(?:it|the\s+offer|the\s+contract)\s+up\b/i,
+];
 
 const REJECTION_PATTERNS = [
   /\bnot interested\b/i,
@@ -99,6 +126,13 @@ export function classifyReply(body: string): {
   const trimmed = (body ?? "").trim();
   if (!trimmed) return { classification: "unknown", matchedPattern: null };
 
+  // Acceptance FIRST — a true "we accept your offer" must not be eaten by
+  // the rejection patches (which match "accepted ... offer" shapes when the
+  // seller is comparing us to another deal in hand).
+  for (const pat of ACCEPTANCE_PATTERNS) {
+    if (pat.test(trimmed)) return { classification: "acceptance", matchedPattern: pat.source };
+  }
+
   for (const pat of REJECTION_PATTERNS) {
     if (pat.test(trimmed)) return { classification: "rejection", matchedPattern: pat.source };
   }
@@ -126,6 +160,10 @@ export function determineNewStatus(
   currentStatus: string | null,
 ): string | null {
   if (classification === "rejection") return "Dead";
+  if (classification === "acceptance") {
+    if (currentStatus === "Offer Accepted") return null;
+    return "Offer Accepted";
+  }
   if (classification === "counter") {
     if (currentStatus === "Counter Received") return null;
     return "Counter Received";
@@ -140,6 +178,10 @@ export type DecisionKind = "pricing" | "engagement" | "review" | "none";
 
 export interface SellerReplyTriage {
   classification: ReplyClassification;
+  /** Alert routing tier (operator 2026-06-10): rejection → tier_0_auto_close
+   *  (system close, no alert); counter/interest/unknown → tier_1_decision;
+   *  acceptance → tier_2_urgent (ACT NOW). */
+  tier: AlertTier;
   /** True when this genuine reply needs an operator decision (i.e. it is not
    *  a clean rejection, which is a downgrade rather than a decision). */
   needsDecision: boolean;
@@ -165,9 +207,21 @@ export function triageSellerReply(
   const snippet = (body ?? "").trim().slice(0, 160);
 
   switch (classification) {
+    case "acceptance":
+      return {
+        classification,
+        tier: "tier_2_urgent",
+        needsDecision: true,
+        decisionKind: "engagement",
+        priority: "HIGH",
+        queueStatus,
+        reasoning: `Seller ACCEPTED / asked for the contract — ACT NOW: draft contract, operator confirms terms. Reply: "${snippet}"`,
+        matchedPattern,
+      };
     case "counter":
       return {
         classification,
+        tier: "tier_1_decision",
         needsDecision: true,
         decisionKind: "pricing",
         priority: "HIGH",
@@ -178,6 +232,7 @@ export function triageSellerReply(
     case "interest":
       return {
         classification,
+        tier: "tier_1_decision",
         needsDecision: true,
         decisionKind: "engagement",
         priority: "HIGH",
@@ -188,16 +243,18 @@ export function triageSellerReply(
     case "rejection":
       return {
         classification,
+        tier: "tier_0_auto_close",
         needsDecision: false,
         decisionKind: "none",
         priority: "NORMAL",
         queueStatus,
-        reasoning: `Seller declined (matched /${matchedPattern}/) — route to Dead, no offer. Reply: "${snippet}"`,
+        reasoning: `Seller declined (matched /${matchedPattern}/) — route to Dead; system sends the one-time polite close (no alert). Reply: "${snippet}"`,
         matchedPattern,
       };
     default:
       return {
         classification,
+        tier: "tier_1_decision",
         needsDecision: true,
         decisionKind: "review",
         priority: "NORMAL",

@@ -199,6 +199,25 @@ export interface Deal {
   buyerBlastStatus: "Pending" | "Sent" | "Closed" | null;
   actionCardState: "Open" | "Held" | "Cleared" | null;
   actionHoldUntil: string | null;
+  // ── INV-023 Pre-EMD DD gate (2026-06-10) — deal-level state lives HERE,
+  // never on Listings_V1 (one concept, one table). Operator attestations:
+  preEmdCmaValidated?: boolean;
+  preEmdCmaValidatedAt?: string | null;
+  preEmdArvConfirmed?: boolean;
+  preEmdPhotosValidated?: boolean;
+  preEmdPhotosValidatedAt?: string | null;
+  /** REQUIRED for every state (operator ruling 2026-06-10) — assignment is
+   *  not prohibited in THIS contract. Replaces TN-only Memphis_Assignment_Verified. */
+  preEmdAssignmentClauseVerified?: boolean;
+  preEmdOperatorSignoff?: boolean;
+  preEmdOperatorSignoffBy?: string | null;
+  preEmdOperatorSignoffAt?: string | null;
+  /** EVALUATOR-OWNED (never hand-flipped): green | red | not_yet_evaluated. */
+  preEmdMathGate?: string | null;
+  /** EVALUATOR-OWNED: pass | hold | block | not_yet_evaluated. */
+  preEmdVerdict?: string | null;
+  preEmdLastEvaluatedAt?: string | null;
+  preEmdHoldReasons?: string | null;
 }
 
 export interface Buyer {

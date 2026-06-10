@@ -143,12 +143,27 @@ export interface PropertyIntelSnapshot {
   lastHydratedAt: string | null;
 }
 
+/** Deal-level gate state (INV-023, 2026-06-10). One concept, one table:
+ *  Pre_EMD_* lives on Deals, joined to the listing by normalized address. */
+export interface DealGateSnapshot {
+  dealRecordId: string;
+  contractPrice: number | null;
+  preEmdCmaValidated: boolean;
+  preEmdArvConfirmed: boolean;
+  preEmdPhotosValidated: boolean;
+  /** REQUIRED for every state (ruling 2026-06-10), not TN-only. */
+  preEmdAssignmentClauseVerified: boolean;
+  preEmdOperatorSignoff: boolean;
+}
+
 export interface GateContext {
   recordId: string;
   listing: Listing | null;
   auditLog?: AuditEntry[] | null;
   // Gate 5 (Pre-EMD) source:
   propertyIntel?: PropertyIntelSnapshot | null;
+  /** Gate 5 (Pre-EMD) — the Deals row joined by address. */
+  deal?: DealGateSnapshot | null;
   // Gate 3 (Pre-Negotiation) sources:
   quoThread?: QuoMessage[] | null;
   gmailThread?: GmailMessage[] | null;
@@ -157,7 +172,7 @@ export interface GateContext {
   // Gate 4 (Pre-Contract) sources:
   paDocument?: PaDocumentSnapshot | null;
   buyerPipeline?: Buyer[] | null;
-  // Future gates will add: deal, pricingAgentRun, titlePrelim.
+  // Future gates will add: pricingAgentRun, titlePrelim.
 }
 
 export type CheckFn = (ctx: GateContext, config: Record<string, unknown>) => CheckResult;

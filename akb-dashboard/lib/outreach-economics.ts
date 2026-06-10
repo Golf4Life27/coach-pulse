@@ -274,6 +274,50 @@ export function resolveOpenerCeiling(
   return { mao: null, priceable: true, market: market?.id ?? null };
 }
 
+// ── Alert price read (2026-06-10 smoke-test fix) ─────────────────────
+// The first Tier 1 smoke test fired the null-price fallback on a record
+// that demonstrably had both numbers: the composer read the STICKY
+// Outreach_Offer_Price field (which the batch never wrote) instead of the
+// resolver chain the batch actually sends from. ONE READ PATH: the alert
+// resolves its numbers through resolveOpenerCeiling + openerMaoGuard —
+// exactly what the batch dispatches with. Sticky wins when captured;
+// MAO_V1 (the door-opener field) is the send-path base otherwise.
+
+export interface AlertNumbers {
+  /** The opener we are HOLDING at — sticky if captured, else the guarded
+   *  door-opener (the same number the batch would send). Null when the
+   *  guard refuses or no base exists (the composer then says "hold sticky
+   *  opener" and the gap is audited — never fabricated). */
+  opener: number | null;
+  /** The underwritten MAO ceiling from the SAME resolver the batch uses. */
+  mao: number | null;
+}
+
+/** Pure: resolve the {opener, mao} pair for an operator alert through the
+ *  batch's own read path. */
+export function resolveAlertNumbers(listing: {
+  state?: string | null;
+  zip?: string | null;
+  mao?: number | null;
+  outreachOfferPrice?: number | null;
+  underwrittenMao?: number | null;
+  realArvMedian?: number | null;
+  estRehab?: number | null;
+  listPrice?: number | null;
+  redFlags?: string[] | string | null;
+  distressBucket?: string | null;
+  distressScore?: number | null;
+}): AlertNumbers {
+  const ceiling = resolveOpenerCeiling(listing);
+  const sticky =
+    typeof listing.outreachOfferPrice === "number" && listing.outreachOfferPrice > 0
+      ? listing.outreachOfferPrice
+      : null;
+  const base = sticky ?? (typeof listing.mao === "number" && listing.mao > 0 ? listing.mao : null);
+  const guard = openerMaoGuard({ baseOpener: base, mao: ceiling.mao, priceable: ceiling.priceable });
+  return { opener: guard.ok ? guard.opener : null, mao: ceiling.mao };
+}
+
 export interface FirstOutreachHydrationCheck {
   ok: boolean;
   isFirstOutreach: boolean;

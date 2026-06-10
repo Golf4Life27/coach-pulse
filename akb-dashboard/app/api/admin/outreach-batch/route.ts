@@ -394,12 +394,24 @@ async function handle(req: Request): Promise<Response> {
       //    Unconfirmed or failed → NOT marked Texted (no false landed-contact).
       const iso = new Date().toISOString();
       if (row.delivered) {
-        const existing = (await getListing(p.recordId).catch(() => null))?.notes ?? null;
-        await updateListingRecord(p.recordId, {
+        const fresh = await getListing(p.recordId).catch(() => null);
+        const fields: Record<string, unknown> = {
           Outreach_Status: "Texted",
           Last_Outbound_At: iso,
-          Verification_Notes: buildSentNote(existing, iso, send.id, p.message!),
-        });
+          Verification_Notes: buildSentNote(fresh?.notes ?? null, iso, send.id, p.message!),
+        };
+        // STICKY CAPTURE (2026-06-10 smoke-test root cause): the batch never
+        // wrote Outreach_Offer_Price, so downstream readers (Tier 1 alert
+        // recommendations, D3 drift detection) found nulls on records that
+        // demonstrably had a sent offer. Same contract outreach-fire honors:
+        // sticky, set once at send, never recomputed.
+        if (!(typeof fresh?.outreachOfferPrice === "number" && fresh.outreachOfferPrice > 0) && p.mao != null && p.mao > 0) {
+          fields["Outreach_Offer_Price"] = p.mao; // the guarded opener that was actually sent
+        }
+        if (fresh?.listPrice != null && fresh.listPrice > 0 && fresh?.listPriceAtSend == null) {
+          fields["List_Price_At_Send"] = fresh.listPrice;
+        }
+        await updateListingRecord(p.recordId, fields);
         row.marked_texted = true;
       }
 

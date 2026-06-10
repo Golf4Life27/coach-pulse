@@ -1,21 +1,23 @@
 {
   "$schema_note": "Pre-EMD DD Gate (Gate 5, INV-029) per ship order 2026-05-25. Runs while a deal is under_contract, BEFORE the operator wires EMD. This gate is an in-stage guard for the EMD-wire action (not a stage-advancing gate) — run-gate is diagnostic and does not move Pipeline_Stage. All 7 items are blocking; the gate returns BLOCKED with itemized reasons until every item passes. EMD button (Forge ship, downstream) will read this gate's output and stay disabled until green. Field decisions locked 2026-05-25: CMA staleness keys off Listing.arvValidatedAt (7d); Memphis_Assignment_Verified + EMD_Operator_Signoff are new operator checkboxes; buyer-track MAO = Listing.investorMao; Buyer_Median + federation severity read from Property_Intel (INV-022).",
-  "last_updated": "2026-05-25",
+  "last_updated": "2026-06-10",
   "source": "INV-029 ship order — Pre-EMD DD Gate",
-  "version": 1,
+  "version": 2,
   "gate_id": "pre_emd",
   "stage_from": "under_contract",
   "stage_to": "under_contract",
   "config": {
     "cma_staleness_days": 7,
-    "condition_variance_block_pct": 0.5,
-    "tn_assignability_states": ["TN", "Tennessee"]
+    "condition_variance_block_pct": 0.5
   },
   "items": [
     {
       "id": "PE-01",
       "description": "CMA present and fresh (arvValidatedAt within 7 days)",
-      "data_sources": ["airtable_listing", "cma"],
+      "data_sources": [
+        "airtable_listing",
+        "cma"
+      ],
       "pass_criteria": "Listing.arvValidatedAt is set AND within cma_staleness_days; CMA fetch returned ≥1 comp. Missing/stale arvValidatedAt or empty CMA → block.",
       "failure_action": "block",
       "blocking": true
@@ -23,7 +25,9 @@
     {
       "id": "PE-02",
       "description": "Buyer_Median present (Property_Intel.buyer_median not null)",
-      "data_sources": ["property_intel"],
+      "data_sources": [
+        "property_intel"
+      ],
       "pass_criteria": "Property_Intel.Buyer_Median_Value is a positive number. Null / no Property_Intel row → block (V2.1 floor truth signal absent — Decision Preconditions Rule 1).",
       "failure_action": "block",
       "blocking": true
@@ -31,23 +35,30 @@
     {
       "id": "PE-03",
       "description": "Federation status green (no AMBER/RED discrepancy)",
-      "data_sources": ["property_intel"],
+      "data_sources": [
+        "property_intel"
+      ],
       "pass_criteria": "Property_Intel.Discrepancy_Severity_Max ∈ {none, info}. amber/red → block. Null / no row → block (federation not yet run).",
       "failure_action": "block",
       "blocking": true
     },
     {
       "id": "PE-04",
-      "description": "Memphis assignment language verified (when State=TN)",
-      "data_sources": ["airtable_listing"],
-      "pass_criteria": "If Listing.State ∈ tn_assignability_states, Memphis_Assignment_Verified must be true. Non-TN → N/A pass. Superseded by INV-023 DocuSign PA-parsing when that lands.",
+      "description": "Assignment clause verified (EVERY state) — operator confirmed assignment is not prohibited in this contract",
+      "data_sources": [
+        "airtable_listing",
+        "airtable_deal"
+      ],
+      "pass_criteria": "Deals.Pre_EMD_Assignment_Clause_Verified must be true for every state (operator ruling 2026-06-10 — Memphis is where we learned the lesson, not the boundary of the risk). No joined Deals row -> data_missing.",
       "failure_action": "block",
       "blocking": true
     },
     {
       "id": "PE-05",
       "description": "Buyer-track MAO computed (Listing.investorMao)",
-      "data_sources": ["airtable_listing"],
+      "data_sources": [
+        "airtable_listing"
+      ],
       "pass_criteria": "Listing.investorMao is a positive number. Null / ≤0 → block (pricing math incomplete).",
       "failure_action": "block",
       "blocking": true
@@ -55,16 +66,22 @@
     {
       "id": "PE-06",
       "description": "Photos verified against modeled condition (Sturtevant variance ≤50%)",
-      "data_sources": ["airtable_listing", "cma"],
+      "data_sources": [
+        "airtable_listing",
+        "cma"
+      ],
       "pass_criteria": "A photo-derived rehab exists (rehabEstimatedAt set) AND modeled-vs-evidenced footprint variance (Listing.buildingSqFt vs CMA median sqft) ≤ condition_variance_block_pct. No photo rehab on record, or variance >50% → block. (Mapped to the in-repo Sturtevant variance primitive per PC-20; revisit if a dedicated condition-variance axis is defined.)",
       "failure_action": "block",
       "blocking": true
     },
     {
       "id": "PE-07",
-      "description": "Operator EMD sign-off set",
-      "data_sources": ["airtable_listing"],
-      "pass_criteria": "Listing.EMD_Operator_Signoff is true. The final 'Alex looked at this' gate — non-negotiable for the Lost-Phone Test.",
+      "description": "Final operator sign-off (Deals.Pre_EMD_Operator_Signoff)",
+      "data_sources": [
+        "airtable_listing",
+        "airtable_deal"
+      ],
+      "pass_criteria": "Deals.Pre_EMD_Operator_Signoff must be true. No joined Deals row -> data_missing.",
       "failure_action": "block",
       "blocking": true
     }

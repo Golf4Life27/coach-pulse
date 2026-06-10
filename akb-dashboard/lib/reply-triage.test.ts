@@ -44,6 +44,19 @@ describe("classifyReply", () => {
     expect(classifyReply("yes interested").classification).toBe("interest");
   });
 
+  it("acceptance: strong-buy signals classify as acceptance and are checked BEFORE rejection", () => {
+    expect(classifyReply("send me the contract").classification).toBe("acceptance");
+    expect(classifyReply("seller will take it").classification).toBe("acceptance");
+    expect(classifyReply("we accept your offer").classification).toBe("acceptance");
+    expect(classifyReply("your offer is accepted").classification).toBe("acceptance");
+    expect(classifyReply("let's do it").classification).toBe("acceptance");
+    // The rejection patch ("accepted ... offer" comparison shape) must NOT
+    // eat a true acceptance:
+    expect(classifyReply("seller accepted your offer, send the contract").classification).toBe("acceptance");
+    // And the Freeland comparison shape stays a rejection:
+    expect(classifyReply("theyre in the process of accepting a much higher offer").classification).toBe("rejection");
+  });
+
   it("UNCLASSIFIED fallback preserved — ambiguous still routes to manual review (not bypassed)", () => {
     // The patches SHRINK the UNCLASSIFIED bucket toward rejection where the
     // signal is clear, but genuinely-ambiguous replies still land in unknown.
@@ -70,6 +83,24 @@ describe("determineNewStatus", () => {
   it("unknown promotes only a still-Texted record", () => {
     expect(determineNewStatus("unknown", "Texted")).toBe("Response Received");
     expect(determineNewStatus("unknown", "Negotiating")).toBeNull();
+  });
+});
+
+describe("triageSellerReply — alert tiers (operator 2026-06-10)", () => {
+  it("rejection → tier_0_auto_close (system close, no alert)", () => {
+    expect(triageSellerReply("not interested", "Texted").tier).toBe("tier_0_auto_close");
+  });
+  it("counter / interest / unknown → tier_1_decision", () => {
+    expect(triageSellerReply("seller is looking for $185,000", "Texted").tier).toBe("tier_1_decision");
+    expect(triageSellerReply("yes send me the offer", "Texted").tier).toBe("tier_1_decision");
+    expect(triageSellerReply("hmm let me check", "Texted").tier).toBe("tier_1_decision");
+  });
+  it("acceptance → tier_2_urgent, status routes to Offer Accepted", () => {
+    const t = triageSellerReply("seller will take it", "Texted");
+    expect(t.tier).toBe("tier_2_urgent");
+    expect(t.classification).toBe("acceptance");
+    expect(t.queueStatus).toBe("Offer Accepted");
+    expect(t.needsDecision).toBe(true);
   });
 });
 

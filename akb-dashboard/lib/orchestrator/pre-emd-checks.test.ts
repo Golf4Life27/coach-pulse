@@ -52,12 +52,26 @@ function comps(sqfts: number[]): RentCastSaleComp[] {
   }));
 }
 
+function deal(over: Partial<NonNullable<GateContext["deal"]>> = {}): NonNullable<GateContext["deal"]> {
+  return {
+    dealRecordId: "recDEAL000000001",
+    contractPrice: 50000,
+    preEmdCmaValidated: true,
+    preEmdArvConfirmed: true,
+    preEmdPhotosValidated: true,
+    preEmdAssignmentClauseVerified: true,
+    preEmdOperatorSignoff: true,
+    ...over,
+  };
+}
+
 function ctx(over: Partial<GateContext> = {}): GateContext {
   return {
     recordId: "rec1HTUqK0YEVb7uA",
     listing: listing(),
     cma: comps([900, 950, 1000]),
     propertyIntel: pi(),
+    deal: deal(),
     ...over,
   };
 }
@@ -133,21 +147,20 @@ describe("PE-03 federation green", () => {
   });
 });
 
-describe("PE-04 Memphis assignment", () => {
-  it("passes (N/A) for non-TN", () => {
-    expect(run("PE-04", ctx({ listing: listing({ state: "TX", memphisAssignmentVerified: false }) })).status).toBe("pass");
+describe("PE-04 assignment clause (EVERY state — ruling 2026-06-10)", () => {
+  it("FAILS for a non-TN state when unverified — Memphis was the lesson, not the boundary", () => {
+    expect(run("PE-04", ctx({ deal: deal({ preEmdAssignmentClauseVerified: false }), listing: listing({ state: "MI" }) })).status).toBe("fail");
+    expect(run("PE-04", ctx({ deal: deal({ preEmdAssignmentClauseVerified: false }), listing: listing({ state: "TX" }) })).status).toBe("fail");
   });
-  it("fails when TN + not verified", () => {
-    expect(run("PE-04", ctx({ listing: listing({ state: "TN", memphisAssignmentVerified: false }) })).status).toBe("fail");
+  it("fails when TN + not verified (unchanged)", () => {
+    expect(run("PE-04", ctx({ deal: deal({ preEmdAssignmentClauseVerified: false }), listing: listing({ state: "TN" }) })).status).toBe("fail");
   });
-  it("passes when TN + verified", () => {
-    expect(run("PE-04", ctx({ listing: listing({ state: "TN", memphisAssignmentVerified: true }) })).status).toBe("pass");
+  it("passes when verified, any state — reads the DEAL field", () => {
+    expect(run("PE-04", ctx({ listing: listing({ state: "TN" }) })).status).toBe("pass");
+    expect(run("PE-04", ctx({ listing: listing({ state: "MI" }) })).status).toBe("pass");
   });
-  it("data_missing when state unset", () => {
-    expect(run("PE-04", ctx({ listing: listing({ state: null }) })).status).toBe("data_missing");
-  });
-  it("recognizes 'Tennessee' long form", () => {
-    expect(run("PE-04", ctx({ listing: listing({ state: "Tennessee", memphisAssignmentVerified: false }) })).status).toBe("fail");
+  it("data_missing when no Deals row joins", () => {
+    expect(run("PE-04", ctx({ deal: null })).status).toBe("data_missing");
   });
 });
 
@@ -184,15 +197,15 @@ describe("PE-06 photos vs modeled condition (Sturtevant)", () => {
   });
 });
 
-describe("PE-07 operator sign-off", () => {
+describe("PE-07 operator sign-off (reads the DEAL — 2026-06-10 move)", () => {
   it("passes when signoff true", () => {
     expect(run("PE-07", ctx()).status).toBe("pass");
   });
-  it("fails when signoff false", () => {
-    expect(run("PE-07", ctx({ listing: listing({ emdOperatorSignoff: false }) })).status).toBe("fail");
+  it("fails when signoff false on the deal", () => {
+    expect(run("PE-07", ctx({ deal: deal({ preEmdOperatorSignoff: false }) })).status).toBe("fail");
   });
-  it("fails when signoff undefined", () => {
-    expect(run("PE-07", ctx({ listing: listing({ emdOperatorSignoff: undefined }) })).status).toBe("fail");
+  it("data_missing when no Deals row joins", () => {
+    expect(run("PE-07", ctx({ deal: null })).status).toBe("data_missing");
   });
 });
 

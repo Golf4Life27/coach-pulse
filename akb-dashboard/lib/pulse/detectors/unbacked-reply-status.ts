@@ -28,6 +28,27 @@ const REPLY_IMPLYING_STATUSES = new Set([
 const DEFAULT_WARNING_FLOOR = 5;
 const DEFAULT_CRITICAL_FLOOR = 12;
 
+/** Forward-only activity cutoff (operator 2026-06-10): the 25 legacy
+ *  pre-batch records with reply-asserting statuses and no recorded inbound
+ *  are KNOWN, dispositioned forward-only, and must never nag again. Only
+ *  records with outbound activity ON/after the first live batch (6/9) are
+ *  in scope — every post-6/9 send stamps Last_Outbound_At, so a record
+ *  with no outbound (or a pre-cutoff one) is legacy by definition. */
+const DEFAULT_ACTIVITY_CUTOFF_ISO = "2026-06-09T00:00:00Z";
+
+/** Pure: stable signature of the offending set, so the detection id changes
+ *  ONLY when the CONDITION changes (different record set), not per tick.
+ *  The runner's active-set diff then fires Spine/SMS once on the new id and
+ *  holds it steady on subsequent scans — "once per condition, not per tick". */
+export function conditionSignature(ids: string[]): string {
+  const joined = [...ids].sort().join(",");
+  let h = 5381;
+  for (let i = 0; i < joined.length; i++) {
+    h = ((h << 5) + h + joined.charCodeAt(i)) | 0;
+  }
+  return (h >>> 0).toString(36);
+}
+
 function readIntThreshold(
   env: Record<string, string | undefined>,
   key: string,
@@ -43,11 +64,18 @@ function readIntThreshold(
 export function detectUnbackedReplyStatus(
   input: PulseDetectorInput,
 ): PulseDetection[] {
-  const offending = input.listings.filter(
-    (l) =>
-      REPLY_IMPLYING_STATUSES.has(l.outreachStatus ?? "") &&
-      !l.lastInboundAt,
-  );
+  const cutoffRaw = input.env["PULSE_UNBACKED_STATUS_SINCE"] ?? DEFAULT_ACTIVITY_CUTOFF_ISO;
+  const cutoff = Date.parse(cutoffRaw);
+  const offending = input.listings.filter((l) => {
+    if (!REPLY_IMPLYING_STATUSES.has(l.outreachStatus ?? "")) return false;
+    if (l.lastInboundAt) return false;
+    // Post-cutoff activity only — legacy records (no outbound, or outbound
+    // before the first live batch) are forward-only dispositioned and out
+    // of scope forever.
+    if (!l.lastOutboundAt) return false;
+    const t = Date.parse(l.lastOutboundAt);
+    return Number.isFinite(t) && t >= cutoff;
+  });
   if (offending.length === 0) return [];
 
   const warningFloor = readIntThreshold(
@@ -85,7 +113,10 @@ export function detectUnbackedReplyStatus(
 
   return [
     {
-      id: "unbacked_reply_status_drift",
+      // Condition-signature id: stable while the offending SET is unchanged
+      // (runner holds it steady — no re-fire per tick), new id only when the
+      // condition itself changes. "Once per condition, not per tick."
+      id: `unbacked_reply_status_drift:${conditionSignature(offending.map((l) => l.id))}`,
       detector_id: "unbacked_reply_status",
       severity,
       title: `${offending.length} active records assert a reply but carry no recorded inbound`,

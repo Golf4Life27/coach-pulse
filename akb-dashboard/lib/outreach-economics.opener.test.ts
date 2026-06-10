@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { openerMaoGuard, resolveOpenerCeiling, MIN_OPENER_USD } from "./outreach-economics";
+import { openerMaoGuard, resolveOpenerCeiling, resolveAlertNumbers, MIN_OPENER_USD } from "./outreach-economics";
 
 describe("openerMaoGuard", () => {
   it("unpriceable market → passes the opener through untouched (guard does not run)", () => {
@@ -103,5 +103,58 @@ describe("resolveOpenerCeiling", () => {
     // MAO ceiling into contractOfferPrice is the bug this fix prevents.
     const c = resolveOpenerCeiling({ state: "MI", zip: "48227", realArvMedian: null, estRehab: null });
     expect(c.mao).toBeNull();
+  });
+});
+
+describe("resolveAlertNumbers — ONE read path (the 2026-06-10 smoke-test fix)", () => {
+  it("Tracey shape: sticky NOT captured, but MAO_V1 + Underwritten_MAO present → real numbers", () => {
+    // recVOZVgXT0GPenAt as it actually was at smoke-test time: the batch
+    // had sent $48,750 (MAO_V1, the door-opener field) but never wrote the
+    // sticky Outreach_Offer_Price; Underwritten_MAO=$50,000 was persisted.
+    // The old composer read the sticky field → nulls → wrong fallback.
+    const nums = resolveAlertNumbers({
+      state: "MI",
+      zip: "48227",
+      mao: 48_750,
+      outreachOfferPrice: null,
+      underwrittenMao: 50_000,
+    });
+    expect(nums.opener).toBe(48_750);
+    expect(nums.mao).toBe(50_000);
+  });
+
+  it("sticky wins when captured", () => {
+    const nums = resolveAlertNumbers({
+      state: "MI",
+      zip: "48227",
+      mao: 48_750,
+      outreachOfferPrice: 47_000,
+      underwrittenMao: 50_000,
+    });
+    expect(nums.opener).toBe(47_000);
+  });
+
+  it("opener above MAO comes back capped — same guard as the batch", () => {
+    const nums = resolveAlertNumbers({
+      state: "MI",
+      zip: "48227",
+      mao: 97_500, // 65%-of-list door-opener above the ceiling
+      outreachOfferPrice: null,
+      underwrittenMao: 50_000,
+    });
+    expect(nums.opener).toBe(50_000); // capped to MAO, never above
+    expect(nums.mao).toBe(50_000);
+  });
+
+  it("genuinely missing numbers → nulls (composer falls back, gap audited, nothing fabricated)", () => {
+    const nums = resolveAlertNumbers({
+      state: "MI",
+      zip: "48227",
+      mao: null,
+      outreachOfferPrice: null,
+      underwrittenMao: null,
+    });
+    expect(nums.opener).toBeNull();
+    expect(nums.mao).toBeNull();
   });
 });

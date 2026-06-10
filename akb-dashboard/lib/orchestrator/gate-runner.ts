@@ -18,7 +18,8 @@
 //      morning brief can render "Gate X item Y blocked on missing data
 //      Z for record W" without trawling individual entries.
 
-import { getListing, getBuyers } from "@/lib/airtable";
+import { getListing, getBuyers, getDeals } from "@/lib/airtable";
+import { normalizeAddressKey } from "@/lib/crawler/intake-filter";
 import { audit, readRecentFromKv, type AuditEntry } from "@/lib/audit-log";
 import { getMessagesForParticipant } from "@/lib/quo";
 import { getThreadsForEmail } from "@/lib/gmail";
@@ -98,6 +99,7 @@ export async function runGate(opts: RunGateOpts): Promise<GateRunResult> {
     paDocument: (fetched.pa_document as GateContext["paDocument"] | undefined) ?? null,
     buyerPipeline: (fetched.buyer_pipeline as GateContext["buyerPipeline"] | undefined) ?? null,
     propertyIntel: (fetched.property_intel as PropertyIntelSnapshot | undefined) ?? null,
+    deal: (fetched.airtable_deal as GateContext["deal"] | undefined) ?? null,
   };
 
   // ── 4. Run checks ──────────────────────────────────────────────────
@@ -326,8 +328,30 @@ async function fetchSource(
       };
       return snapshot;
     }
+    case "airtable_deal": {
+      // INV-023 (2026-06-10): join the Deals row to the listing by
+      // NORMALIZED street address (Deals carries property_address, no link
+      // field). Null when the listing has no address or no Deals row matches
+      // — the Pre-EMD checks treat that as data_missing, never a pass.
+      if (!listing?.address) return null;
+      const wantKey = normalizeAddressKey(listing.address.split(",")[0]);
+      if (!wantKey) return null;
+      const deals = await getDeals();
+      const match = deals.find(
+        (d) => d.propertyAddress && normalizeAddressKey(d.propertyAddress.split(",")[0]) === wantKey,
+      );
+      if (!match) return null;
+      return {
+        dealRecordId: match.id,
+        contractPrice: match.contractPrice ?? null,
+        preEmdCmaValidated: match.preEmdCmaValidated === true,
+        preEmdArvConfirmed: match.preEmdArvConfirmed === true,
+        preEmdPhotosValidated: match.preEmdPhotosValidated === true,
+        preEmdAssignmentClauseVerified: match.preEmdAssignmentClauseVerified === true,
+        preEmdOperatorSignoff: match.preEmdOperatorSignoff === true,
+      };
+    }
     // Future sources:
-    case "airtable_deal":
     case "pricing_agent_run":
     case "title_prelim":
       throw new Error(
