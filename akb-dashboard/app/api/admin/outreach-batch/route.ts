@@ -45,7 +45,6 @@ import {
 } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import {
-  selectOutreachReady,
   outreachReadyReason,
   buildPriorContactIndex,
   planQueue,
@@ -137,69 +136,160 @@ async function handle(req: Request): Promise<Response> {
   const recordIdsParam = url.searchParams.get("record_ids");
   const explicitIds = recordIdsParam ? recordIdsParam.split(",").map((s) => s.trim()).filter(Boolean) : [];
 
-  // ── Select leads ──────────────────────────────────────────────────
-  let leads: Listing[];
+  // ── Select leads + per-record disposition audit ──────────────────
+  // After 2026-06-09 (the underwrite field-fix), silent absence is a defect
+  // class: every input record must appear in exactly ONE bucket with a
+  // reason. The dispositioning below covers the three silent-drop seams
+  // (the global selectOutreachReady filter, the planQueue non-first_touch
+  // routes, and a defensive first_touch-but-missing-phone-or-message check)
+  // so the dry-run report is a complete funnel audit of in-scope leads.
+  type Disposition =
+    | "planned"
+    | "planned_over_limit"
+    | "ineligible"
+    | "pre_outreach_filter"
+    | "prior_contact_stalled"
+    | "bad_phone_quarantined"
+    | "route_skipped"
+    | "incomplete_plan"
+    | "out_of_zip_scope";
+  interface RecordDisposition {
+    recordId: string;
+    address: string | null;
+    zip: string | null;
+    disposition: Disposition;
+    reason: string | null;
+    prior?: { recordId: string; address: string; status: string } | null;
+  }
+  const dispositions: RecordDisposition[] = [];
+  const dispose = (l: { id: string; address?: string | null; zip?: string | null }, d: Disposition, reason: string | null, prior?: RecordDisposition["prior"]) => {
+    dispositions.push({ recordId: l.id, address: l.address ?? null, zip: l.zip ?? null, disposition: d, reason, ...(prior != null ? { prior } : {}) });
+  };
+
+  // ── Step 1: fetch + scope ────────────────────────────────────────
+  let allListings: Listing[] = [];
+  let inputCohort: Listing[];
   const ineligible: Array<{ recordId: string; reason: string }> = [];
   try {
     if (explicitIds.length > 0) {
       const fetched = await Promise.all(explicitIds.map((id) => getListing(id).catch(() => null)));
-      leads = [];
+      inputCohort = [];
       for (let i = 0; i < explicitIds.length; i++) {
         const l = fetched[i];
-        if (!l) { ineligible.push({ recordId: explicitIds[i], reason: "not_found" }); continue; }
-        // STRICT gate: H2-eligible AND confirmed-fresh AND actionable market.
-        const rr = outreachReadyReason(l);
-        if (!rr.ready) { ineligible.push({ recordId: l.id, reason: rr.reason ?? "not_outreach_ready" }); continue; }
-        leads.push(l);
+        if (!l) {
+          ineligible.push({ recordId: explicitIds[i], reason: "not_found" });
+          dispose({ id: explicitIds[i] }, "ineligible", "not_found");
+          continue;
+        }
+        inputCohort.push(l);
       }
     } else {
-      const all = await getListings();
-      leads = selectOutreachReady(all); // confirmed-live, actionable-market only
+      allListings = await getListings();
+      inputCohort = allListings;
     }
   } catch (err) {
     return NextResponse.json({ error: "select_failed", message: err instanceof Error ? err.message : String(err) }, { status: 502 });
   }
 
   // Optional ZIP scope (?zips=48227,48228): hard-constrain the batch to a
-  // market so a controlled proving run can't pull a lead from anywhere else.
+  // market. Out-of-scope records get a disposition (NOT silent).
   const zipScope = new Set(
     (url.searchParams.get("zips") ?? "").split(",").map((z) => z.trim()).filter((z) => /^\d{5}$/.test(z)),
   );
+  let inScope: Listing[];
   if (zipScope.size > 0) {
-    for (const l of leads) {
-      if (!zipScope.has((l.zip ?? "").trim())) ineligible.push({ recordId: l.id, reason: `out_of_zip_scope (${l.zip ?? "?"})` });
+    inScope = [];
+    for (const l of inputCohort) {
+      if (zipScope.has((l.zip ?? "").trim())) {
+        inScope.push(l);
+      } else {
+        const reason = `out_of_zip_scope (${l.zip ?? "?"})`;
+        ineligible.push({ recordId: l.id, reason });
+        dispose(l, "out_of_zip_scope", reason);
+      }
     }
-    leads = leads.filter((l) => zipScope.has((l.zip ?? "").trim()));
+  } else {
+    inScope = inputCohort;
   }
 
-  // Opener-vs-MAO guard (priceable markets only): the 65%-of-list door-opener
-  // carried on Listings_V1 as MAO_V1 (lead.mao) must never exceed the deal's
-  // underwritten MAO. Cap the opener down to MAO, or skip + flag the listing.
-  // Unpriceable markets pass through untouched (no MAO to compare against).
-  // Pre-load the ZIP-store medians for the cohort once so the resolver uses
-  // track-aware math (landlord as-is median is a purchase price) rather than
-  // the flipper-only ARV×arv_pct_max path that needs ARV/rehab on file.
-  const uwCtx = await loadUnderwriteContextForListings(leads);
+  // ── Step 2: per-record outreach-ready evaluation (was a silent filter).
+  // Every fail gets a reason here; pre_outreach_filter is its own bucket.
+  const ready: Listing[] = [];
+  for (const l of inScope) {
+    const rr = outreachReadyReason(l);
+    if (!rr.ready) {
+      dispose(l, "pre_outreach_filter", rr.reason ?? "not_outreach_ready");
+      continue;
+    }
+    ready.push(l);
+  }
+
+  // ── Step 3: opener-vs-MAO guard ──────────────────────────────────
+  // Priceable markets only: the 65%-of-list door-opener (MAO_V1) must never
+  // exceed the deal's underwritten MAO. The resolver reads Underwritten_MAO
+  // from the listing first (primary path, no live I/O); the ZIP-store
+  // context is a legitimate fallback for intake rows too fresh to have been
+  // written. A missing MAO surfaces the DISTINCT mao_not_underwritten error
+  // (not the old silent fallback to "needs ARV + rehab").
+  const uwCtx = await loadUnderwriteContextForListings(ready);
   const guardedLeads: Listing[] = [];
-  for (const l of leads) {
+  for (const l of ready) {
     const ceiling = resolveOpenerCeiling(l, uwCtx);
     const guard = openerMaoGuard({ baseOpener: l.mao, mao: ceiling.mao, priceable: ceiling.priceable });
     if (!guard.ok) {
-      ineligible.push({ recordId: l.id, reason: guard.reason ?? "opener_exceeds_mao" });
+      const reason = guard.reason ?? "opener_exceeds_mao";
+      ineligible.push({ recordId: l.id, reason });
+      dispose(l, "ineligible", reason);
       continue;
     }
-    if (guard.capped && guard.opener != null) l.mao = guard.opener; // send the opener at MAO, not 65%-of-list
+    if (guard.capped && guard.opener != null) l.mao = guard.opener;
     guardedLeads.push(l);
   }
-  leads = guardedLeads;
+  let leads = guardedLeads;
 
-  // Plan (message + route) and keep only the sendable first-touch leads, capped.
-  const priorIndex = buildPriorContactIndex(await getListings().catch(() => []));
-  const plans = planQueue(leads, priorIndex)
-    .filter((p) => p.route === "first_touch" && p.toE164 && p.message)
-    .slice(0, limit);
+  // ── Step 4: planQueue → bucket every route (was: silent filter to first_touch).
+  const priorIndex = buildPriorContactIndex(allListings.length > 0 ? allListings : await getListings().catch(() => []));
+  const allPlans = planQueue(leads, priorIndex);
+  const firstTouchPlans = [] as typeof allPlans;
+  for (const p of allPlans) {
+    if (p.route === "prior_contact_stall") {
+      dispose({ id: p.recordId, address: p.address, zip: null }, "prior_contact_stalled", p.prior ? `same agent already contacted at ${p.prior.address}` : "same agent already contacted", p.prior ?? null);
+    } else if (p.route === "bad_phone_quarantine") {
+      dispose({ id: p.recordId, address: p.address, zip: null }, "bad_phone_quarantined", "agent phone could not normalize to E.164");
+    } else if (p.route === "skipped") {
+      dispose({ id: p.recordId, address: p.address, zip: null }, "route_skipped", p.skipReason ?? "route_skipped");
+    } else if (p.route === "first_touch") {
+      if (!p.toE164 || !p.message) {
+        dispose({ id: p.recordId, address: p.address, zip: null }, "incomplete_plan", `first_touch missing ${!p.toE164 ? "toE164 " : ""}${!p.message ? "message" : ""}`.trim());
+      } else {
+        firstTouchPlans.push(p);
+      }
+    }
+  }
+  const plans = firstTouchPlans.slice(0, limit);
+  for (const p of plans) dispose({ id: p.recordId, address: p.address, zip: null }, "planned", null);
+  for (const p of firstTouchPlans.slice(limit)) dispose({ id: p.recordId, address: p.address, zip: null }, "planned_over_limit", `dropped by limit=${limit}`);
   // Property state (for the quiet-hours timezone) — the plan carries city, not state.
   const stateById = new Map(leads.map((l) => [l.id, l.state]));
+
+  // ── Funnel audit: every input lead must appear exactly once. ──────
+  const seen = new Set(dispositions.map((d) => d.recordId));
+  const inputIds = new Set([...inputCohort.map((l) => l.id), ...explicitIds]);
+  const missing_from_funnel = [...inputIds].filter((id) => !seen.has(id));
+  const bucket_counts: Record<Disposition, number> = {
+    planned: 0, planned_over_limit: 0, ineligible: 0,
+    pre_outreach_filter: 0, prior_contact_stalled: 0,
+    bad_phone_quarantined: 0, route_skipped: 0,
+    incomplete_plan: 0, out_of_zip_scope: 0,
+  };
+  for (const d of dispositions) bucket_counts[d.disposition]++;
+  const funnel_audit = {
+    input_count: inputIds.size,
+    in_zip_scope: zipScope.size > 0 ? inScope.length : null,
+    disposition_total: dispositions.length,
+    missing_from_funnel,
+    bucket_counts,
+  };
 
   // ── DRY-RUN short-circuit ─────────────────────────────────────────
   if (!live) {
@@ -220,6 +310,16 @@ async function handle(req: Request): Promise<Response> {
         " AND H2_OUTREACH_LIVE=\"true\" in env. All three are required.",
       planned_count: plans.length,
       planned: plans.map((p) => ({ recordId: p.recordId, address: p.address, agentName: p.agentName, toE164: p.toE164, message: p.message })),
+      // Every drop seam now surfaces a bucket with a per-record reason — no
+      // silent absence. Confirm input_count == disposition_total, and check
+      // missing_from_funnel is []; if not, a NEW drop seam needs surfacing.
+      funnel_audit,
+      pre_outreach_filter: dispositions.filter((d) => d.disposition === "pre_outreach_filter"),
+      prior_contact_stalled: dispositions.filter((d) => d.disposition === "prior_contact_stalled"),
+      bad_phone_quarantined: dispositions.filter((d) => d.disposition === "bad_phone_quarantined"),
+      route_skipped: dispositions.filter((d) => d.disposition === "route_skipped"),
+      incomplete_plan: dispositions.filter((d) => d.disposition === "incomplete_plan"),
+      planned_over_limit: dispositions.filter((d) => d.disposition === "planned_over_limit"),
       ineligible,
       auth_kind: authKind,
       duration_ms: Date.now() - t0,
