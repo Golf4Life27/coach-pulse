@@ -19,9 +19,19 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
       setAuthenticated(true);
       return;
     }
-    // Check if already authenticated via cookie
-    const isAuth = document.cookie.includes("akb-auth=authenticated");
-    setAuthenticated(isAuth);
+    // Cookie is HttpOnly (set by /api/auth) so document.cookie cannot see it.
+    // Ask the server, which can read the cookie header on same-origin fetch.
+    let cancelled = false;
+    fetch("/api/auth/check", { cache: "no-store", credentials: "same-origin" })
+      .then((r) => {
+        if (!cancelled) setAuthenticated(r.ok);
+      })
+      .catch(() => {
+        if (!cancelled) setAuthenticated(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [isPublic]);
 
   const handleSubmit = async (e: React.FormEvent) => {

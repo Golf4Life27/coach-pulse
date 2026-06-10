@@ -17,10 +17,14 @@
  *      photos / vision call failed) the "or set manually" expander
  *      surfaces — Constitution Rule 3, manual is fallback-only.
  *
- *   3. Compute in flight → button shows "Running… (15-30s — Vision call)".
+ *   3. Compute in flight → button shows "Running… (1-3 min — Vision
+ *      call, leave this open)". The rehab route has maxDuration=300
+ *      (Freeland P0, 2026-06-10) so the fetch is expected to hold for
+ *      minutes — that is honest, not hung.
  */
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import type { Listing } from "@/lib/types";
 import { BBC_ANCHOR_PER_SQFT, type BbcTier } from "@/lib/appraiser/rehab-calibration";
 import {
@@ -145,6 +149,7 @@ function extractLatestDriftLine(notes: string | null | undefined): string | null
 }
 
 export default function AppraiserRehabPanel({ recordId, listing }: AppraiserRehabPanelProps) {
+  const router = useRouter();
   const [running, setRunning] = useState(false);
   const [showItems, setShowItems] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -193,7 +198,12 @@ export default function AppraiserRehabPanel({ recordId, listing }: AppraiserReha
         setErrorCode(typeof body.error === "string" ? body.error : null);
         throw new Error(body.message ?? body.reason ?? body.error ?? `HTTP ${res.status}`);
       }
-      if (typeof window !== "undefined") window.location.reload();
+      // router.refresh() instead of window.location.reload() — the hard
+      // reload was unmounting AuthGate (which then re-fetched the HttpOnly
+      // cookie via /api/auth/check). On Vision-call timeouts the SPA state
+      // was being lost. See app/api/auth/check/route.ts header for the
+      // full AuthGate root-cause history.
+      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -219,7 +229,7 @@ export default function AppraiserRehabPanel({ recordId, listing }: AppraiserReha
         const body = await res.json().catch(() => ({}));
         throw new Error(body.reason ?? body.message ?? body.error ?? `HTTP ${res.status}`);
       }
-      if (typeof window !== "undefined") window.location.reload();
+      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -242,7 +252,7 @@ export default function AppraiserRehabPanel({ recordId, listing }: AppraiserReha
         const body = await res.json().catch(() => ({}));
         throw new Error(body.reason ?? body.message ?? `HTTP ${res.status}`);
       }
-      if (typeof window !== "undefined") window.location.reload();
+      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setResolvingDrift(null);
@@ -267,7 +277,7 @@ export default function AppraiserRehabPanel({ recordId, listing }: AppraiserReha
           disabled={running}
           className="bg-emerald-700 hover:bg-emerald-600 text-white text-[11px] font-semibold px-3 py-1.5 rounded disabled:opacity-50"
         >
-          {running ? "Running… (15-30s — Vision call)" : "Run rehab"}
+          {running ? "Running… (1-3 min — Vision call, leave this open)" : "Run rehab"}
         </button>
         {error && <p className="text-[10px] text-red-400">{error}</p>}
         {/* INV-005 manual fallback — only renders after a vision/photo

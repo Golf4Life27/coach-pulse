@@ -61,6 +61,10 @@ export interface RentCastSaleComp {
   daysOnMarket: number | null;
   removedDate: string | null;
   saleDate: string | null;
+  // Carried so the Appraiser ARV panel can render the address per comp
+  // (provenance law — operator must be able to verify any comp in one
+  // click). Optional because legacy persisted JSON predates the field.
+  formattedAddress?: string | null;
 }
 
 interface AvmInput {
@@ -170,7 +174,23 @@ export async function getSaleComparables(
       (c.lastSeenDate as string) ??
       (c.removedDate as string) ??
       null,
+    formattedAddress:
+      (c.formattedAddress as string) ??
+      buildFallbackAddress(c) ??
+      null,
   }));
+}
+
+// RentCast normally returns formattedAddress on every comparable, but a
+// few records (older indexed sales) carry only the component fields.
+// Reassemble them so the comp row is never address-less in the UI.
+function buildFallbackAddress(c: Record<string, unknown>): string | null {
+  const line = (c.addressLine1 as string) ?? null;
+  const city = (c.city as string) ?? null;
+  const state = (c.state as string) ?? null;
+  const zip = (c.zipCode as string) ?? (c.zip as string) ?? null;
+  if (!line && !city) return null;
+  return [line, city, state, zip].filter(Boolean).join(", ");
 }
 
 // RentCast rent AVM. Returns the monthly rent estimate + range. Used by

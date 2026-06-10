@@ -47,7 +47,12 @@ import {
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+// 300 (plan ceiling) — was 60, which the Anthropic vision call regularly
+// exceeded: the lambda died mid-run, the panel surfaced a dead connection,
+// and Alex's manual refresh after the timeout looked like a logout
+// (2026-06-10 Freeland P0 investigation). Vision + photo scrape need the
+// full budget.
+export const maxDuration = 300;
 
 export async function GET(
   req: Request,
