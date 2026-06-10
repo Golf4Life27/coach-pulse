@@ -32,9 +32,26 @@ the auth-gated ones. The only mutation v2 performs is `PATCH /api/operator-actio
 | Deal Room | `/api/listings/[id]`, `/api/deal-dossier/[id]`, `/api/conversations/[id]` (verified feed), `/api/admin/audit-tail?recordId=` |
 | Maverick panel | `GET /api/maverick/load-state?format=narrative`, `POST /api/maverick/recall` |
 
-Design laws enforced in code: every figure renders with provenance + consequence
-(`Numbers` in the Deal Room; `detail` on every health-strip cell); missing data renders
-as an explicit "no signal / blocks the gate" state — never a fake number.
+Design laws enforced in code (the original charter plus the 6/10 operator-review laws):
+
+1. **Why-attached numbers** — every figure renders with provenance + consequence
+   (`Numbers` in the Deal Room; `detail` on every health-strip cell).
+2. **Buttons are the decisions** — each card's stated options become its buttons
+   (`_lib/decisions.ts` derives them from the Action_Required prose; generic verbs only
+   when a card genuinely has no specific options). A chosen option is recorded and the
+   card clears; execution still happens in the Deal Room / v1 until ops ships a
+   decision-capture write.
+3. **Plain English on surfaces** — raw system/audit/Notes jargon never renders verbatim
+   on a primary surface (`_lib/translate.ts`: known patterns get one-line translations,
+   unknown machine voice collapses behind a generic line; raw text stays under an
+   expandable "system log" for provenance).
+4. **Honest zero** — a number renders only when its wired source actually returned it
+   (`deriveActivity` in `_lib/data.tsx`: sends-today from delivery-confirmed audit
+   events, listings backstop when the KV window doesn't reach midnight, "no signal"
+   otherwise — never a confident zero from an unwired source).
+5. **Queue hygiene** — terminal-state records and paused-market items leave the queue
+   into a collapsed "already decided" section with the standing-decision reference
+   (`_lib/policy.ts`); the open-decision count is forward-only.
 
 ## 3. Backend requests for the ops session (v2 stops here; nothing built)
 
@@ -75,6 +92,11 @@ as an explicit "no signal / blocks the gate" state — never a fake number.
    state from the H2 same-agent stall logic (currently internal to `lib/h2-outreach.ts`).
 6. **Money surface reads** — cost-per-lead/offer needs spend events joined to intake
    counts; propose a daily rollup written to KV by the existing intake/outreach crons.
+7. **Standing-policy read + decision capture** — (a) a machine-readable read of standing
+   spine policies (paused markets, do-not-resurface rules) so queue hygiene stops
+   running on the hardcoded projection in `app/v2/_lib/policy.ts` (currently: TN/Memphis
+   paused); (b) a `Decision_Taken` field on Operator_Action_Items so the chosen button
+   label persists with the resolved item instead of only clearing it.
 
 ## 4. Surface status
 

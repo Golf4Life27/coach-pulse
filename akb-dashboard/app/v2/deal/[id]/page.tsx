@@ -20,6 +20,8 @@ import type {
   UnifiedMessage,
 } from "../../_lib/types";
 import { ago, money, timeStamp } from "../../_lib/format";
+import { translateSystemText } from "../../_lib/translate";
+import { listingSuppression } from "../../_lib/policy";
 
 export default function DealRoomPage() {
   const params = useParams<{ id: string }>();
@@ -122,13 +124,13 @@ function Header({ listing }: { listing: ListingDetail }) {
           <span className="rounded border border-red-800 px-1.5 py-px text-red-400">DO NOT TEXT</span>
         )}
       </div>
-      <h1 className="text-lg font-black leading-tight text-white">{listing.address}</h1>
-      <p className="text-xs text-zinc-500">
+      <h1 className="text-2xl font-black leading-tight text-white">{listing.address}</h1>
+      <p className="text-sm text-zinc-500">
         {[listing.city, listing.state, listing.zip].filter(Boolean).join(", ")}
         {facts.length > 0 && <span className="text-zinc-600"> · {facts.join(" · ")}</span>}
         {listing.distressBucket && <span className="text-zinc-600"> · {listing.distressBucket}</span>}
       </p>
-      <p className="mt-1 text-xs text-zinc-400">
+      <p className="mt-1 text-sm text-zinc-400">
         {listing.agentName ?? "agent unknown"}
         {listing.agentPhone && <span className="font-mono text-zinc-500"> · {listing.agentPhone}</span>}
         {listing.verificationUrl && (
@@ -163,9 +165,14 @@ function NextAction({ listing, dossier }: { listing: ListingDetail; dossier: Dos
   const missing = gate.filter((g) => !g.ok);
   const daysSilent = outbound ? Math.floor((Date.now() - Math.max(inbound, outbound)) / 86_400_000) : null;
 
+  const suppression = listingSuppression(listing);
+
   let action: string;
   let why: string;
-  if (inbound > outbound) {
+  if (suppression.suppressed) {
+    action = "No decision — already settled.";
+    why = `${suppression.reference}. Nothing here needs you unless the record comes back to life (relist, price cut, reply).`;
+  } else if (inbound > outbound) {
     action = `Reply to ${listing.agentName ?? "the agent"}.`;
     why = `Inbound ${ago(listing.lastInboundAt)} is newer than our last outbound (${ago(
       listing.lastOutboundAt ?? listing.lastOutreachDate,
@@ -185,9 +192,9 @@ function NextAction({ listing, dossier }: { listing: ListingDetail; dossier: Dos
 
   return (
     <section className="rounded-xl border border-cyan-900/50 bg-[#0a121a] p-3.5">
-      <p className="mb-1 text-[10px] font-black tracking-[0.2em] text-cyan-400">NEXT ACTION</p>
-      <p className="text-sm font-bold leading-snug text-zinc-100">{action}</p>
-      <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">{why}</p>
+      <p className="mb-1.5 text-[11px] font-black tracking-[0.2em] text-cyan-400">NEXT ACTION</p>
+      <p className="text-lg font-bold leading-snug text-zinc-50">{action}</p>
+      <p className="mt-1.5 text-sm leading-relaxed text-zinc-400">{why}</p>
       <div className="mt-2.5 flex gap-2">
         <button
           onClick={() => openWithQuery(listing.address)}
@@ -286,24 +293,24 @@ function Numbers({ listing, dossier }: { listing: ListingDetail; dossier: Dossie
 
   return (
     <section>
-      <h2 className="mb-2 text-[11px] font-black tracking-[0.2em] text-zinc-400">THE NUMBERS</h2>
+      <h2 className="mb-2 text-xs font-black tracking-[0.2em] text-zinc-400">THE NUMBERS</h2>
       <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
         {figures.map((f) => (
-          <div key={f.label} className="rounded-lg border border-zinc-800 bg-[#0b0e13] p-2.5">
-            <p className="text-[9px] font-bold tracking-[0.15em] text-zinc-500">{f.label}</p>
+          <div key={f.label} className="rounded-lg border border-zinc-800 bg-[#0b0e13] p-3">
+            <p className="text-[10px] font-bold tracking-[0.15em] text-zinc-500">{f.label}</p>
             <p
-              className={`font-mono text-base font-semibold ${
-                f.value != null ? "text-zinc-100" : "text-zinc-600"
+              className={`font-mono text-xl font-semibold ${
+                f.value != null ? "text-zinc-50" : "text-zinc-600"
               }`}
             >
               {money(f.value)}
-              {f.value != null && f.suffix ? <span className="text-[10px] text-zinc-500">{f.suffix}</span> : null}
+              {f.value != null && f.suffix ? <span className="text-xs text-zinc-500">{f.suffix}</span> : null}
             </p>
-            <p className="mt-1 text-[9px] leading-relaxed text-zinc-600">
+            <p className="mt-1 text-xs leading-relaxed text-zinc-500">
               {f.value != null ? f.provenance : (f.missing ?? f.provenance)}
             </p>
             {f.value != null && f.consequence && (
-              <p className="mt-0.5 text-[9px] font-bold text-amber-400">{f.consequence}</p>
+              <p className="mt-0.5 text-xs font-bold text-amber-400">{f.consequence}</p>
             )}
           </div>
         ))}
@@ -370,7 +377,7 @@ function Gate({ listing, dossier }: { listing: ListingDetail; dossier: DossierRe
 
   return (
     <section>
-      <h2 className="mb-2 text-[11px] font-black tracking-[0.2em] text-zinc-400">
+      <h2 className="mb-2 text-xs font-black tracking-[0.2em] text-zinc-400">
         OFFER GATE
         <span className="ml-2 font-normal tracking-normal text-zinc-600">
           hard checklist {hardOk}/4 · DD V3 {ddDone}/12 — this panel becomes INV-023&apos;s surface
@@ -388,8 +395,8 @@ function Gate({ listing, dossier }: { listing: ListingDetail; dossier: DossierRe
               {g.ok ? "✓" : "✗"}
             </span>
             <div>
-              <p className="text-xs font-bold text-zinc-200">{g.label}</p>
-              <p className="text-[10px] leading-relaxed text-zinc-500">{g.evidence}</p>
+              <p className="text-sm font-bold text-zinc-200">{g.label}</p>
+              <p className="text-xs leading-relaxed text-zinc-500">{g.evidence}</p>
             </div>
           </div>
         ))}
@@ -406,7 +413,7 @@ function Gate({ listing, dossier }: { listing: ListingDetail; dossier: DossierRe
           {DD_V3_ITEMS.map((item) => {
             const ok = checked.has(item);
             return (
-              <div key={item} className="flex items-center gap-2 rounded border border-zinc-800/70 px-2.5 py-1.5 text-[11px]">
+              <div key={item} className="flex items-center gap-2 rounded border border-zinc-800/70 px-2.5 py-2 text-sm">
                 <span className={ok ? "text-emerald-400" : "text-zinc-700"}>{ok ? "✓" : "○"}</span>
                 <span className={ok ? "text-zinc-300" : "text-zinc-500"}>{item}</span>
               </div>
@@ -424,7 +431,7 @@ function Thread({ convo, listing }: { convo: ConversationResponse | null; listin
   if (!convo) {
     return (
       <section>
-        <h2 className="mb-2 text-[11px] font-black tracking-[0.2em] text-zinc-400">THREAD</h2>
+        <h2 className="mb-2 text-xs font-black tracking-[0.2em] text-zinc-400">THREAD</h2>
         <p className="rounded-lg border border-zinc-800 px-3 py-2 text-xs text-zinc-600">
           Conversation feed unreachable right now (verified Quo + Gmail + notes merge).
         </p>
@@ -433,7 +440,7 @@ function Thread({ convo, listing }: { convo: ConversationResponse | null; listin
   }
   return (
     <section>
-      <h2 className="mb-2 text-[11px] font-black tracking-[0.2em] text-zinc-400">
+      <h2 className="mb-2 text-xs font-black tracking-[0.2em] text-zinc-400">
         THREAD
         <span className="ml-2 font-normal tracking-normal text-zinc-600">
           {convo.messageCount} msgs · {convo.quoCount} sms / {convo.emailCount} email / {convo.notesCount} notes —
@@ -459,10 +466,17 @@ function Thread({ convo, listing }: { convo: ConversationResponse | null; listin
 function Bubble({ m }: { m: UnifiedMessage }) {
   const isIn = m.direction === "inbound";
   const isSys = m.direction === "system";
+  const [showRaw, setShowRaw] = useState(false);
+
+  // PLAIN ENGLISH law: system/notes rows never render machine voice
+  // verbatim — translated line on the surface, raw entry under "system log".
+  const translation = isSys || m.source === "notes" ? translateSystemText(m.body) : null;
+  const collapsed = translation != null && translation.machineVoice;
+
   return (
     <div className={`flex ${isIn ? "justify-start" : "justify-end"}`}>
       <div
-        className={`max-w-[85%] rounded-lg border px-3 py-2 ${
+        className={`max-w-[85%] rounded-lg border px-3 py-2.5 ${
           isSys
             ? "border-zinc-800 bg-zinc-900/40"
             : isIn
@@ -470,7 +484,7 @@ function Bubble({ m }: { m: UnifiedMessage }) {
               : "border-cyan-900/50 bg-[#0a141c]"
         }`}
       >
-        <p className="mb-0.5 flex items-center gap-1.5 text-[9px] font-bold tracking-wider text-zinc-600">
+        <p className="mb-1 flex items-center gap-1.5 text-[10px] font-bold tracking-wider text-zinc-600">
           <span
             className={`rounded border px-1 py-px ${
               m.source === "quo"
@@ -482,10 +496,31 @@ function Bubble({ m }: { m: UnifiedMessage }) {
           >
             {m.source === "quo" ? "SMS" : m.source.toUpperCase()}
           </span>
-          {isIn ? m.from : "AKB"} · {timeStamp(m.timestamp)}
+          {isSys ? "SYSTEM" : isIn ? m.from : "AKB"} · {timeStamp(m.timestamp)}
         </p>
-        {m.subject && <p className="text-[11px] font-bold text-zinc-300">{m.subject}</p>}
-        <p className="whitespace-pre-wrap text-xs leading-relaxed text-zinc-200">{m.body}</p>
+        {m.subject && <p className="text-sm font-bold text-zinc-300">{m.subject}</p>}
+        {collapsed ? (
+          <>
+            <p className="text-sm leading-relaxed text-zinc-300">
+              {translation.summary}{" "}
+              <button
+                onClick={() => setShowRaw(!showRaw)}
+                className="text-xs font-bold text-zinc-600 hover:text-zinc-300"
+              >
+                {showRaw ? "hide log" : "system log"}
+              </button>
+            </p>
+            {showRaw && (
+              <p className="mt-1 whitespace-pre-wrap break-words rounded bg-black/40 px-2 py-1.5 font-mono text-xs leading-relaxed text-zinc-500">
+                {m.body}
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-200">
+            {translation ? translation.summary : m.body}
+          </p>
+        )}
       </div>
     </div>
   );
@@ -507,7 +542,7 @@ function Trail({ trail }: { trail: AuditEntry[] | null }) {
       {open && (
         <div className="mt-2 space-y-1">
           {trail.slice(0, 30).map((e, i) => (
-            <div key={i} className="flex items-baseline gap-2 rounded border border-zinc-800/70 px-2.5 py-1.5 text-[11px]">
+            <div key={i} className="flex items-baseline gap-2 rounded border border-zinc-800/70 px-2.5 py-2 text-sm">
               <span
                 className={
                   e.status === "confirmed_success"

@@ -79,7 +79,7 @@ export default function PipelinePage() {
     <div className="space-y-6">
       {/* Lane 1 — live stock by stage */}
       <section>
-        <h1 className="mb-2 text-[11px] font-black tracking-[0.2em] text-zinc-400">
+        <h1 className="mb-2 text-xs font-black tracking-[0.2em] text-zinc-400">
           STOCK BY STAGE
           <span className="ml-2 font-normal tracking-normal text-zinc-600">
             {listings ? `${listings.length} active records (live, /api/listings — dead excluded)` : "loading…"}
@@ -121,7 +121,7 @@ export default function PipelinePage() {
 
       {/* Lane 2 — last batch funnel audit */}
       <section>
-        <h2 className="mb-2 text-[11px] font-black tracking-[0.2em] text-zinc-400">
+        <h2 className="mb-2 text-xs font-black tracking-[0.2em] text-zinc-400">
           LAST BATCH FUNNEL
           {funnel && (
             <span className="ml-2 font-normal tracking-normal text-zinc-600">
@@ -217,7 +217,7 @@ function BucketDrill({ funnel, bucket }: { funnel: FunnelSnapshotResult; bucket:
       ) : (
         <div className="space-y-1">
           {rows.map((r) => (
-            <div key={r.recordId} className="flex flex-wrap items-baseline gap-x-2 rounded border border-zinc-800/70 px-2.5 py-1.5 text-[11px]">
+            <div key={r.recordId} className="flex flex-wrap items-baseline gap-x-2 rounded border border-zinc-800/70 px-2.5 py-2 text-sm">
               {sim ? (
                 <span className="text-zinc-400">{r.address ?? r.recordId}</span>
               ) : (
@@ -249,7 +249,7 @@ function StageDrill({ stage, items }: { stage: string; items: ListingDetail[] })
           <Link
             key={l.id}
             href={`/v2/deal/${l.id}`}
-            className="flex flex-wrap items-baseline gap-x-2 rounded border border-zinc-800/70 px-2.5 py-1.5 text-[11px] hover:border-cyan-800"
+            className="flex flex-wrap items-baseline gap-x-2 rounded border border-zinc-800/70 px-2.5 py-2 text-sm hover:border-cyan-800"
           >
             <span className="font-bold text-zinc-200">{l.address}</span>
             <span className="text-zinc-600">{l.zip}</span>

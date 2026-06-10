@@ -113,7 +113,7 @@ export default function MaverickPanel() {
 
       <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto px-4 py-3">
         {feed.length === 0 && (
-          <p className="text-xs leading-relaxed text-zinc-500">
+          <p className="text-sm leading-relaxed text-zinc-500">
             Wired to the live Maverick state layer (load_state + recall, dashboard-cookie auth).
             Ask for the overnight briefing, or recall anything — an address, an agent, a
             decision (&ldquo;Freeland&rdquo;, &ldquo;circuit breaker&rdquo;, &ldquo;48227&rdquo;).
@@ -122,13 +122,13 @@ export default function MaverickPanel() {
         {feed.map((m, i) => {
           if (m.kind === "user")
             return (
-              <div key={i} className="ml-8 rounded-lg bg-zinc-800/80 px-3 py-2 text-xs text-zinc-200">
+              <div key={i} className="ml-8 rounded-lg bg-zinc-800/80 px-3 py-2.5 text-sm text-zinc-200">
                 {m.text}
               </div>
             );
           if (m.kind === "narrative")
             return (
-              <div key={i} className="mr-4 whitespace-pre-wrap rounded-lg border border-cyan-900/40 bg-[#0c141c] px-3 py-2 text-xs leading-relaxed text-zinc-300">
+              <div key={i} className="mr-4 whitespace-pre-wrap rounded-lg border border-cyan-900/40 bg-[#0c141c] px-3 py-2.5 text-sm leading-relaxed text-zinc-300">
                 {m.text}
               </div>
             );
@@ -150,7 +150,7 @@ export default function MaverickPanel() {
                   <span className={`mb-1 inline-block rounded border px-1.5 py-px text-[9px] font-bold uppercase tracking-wider ${SOURCE_TONE[r.source] ?? "text-zinc-400 border-zinc-700"}`}>
                     {r.source}
                   </span>
-                  <p className="text-xs leading-snug text-zinc-300">{r.summary}</p>
+                  <p className="text-sm leading-snug text-zinc-300">{r.summary}</p>
                 </div>
               ))}
               {m.truncated > 0 && (

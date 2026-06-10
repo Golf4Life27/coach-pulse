@@ -33,7 +33,7 @@ export default function HealthStrip() {
           <button
             key={h.label}
             onClick={() => setOpenDetail(openDetail === h.label ? null : h.label)}
-            className={`flex min-w-[7.5rem] flex-1 flex-col gap-0.5 border-r border-zinc-800/70 px-3 py-2 text-left transition-colors hover:bg-zinc-900 ${
+            className={`flex min-w-[8rem] flex-1 flex-col gap-0.5 border-r border-zinc-800/70 px-3 py-2 text-left transition-colors hover:bg-zinc-900 ${
               openDetail === h.label ? "bg-zinc-900" : ""
             }`}
           >
@@ -41,7 +41,7 @@ export default function HealthStrip() {
               <span className={`h-1.5 w-1.5 rounded-full ${LED[h.state]}`} />
               {h.label}
             </span>
-            <span className={`font-mono text-xs font-semibold ${VALUE_TONE[h.state]}`}>
+            <span className={`font-mono text-sm font-semibold ${VALUE_TONE[h.state]}`}>
               {loading && h.state === "nodata" ? "…" : h.value}
             </span>
           </button>
@@ -55,7 +55,7 @@ export default function HealthStrip() {
         </button>
       </div>
       {detail && (
-        <div className="border-t border-zinc-800/70 px-3 py-1.5 text-[11px] text-zinc-400">
+        <div className="border-t border-zinc-800/70 px-3 py-1.5 text-sm text-zinc-400">
           <span className="font-bold text-zinc-300">{detail.label}</span> — {detail.detail}
         </div>
       )}

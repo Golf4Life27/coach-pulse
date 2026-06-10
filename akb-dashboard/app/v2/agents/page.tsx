@@ -104,7 +104,7 @@ export default function AgentsPage() {
   return (
     <div className="space-y-4">
       <section>
-        <h1 className="mb-1 text-[11px] font-black tracking-[0.2em] text-zinc-400">
+        <h1 className="mb-1 text-xs font-black tracking-[0.2em] text-zinc-400">
           AGENTS — THE CHANNEL
           <span className="ml-2 font-normal tracking-normal text-zinc-600">
             {listings
@@ -201,7 +201,7 @@ function AgentCard({ a, expanded, onToggle }: { a: AgentRow; expanded: boolean; 
                 <Link
                   key={l.id}
                   href={`/v2/deal/${l.id}`}
-                  className="flex flex-wrap items-baseline gap-x-2 rounded border border-zinc-800/70 px-2.5 py-1.5 text-[11px] hover:border-cyan-800"
+                  className="flex flex-wrap items-baseline gap-x-2 rounded border border-zinc-800/70 px-2.5 py-2 text-sm hover:border-cyan-800"
                 >
                   <span className="font-bold text-zinc-200">{l.address}</span>
                   <span className="text-zinc-600">{l.zip}</span>
