@@ -23,6 +23,7 @@
  */
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import type { Listing } from "@/lib/types";
 
 export interface AppraiserArvPanelProps {
@@ -52,6 +53,23 @@ interface ParsedComp {
   beds?: number | null;
   bathrooms?: number | null;
   cluster?: string;
+  formatted_address?: string | null;
+}
+
+// Lookup URLs for one-click comp verification. Zillow's homes search and
+// Redfin's universal search both honor a free-text address query and
+// route the user to the property card if it's indexed. If RentCast hands
+// us a comp without an address (legacy persisted JSON), we hide the
+// links rather than ship dead anchors.
+function zillowLookupUrl(address: string): string {
+  return `https://www.zillow.com/homes/${encodeURIComponent(address)}_rb/`;
+}
+function redfinLookupUrl(address: string): string {
+  // Redfin has no clean public address-search URL — their
+  // /stingray/do/location-autocomplete returns JSON. Route through
+  // Google site-search so Alex still lands on the Redfin record card
+  // in one click. Reliable and indexed.
+  return `https://www.google.com/search?q=${encodeURIComponent(`site:redfin.com ${address}`)}`;
 }
 
 function parseComps(json: string | null | undefined): ParsedComp[] {
@@ -86,6 +104,7 @@ const CONFIDENCE_STYLES: Record<NonNullable<Listing["arvConfidence"]>, { border:
 };
 
 export default function AppraiserArvPanel({ recordId, listing }: AppraiserArvPanelProps) {
+  const router = useRouter();
   const [running, setRunning] = useState(false);
   const [showComps, setShowComps] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -118,8 +137,11 @@ export default function AppraiserArvPanel({ recordId, listing }: AppraiserArvPan
         const body = await res.json().catch(() => ({}));
         throw new Error(body.message ?? body.reason ?? body.error ?? `HTTP ${res.status}`);
       }
-      // Reload page to surface fresh values from /api/listings/[id].
-      if (typeof window !== "undefined") window.location.reload();
+      // Re-render the server component tree so the listing read picks up the
+      // fresh values. Avoid window.location.reload(): a hard reload unmounts
+      // AuthGate, and on auth-hardening-V1 boundaries we want the SPA state
+      // (running flag, panel scroll) preserved.
+      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -206,23 +228,57 @@ export default function AppraiserArvPanel({ recordId, listing }: AppraiserArvPan
               <table className="w-full text-[10px]">
                 <thead className="text-gray-500">
                   <tr className="border-b border-[#30363d]">
+                    <th className="text-left pb-1 pr-2">Address</th>
                     <th className="text-left pb-1 pr-2">Price</th>
                     <th className="text-left pb-1 pr-2">SqFt</th>
                     <th className="text-left pb-1 pr-2">$/sqft</th>
                     <th className="text-left pb-1 pr-2">Dist</th>
-                    <th className="text-left pb-1">Sold</th>
+                    <th className="text-left pb-1 pr-2">Sold</th>
+                    <th className="text-left pb-1">Verify</th>
                   </tr>
                 </thead>
                 <tbody className="text-gray-300">
-                  {comps.slice(0, 25).map((c, i) => (
-                    <tr key={i} className="border-b border-[#21262d]">
-                      <td className="py-1 pr-2 font-mono">{formatCurrency(c.price)}</td>
-                      <td className="py-1 pr-2">{c.sqft ?? "—"}</td>
-                      <td className="py-1 pr-2 font-mono">${c.per_sqft?.toFixed(0) ?? "—"}</td>
-                      <td className="py-1 pr-2">{c.distance != null ? `${c.distance.toFixed(2)}mi` : "—"}</td>
-                      <td className="py-1 text-gray-500">{c.sale_date?.slice(0, 10) ?? "—"}</td>
-                    </tr>
-                  ))}
+                  {comps.slice(0, 25).map((c, i) => {
+                    const addr = c.formatted_address ?? null;
+                    return (
+                      <tr key={i} className="border-b border-[#21262d]">
+                        <td className="py-1 pr-2 text-gray-200">
+                          {addr ?? <span className="text-gray-600 italic">address pending</span>}
+                        </td>
+                        <td className="py-1 pr-2 font-mono">{formatCurrency(c.price)}</td>
+                        <td className="py-1 pr-2">{c.sqft ?? "—"}</td>
+                        <td className="py-1 pr-2 font-mono">${c.per_sqft?.toFixed(0) ?? "—"}</td>
+                        <td className="py-1 pr-2">{c.distance != null ? `${c.distance.toFixed(2)}mi` : "—"}</td>
+                        <td className="py-1 pr-2 text-gray-500">{c.sale_date?.slice(0, 10) ?? "—"}</td>
+                        <td className="py-1">
+                          {addr ? (
+                            <span className="flex gap-1.5">
+                              <a
+                                href={zillowLookupUrl(addr)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-400 hover:text-blue-300 underline"
+                                title={`Look up ${addr} on Zillow`}
+                              >
+                                Z
+                              </a>
+                              <a
+                                href={redfinLookupUrl(addr)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-red-400 hover:text-red-300 underline"
+                                title={`Look up ${addr} on Redfin (via Google site search)`}
+                              >
+                                R
+                              </a>
+                            </span>
+                          ) : (
+                            <span className="text-gray-700">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
               {comps.length > 25 && (

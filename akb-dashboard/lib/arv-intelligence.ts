@@ -67,6 +67,10 @@ export interface ArvCompUsed {
   days_on_market: number | null;
   cluster?: "lower" | "upper";
   excluded_reason?: string;
+  // Provenance law for comps — operator must be able to verify any comp
+  // in one click. Persisted in ARV_Comp_Details_JSON, rendered with
+  // Zillow/Redfin lookup links by AppraiserArvPanel.
+  formatted_address?: string | null;
 }
 
 export type ArvConfidence = "HIGH" | "MED" | "LOW";
@@ -158,6 +162,7 @@ function compToUsed(
     days_on_market: c.daysOnMarket,
     cluster,
     excluded_reason: reason,
+    formatted_address: c.formattedAddress ?? null,
   };
 }
 

@@ -6,6 +6,11 @@ import {
   determineNewStatus,
   type ReplyClassification,
 } from "@/lib/reply-triage";
+import {
+  autoRunOnEngaged,
+  originFromRequest,
+  type EngagedAutoRunResult,
+} from "@/lib/appraiser/auto-run-on-engaged";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -72,14 +77,14 @@ export async function GET(req: Request) {
     }
   }
 
-  return handleScan();
+  return handleScan(req);
 }
 
-export async function POST() {
-  return handleScan();
+export async function POST(req: Request) {
+  return handleScan(req);
 }
 
-async function handleScan() {
+async function handleScan(req: Request) {
   if (!AIRTABLE_PAT) {
     return Response.json({ error: "AIRTABLE_PAT not set" }, { status: 500 });
   }
@@ -115,6 +120,12 @@ async function handleScan() {
     let notesAppended = 0;
     const results: ScanResult[] = [];
     const errors: string[] = [];
+    // 2026-06-10 ruling — auto-run Appraiser on Texted → Response Received.
+    // ARV is awaited inline (fresh number needed before the alert lands);
+    // rehab is fire-and-forget (the panel's manual button is the prepared
+    // one-click fallback). See lib/appraiser/auto-run-on-engaged.ts.
+    const autoRunResults: EngagedAutoRunResult[] = [];
+    const origin = originFromRequest(req);
 
     for (const phone of phones) {
       phonesChecked++;
@@ -155,6 +166,28 @@ async function handleScan() {
           try {
             await updateListingRecord(listing.id, fields);
             notesAppended++;
+            // Event-driven Appraiser kick — only on the transition INTO
+            // Response Received (not Negotiating / Counter Received /
+            // Dead). Ruling 2026-06-10: the reply is the gate.
+            if (newStatus === "Response Received") {
+              try {
+                const r = await autoRunOnEngaged({
+                  recordId: listing.id,
+                  origin,
+                });
+                autoRunResults.push(r);
+              } catch (err) {
+                autoRunResults.push({
+                  recordId: listing.id,
+                  arvAttempted: true,
+                  arvOk: false,
+                  arvHttpStatus: null,
+                  arvElapsedMs: 0,
+                  rehabKicked: false,
+                  error: String(err).slice(0, 240),
+                });
+              }
+            }
           } catch (err) {
             errors.push(`${listing.address}: ${String(err)}`);
           }
@@ -182,6 +215,12 @@ async function handleScan() {
       statusUpdated,
       notesAppended,
       results,
+      autoRunOnEngaged: autoRunResults.length > 0 ? {
+        attempted: autoRunResults.length,
+        arvOk: autoRunResults.filter((r) => r.arvOk).length,
+        rehabKicked: autoRunResults.filter((r) => r.rehabKicked).length,
+        results: autoRunResults,
+      } : undefined,
       errors: errors.length > 0 ? errors : undefined,
       timestamp: new Date().toISOString(),
     });
