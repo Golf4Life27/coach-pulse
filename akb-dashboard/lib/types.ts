@@ -94,6 +94,11 @@ export interface Listing {
   // V2.1-reserved for the DD-time contract number set by the INV-023 gate
   // after CMA + rehab; it must stay empty until DD sets it.
   underwrittenMao?: number | null;
+  /** Which buyer track Underwritten_MAO was computed on (landlord | flipper).
+   *  Written alongside Underwritten_MAO; the Offer Readiness panel shows
+   *  THIS track's ceiling as operative — a track-blind ceiling invites
+   *  overpricing at DD (Tracey display defect, 2026-06-10). */
+  underwrittenMaoTrack?: string | null;
   sellerMotivationScore?: number | null;
   listPriceAtSend?: number | null;
   // ── Pre-Send Gate inputs (added 5/13 for orchestrator Gate 2)

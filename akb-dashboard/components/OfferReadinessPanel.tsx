@@ -36,9 +36,16 @@ export default function OfferReadinessPanel({
   const [readiness, setReadiness] = useState<OfferReadiness | null>(null);
 
   // Buyer_Median (γ-path) — read from Property_Intel via the deal route.
-  const [buyerMedian, setBuyerMedian] = useState<{ value: number | null; source: string | null; track: string | null; fetchedAt: string | null }>(
-    { value: null, source: null, track: null, fetchedAt: null },
-  );
+  const [buyerMedian, setBuyerMedian] = useState<{
+    value: number | null;
+    source: string | null;
+    track: string | null;
+    fetchedAt: string | null;
+    // Both ZIP-store tracks (2026-06-10 Tracey display defect): the panel
+    // shows the OPERATIVE track's ceiling highlighted with the other track
+    // labeled — a track-blind ceiling invites overpricing at DD.
+    tracks: { landlord: { value: number } | null; flipper: { value: number } | null } | null;
+  }>({ value: null, source: null, track: null, fetchedAt: null, tracks: null });
   const [showInput, setShowInput] = useState(false);
   const [bmValue, setBmValue] = useState("");
   // Distressed as-is inventory defaults to the LANDLORD track (bimodal pool).
@@ -51,7 +58,7 @@ export default function OfferReadinessPanel({
   const loadBuyerMedian = useCallback(() => {
     fetch(`/api/deal/${recordId}/buyer-median`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (d) setBuyerMedian({ value: d.value ?? null, source: d.source ?? null, track: d.track ?? null, fetchedAt: d.fetchedAt ?? null }); })
+      .then((d) => { if (d) setBuyerMedian({ value: d.value ?? null, source: d.source ?? null, track: d.track ?? null, fetchedAt: d.fetchedAt ?? null, tracks: d.tracks ?? null }); })
       .catch(() => {});
   }, [recordId]);
 
@@ -145,10 +152,29 @@ export default function OfferReadinessPanel({
               <span className={it.ok ? "text-gray-400" : "text-red-400/80"}>
                 {/* Show the InvestorBase manual provenance only in disclosure
                     states; in a non-disclosure state the branch prices off ARV
-                    comps and it.detail already carries the right number. */}
-                {it.key === "buyer_ceiling" && buyerMedian.value != null && isDisclosureState(listing.state)
-                  ? `$${buyerMedian.value.toLocaleString()}${buyerMedian.track ? ` · ${buyerMedian.track}` : ""}${buyerMedian.source ? ` · ${buyerMedian.source}` : ""}${buyerMedian.fetchedAt ? ` · ${buyerMedian.fetchedAt.slice(0, 10)}` : ""}`
-                  : it.detail}
+                    comps and it.detail already carries the right number.
+                    OPERATIVE TRACK highlighted (2026-06-10 defect): the
+                    ceiling shown is the track the deal was UNDERWRITTEN on;
+                    the other track renders dimmed + labeled so it can never
+                    be mistaken for the operative number. */}
+                {it.key === "buyer_ceiling" && buyerMedian.value != null && isDisclosureState(listing.state) ? (
+                  <>
+                    <span className="text-emerald-300 font-semibold">
+                      ${buyerMedian.value.toLocaleString()} · {buyerMedian.track ?? "?"} (operative)
+                    </span>
+                    {buyerMedian.source ? ` · ${buyerMedian.source}` : ""}
+                    {buyerMedian.fetchedAt ? ` · ${buyerMedian.fetchedAt.slice(0, 10)}` : ""}
+                    {(() => {
+                      const other = buyerMedian.track === "landlord" ? buyerMedian.tracks?.flipper : buyerMedian.tracks?.landlord;
+                      const otherName = buyerMedian.track === "landlord" ? "flipper" : "landlord";
+                      return other ? (
+                        <span className="text-gray-600"> · {otherName} ${other.value.toLocaleString()} (not operative)</span>
+                      ) : null;
+                    })()}
+                  </>
+                ) : (
+                  it.detail
+                )}
               </span>
               {it.key === "buyer_ceiling" && (
                 <button

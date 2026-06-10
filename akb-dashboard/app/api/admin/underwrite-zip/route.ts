@@ -167,7 +167,10 @@ export async function GET(req: Request) {
         // Persist the underwritten MAO ceiling to Underwritten_MAO (the
         // operative offer at negotiation/DD stage per Phase 20.2 v1.3 —
         // a sensible home for a track-aware landlord ceiling here).
-        await updateListingRecord(l.id, { Underwritten_MAO: uw.yourMao });
+        // Track persisted alongside the MAO (2026-06-10 Tracey display
+        // defect): the Offer Readiness panel shows THIS track's ceiling as
+        // operative — a track-blind ceiling invites overpricing at DD.
+        await updateListingRecord(l.id, { Underwritten_MAO: uw.yourMao, Underwritten_MAO_Track: uw.track });
         wrote = true;
       } catch (err) {
         writeError = err instanceof Error ? err.message : String(err);

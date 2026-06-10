@@ -64,26 +64,47 @@ export async function GET(req: Request, { params }: { params: Promise<{ recordId
 
   try {
     // ZIP-level store is the SOURCE OF TRUTH: a deal reads its ZIP's median
-    // for its track (distressed as-is → landlord) instead of a hand-entered
-    // per-deal value. Per-deal Property_Intel is only a legacy fallback.
+    // for its OPERATIVE track instead of a hand-entered per-deal value.
+    // OPERATIVE TRACK (2026-06-10 Tracey display defect): the track the deal
+    // was actually UNDERWRITTEN on (persisted Underwritten_MAO_Track) — one
+    // read path with the underwrite, never re-derived differently. Cohort
+    // heuristic only as fallback for never-underwritten records. BOTH
+    // tracks are returned so the panel can label them; a track-blind
+    // ceiling invites overpricing at DD.
     const listing = await getListing(recordId).catch(() => null);
     if (listing?.zip) {
+      const persisted = (listing.underwrittenMaoTrack ?? "").toLowerCase();
       const redFlagsText = Array.isArray(listing.redFlags) ? listing.redFlags.join(" ") : (listing.redFlags ?? "");
-      const track = defaultBuyerTrack({
-        condition: `${redFlagsText} ${listing.distressBucket ?? ""}`,
-        distressed: (listing.distressScore ?? 0) > 0,
-      });
-      const zipMedian = await getZipBuyerMedian(listing.zip, track).catch(() => null);
-      if (zipMedian) {
+      const operativeTrack: "landlord" | "flipper" =
+        persisted === "landlord" || persisted === "flipper"
+          ? (persisted as "landlord" | "flipper")
+          : defaultBuyerTrack({
+              condition: `${redFlagsText} ${listing.distressBucket ?? ""}`,
+              distressed: (listing.distressScore ?? 0) > 0,
+            });
+      const [landlord, flipper] = await Promise.all([
+        getZipBuyerMedian(listing.zip, "landlord").catch(() => null),
+        getZipBuyerMedian(listing.zip, "flipper").catch(() => null),
+      ]);
+      const operative = operativeTrack === "landlord" ? landlord : flipper;
+      if (operative) {
         return NextResponse.json({
           found: true,
           origin: "zip_store",
-          zip: zipMedian.zip,
-          value: zipMedian.value,
-          source: zipMedian.source,
-          track: zipMedian.track,
-          fetchedAt: zipMedian.fetchedAt,
-          sampleSize: zipMedian.compCount,
+          zip: operative.zip,
+          // Top-level value/source/track = the OPERATIVE track (back-compat
+          // with existing consumers, now track-correct).
+          value: operative.value,
+          source: operative.source,
+          track: operative.track,
+          operative_track_source: persisted ? "underwritten" : "cohort_default",
+          fetchedAt: operative.fetchedAt,
+          sampleSize: operative.compCount,
+          // Both tracks for the panel's labeled display.
+          tracks: {
+            landlord: landlord ? { value: landlord.value, source: landlord.source, fetchedAt: landlord.fetchedAt } : null,
+            flipper: flipper ? { value: flipper.value, source: flipper.source, fetchedAt: flipper.fetchedAt } : null,
+          },
         });
       }
     }

@@ -137,6 +137,7 @@ const LISTING_FIELDS: Record<string, string> = {
   // (V2.1-reserved for the DD-time contract number set by the INV-023 gate
   // after CMA + rehab — that field MUST stay empty until DD).
   fldTSadqhYKeyKd89: "underwrittenMao",
+  fldFuePOkTlAl3NUT: "underwrittenMaoTrack",
 };
 
 // Reverse map: field name -> prop name (for single-record GET which returns field names)
@@ -194,6 +195,7 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "Outreach_Offer_Price": "outreachOfferPrice",
   "Contract_Offer_Price": "contractOfferPrice",
   "Underwritten_MAO": "underwrittenMao",
+  "Underwritten_MAO_Track": "underwrittenMaoTrack",
   "Seller_Motivation_Score": "sellerMotivationScore",
   "List_Price_At_Send": "listPriceAtSend",
   // ── Phase 3: photo analysis / rehab ──────────────────────────────────────

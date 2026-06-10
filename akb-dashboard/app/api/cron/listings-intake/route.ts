@@ -138,6 +138,7 @@ async function createIntakeListing(
   portfolioDetected: boolean = false,
   matchedPortfolioKeywords: string[] = [],
   underwrittenMao: number | null = null,
+  underwrittenMaoTrack: string | null = null,
 ): Promise<string> {
   if (!AIRTABLE_PAT) throw new Error("AIRTABLE_PAT not set");
   const url = `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}`;
@@ -215,6 +216,9 @@ async function createIntakeListing(
   // per Phase 20.2 v1.3 (operator 2026-06-09).
   if (typeof underwrittenMao === "number" && Number.isFinite(underwrittenMao) && underwrittenMao > 0) {
     fields["Underwritten_MAO"] = underwrittenMao;
+  }
+  if (underwrittenMaoTrack === "landlord" || underwrittenMaoTrack === "flipper") {
+    fields["Underwritten_MAO_Track"] = underwrittenMaoTrack;
   }
   const res = await fetch(url, {
     method: "POST",
@@ -856,19 +860,29 @@ export async function GET(req: Request) {
     }
 
     // ── Underwrite BEFORE promote (operator 2026-06-09) ──
-    // Pick the cohort-default track (fresh intake → no distress info → flipper),
-    // fall back to whichever track has a seeded median for the ZIP. Compute
-    // track-aware Your_MAO; null → mao_not_underwritten blocks promote.
+    // TRACK (2026-06-10 Tracey display defect): an accepted intake candidate
+    // IS the distressed as-is cohort (the Firecrawl classifier requires a
+    // distress signal to accept) — operator ruling: that cohort defaults to
+    // LANDLORD. The previous defaultBuyerTrack({}) returned flipper for
+    // every fresh candidate, which would also have HOLD-blocked promotion
+    // (flipper math needs Est_Rehab, which intake doesn't have).
+    // FALLBACK at the COMPUTE level, not just median presence: if the
+    // preferred track's math HOLDs (e.g. flipper without rehab), try the
+    // other seeded track before giving up.
     const candZip = (c.zip ?? "").trim();
-    const defaultTrack = defaultBuyerTrack({});
-    const preferred = zipMedians.get(`${candZip}:${defaultTrack}`);
-    const fallback = preferred ?? zipMedians.get(`${candZip}:${defaultTrack === "flipper" ? "landlord" : "flipper"}`) ?? null;
+    const defaultTrack = defaultBuyerTrack({ distressed: accepted });
+    const otherTrack: BuyerTrack = defaultTrack === "flipper" ? "landlord" : "flipper";
     let underwrittenMao: number | null = null;
     let underwrittenMaoTrack: BuyerTrack | null = null;
-    if (fallback) {
-      const uw = computeTrackAwareMao({ track: fallback.track, buyerMedian: fallback.value, estRehab: null });
-      underwrittenMao = uw.yourMao;
-      underwrittenMaoTrack = fallback.track;
+    for (const track of [defaultTrack, otherTrack]) {
+      const median = zipMedians.get(`${candZip}:${track}`);
+      if (!median) continue;
+      const uw = computeTrackAwareMao({ track, buyerMedian: median.value, estRehab: null });
+      if (uw.yourMao != null && uw.yourMao > 0) {
+        underwrittenMao = uw.yourMao;
+        underwrittenMaoTrack = track;
+        break;
+      }
     }
 
     // Intrinsic auto-promote eligibility, then layer the feature flags.
@@ -933,9 +947,9 @@ export async function GET(req: Request) {
   // ── Phase 4: writes (live only; sequential, post-pool — no concurrent
   // Airtable writes / intra-run dup races). ──
   if (!dryRun) {
-    for (const { candidate: c, zip, promote, firecrawlUrl, portfolioDetected, matchedPortfolioKeywords, underwrittenMao } of toWrite) {
+    for (const { candidate: c, zip, promote, firecrawlUrl, portfolioDetected, matchedPortfolioKeywords, underwrittenMao, underwrittenMaoTrack } of toWrite) {
       try {
-        await createIntakeListing(c, promote, firecrawlUrl, portfolioDetected, matchedPortfolioKeywords, underwrittenMao);
+        await createIntakeListing(c, promote, firecrawlUrl, portfolioDetected, matchedPortfolioKeywords, underwrittenMao, underwrittenMaoTrack);
         summary.written++;
       } catch (err) {
         summary.per_zip_errors.push({
