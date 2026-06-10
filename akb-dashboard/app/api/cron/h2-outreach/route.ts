@@ -38,7 +38,7 @@
 
 import { NextResponse } from "next/server";
 import { getListings, getListing, updateListingRecord } from "@/lib/airtable";
-import { sendMessageWithId } from "@/lib/quo";
+import { sendMessageWithId, getMessageStatus } from "@/lib/quo";
 import { audit } from "@/lib/audit-log";
 import { checkFirstOutreachHydration, checkOfferOverList, openerMaoGuard, resolveOpenerCeiling } from "@/lib/outreach-economics";
 import { loadUnderwriteContextForListings } from "@/lib/track-aware-underwrite";
@@ -52,7 +52,7 @@ import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import type { Listing } from "@/lib/types";
 import {
   isH2Eligible,
-  selectH2Eligible,
+  selectOutreachReady,
   buildPriorContactIndex,
   planQueue,
   buildSentNote,
@@ -87,6 +87,11 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// Positive Confirmation polling (operator 2026-06-10): same posture as
+// outreach-batch — only mark Texted on a terminal-success status from Quo.
+const POLL_ATTEMPTS = Number(process.env.H2_CRON_POLL_ATTEMPTS ?? "6");
+const POLL_DELAY_MS = Number(process.env.H2_CRON_POLL_DELAY_MS ?? "5000");
+
 interface ProcessedRow {
   record_id: string;
   address: string;
@@ -96,6 +101,12 @@ interface ProcessedRow {
   message: string | null;
   sms_fired: boolean;
   sms_message_id: string | null;
+  /** Final Quo message status observed after polling (delivered | sent |
+   *  failed | undelivered | unknown). Null when no id came back. */
+  confirmed_status: string | null;
+  /** True only when polling observed a terminal SUCCESS (delivered or sent).
+   *  Unconfirmed sends do NOT mark Texted — reconcile cron repairs from Quo. */
+  delivered: boolean;
   airtable_updated: boolean;
   error: string | null;
   working_hours_meta: WorkingHoursMeta | null;
@@ -224,20 +235,31 @@ async function handle(req: Request): Promise<Response> {
           message: null,
           sms_fired: false,
           sms_message_id: null,
+          confirmed_status: null,
+          delivered: false,
           airtable_updated: false,
           error: `ineligible: ${reason}`,
+          working_hours_meta: null,
         }],
-        summary: { first_touch_sent: 0, prior_contact_stalled: 0, bad_phone_quarantined: 0, outside_hours: 0, skipped: 1, errors: 0 },
+        summary: { first_touch_sent: 0, prior_contact_stalled: 0, bad_phone_quarantined: 0, outside_hours: 0, skipped: 1, errors: 0, unconfirmed: 0 },
         auth_kind: authKind,
         duration_ms: Date.now() - t0,
       });
     }
     queue = [target];
   } else {
-    queue = selectH2Eligible(allListings).slice(0, limit);
+    // STRICT selector (operator 2026-06-10, aperture-open audit): the cron
+    // uses the SAME gate the batch uses — selectOutreachReady layers
+    // freshness + priceable-market on top of H2 eligibility. Replaces the
+    // older selectH2Eligible which would have re-engaged the 25 legacy
+    // unbacked-status records (forward-only directive) and any pre-
+    // priceable-gate listings still in the cohort.
+    queue = selectOutreachReady(allListings).slice(0, limit);
   }
 
-  const eligibleCount = recordId ? queue.length : selectH2Eligible(allListings).length;
+  // eligibleCount uses the same strict selector as the queue so the dry-run
+  // headline matches the real send pool.
+  const eligibleCount = recordId ? queue.length : selectOutreachReady(allListings).length;
 
   // Opener-vs-MAO guard (priceable markets only): the 65%-of-list door-opener
   // (MAO_V1 = l.mao) must never exceed the deal's underwritten MAO. Cap to MAO,
@@ -264,7 +286,18 @@ async function handle(req: Request): Promise<Response> {
 
   const startedAt = new Date(t0).toISOString();
   const processed: ProcessedRow[] = [];
-  const summary = {
+  const summary: {
+    first_touch_sent: number;
+    prior_contact_stalled: number;
+    bad_phone_quarantined: number;
+    outside_hours: number;
+    skipped: number;
+    idempotent_skipped: number;
+    errors: number;
+    /** Sends that fired but never observed a terminal-success status in the
+     *  poll window — Texted NOT stamped; reconcile cron repairs. */
+    unconfirmed: number;
+  } = {
     first_touch_sent: 0,
     prior_contact_stalled: 0,
     bad_phone_quarantined: 0,
@@ -272,6 +305,7 @@ async function handle(req: Request): Promise<Response> {
     skipped: 0,
     idempotent_skipped: 0,
     errors: 0,
+    unconfirmed: 0,
   };
 
   // Run-mutex (live only) — two overlapping invocations both reading the same
@@ -306,6 +340,8 @@ async function handle(req: Request): Promise<Response> {
       message: p.message,
       sms_fired: false,
       sms_message_id: null,
+      confirmed_status: null,
+      delivered: false,
       airtable_updated: false,
       error: null,
       working_hours_meta: null,
@@ -428,15 +464,54 @@ async function handle(req: Request): Promise<Response> {
             });
             continue;
           }
+          // ── 1) SEND ─────────────────────────────────────────────────
           const result = await sendMessageWithId(p.toE164!, p.message!);
           row.sms_fired = true;
           row.sms_message_id = result.id;
-          await updateListingRecord(p.recordId, {
-            Outreach_Status: "Texted",
-            Verification_Notes: buildSentNote(existingNotes, iso, result.id, p.message!),
-          });
-          row.airtable_updated = true;
-          summary.first_touch_sent++;
+
+          // ── 2) CONFIRM via message-status polling (operator 2026-06-10,
+          //      aperture-open audit). A 2xx from Quo means QUEUED, not
+          //      DELIVERED — per Positive Confirmation, the cron must not
+          //      stamp Texted on an unverified send (the batch path already
+          //      enforces this; the cron was missing it).
+          let delivered = false;
+          let confirmedStatus: string | null = result.status ?? null;
+          if (result.id) {
+            for (let attempt = 0; attempt < POLL_ATTEMPTS; attempt++) {
+              await sleep(POLL_DELAY_MS);
+              try {
+                const st = await getMessageStatus(result.id);
+                confirmedStatus = st.status;
+                if (st.isTerminal) {
+                  delivered = st.isSuccess;
+                  break;
+                }
+              } catch (err) {
+                row.error = `status_poll: ${String(err).slice(0, 120)}`;
+              }
+            }
+          } else {
+            row.error = "send returned no message id — cannot confirm";
+          }
+          row.confirmed_status = confirmedStatus;
+
+          // ── 3) WRITE — only mark Texted on a CONFIRMED success ──────
+          // Unconfirmed or failed sends are NOT marked Texted. The
+          // KV dispatch claim stays (avoids retry of an unconfirmed send
+          // that may have actually landed); the reconcile cron repairs
+          // status from Quo as the source of truth.
+          if (delivered) {
+            await updateListingRecord(p.recordId, {
+              Outreach_Status: "Texted",
+              Last_Outbound_At: iso,
+              Verification_Notes: buildSentNote(existingNotes, iso, result.id, p.message!),
+            });
+            row.delivered = true;
+            row.airtable_updated = true;
+            summary.first_touch_sent++; // Texted only counted on confirmed delivery
+          } else {
+            summary.unconfirmed++; // not stamped Texted; reconcile cron repairs
+          }
           if (sendDelayMs > 0) await sleep(sendDelayMs); // throttle after a send only
         }
       }
