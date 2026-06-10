@@ -1,9 +1,0 @@
-/* V2-scoped utilities — kept out of globals.css so v1 styling is untouched. */
-
-.no-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
-.no-scrollbar::-webkit-scrollbar {
-  display: none;
-}

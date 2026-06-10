@@ -9,6 +9,7 @@ import CommandBarFAB from "@/components/CommandBarFAB";
 import ShepherdPanel from "@/components/ShepherdPanel";
 import BriefingProvider from "@/components/BriefingProvider";
 import { v2Enabled } from "./v2/_lib/flag";
+import V2Frame from "./v2/_components/V2Frame";
 
 export const metadata: Metadata = {
   title: "AKB Solutions — Pipeline Dashboard",
@@ -33,7 +34,13 @@ export default function RootLayout({
           <BriefingProvider>
             <QuotesBar />
             <Navigation v2={v2Enabled()} />
-            <main className="max-w-7xl mx-auto px-4 py-6">{children}</main>
+            {v2Enabled() ? (
+              // V2 absorption (flag-gated): slim health strip + shared data
+              // provider + Maverick panel around the SAME <main> container.
+              <V2Frame>{children}</V2Frame>
+            ) : (
+              <main className="max-w-7xl mx-auto px-4 py-6">{children}</main>
+            )}
             <CommandBar />
             <CommandBarFAB />
             <ShepherdPanel />

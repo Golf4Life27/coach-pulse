@@ -112,6 +112,10 @@ export interface ListingDetail {
   outreachOfferPrice?: number | null;
   contractOfferPrice?: number | null;
   underwrittenMao?: number | null;
+  /** landlord | flipper — the PERSISTED operative underwrite track
+   *  (Underwritten_MAO_Track, ops bb03a6d). Display ceilings track-labeled,
+   *  matching ops's Offer Readiness panel. */
+  underwrittenMaoTrack?: string | null;
   investorMao?: number | null;
   yourMao?: number | null;
   estRehab?: number | null;

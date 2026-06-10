@@ -10,21 +10,15 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { V2DataProvider, useV2Data } from "../_lib/data";
+import { useV2Data } from "../_lib/data";
 import type { AuditEntry, OperatorItem, QueueCard } from "../_lib/types";
 import { ago, money, timeStamp } from "../_lib/format";
 import { deriveDecisions } from "../_lib/decisions";
 import { humanizeEvent, translateSystemText } from "../_lib/translate";
 
+// Data comes from the shared V2DataProvider mounted by V2Frame in the root
+// layout (same fetch loop as the header health strip).
 export default function TodayBoard() {
-  return (
-    <V2DataProvider>
-      <Today />
-    </V2DataProvider>
-  );
-}
-
-function Today() {
   const {
     openCards,
     suppressedCards,

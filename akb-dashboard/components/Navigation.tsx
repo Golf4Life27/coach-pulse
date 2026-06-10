@@ -14,7 +14,11 @@ const tabs = [
 
 // V2 surfaces being absorbed into the V1 shell (charter pivot 6/10). Gated
 // by the V2 flag, passed from the server layout. "TODAY" lands first.
-const v2Tabs = [{ name: "TODAY", href: "/today" }];
+const v2Tabs = [
+  { name: "TODAY", href: "/today" },
+  { name: "FUNNEL", href: "/funnel" },
+  { name: "AGENTS", href: "/agents" },
+];
 
 export default function Navigation({ v2 = false }: { v2?: boolean }) {
   const pathname = usePathname();
