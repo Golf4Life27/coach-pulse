@@ -264,17 +264,39 @@ async function handle(req: Request): Promise<Response> {
   // Opener-vs-MAO guard (priceable markets only): the 65%-of-list door-opener
   // (MAO_V1 = l.mao) must never exceed the deal's underwritten MAO. Cap to MAO,
   // or skip + flag. Unpriceable markets pass through unchanged.
-  const openerGuarded: Array<{ recordId: string; action: "capped" | "skipped"; reason: string | null; from: number | null; to: number | null }> = [];
+  //
+  // AUTONOMOUS-PATH RULES (operator 2026-06-10, spine recjsLKqETfQ5r6zK,
+  // post-Hunt-St-breach standing rules — h2-outreach cron is the autonomous
+  // send path, so it enables BOTH):
+  //   1. requireBuyerAnchored — MAO lineage must be buyer-anchored
+  //      (buyer_underwrite_persisted | buyer_zip_store_live). deal_math
+  //      INFORMS analysis but does NOT authorize an autonomous first touch.
+  //      Practical effect today: the autonomous lane is 48227 only;
+  //      seeding a new market's buyer median is what opens that market.
+  //   2. Lowball floor — capped opener < 35% of list HOLDs for operator
+  //      review. A cap that deep means lineage mismatch (3684 Hunt St:
+  //      $13,500 vs $100k list ≈ 13.5%, sourced via deal-math fallback).
+  //
+  // The controlled batch path (outreach-batch) does NOT pass these flags
+  // — operator supervision substitutes for the autonomous brake.
+  const openerGuarded: Array<{ recordId: string; action: "capped" | "skipped"; reason: string | null; from: number | null; to: number | null; source: string | null }> = [];
   const uwCtxCron = await loadUnderwriteContextForListings(queue);
   queue = queue.filter((l) => {
     const ceiling = resolveOpenerCeiling(l, uwCtxCron);
-    const guard = openerMaoGuard({ baseOpener: l.mao, mao: ceiling.mao, priceable: ceiling.priceable });
+    const guard = openerMaoGuard({
+      baseOpener: l.mao,
+      mao: ceiling.mao,
+      priceable: ceiling.priceable,
+      source: ceiling.source,
+      requireBuyerAnchored: true,
+      listPrice: l.listPrice,
+    });
     if (!guard.ok) {
-      openerGuarded.push({ recordId: l.id, action: "skipped", reason: guard.reason, from: guard.baseOpener, to: null });
+      openerGuarded.push({ recordId: l.id, action: "skipped", reason: guard.reason, from: guard.baseOpener, to: null, source: ceiling.source });
       return false;
     }
     if (guard.capped && guard.opener != null) {
-      openerGuarded.push({ recordId: l.id, action: "capped", reason: guard.reason, from: guard.baseOpener, to: guard.opener });
+      openerGuarded.push({ recordId: l.id, action: "capped", reason: guard.reason, from: guard.baseOpener, to: guard.opener, source: ceiling.source });
       l.mao = guard.opener; // send the opener at MAO, not 65%-of-list
     }
     return true;

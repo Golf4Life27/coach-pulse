@@ -113,6 +113,24 @@ export function checkOfferOverList(
 /** Minimum opener we'll send. Mirrors the $5K floor the H2 selector uses. */
 export const MIN_OPENER_USD = 5000;
 
+/** Lowball floor (operator 2026-06-10, standing rule). A capped opener
+ *  below this fraction of list_price signals pricing-lineage mismatch
+ *  (e.g. a deal-math fallback in a market without a buyer median, the
+ *  3684 Hunt St breach: $13,500 / $100k ≈ 13.5%). HOLD for operator
+ *  review rather than burn the agent. Env-tunable. */
+export const LOWBALL_FLOOR_PCT_OF_LIST = (() => {
+  const raw = Number(process.env.H2_LOWBALL_FLOOR_PCT_OF_LIST);
+  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.35;
+})();
+
+/** Lineages the autonomous h2-outreach cron is authorized to send on
+ *  (operator 2026-06-10, standing rule BUYER-ANCHORED ONLY). The cron
+ *  passes requireBuyerAnchored=true; deal_math and null are refused. */
+const BUYER_ANCHORED_SOURCES: ReadonlySet<MaoLineage> = new Set([
+  "buyer_underwrite_persisted",
+  "buyer_zip_store_live",
+]);
+
 export interface OpenerMaoGuard {
   /** false = skip the listing (do not send). */
   ok: boolean;
@@ -132,11 +150,24 @@ const positiveNum = (n: number | null | undefined): n is number =>
   typeof n === "number" && Number.isFinite(n) && n > 0;
 
 /** Pure: cap or skip the door-opener so it never exceeds the deal's MAO.
- *  Only acts in priceable markets; elsewhere the opener passes through. */
+ *  Only acts in priceable markets; elsewhere the opener passes through.
+ *
+ *  Autonomous-send extras (operator 2026-06-10, h2-outreach cron only):
+ *    - requireBuyerAnchored — refuse when MAO lineage is deal_math or null.
+ *      Seeding a market's buyer median is what opens its autonomous lane.
+ *    - listPrice + LOWBALL_FLOOR_PCT_OF_LIST — capped opener below 35% of
+ *      list HOLDs for operator review (lineage-mismatch smell). */
 export function openerMaoGuard(input: {
   baseOpener: number | null | undefined;
   mao: number | null | undefined;
   priceable: boolean;
+  /** MaoLineage from resolveOpenerCeiling. Required when
+   *  requireBuyerAnchored=true; ignored otherwise. */
+  source?: MaoLineage | null;
+  /** Autonomous-cron switch: refuse non-buyer-anchored lineages. */
+  requireBuyerAnchored?: boolean;
+  /** Listing list price, for the lowball-floor check. */
+  listPrice?: number | null;
 }): OpenerMaoGuard {
   const base = positiveNum(input.baseOpener) ? input.baseOpener : null;
   const mao = positiveNum(input.mao) ? input.mao : null;
@@ -160,11 +191,42 @@ export function openerMaoGuard(input: {
       reason: "mao_not_underwritten — no persisted Underwritten_MAO and ZIP-store unavailable; run the underwrite station before sending an opener",
     };
   }
+  // Buyer-anchored lineage gate (autonomous send paths only). MAO from
+  // deal-math is analysis-grade, not send-authorizing. The 3684 Hunt St
+  // breach: 48207 has no seeded buyer median, deal-math priced it at
+  // $13,658 → cap $13,500 against ~$100k list, autonomously schedulable
+  // without this gate. Refuse explicitly so adding a buyer median (not
+  // hardcoding a ZIP) is what opens a market's autonomous lane.
+  if (input.requireBuyerAnchored && (input.source == null || !BUYER_ANCHORED_SOURCES.has(input.source))) {
+    return {
+      ok: false,
+      opener: null,
+      baseOpener: base,
+      mao,
+      capped: false,
+      reason: `mao_lineage_not_buyer_anchored (source=${input.source ?? "null"}) — autonomous h2-outreach requires buyer_underwrite_persisted or buyer_zip_store_live; seed the ZIP's buyer median to open the autonomous lane`,
+    };
+  }
+  // Lowball floor (autonomous-path rule, gated by requireBuyerAnchored —
+  // operator-supervised paths keep operator judgment): a sub-35%-of-list
+  // opener signals lineage mismatch and burns the agent for nothing.
+  // Applied on BOTH the base opener (≤ MAO branch) and the capped opener
+  // (base > MAO branch) because a deep cap is the same smell.
+  const lowballApplies = input.requireBuyerAnchored === true && input.listPrice != null && input.listPrice > 0;
+  const lowballFloor = lowballApplies ? (input.listPrice as number) * LOWBALL_FLOOR_PCT_OF_LIST : 0;
+  const lowballReason = (n: number) =>
+    `lowball_below_${Math.round(LOWBALL_FLOOR_PCT_OF_LIST * 100)}pct_of_list — opener $${n.toLocaleString()} < ${Math.round(LOWBALL_FLOOR_PCT_OF_LIST * 100)}% of list $${(input.listPrice as number).toLocaleString()} ($${Math.round(lowballFloor).toLocaleString()} floor); HOLD for operator review`;
   if (base <= mao) {
+    if (lowballApplies && base < lowballFloor) {
+      return { ok: false, opener: null, baseOpener: base, mao, capped: false, reason: lowballReason(base) };
+    }
     return { ok: true, opener: base, baseOpener: base, mao, capped: false, reason: null };
   }
   // base > mao → cap to MAO, rounded DOWN to $250 so we never exceed it.
   const cappedOpener = Math.floor(mao / 250) * 250;
+  if (lowballApplies && cappedOpener < lowballFloor) {
+    return { ok: false, opener: null, baseOpener: base, mao, capped: false, reason: lowballReason(cappedOpener) };
+  }
   if (cappedOpener < MIN_OPENER_USD) {
     return {
       ok: false,
@@ -192,7 +254,17 @@ export interface OpenerCeiling {
   priceable: boolean;
   /** Resolved market id for audit, or null when no market matched. */
   market: string | null;
+  /** Lineage of the MAO number, written by resolveOpenerCeiling so callers
+   *  can enforce a buyer-anchored policy on autonomous send paths. The
+   *  h2-outreach cron (operator 2026-06-10) refuses to send unless this is
+   *  buyer_underwrite_persisted or buyer_zip_store_live. */
+  source: MaoLineage | null;
 }
+
+export type MaoLineage =
+  | "buyer_underwrite_persisted"  // (1) listing.underwrittenMao — buyer-anchored
+  | "buyer_zip_store_live"        // (2) UnderwriteContext ZIP-store median — buyer-anchored
+  | "deal_math";                  // (3) evaluateDeal ARV×arv_pct_max-rehab-fee — NOT buyer-anchored
 
 /** Pure: resolve the deal's MAO ceiling + market priceability. PRIORITY:
  *  (1) persisted listing.underwrittenMao — what the underwrite station wrote;
@@ -229,15 +301,16 @@ export function resolveOpenerCeiling(
   const market = getMarketForListing({ state: listing.state, zip: listing.zip });
   const priceable = market?.buyer_params?.arv_pct_max != null;
   if (!priceable) {
-    return { mao: null, priceable: false, market: market?.id ?? null };
+    return { mao: null, priceable: false, market: market?.id ?? null, source: null };
   }
-  // (1) Persisted Underwritten_MAO — preferred. The send path reads what the
-  // underwrite station wrote; no live I/O dependency.
+  // (1) Persisted Underwritten_MAO — preferred. Buyer-anchored: written by
+  // the buyer-median underwrite, no live I/O dependency.
   if (typeof listing.underwrittenMao === "number" && listing.underwrittenMao > 0) {
-    return { mao: listing.underwrittenMao, priceable: true, market: market?.id ?? null };
+    return { mao: listing.underwrittenMao, priceable: true, market: market?.id ?? null, source: "buyer_underwrite_persisted" };
   }
-  // (2) Track-aware ZIP-store via pre-loaded context — legitimate fallback
-  // for intake rows too fresh for the station to have written yet.
+  // (2) Track-aware ZIP-store via pre-loaded context — buyer-anchored:
+  // legitimate fallback for intake rows too fresh for the station to have
+  // written yet.
   if (ctx) {
     const uw = computeListingMao(
       {
@@ -251,12 +324,15 @@ export function resolveOpenerCeiling(
       ctx,
     );
     if (uw.yourMao != null) {
-      return { mao: uw.yourMao, priceable: true, market: market?.id ?? null };
+      return { mao: uw.yourMao, priceable: true, market: market?.id ?? null, source: "buyer_zip_store_live" };
     }
   }
-  // (3) evaluateDeal — ONLY when ARV+rehab are actually present. Otherwise we
-  // surface a DISTINCT failure rather than silently emit the misleading
-  // "needs ARV+rehab" error. Silent fallback = defect.
+  // (3) evaluateDeal — NOT buyer-anchored. INFORMS analysis but the
+  // h2-outreach cron path REFUSES this lineage (operator 2026-06-10,
+  // standing rule "BUYER-ANCHORED ONLY"). The 3684 Hunt St breach: this
+  // path produced a $13,658 MAO against a ~$100k list, with no buyer
+  // median for 48207 — autonomous send authorization does not extend
+  // here. Caller enforces via openerMaoGuard { requireBuyerAnchored }.
   const hasArvRehab =
     typeof listing.realArvMedian === "number" && listing.realArvMedian > 0 &&
     typeof listing.estRehab === "number" && listing.estRehab >= 0;
@@ -265,13 +341,10 @@ export function resolveOpenerCeiling(
       { arv: listing.realArvMedian, rehab: listing.estRehab, listPrice: listing.listPrice },
       market,
     );
-    return { mao: res.mao, priceable: true, market: market?.id ?? null };
+    return { mao: res.mao, priceable: true, market: market?.id ?? null, source: "deal_math" };
   }
   // No persisted MAO, no ZIP-store median, no ARV+rehab → distinct error.
-  // Distinguishes "the lead was never underwritten" from "ARV+rehab are
-  // missing for a deal-math run." The openerMaoGuard surfaces this reason
-  // verbatim so the cause is unmistakable.
-  return { mao: null, priceable: true, market: market?.id ?? null };
+  return { mao: null, priceable: true, market: market?.id ?? null, source: null };
 }
 
 // ── Alert price read (2026-06-10 smoke-test fix) ─────────────────────
