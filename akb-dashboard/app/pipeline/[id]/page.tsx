@@ -9,6 +9,7 @@ import { ALL_DD_ITEMS } from "@/lib/actionQueue";
 import { showToast } from "@/components/Toast";
 import MaverickDealCommentary from "@/components/MaverickDealCommentary";
 import DealFilePanel from "@/components/DealFilePanel";
+import PreEmdGatePanel from "@/components/PreEmdGatePanel";
 import OfferReadinessPanel from "@/components/OfferReadinessPanel";
 import AppraiserArvPanel from "@/components/AppraiserArvPanel";
 import AppraiserRehabPanel from "@/components/AppraiserRehabPanel";
@@ -244,6 +245,10 @@ export default function DealWorkspace() {
 
       {/* Wire #1 (SYSTEM_HANDOFF.md) — the Deal File / underwrite on the deal page */}
       <DealFilePanel recordId={listing.id} />
+
+      {/* INV-023 — Pre-EMD DD gate (renders only when a Deals row joins).
+          Self-contained; the V2 Deal Room lifts it later. */}
+      <PreEmdGatePanel recordId={listing.id} />
 
       {/* Phase 5.3 — Scribe envelope panel */}
       <ScribeDealCommentary

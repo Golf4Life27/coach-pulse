@@ -28,7 +28,6 @@ export const PRE_EMD_GATE: Gate = {
 export const PRE_EMD_CONFIG = preEmdConfig.config as {
   cma_staleness_days: number;
   condition_variance_block_pct: number;
-  tn_assignability_states: string[];
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────
@@ -144,32 +143,28 @@ const PE_03_federation_green: CheckFn = (ctx) => {
   });
 };
 
-const PE_04_memphis_assignment: CheckFn = (ctx, cfg) => {
-  const c = cfg as typeof PRE_EMD_CONFIG;
-  const state = ctx.listing?.state;
-  if (!state) {
-    return dataMissing("PE-04", "listing.State unset — can't determine TN applicability.", {
-      missing_data_source: "airtable_listing.State",
+const PE_04_assignment_clause: CheckFn = (ctx) => {
+  // Operator ruling 2026-06-10: REQUIRED FOR EVERY STATE. Memphis is where
+  // we learned the lesson, not the boundary of the risk — a Michigan PA can
+  // carry non-assignability language too. Reads the DEAL (one concept, one
+  // table), not the listing.
+  if (!ctx.deal) {
+    return dataMissing("PE-04", "No Deals row joined to this listing — assignment-clause attestation lives on the deal.", {
+      missing_data_source: "airtable_deal",
       recordId: ctx.recordId,
     });
   }
-  const isTN = c.tn_assignability_states.some((s) => s.toLowerCase() === state.trim().toLowerCase());
-  if (!isTN) {
-    return pass("PE-04", `state="${state}" — not TN, Memphis assignment check N/A.`, {
-      state,
-      tn_states: c.tn_assignability_states,
-    });
-  }
-  if (ctx.listing?.memphisAssignmentVerified !== true) {
+  if (ctx.deal.preEmdAssignmentClauseVerified !== true) {
     return fail(
       "PE-04",
-      `State=${state} but Memphis_Assignment_Verified is not set. Operator must confirm non-assignment language absent before EMD.`,
-      { state, memphis_assignment_verified: ctx.listing?.memphisAssignmentVerified ?? false },
+      "Pre_EMD_Assignment_Clause_Verified is not set. Operator must confirm assignment is not prohibited in THIS contract (every state, always) before EMD.",
+      { state: ctx.listing?.state ?? null, pre_emd_assignment_clause_verified: false, deal_record_id: ctx.deal.dealRecordId },
     );
   }
-  return pass("PE-04", `State=${state} and Memphis_Assignment_Verified=true.`, {
-    state,
-    memphis_assignment_verified: true,
+  return pass("PE-04", "Pre_EMD_Assignment_Clause_Verified=true (operator confirmed assignment not prohibited).", {
+    state: ctx.listing?.state ?? null,
+    pre_emd_assignment_clause_verified: true,
+    deal_record_id: ctx.deal.dealRecordId,
   });
 };
 
@@ -241,21 +236,28 @@ const PE_06_photos_vs_modeled: CheckFn = (ctx, cfg) => {
 };
 
 const PE_07_operator_signoff: CheckFn = (ctx) => {
-  if (ctx.listing?.emdOperatorSignoff !== true) {
+  // Reads the DEAL (2026-06-10 move off Listings_V1).
+  if (!ctx.deal) {
+    return dataMissing("PE-07", "No Deals row joined to this listing — operator sign-off lives on the deal.", {
+      missing_data_source: "airtable_deal",
+      recordId: ctx.recordId,
+    });
+  }
+  if (ctx.deal.preEmdOperatorSignoff !== true) {
     return fail(
       "PE-07",
-      "EMD_Operator_Signoff not set — final operator sign-off required before EMD wire (Lost-Phone Test).",
-      { emd_operator_signoff: ctx.listing?.emdOperatorSignoff ?? false, recordId: ctx.recordId },
+      "Pre_EMD_Operator_Signoff not set — final operator sign-off required before EMD wire (Lost-Phone Test).",
+      { pre_emd_operator_signoff: false, deal_record_id: ctx.deal.dealRecordId, recordId: ctx.recordId },
     );
   }
-  return pass("PE-07", "EMD_Operator_Signoff=true.", { emd_operator_signoff: true });
+  return pass("PE-07", "Pre_EMD_Operator_Signoff=true.", { pre_emd_operator_signoff: true, deal_record_id: ctx.deal.dealRecordId });
 };
 
 export const PRE_EMD_CHECKS: Record<string, CheckFn> = {
   "PE-01": PE_01_cma_fresh,
   "PE-02": PE_02_buyer_median,
   "PE-03": PE_03_federation_green,
-  "PE-04": PE_04_memphis_assignment,
+  "PE-04": PE_04_assignment_clause,
   "PE-05": PE_05_buyer_track_mao,
   "PE-06": PE_06_photos_vs_modeled,
   "PE-07": PE_07_operator_signoff,

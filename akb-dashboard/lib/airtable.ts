@@ -262,6 +262,20 @@ const DEAL_FIELDS: Record<string, string> = {
   fldWIL8UzG6y2zjY0: "buyerBlastStatus",
   fldi7i3WinAohQ3aS: "actionCardState",
   fldDmZjkunw6iZujf: "actionHoldUntil",
+  // INV-023 Pre-EMD DD gate (2026-06-10) — see lib/types.ts Deal notes.
+  fldCEhZ0mrTuWpT1N: "preEmdCmaValidated",
+  fldFBxhUHiL4Ubwly: "preEmdCmaValidatedAt",
+  flduHcfAaVwuc9OF0: "preEmdArvConfirmed",
+  fldvjGx7ZWQCqGJD1: "preEmdPhotosValidated",
+  fldBAUjTY2f7tFoVz: "preEmdPhotosValidatedAt",
+  fld2cRlf7QqBFP1ul: "preEmdAssignmentClauseVerified",
+  fldYkXU9LH7dvjtEP: "preEmdOperatorSignoff",
+  fldWWyYkYKHHCyN0x: "preEmdOperatorSignoffBy",
+  fldpIDLp5OJiRCcVY: "preEmdOperatorSignoffAt",
+  fld0jGPvjhu8D9WxA: "preEmdMathGate",
+  fld9aWL701m6iA208: "preEmdVerdict",
+  flddHJgP946flv88F: "preEmdLastEvaluatedAt",
+  fldWMw8y7FFBdGYOn: "preEmdHoldReasons",
 };
 
 const BUYER_FIELDS: Record<string, string> = {
