@@ -29,6 +29,7 @@ import {
 } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { buildReplyAlertBody, sendReplyAlert, type ReplyAlertInput } from "@/lib/reply-alert";
+import { resolveAlertNumbers } from "@/lib/outreach-economics";
 import type { AlertTier } from "@/lib/reply-triage";
 
 export const runtime = "nodejs";
@@ -70,14 +71,19 @@ export async function GET(req: Request) {
 
   // Synthesize the alert input from the REAL record: a counter for tier 1
   // (exercises the recommend-with-numbers path against the live opener/MAO),
-  // an acceptance for tier 2.
+  // an acceptance for tier 2. Numbers resolve through the SAME read path the
+  // batch dispatches with (resolveAlertNumbers → resolveOpenerCeiling +
+  // openerMaoGuard) — the 2026-06-10 smoke test fired the null-price
+  // fallback because this endpoint read the sticky field directly, which
+  // the batch never wrote. One read path, not a parallel one.
+  const nums = resolveAlertNumbers(listing);
   const input: ReplyAlertInput = {
     recordId: listing.id,
     address: listing.address ?? null,
     tier,
     classification: tier === "tier_2_urgent" ? "acceptance" : "counter",
-    outreachOfferPrice: listing.outreachOfferPrice ?? null,
-    underwrittenMao: listing.underwrittenMao ?? null,
+    outreachOfferPrice: nums.opener,
+    underwrittenMao: nums.mao,
   };
   const composed = buildReplyAlertBody(input);
 
@@ -87,10 +93,11 @@ export async function GET(req: Request) {
       mode: "dry_run",
       detail: `No SMS sent. To send: ?apply=1&confirm=${todayToken()} (requires ALERT_PHONE set in env).`,
       tier,
-      record: { recordId: listing.id, address: listing.address, outreachOfferPrice: listing.outreachOfferPrice ?? null, underwrittenMao: listing.underwrittenMao ?? null },
+      record: { recordId: listing.id, address: listing.address, resolved_opener: nums.opener, resolved_mao: nums.mao, sticky_outreach_offer_price: listing.outreachOfferPrice ?? null, mao_v1_door_opener: listing.mao ?? null, underwritten_mao_field: listing.underwrittenMao ?? null },
       composed_body: composed.body,
       price_gap: composed.priceGap,
       alert_phone_set: Boolean((process.env.ALERT_PHONE ?? "").trim()),
+      alert_from_set: Boolean((process.env.ALERT_FROM ?? "").trim()),
       auth_kind: authKind,
       duration_ms: Date.now() - t0,
     });

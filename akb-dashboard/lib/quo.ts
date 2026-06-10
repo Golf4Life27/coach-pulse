@@ -88,12 +88,13 @@ export async function getMessagesForParticipant(
 
 export async function sendMessage(
   to: string,
-  content: string
+  content: string,
+  opts: { from?: string } = {},
 ): Promise<void> {
   // Back-compat shim — discards the queued id. New call sites should use
   // sendMessageWithId() and poll getMessageStatus() per Positive
   // Confirmation Principle.
-  await sendMessageWithId(to, content);
+  await sendMessageWithId(to, content, opts);
 }
 
 // OpenPhone POST /v1/messages response.
@@ -119,10 +120,16 @@ export interface QuoSendResult {
 export async function sendMessageWithId(
   to: string,
   content: string,
+  opts: { from?: string } = {},
 ): Promise<QuoSendResult> {
   if (!QUO_API_KEY) {
     throw new Error("QUO_API_KEY not set");
   }
+  // CHANNEL SEPARATION (operator 2026-06-10): the default outreach line
+  // (QUO_PHONE_ID) talks ONLY to agents. Operator-facing sends (Tier 1/2
+  // alerts, Pulse escalation) pass opts.from = ALERT_FROM, the dedicated
+  // Maverick line — those callers REFUSE to send when it's unset rather
+  // than fall back here.
   const res = await fetch("https://api.openphone.com/v1/messages", {
     method: "POST",
     headers: {
@@ -130,7 +137,7 @@ export async function sendMessageWithId(
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      from: QUO_PHONE_ID,
+      from: opts.from ?? QUO_PHONE_ID,
       to: [to],
       content,
     }),

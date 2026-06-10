@@ -14,7 +14,7 @@ import type { PrioritySignal, SeverityTier } from "./severity";
 import type { StructuredBriefing, SourceHealth } from "./briefing";
 import type { SourceName } from "./types";
 
-const ENV: Stage4Env = { target: "+16302505865", cooldownMin: 30, dailyCap: 5 };
+const ENV: Stage4Env = { target: "+16302505865", from: "PNMhSUQXFw", cooldownMin: 30, dailyCap: 5 };
 const NOW = new Date("2026-05-18T12:00:00Z");
 
 function signal(over: Partial<PrioritySignal> & { tier: SeverityTier; id: string }): PrioritySignal {

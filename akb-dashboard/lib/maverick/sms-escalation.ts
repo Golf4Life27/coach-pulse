@@ -42,6 +42,10 @@ function signalKvKey(signalKey: string): string {
 
 export interface Stage4Env {
   target: string;
+  /** CHANNEL SEPARATION (operator 2026-06-10): operator-facing sends go
+   *  FROM the dedicated Maverick line (ALERT_FROM env), never the agent-
+   *  facing outreach line. Null when unset — the send REFUSES (audited). */
+  from: string | null;
   cooldownMin: number;
   dailyCap: number;
 }
@@ -52,8 +56,10 @@ export function readStage4Env(): Stage4Env {
     10,
   );
   const cap = parseInt(process.env.MAVERICK_SMS_DAILY_CAP ?? "", 10);
+  const from = (process.env.ALERT_FROM ?? "").trim();
   return {
     target: process.env.MAVERICK_STAGE4_SMS_TARGET ?? DEFAULT_TARGET,
+    from: from !== "" ? from : null,
     cooldownMin: Number.isFinite(cooldown) && cooldown > 0 ? cooldown : DEFAULT_COOLDOWN_MIN,
     dailyCap: Number.isFinite(cap) && cap > 0 ? cap : DEFAULT_DAILY_CAP,
   };
@@ -147,7 +153,7 @@ export interface EvaluateStage4Opts {
   env: Stage4Env;
   now?: Date;
   /** Sender override for tests — default uses lib/quo's sendMessageWithId. */
-  send?: (to: string, content: string) => Promise<QuoSendResult>;
+  send?: (to: string, content: string, opts?: { from?: string }) => Promise<QuoSendResult>;
   /** Audit override for tests — default uses lib/audit-log's audit(). */
   recordAudit?: (entry: Parameters<typeof audit>[0]) => Promise<void>;
 }
@@ -161,7 +167,7 @@ export interface EvaluateStage4Result {
   /** Convenience for tests — empty when no signals or non-authorized auth. */
   details: Array<{
     signal_key: string;
-    outcome: "sent" | "cooldown" | "daily_cap" | "failed";
+    outcome: "sent" | "cooldown" | "daily_cap" | "failed" | "suppressed_no_alert_from";
     error?: string;
     quo_message_id?: string | null;
   }>;
@@ -243,10 +249,23 @@ export async function evaluateStage4Escalation(
       continue;
     }
 
-    // Send.
+    // Send — FROM the Maverick line only (channel separation). When
+    // ALERT_FROM is unset, REFUSE rather than fall back to the agent-
+    // facing outreach line; the suppression is audited and visible.
+    if (!opts.env.from) {
+      tally.details.push({ signal_key: key, outcome: "suppressed_no_alert_from" });
+      await safeAudit(auditFn, {
+        agent: "maverick",
+        event: "sms_rate_limited",
+        status: "uncertain",
+        inputSummary: { signal_key: key, reason: "ALERT_FROM not set — refusing to send from the outreach line (channel separation)" },
+        outputSummary: { sent: false },
+      });
+      continue;
+    }
     const content = formatStage4Message(signal);
     try {
-      const result = await sendFn(opts.env.target, content);
+      const result = await sendFn(opts.env.target, content, { from: opts.env.from });
       const sendIso = now.toISOString();
       activeSends = [sendIso, ...activeSends].slice(0, opts.env.dailyCap * 2);
 

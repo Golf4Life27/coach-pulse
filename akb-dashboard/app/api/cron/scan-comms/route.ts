@@ -8,6 +8,7 @@ import { isSelfEchoOrAutoreply } from "@/lib/conversation-check";
 import { triageSellerReply } from "@/lib/reply-triage";
 import { sendReplyAlert, type ReplyAlertInput } from "@/lib/reply-alert";
 import { sendAutoClose } from "@/lib/auto-close";
+import { resolveAlertNumbers } from "@/lib/outreach-economics";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -310,16 +311,19 @@ export async function GET(req: Request) {
 
           // Queue the decision/urgent alert for AFTER batch-create succeeds.
           // The body leads with the decision, never the inbound text (Quo
-          // already showed Alex the message). Counter recommendations carry
-          // the record's sticky opener + MAO — or fall back to "hold sticky
-          // opener" when missing (gap audited, never fabricated).
+          // already showed Alex the message). Numbers resolve through the
+          // SAME read path the batch dispatches with (resolveAlertNumbers)
+          // — one read path, not a parallel one (2026-06-10 smoke-test fix).
+          // Missing numbers still fall back to "hold sticky opener" with the
+          // gap audited, never fabricated.
+          const nums = resolveAlertNumbers(listing);
           alertQueue.push({
             recordId: listing.id,
             address: listing.address ?? null,
             tier: triage.tier,
             classification: triage.classification,
-            outreachOfferPrice: listing.outreachOfferPrice ?? null,
-            underwrittenMao: listing.underwrittenMao ?? null,
+            outreachOfferPrice: nums.opener,
+            underwrittenMao: nums.mao,
           });
 
           existingPending.add(`${listing.id}:jarvis_reply`);

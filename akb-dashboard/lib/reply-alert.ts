@@ -99,7 +99,13 @@ export function buildReplyAlertBody(input: ReplyAlertInput): { body: string; pri
 }
 
 /** Best-effort SMS via Quo to ALERT_PHONE. Never throws. Tier 0 is a no-op
- *  by contract (the caller shouldn't route it here; double-guarded anyway). */
+ *  by contract (the caller shouldn't route it here; double-guarded anyway).
+ *
+ *  CHANNEL SEPARATION (operator 2026-06-10): operator alerts send FROM the
+ *  dedicated Maverick line (ALERT_FROM env — Quo inbox PNMhSUQXFw,
+ *  +16302505865), NEVER from the agent-facing outreach line. When
+ *  ALERT_FROM is unset the alert REFUSES (audited) rather than fall back
+ *  to the outreach line — the hard rule beats delivery. */
 export async function sendReplyAlert(input: ReplyAlertInput): Promise<ReplyAlertResult> {
   if (input.tier === "tier_0_auto_close") {
     return { sent: false, reason: "tier_0_no_alert", priceGap: false };
@@ -116,9 +122,21 @@ export async function sendReplyAlert(input: ReplyAlertInput): Promise<ReplyAlert
     });
     return { sent: false, reason: "alert_phone_not_set", priceGap: false };
   }
+  const from = (process.env.ALERT_FROM ?? "").trim();
+  if (!from) {
+    await audit({
+      agent: "crier",
+      event: "reply_alert_skipped",
+      status: "uncertain",
+      recordId: input.recordId,
+      inputSummary: { reason: "ALERT_FROM not set — refusing to send from the agent-facing outreach line (channel separation)", tier: input.tier },
+      outputSummary: { sent: false },
+    });
+    return { sent: false, reason: "alert_from_not_set", priceGap: false };
+  }
   const { body, priceGap } = buildReplyAlertBody(input);
   try {
-    await sendMessage(to, body);
+    await sendMessage(to, body, { from });
     await audit({
       agent: "crier",
       event: "reply_alert_sent",
