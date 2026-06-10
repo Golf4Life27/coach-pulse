@@ -41,9 +41,30 @@ as an explicit "no signal / blocks the gate" state — never a fake number.
 1. **Breaker/spend read route** — e.g. `GET /api/admin/spend-status`: Firecrawl breaker
    armed/tripped, window spend, RentCast calls used/remaining. The health strip currently
    infers from audit events and honestly shows "no signal" when the KV window has aged out.
-2. **Funnel-audit snapshot** — persist the last outreach-batch funnel-audit result
-   (bucket counts + invariant pass/fail + ts) to KV under a stable key, with a read route.
-   Same reason as #1: the strip needs a durable answer, not a log-window guess.
+2. **Funnel-audit snapshot** — APPROVED + QUEUED (first in ops priority). Persist the
+   last outreach-batch run's funnel audit to KV and expose
+   `GET /api/admin/funnel-snapshot` returning exactly this (shape copied verbatim from
+   the batch route's existing `Disposition` / `funnel_audit` computation — see
+   `app/v2/_lib/funnel.ts` for the frozen TypeScript contract the UI already consumes):
+
+   ```ts
+   interface FunnelSnapshot {
+     generated_at: string;
+     mode: "dry_run" | "live";
+     params: { zips: string[] | null; limit: number };
+     funnel_audit: {
+       input_count: number;
+       in_zip_scope: number | null;
+       disposition_total: number;
+       missing_from_funnel: string[];
+       bucket_counts: Record<Disposition, number>; // the 9 existing buckets
+     };
+     dispositions: RecordDisposition[]; // { recordId, address, zip, disposition, reason, prior? }
+   }
+   ```
+
+   The v2 Pipeline lane auto-flips from its labeled SIMULATED fixture to live the moment
+   this route 200s with that shape — no UI change needed.
 3. **Maverick chat/act** — a conversational endpoint over the Maverick MCP (tools/call
    with named-agent attribution) so the panel can go beyond load_state/recall to
    "approve the Freeland counter". jarvis-chat is deprecated; not wiring v2 to it.
@@ -55,13 +76,16 @@ as an explicit "no signal / blocks the gate" state — never a fake number.
 6. **Money surface reads** — cost-per-lead/offer needs spend events joined to intake
    counts; propose a daily rollup written to KV by the existing intake/outreach crons.
 
-## 4. Surfaces still to build (in order)
+## 4. Surface status
 
-- **Pipeline** — live conveyor from the funnel-audit buckets (needs request #2); click a
-  bucket → records + the reason each lead landed there.
-- **Agent CRM** — agents first-class (48227 = 27 listings / 6 agents); response history,
-  stall-release countdowns (needs request #5).
-- **Money** — spend telemetry, breaker, $/lead, $/offer, fee pipeline (needs #1, #6).
+- **Today / Deal Room** — LIVE behind the flag (first deliverable, accepted).
+- **Pipeline** — BUILT: stage conveyor lane is live from `/api/listings`; the batch-funnel
+  lane runs on a loudly-labeled simulated fixture until request #2's snapshot route ships,
+  then flips live automatically (adapter in `app/v2/_lib/funnel.ts`).
+- **Agent CRM** — BUILT live from `/api/listings` grouped by normalized agent phone:
+  listings held, reply-waiting flag, replied/texted history, ZIP concentration filter.
+  Stall-release timers render as "awaiting ops read" until request #5.
+- **Money** — next; needs requests #1 + #6.
 - **Agent Theater** — last; schema below ships now so events accumulate.
 
 ## 5. Agent Theater — event schema (defined now, skin later)

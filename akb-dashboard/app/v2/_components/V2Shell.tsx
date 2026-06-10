@@ -12,8 +12,8 @@ import MaverickPanel from "./MaverickPanel";
 
 const SURFACES: { name: string; href: string | null }[] = [
   { name: "TODAY", href: "/v2" },
-  { name: "PIPELINE", href: null },
-  { name: "AGENTS", href: null },
+  { name: "PIPELINE", href: "/v2/pipeline" },
+  { name: "AGENTS", href: "/v2/agents" },
   { name: "MONEY", href: null },
   { name: "THEATER", href: null },
 ];
