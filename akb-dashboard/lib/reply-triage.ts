@@ -36,6 +36,19 @@ const REJECTION_PATTERNS = [
   /\bno longer\b.*\b(available|listed)\b/i,
   /\bwithdrawn\b/i,
   /\bpending\b/i,
+  // Patches 2026-06-10 — shrink the UNCLASSIFIED bucket toward "rejection"
+  // ONLY when paired with an acceptance / possession / commitment verb (the
+  // seller is comparing OUR offer to another deal in hand, not asking us to
+  // come up). A bare "higher offer" is intentionally NOT enough — "send me
+  // a higher offer" is interest, not rejection. UNCLASSIFIED → manual review
+  // fallback is preserved (lib/reply-triage.determineNewStatus's "unknown"
+  // path). Today's first live reply (13235 Freeland: "in the process of
+  // accepting a much higher offer") is the anchor case; pattern 1 catches
+  // it via "accepting" + up to 5 words + "offer".
+  /\b(?:accepted|accepting)\b\s+(?:[a-z]+\s+){0,5}\boffer\b/i,
+  /\b(?:got|have|received)\s+(?:a\s+|an\s+)?(?:another|higher|better|stronger|cash)\s+offer\b/i,
+  /\bgoing\s+(?:with|to\s+go\s+with)\s+(?:another|a\s+different|a\s+higher|the)\s+(?:offer|buyer)\b/i,
+  /\bin\s+escrow\b/i,
 ];
 
 const INTEREST_PATTERNS = [

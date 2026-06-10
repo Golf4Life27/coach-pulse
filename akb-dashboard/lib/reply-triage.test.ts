@@ -24,6 +24,35 @@ describe("classifyReply", () => {
     expect(classifyReply("").classification).toBe("unknown");
     expect(classifyReply("ok").classification).toBe("unknown");
   });
+
+  it("rejection patches (2026-06-10): the Freeland phrase + other 'comparing offers' shapes", () => {
+    // The exact reply we hit 2026-06-10 (13235 Freeland; first live reply).
+    expect(classifyReply("Hi theyre in the process of accepting a much higher offer").classification).toBe("rejection");
+    // Other 'comparing-to-another-offer' shapes that should also route to Dead.
+    expect(classifyReply("we have a higher offer already").classification).toBe("rejection");
+    expect(classifyReply("got a better offer this morning").classification).toBe("rejection");
+    expect(classifyReply("seller is going with another buyer").classification).toBe("rejection");
+    expect(classifyReply("property is in escrow").classification).toBe("rejection");
+    expect(classifyReply("seller accepted an offer yesterday").classification).toBe("rejection");
+  });
+
+  it("the patches do NOT false-positive on our own outbound shapes or interest replies", () => {
+    // 'cash offer at $X' is OUR template, but it's stripped by isSelfEchoOrAutoreply
+    // BEFORE triage — the patches don't see it. Confirm the patches don't fire on
+    // a generic 'send me a higher offer' which is INTEREST, not rejection.
+    expect(classifyReply("can you send me a higher offer").classification).not.toBe("rejection");
+    expect(classifyReply("yes interested").classification).toBe("interest");
+  });
+
+  it("UNCLASSIFIED fallback preserved — ambiguous still routes to manual review (not bypassed)", () => {
+    // The patches SHRINK the UNCLASSIFIED bucket toward rejection where the
+    // signal is clear, but genuinely-ambiguous replies still land in unknown.
+    // The fallback path (determineNewStatus("unknown", "Texted")) keeps the
+    // record at Response Received for operator review — never Dead-by-default.
+    expect(classifyReply("hmm let me check").classification).toBe("unknown");
+    expect(classifyReply("call me later").classification).toBe("interest"); // existing 'call me' pattern wins
+    expect(determineNewStatus("unknown", "Texted")).toBe("Response Received");
+  });
 });
 
 describe("determineNewStatus", () => {

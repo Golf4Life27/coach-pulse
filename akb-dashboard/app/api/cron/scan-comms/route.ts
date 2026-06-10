@@ -6,6 +6,7 @@ import { synthesize } from "@/lib/maverick/synthesizer";
 import { toE164 } from "@/lib/phone";
 import { isSelfEchoOrAutoreply } from "@/lib/conversation-check";
 import { triageSellerReply } from "@/lib/reply-triage";
+import { sendReplyAlert, type ReplyAlertInput } from "@/lib/reply-alert";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -205,6 +206,10 @@ export async function GET(req: Request) {
     let inboundFound = 0;
     let matched = 0;
     const newProposals: ProposalRecord[] = [];
+    // Outbound SMS alerts to ALERT_PHONE, fired AFTER batch-create succeeds.
+    // Operator directive (2026-06-10): a reply that turns into a live
+    // negotiation in 60 seconds means alerting is no longer optional.
+    const alertQueue: ReplyAlertInput[] = [];
     // 2026-06-08: was string[]. Now carries the INBOUND's actual createdAt,
     // not wall-clock now — the prior shape stamped Last_Inbound_At with
     // "right now" on every cron tick (line 278 used new Date()), so the
@@ -282,6 +287,21 @@ export async function GET(req: Request) {
             },
           });
 
+          // Queue an alert for AFTER the batch-create succeeds. Gated on
+          // triage.needsDecision: rejections auto-route to Dead via
+          // determineNewStatus and do not need a wake-up; counter / interest
+          // / unknown ARE needs-decision and page Alex via SMS.
+          if (triage.needsDecision) {
+            alertQueue.push({
+              recordId: listing.id,
+              address: listing.address ?? null,
+              agentName: listing.agentName ?? null,
+              inboundBody: inbound.body,
+              classification: triage.classification,
+              decisionKind: triage.decisionKind,
+            });
+          }
+
           existingPending.add(`${listing.id}:jarvis_reply`);
         }
       } catch (err) {
@@ -294,6 +314,21 @@ export async function GET(req: Request) {
       newProposals.length > 0
         ? await batchCreateProposals(proposalsTableId, newProposals)
         : 0;
+
+    // Fire reply alerts (best-effort, never block the cron). One per needs-
+    // decision proposal that was just created. The alert queue is gated on
+    // triage.needsDecision upstream — rejections (auto-Dead) do not page.
+    const alertResults: Array<{ recordId: string; sent: boolean; reason: string | null }> = [];
+    if (created > 0 && alertQueue.length > 0) {
+      for (const item of alertQueue) {
+        try {
+          const res = await sendReplyAlert(item);
+          alertResults.push({ recordId: item.recordId, sent: res.sent, reason: res.reason });
+        } catch (e) {
+          alertResults.push({ recordId: item.recordId, sent: false, reason: e instanceof Error ? e.message.slice(0, 160) : String(e).slice(0, 160) });
+        }
+      }
+    }
 
     // Stamp Last_Inbound_At with the inbound's ACTUAL createdAt — was
     // wall-clock new Date() before 2026-06-08, breaking timeline ordering.
@@ -317,6 +352,9 @@ export async function GET(req: Request) {
       matched,
       proposalsCreated: created,
       skippedDedupe: matched - newProposals.length,
+      alertsAttempted: alertResults.length,
+      alertsSent: alertResults.filter((r) => r.sent).length,
+      alertResults: alertResults.length > 0 ? alertResults : undefined,
       errors: errors.length > 0 ? errors : undefined,
       timestamp: new Date().toISOString(),
     });

@@ -6,7 +6,7 @@
     },
     {
       "path": "/api/cron/scan-comms",
-      "schedule": "0 10 * * *"
+      "schedule": "*/10 * * * *"
     },
     {
       "path": "/api/scan-replies",
