@@ -10,10 +10,13 @@
 //   PE-01 CMA staleness  → Listing.arvValidatedAt (7-day threshold)
 //   PE-02 Buyer_Median   → Property_Intel.Buyer_Median_Value (INV-022)
 //   PE-03 Federation     → Property_Intel.Discrepancy_Severity_Max
-//   PE-04 Memphis verify → Listing.memphisAssignmentVerified (new checkbox)
+//   PE-04 Assignment clause (EVERY state, ruling 2026-06-10)
+//                        → Deal.preEmdAssignmentClauseVerified
 //   PE-05 Buyer-track MAO→ Listing.investorMao
 //   PE-06 Sturtevant     → photo-rehab presence + sqft variance ≤50%
-//   PE-07 Operator signoff→ Listing.emdOperatorSignoff (new checkbox)
+//   PE-07 Operator signoff→ Deal.preEmdOperatorSignoff (moved off
+//                            Listings_V1 2026-06-10 per "one concept, one
+//                            table"; INV-023 column-drop)
 
 import preEmdConfig from "@/lib/config/gates/pre_emd.json";
 import type { CheckFn, CheckResult, ChecklistItem, Gate } from "./types";
