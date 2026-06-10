@@ -8,6 +8,7 @@
 
 import V2Shell from "./_components/V2Shell";
 import "./v2.css";
+import { v2Enabled } from "./_lib/flag";
 
 export const metadata = {
   title: "MAVERICK CMD — V2",
@@ -17,15 +18,8 @@ export const metadata = {
 // V2_DASHBOARD on the project without a code change.
 export const dynamic = "force-dynamic";
 
-function flagEnabled(): boolean {
-  if (process.env.V2_DASHBOARD === "true") return true;
-  if (process.env.VERCEL_ENV === "preview") return true;
-  if (process.env.NODE_ENV === "development") return true;
-  return false;
-}
-
 export default function V2Layout({ children }: { children: React.ReactNode }) {
-  if (!flagEnabled()) {
+  if (!v2Enabled()) {
     return (
       <div className="fixed inset-0 z-[60] flex items-center justify-center bg-[#06080b] px-6">
         <div className="max-w-sm rounded-xl border border-zinc-800 bg-[#0a0c10] p-6 text-center">

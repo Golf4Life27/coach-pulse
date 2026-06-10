@@ -8,6 +8,7 @@ import CommandBar from "@/components/CommandBar";
 import CommandBarFAB from "@/components/CommandBarFAB";
 import ShepherdPanel from "@/components/ShepherdPanel";
 import BriefingProvider from "@/components/BriefingProvider";
+import { v2Enabled } from "./v2/_lib/flag";
 
 export const metadata: Metadata = {
   title: "AKB Solutions — Pipeline Dashboard",
@@ -31,7 +32,7 @@ export default function RootLayout({
         <AuthGate>
           <BriefingProvider>
             <QuotesBar />
-            <Navigation />
+            <Navigation v2={v2Enabled()} />
             <main className="max-w-7xl mx-auto px-4 py-6">{children}</main>
             <CommandBar />
             <CommandBarFAB />
