@@ -37,6 +37,9 @@ export default function RootLayout({
             {v2Enabled() ? (
               // V2 absorption (flag-gated): slim health strip + shared data
               // provider + Maverick panel around the SAME <main> container.
+              // NOTE: for statically-prerendered pages this evaluates at
+              // BUILD time — correct on Vercel, where env changes always
+              // trigger a rebuild (flipping V2_DASHBOARD requires redeploy).
               <V2Frame>{children}</V2Frame>
             ) : (
               <main className="max-w-7xl mx-auto px-4 py-6">{children}</main>

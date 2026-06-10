@@ -1,8 +1,10 @@
 "use client";
 
 // V2 data spine — one shared fetch loop for the surfaces every screen needs
-// (decision queue, operator items, listings, briefing counts, audit tail).
-// Read-only: every call here is a GET against an existing route.
+// (decision queue, operator items, listings, audit tail). Read-only: every
+// call here is a GET against an existing route. /api/briefing is NOT
+// fetched here — v1's BriefingProvider already polls it; v2 derives its
+// own counts from the sources below.
 //
 // HONEST ZERO (design law, operator review 6/10): a number renders only when
 // its wired source actually returned it. Unwired or out-of-window sources
@@ -20,18 +22,13 @@ import {
 import type {
   AuditEntry,
   AuditTailResponse,
-  Briefing,
   ListingDetail,
   OperatorItem,
   QueueCard,
   QueueResponse,
 } from "./types";
-import {
-  classifyOperatorItems,
-  listingSuppression,
-  sortActionable,
-  PAUSED_MARKETS,
-} from "./policy";
+import { classifyOperatorItems, listingSuppression, marketSuppression } from "./policy";
+import { ago, isLocalToday, startOfLocalDayIso } from "./format";
 
 const REFRESH_MS = 90_000;
 const SEND_EVENT = "outreach_batch_send";
@@ -59,9 +56,11 @@ interface V2Data {
   operatorItems: OperatorItem[] | null;
   actionableItems: OperatorItem[];
   suppressedItems: Array<{ item: OperatorItem; reference: string }>;
+  /** NOTE: fetched with ?include_dead=true so queue hygiene can see the
+   *  terminal records operator items still reference. Consumers rendering
+   *  inventory must filter dead/do-not-text themselves (the boards do). */
   listings: ListingDetail[] | null;
   listingsById: Map<string, ListingDetail>;
-  briefing: Briefing | null;
   audit: AuditEntry[] | null;
   auditWindow: { oldest: string | null; newest: string | null };
   activityToday: ActivityToday;
@@ -82,51 +81,35 @@ export function useV2Data(): V2Data {
   return v;
 }
 
-function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function agoShort(iso: string): string {
-  const s = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
-  if (s < 60) return `${s}s ago`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 48) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
-}
-
-// ── Activity today, honest-zero rules. Audit log is the primary send source
+// ── Activity today, honest-zero rules. "Today" is the VIEWER'S local day
+// (isLocalToday), not the UTC day. Audit log is the primary send source
 // (positive-confirmation events); listings Last_Outreach_Date is the backstop
-// when the KV window doesn't reach back to midnight. ──
+// when the KV window doesn't reach back to local midnight. ──
 
 function deriveActivity(
   audit: AuditEntry[] | null,
   auditOldest: string | null,
   listings: ListingDetail[] | null,
 ): ActivityToday {
-  const today = todayISO();
   let sends: number | null = null;
   let sendsSource = "no signal";
 
   if (audit) {
     const auditSends = audit.filter(
-      (e) => e.event === SEND_EVENT && e.ts.startsWith(today) && e.status === "confirmed_success",
+      (e) => e.event === SEND_EVENT && isLocalToday(e.ts) && e.status === "confirmed_success",
     ).length;
-    const windowCoversToday = auditOldest != null && auditOldest <= `${today}T00:00:00`;
+    const windowCoversToday = auditOldest != null && auditOldest <= startOfLocalDayIso();
     if (auditSends > 0 || windowCoversToday) {
       sends = auditSends;
       sendsSource = "KV audit_log (delivery-confirmed sends)";
     }
   }
   if (sends == null && listings) {
-    sends = listings.filter((l) => (l.lastOutreachDate ?? "").startsWith(today)).length;
+    sends = listings.filter((l) => isLocalToday(l.lastOutreachDate)).length;
     sendsSource = "Listings Last_Outreach_Date (audit window doesn't reach midnight)";
   }
 
-  const replies = listings
-    ? listings.filter((l) => (l.lastInboundAt ?? "").startsWith(today)).length
-    : null;
+  const replies = listings ? listings.filter((l) => isLocalToday(l.lastInboundAt)).length : null;
 
   return { sends, sendsSource, replies };
 }
@@ -145,7 +128,7 @@ function deriveHealth(
       ? {
           label: "INTAKE",
           state: Date.now() - new Date(intake.ts).getTime() < 2 * 3_600_000 ? "ok" : "warn",
-          value: agoShort(intake.ts),
+          value: ago(intake.ts),
           detail: `last intake event ${intake.status === "confirmed_success" ? "succeeded" : intake.status.replace("_", " ")} (KV audit log)`,
         }
       : {
@@ -166,7 +149,7 @@ function deriveHealth(
           label: "SPEND",
           state: spend.status === "confirmed_failure" ? "fault" : "ok",
           value: spend.status === "confirmed_failure" ? "TRIPPED" : "armed",
-          detail: `last breaker event ${agoShort(spend.ts)} (KV audit log)`,
+          detail: `last breaker event ${ago(spend.ts)} (KV audit log)`,
         }
       : {
           label: "SPEND",
@@ -209,7 +192,7 @@ function deriveHealth(
           label: "FUNNEL",
           state: funnel.status === "confirmed_failure" ? "fault" : "ok",
           value: funnel.status === "confirmed_failure" ? "VIOLATED" : "holds",
-          detail: `last batch ${agoShort(funnel.ts)} — every in-scope lead landed in exactly one bucket`,
+          detail: `last batch ${ago(funnel.ts)} — every in-scope lead landed in exactly one bucket`,
         }
       : {
           label: "FUNNEL",
@@ -234,7 +217,6 @@ export function V2DataProvider({ children }: { children: React.ReactNode }) {
   const [queue, setQueue] = useState<QueueResponse | null>(null);
   const [operatorItems, setOperatorItems] = useState<OperatorItem[] | null>(null);
   const [listings, setListings] = useState<ListingDetail[] | null>(null);
-  const [briefing, setBriefing] = useState<Briefing | null>(null);
   const [audit, setAudit] = useState<AuditEntry[] | null>(null);
   const [auditWindow, setAuditWindow] = useState<{ oldest: string | null; newest: string | null }>({
     oldest: null,
@@ -263,10 +245,9 @@ export function V2DataProvider({ children }: { children: React.ReactNode }) {
       }
     };
 
-    const [q, oa, b, at, ls] = await Promise.all([
+    const [q, oa, at, ls] = await Promise.all([
       grab<QueueResponse>("/api/queue", "queue"),
       grab<{ items: OperatorItem[] }>("/api/operator-actions", "operator-actions"),
-      grab<Briefing>("/api/briefing", "briefing"),
       grab<AuditTailResponse>("/api/admin/audit-tail?limit=500", "audit-tail"),
       // include_dead so queue hygiene can see terminal records that operator
       // items still reference.
@@ -275,7 +256,6 @@ export function V2DataProvider({ children }: { children: React.ReactNode }) {
 
     if (q) setQueue(q);
     if (oa) setOperatorItems(oa.items);
-    if (b) setBriefing(b);
     if (ls) setListings(ls);
     if (at?.ok) {
       setAudit(at.entries);
@@ -289,8 +269,19 @@ export function V2DataProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     load();
-    const t = setInterval(load, REFRESH_MS);
-    return () => clearInterval(t);
+    // Don't poll while the tab is hidden — refresh immediately on return
+    // instead. The strip is global, so this loop runs on every page.
+    const t = setInterval(() => {
+      if (document.visibilityState === "visible") load();
+    }, REFRESH_MS);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") load();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [load]);
 
   const setOperatorItemStatus = useCallback(
@@ -318,34 +309,34 @@ export function V2DataProvider({ children }: { children: React.ReactNode }) {
   }, [listings]);
 
   // Queue hygiene — operator items + queue cards through the policy filter.
-  const { actionableItems, suppressedItems } = useMemo(() => {
-    const c = classifyOperatorItems(operatorItems ?? [], listingsById);
-    return { actionableItems: sortActionable(c.actionable), suppressedItems: c.suppressed };
-  }, [operatorItems, listingsById]);
+  // Ordering happens once, in policy.mergeAndSort, at the board.
+  const { actionableItems, suppressedItems } = useMemo(
+    () => {
+      const c = classifyOperatorItems(operatorItems ?? [], listingsById);
+      return { actionableItems: c.actionable, suppressedItems: c.suppressed };
+    },
+    [operatorItems, listingsById],
+  );
 
   const { openCards, suppressedCards } = useMemo(() => {
     const open: QueueCard[] = [];
     const supp: Array<{ card: QueueCard; reference: string }> = [];
     for (const card of queue?.open ?? []) {
       // /api/queue already drops dead + do-not-text listings; paused markets
-      // and any terminal record it misses get caught here.
+      // and any terminal record it misses get caught here. card.state is the
+      // GEOGRAPHIC state ("TN"), not the card's hold status (cardState).
       const listing = card.table === "listings" ? listingsById.get(card.recordId) : null;
-      const v = listing
-        ? listingSuppression(listing)
-        : (() => {
-            const paused = PAUSED_MARKETS.find((m) => m.state === (card.state ?? "").toUpperCase());
-            return paused
-              ? { suppressed: true, reference: paused.reference }
-              : { suppressed: false, reference: null };
-          })();
+      const v = listing ? listingSuppression(listing) : marketSuppression(card.state);
       if (v.suppressed) supp.push({ card, reference: v.reference! });
       else open.push(card);
     }
     return { openCards: open, suppressedCards: supp };
   }, [queue, listingsById]);
 
+  // HONEST ZERO: the count renders only when BOTH sources loaded — a failed
+  // queue fetch must not present "operator items only" as the whole truth.
   const openDecisionCount =
-    queue || operatorItems ? openCards.length + actionableItems.length : null;
+    queue && operatorItems ? openCards.length + actionableItems.length : null;
 
   const activityToday = useMemo(
     () => deriveActivity(audit, auditWindow.oldest, listings),
@@ -357,33 +348,52 @@ export function V2DataProvider({ children }: { children: React.ReactNode }) {
     [audit, openDecisionCount, activityToday],
   );
 
-  return (
-    <Ctx.Provider
-      value={{
-        queue,
-        openCards,
-        suppressedCards,
-        operatorItems,
-        actionableItems,
-        suppressedItems,
-        listings,
-        listingsById,
-        briefing,
-        audit,
-        auditWindow,
-        activityToday,
-        health,
-        openDecisionCount,
-        loading,
-        lastFetched,
-        errors,
-        refresh: load,
-        setOperatorItemStatus,
-      }}
-    >
-      {children}
-    </Ctx.Provider>
+  // Stable context identity between data refreshes — consumers across every
+  // page subscribe to this; don't re-render them for a no-op render pass.
+  const value = useMemo<V2Data>(
+    () => ({
+      queue,
+      openCards,
+      suppressedCards,
+      operatorItems,
+      actionableItems,
+      suppressedItems,
+      listings,
+      listingsById,
+      audit,
+      auditWindow,
+      activityToday,
+      health,
+      openDecisionCount,
+      loading,
+      lastFetched,
+      errors,
+      refresh: load,
+      setOperatorItemStatus,
+    }),
+    [
+      queue,
+      openCards,
+      suppressedCards,
+      operatorItems,
+      actionableItems,
+      suppressedItems,
+      listings,
+      listingsById,
+      audit,
+      auditWindow,
+      activityToday,
+      health,
+      openDecisionCount,
+      loading,
+      lastFetched,
+      errors,
+      load,
+      setOperatorItemStatus,
+    ],
   );
+
+  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
 // ── Maverick panel state ──

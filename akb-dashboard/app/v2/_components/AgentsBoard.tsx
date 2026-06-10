@@ -10,14 +10,10 @@ import { useMemo, useState } from "react";
 import { useV2Data } from "../_lib/data";
 import type { ListingDetail } from "../_lib/types";
 import { ago, money } from "../_lib/format";
-
-function normPhone(p: string | null): string | null {
-  if (!p) return null;
-  const d = p.replace(/[^0-9]/g, "");
-  if (d.length === 10) return `+1${d}`;
-  if (d.length === 11 && d.startsWith("1")) return `+${d}`;
-  return d ? `+${d}` : null;
-}
+// Same normalizer the spine uses for every phone-keyed comparison
+// (lib/phone-normalize.ts) — agents group exactly the way the sender
+// dedupes, no parallel implementation.
+import { normalizePhone } from "@/lib/phone-normalize";
 
 function isActive(l: ListingDetail): boolean {
   const stage = (l.pipelineStage ?? "").toLowerCase();
@@ -42,7 +38,7 @@ function buildAgents(listings: ListingDetail[]): AgentRow[] {
   const byKey = new Map<string, AgentRow>();
   for (const l of listings) {
     if (!isActive(l)) continue;
-    const phone = normPhone(l.agentPhone);
+    const phone = normalizePhone(l.agentPhone);
     const key = phone ?? (l.agentName ? `name:${l.agentName.toLowerCase().trim()}` : null) ?? "";
     if (!key) continue;
     let row = byKey.get(key);
@@ -88,8 +84,10 @@ export default function AgentsBoard() {
     return [...m.entries()].sort((x, y) => y[1] - x[1]).slice(0, 8);
   }, [agents]);
 
-  const visible = zipFilter ? agents.filter((a) => a.zips.has(zipFilter)) : agents;
-  const multiHolders = visible.filter((a) => a.listings.length > 1).length;
+  const { visible, multiHolders } = useMemo(() => {
+    const v = zipFilter ? agents.filter((a) => a.zips.has(zipFilter)) : agents;
+    return { visible: v, multiHolders: v.filter((a) => a.listings.length > 1).length };
+  }, [agents, zipFilter]);
 
   return (
     <div className="space-y-6">

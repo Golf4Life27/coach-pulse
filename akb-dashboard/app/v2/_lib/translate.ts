@@ -18,10 +18,13 @@ export interface Translation {
 // and audit entries; widen as new patterns appear.
 const MACHINE_TOKENS =
   /\b(forward-only|idempoten|sandbox path|stage engine|kill-edge|semantics|backfill|cadence engine|INV-\d|sentinel|dedup|e\.?164|formula field|snake_case|dry[-_ ]run)\b/i;
-const SNAKE_CASE = /\b[a-z]+_[a-z_]+\b/;
+const SNAKE_CASE = /\b[a-z]+_[a-z_]+\b/g;
 
 export function looksMachineVoice(raw: string): boolean {
-  return MACHINE_TOKENS.test(raw) || SNAKE_CASE.test(raw) || raw.includes("()");
+  if (MACHINE_TOKENS.test(raw) || raw.includes("()")) return true;
+  // One stray snake_case token isn't enough — an operator note quoting a
+  // single field name shouldn't collapse. Two or more reads as machine voice.
+  return (raw.match(SNAKE_CASE) ?? []).length >= 2;
 }
 
 export function translateSystemText(raw: string): Translation {

@@ -12,10 +12,11 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useV2Data } from "../_lib/data";
-import type { AuditEntry, ListingDetail, OperatorItem, QueueCard } from "../_lib/types";
+import type { AuditEntry, OperatorItem, QueueCard } from "../_lib/types";
 import { ago, money, timeStamp } from "../_lib/format";
 import { deriveDecisions, type DecisionOption } from "../_lib/decisions";
 import { humanizeEvent, translateSystemText } from "../_lib/translate";
+import { mergeAndSort } from "../_lib/policy";
 import glow from "./glow.module.css";
 
 export default function TodayBoard() {
@@ -102,62 +103,6 @@ export default function TodayBoard() {
 
       <OvernightDigest />
     </div>
-  );
-}
-
-// ── Merged queue ordering: today's live items first, then importance
-// (ACT NOW > HIGH > MEDIUM > LOW), then recency. ─────────────────────────
-
-type QueueEntry =
-  | { type: "item"; item: OperatorItem; liveToday: boolean; rank: number; recency: string }
-  | { type: "card"; card: QueueCard; liveToday: boolean; rank: number; recency: string };
-
-const ITEM_RANK: Record<string, number> = { high: 1, medium: 2, low: 3 };
-// Response cards are ACT NOW (an agent is waiting on us). Deals in flight
-// rank with HIGH; DD gaps with MEDIUM; cold stale sweeps with LOW.
-const CARD_RANK: Record<string, number> = { response: 0, deal: 1, dd: 2, stale: 3 };
-
-function isToday(iso: string | null | undefined): boolean {
-  return !!iso && iso.startsWith(new Date().toISOString().slice(0, 10));
-}
-
-function mergeAndSort(
-  items: OperatorItem[],
-  cards: QueueCard[],
-  listingsById: Map<string, ListingDetail>,
-): QueueEntry[] {
-  const entries: QueueEntry[] = [];
-
-  for (const item of items) {
-    entries.push({
-      type: "item",
-      item,
-      liveToday: isToday(item.createdAt),
-      rank: ITEM_RANK[item.priority] ?? 2,
-      recency: item.createdAt ?? "",
-    });
-  }
-  for (const card of cards) {
-    const listing = card.table === "listings" ? listingsById.get(card.recordId) : undefined;
-    const lastTouch =
-      [listing?.lastInboundAt, listing?.lastOutboundAt, card.lastOutreachDate]
-        .filter((v): v is string => !!v)
-        .sort()
-        .pop() ?? "";
-    entries.push({
-      type: "card",
-      card,
-      liveToday: isToday(listing?.lastInboundAt),
-      rank: CARD_RANK[card.kind] ?? 2,
-      recency: lastTouch,
-    });
-  }
-
-  return entries.sort(
-    (a, b) =>
-      Number(b.liveToday) - Number(a.liveToday) ||
-      a.rank - b.rank ||
-      b.recency.localeCompare(a.recency),
   );
 }
 

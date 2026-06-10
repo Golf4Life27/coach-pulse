@@ -242,7 +242,7 @@ function BucketDrill({ funnel, bucket }: { funnel: FunnelSnapshotResult; bucket:
 }
 
 function StageDrill({ stage, items }: { stage: string; items: ListingDetail[] }) {
-  const sorted = [...items].sort((a, b) => (b.dom ?? 0) - (a.dom ?? 0));
+  const sorted = useMemo(() => [...items].sort((a, b) => (b.dom ?? 0) - (a.dom ?? 0)), [items]);
   return (
     <div className="bg-[#1c2128] rounded-lg border border-[#30363d] p-3 space-y-1">
       <p className="text-xs font-semibold uppercase tracking-wider text-gray-300">

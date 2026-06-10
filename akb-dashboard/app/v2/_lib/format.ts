@@ -42,6 +42,29 @@ export function timeStamp(iso: string | null | undefined): string {
   });
 }
 
+/** True when the timestamp falls on the VIEWER'S local calendar day —
+ *  not the UTC day. "Today" on the board means Alex's today: an 8pm
+ *  Detroit item is today even though its ISO date already reads tomorrow. */
+export function isLocalToday(iso: string | null | undefined): boolean {
+  if (!iso) return false;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return false;
+  const now = new Date();
+  return (
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  );
+}
+
+/** ISO timestamp of the viewer's local midnight — the lower bound of
+ *  "today" for window-coverage checks. */
+export function startOfLocalDayIso(): string {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.toISOString();
+}
+
 export function hoursSince(iso: string | null | undefined): number | null {
   if (!iso) return null;
   const t = new Date(iso).getTime();

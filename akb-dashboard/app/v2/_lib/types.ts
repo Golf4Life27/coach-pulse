@@ -1,8 +1,21 @@
-// V2 surface — response types for the EXISTING read routes this surface
-// consumes. V2 is read-only against the spine: these mirror what the live
-// routes return today; they do not define new backend contracts.
+// V2 surface — types for the EXISTING read routes this surface consumes.
+// Where a route returns a lib-typed object verbatim, we RE-EXPORT the lib
+// type instead of hand-copying it (drift-proof: lib field additions flow
+// through automatically). Local interfaces remain only for shapes the
+// routes construct inline.
 
-// ── /api/queue (lib/actionQueue.ts shapes) ─────────────────────────────
+import type { Listing } from "@/lib/types";
+
+// ── /api/listings + /api/listings/[id] — lib Listing verbatim ──────────
+export type ListingDetail = Listing;
+
+// ── lib/audit-log AuditEntry — served verbatim by /api/admin/audit-tail ─
+export type { AuditEntry } from "@/lib/audit-log";
+
+// ── /api/queue (lib/actionQueue.ts builds these). The lib type is a
+// discriminated union (ResponseCard | DealCard | StaleCard | DDCard);
+// this is the flattened all-optional view the boards render from. Field
+// names match the union members 1:1 — see lib/actionQueue.ts. ──────────
 export type CardKind = "deal" | "response" | "dd" | "stale";
 
 export interface QueueCard {
@@ -14,6 +27,8 @@ export interface QueueCard {
   holdUntil: string | null;
   address: string;
   city: string | null;
+  /** Geographic US state ("TN") — NOT the card's hold status (that's
+   *  cardState). The paused-market check reads this. */
   state: string | null;
   // response / stale / dd
   agentName?: string | null;
@@ -39,7 +54,7 @@ export interface QueueResponse {
   held: QueueCard[];
 }
 
-// ── /api/operator-actions ──────────────────────────────────────────────
+// ── /api/operator-actions (shape built inline by the route) ────────────
 export interface OperatorItem {
   id: string;
   title: string;
@@ -52,32 +67,8 @@ export interface OperatorItem {
   createdAt: string | null;
 }
 
-// ── /api/briefing ──────────────────────────────────────────────────────
-export interface Briefing {
-  pendingResponses: number;
-  activeNegotiations: number;
-  staleNegotiations: number;
-  dealDeadlines7d: number;
-  textsToday: number;
-  responseRateToday: number | null;
-  makeErrors24h: number;
-  gaps: string[];
-}
-
-// ── /api/admin/audit-tail (lib/audit-log.ts AuditEntry) ────────────────
-export interface AuditEntry {
-  ts: string;
-  agent: string;
-  event: string;
-  status: "confirmed_success" | "confirmed_failure" | "uncertain";
-  recordId?: string;
-  externalId?: string;
-  inputSummary?: Record<string, unknown>;
-  outputSummary?: Record<string, unknown>;
-  decision?: string;
-  ms?: number;
-  error?: string;
-}
+// ── /api/admin/audit-tail envelope ─────────────────────────────────────
+import type { AuditEntry as _AuditEntry } from "@/lib/audit-log";
 
 export interface AuditTailResponse {
   ok: boolean;
@@ -85,98 +76,7 @@ export interface AuditTailResponse {
   kv_oldest_ts: string | null;
   kv_newest_ts: string | null;
   matched_count: number;
-  entries: AuditEntry[];
-}
-
-// ── /api/listings/[id] (lib/types.ts Listing — fields v2 reads) ────────
-export interface ListingDetail {
-  id: string;
-  address: string;
-  city: string;
-  zip: string;
-  state: string | null;
-  listPrice: number | null;
-  mao: number | null;
-  dom: number | null;
-  outreachStatus: string | null;
-  pipelineStage?: string | null;
-  lastOutreachDate: string | null;
-  lastInboundAt: string | null;
-  lastOutboundAt: string | null;
-  agentName: string | null;
-  agentPhone: string | null;
-  agentEmail: string | null;
-  verificationUrl: string | null;
-  ddChecklist: string[] | null;
-  doNotText: boolean;
-  outreachOfferPrice?: number | null;
-  contractOfferPrice?: number | null;
-  underwrittenMao?: number | null;
-  /** landlord | flipper — the PERSISTED operative underwrite track
-   *  (Underwritten_MAO_Track, ops bb03a6d). Display ceilings track-labeled,
-   *  matching ops's Offer Readiness panel. */
-  underwrittenMaoTrack?: string | null;
-  investorMao?: number | null;
-  yourMao?: number | null;
-  estRehab?: number | null;
-  estRehabLow?: number | null;
-  estRehabHigh?: number | null;
-  rehabSource?: string | null;
-  rehabEstimatedAt?: string | null;
-  rehabConfidenceScore?: number | null;
-  realArvLow?: number | null;
-  realArvMedian?: number | null;
-  realArvHigh?: number | null;
-  arvConfidence?: "HIGH" | "MED" | "LOW" | null;
-  arvCompCount?: number | null;
-  arvValidatedAt?: string | null;
-  estimatedMonthlyRent?: number | null;
-  followUpCount?: number | null;
-  sellerMotivationScore?: number | null;
-  bedrooms: number | null;
-  bathrooms: number | null;
-  buildingSqFt: number | null;
-  yearBuilt: number | null;
-  distressBucket: string | null;
-}
-
-// ── /api/deal-dossier/[id] ─────────────────────────────────────────────
-export interface DossierResponse {
-  found: boolean;
-  dossierRecordId?: string;
-  dealNumber?: number | null;
-  verdict?: string | null;
-  pessimisticMao?: number | null;
-  stickyFloor?: number | null;
-  marginOverFloor?: number | null;
-  awaiting?: string | null;
-  createdAt?: string | null;
-  hasOperatorCma?: boolean;
-  markdown?: string | null;
-}
-
-// ── /api/conversations/[id] ────────────────────────────────────────────
-export interface UnifiedMessage {
-  id: string;
-  source: "quo" | "email" | "notes";
-  direction: "inbound" | "outbound" | "system";
-  body: string;
-  timestamp: string;
-  from: string;
-  to: string;
-  subject?: string;
-}
-
-export interface ConversationResponse {
-  recordId: string;
-  address: string;
-  agentName: string | null;
-  agentPhone: string | null;
-  messageCount: number;
-  quoCount: number;
-  emailCount: number;
-  notesCount: number;
-  messages: UnifiedMessage[];
+  entries: _AuditEntry[];
 }
 
 // ── /api/maverick/recall ───────────────────────────────────────────────
