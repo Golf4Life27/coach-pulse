@@ -22,8 +22,6 @@ function listing(over: Partial<Listing> = {}): Listing {
     investorMao: 45000,
     rehabEstimatedAt: freshIso,
     rehabSource: "vision",
-    memphisAssignmentVerified: true,
-    emdOperatorSignoff: true,
     ...over,
   } as unknown as Listing;
 }
