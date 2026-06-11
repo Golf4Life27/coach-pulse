@@ -4,21 +4,84 @@
 // confirmation; here we add the AVM endpoints used by /api/arv-validate.
 
 import { auditPaidCall } from "@/lib/spend/audit-paid-call";
+import {
+  checkLoopBreaker,
+  recordCallError,
+  recordCallOutcome,
+} from "@/lib/rentcast/failure-loop-breaker";
 
 const RENTCAST_API_KEY = process.env.RENTCAST_API_KEY;
 const BASE = "https://api.rentcast.io/v1";
+
+/** Breaker-shape inputs — the call's answer-relevant params, used to
+ *  group repeated failures of the SAME shape (so a 404 on one address
+ *  doesn't trip a sibling call on another). */
+export interface PaidFetchBreakerInputs {
+  address?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
+  recordId?: string | null;
+}
+
+/** A short-circuit response we return when the loop-breaker is tripped.
+ *  Looks like an HTTP 599 to callers (a synthetic status outside the
+ *  real range), so error-handling paths fail closed without misreading
+ *  it as a real 4xx/5xx — caller logs already match "non-2xx → propagate
+ *  an error". The body carries the breaker key for diagnosis. */
+function breakerShortCircuitResponse(key: string, lastStatus: number | null): Response {
+  return new Response(
+    JSON.stringify({
+      error: "rentcast_loop_breaker_tripped",
+      message:
+        "RentCast paid call short-circuited — same call shape failed N times in a row. " +
+        "A success on this shape clears the counter; otherwise check the address/recordId or wait for upstream recovery.",
+      breaker_key: key,
+      last_status: lastStatus,
+    }),
+    {
+      status: 599,
+      headers: { "Content-Type": "application/json" },
+    },
+  );
+}
 
 // Wraps a single RentCast fetch call with paid-call telemetry. Emits one
 // agent:audit entry per HTTP round-trip on the "rentcast" agent — the
 // shape lib/spend/derive.ts and the paid_api_spend_24h Pulse detector
 // consume. recordId is optional: present for appraiser-routed calls that
 // already know the listing id, absent for zip-level discovery scans.
+//
+// 2026-06-11 P0: wrapped in lib/rentcast/failure-loop-breaker. Before any
+// paid call we check the breaker for THIS call shape; if tripped, return
+// a synthetic 599 instead of billing again. Successes clear the counter;
+// failures increment it and edge-trigger an alert audit at the trip
+// threshold. The */10 bexar-taxes cron (recG4GNM2sa0ZYj7p) burned ~6
+// 404s/hr against an unindexed address before this breaker shipped.
 async function paidFetch(
   endpoint: string,
   url: string,
   init: RequestInit,
   recordId?: string,
+  breakerInputs?: PaidFetchBreakerInputs,
 ): Promise<Response> {
+  const shape = breakerInputs ?? { recordId };
+  const pre = await checkLoopBreaker(endpoint, shape);
+  if (pre.tripped) {
+    // Still emit a paid-call audit row so the spend dashboard sees a
+    // breaker-skipped entry (with cost=0). Without this the breaker
+    // would invisibly drop calls from the audit trail.
+    await auditPaidCall({
+      source: "rentcast",
+      endpoint,
+      http: 599,
+      ms: 0,
+      recordId,
+      error: `loop_breaker_tripped (count=${pre.count}, last_status=${pre.lastStatus})`,
+    });
+    return breakerShortCircuitResponse(pre.key, pre.lastStatus);
+  }
+
   const t0 = Date.now();
   try {
     const res = await fetch(url, init);
@@ -30,6 +93,7 @@ async function paidFetch(
       recordId,
       error: res.ok ? undefined : `HTTP ${res.status}`,
     });
+    await recordCallOutcome(endpoint, shape, res.status);
     return res;
   } catch (err) {
     await auditPaidCall({
@@ -40,6 +104,7 @@ async function paidFetch(
       recordId,
       error: String(err),
     });
+    await recordCallError(endpoint, shape);
     throw err;
   }
 }
@@ -320,12 +385,10 @@ export function extractAssessedValue(rec: Record<string, unknown> | undefined): 
  * Fetch the subject's most-recent CAD assessed value from RentCast
  * `/properties`. Never throws — returns null on any failure.
  */
-export async function getRentCastAssessedValue(input: {
-  address: string;
-  city: string;
-  state: string;
-  zip: string;
-}): Promise<number | null> {
+export async function getRentCastAssessedValue(
+  input: { address: string; city: string; state: string; zip: string },
+  recordId?: string,
+): Promise<number | null> {
   if (!RENTCAST_API_KEY) return null;
   const qp = new URLSearchParams({
     address: input.address,
@@ -338,6 +401,8 @@ export async function getRentCastAssessedValue(input: {
       "properties",
       `${BASE}/properties?${qp.toString()}`,
       { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" },
+      recordId,
+      { ...input, recordId: recordId ?? null },
     );
     if (!res.ok) return null;
     const body = (await res.json()) as unknown;
@@ -353,12 +418,10 @@ export async function getRentCastAssessedValue(input: {
  * `/properties`. Never throws — returns null on any failure (caller
  * HOLDs rather than fabricating a tax number).
  */
-export async function getAnnualPropertyTaxes(input: {
-  address: string;
-  city: string;
-  state: string;
-  zip: string;
-}): Promise<number | null> {
+export async function getAnnualPropertyTaxes(
+  input: { address: string; city: string; state: string; zip: string },
+  recordId?: string,
+): Promise<number | null> {
   if (!RENTCAST_API_KEY) return null;
   const qp = new URLSearchParams({
     address: input.address,
@@ -371,6 +434,8 @@ export async function getAnnualPropertyTaxes(input: {
       "properties",
       `${BASE}/properties?${qp.toString()}`,
       { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" },
+      recordId,
+      { ...input, recordId: recordId ?? null },
     );
     if (!res.ok) return null;
     const body = (await res.json()) as unknown;

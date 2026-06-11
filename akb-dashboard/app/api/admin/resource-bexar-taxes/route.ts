@@ -47,8 +47,8 @@ export async function GET(req: Request) {
   }
 
   const [rentCast, rentcastAssessed, bexar, redfin] = await Promise.all([
-    getAnnualPropertyTaxes({ address, city, state, zip }).catch(() => null),
-    getRentCastAssessedValue({ address, city, state, zip }).catch(() => null),
+    getAnnualPropertyTaxes({ address, city, state, zip }, recordId ?? undefined).catch(() => null),
+    getRentCastAssessedValue({ address, city, state, zip }, recordId ?? undefined).catch(() => null),
     fetchBexarCadTaxes({ address, city, zip }).catch((err) => ({
       directAnnualTaxes: null, assessedValue: null, derivedAnnualTaxes: null,
       recommendedAnnualTaxes: null, source: null,
