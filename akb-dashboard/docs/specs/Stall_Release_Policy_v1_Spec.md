@@ -1,11 +1,41 @@
-# Stall-Release Policy v1 — DESIGN, not shipped
+# Stall-Release Policy v1 — ADJUDICATED, ships after the 48h watch
 
-Status: **DESIGN** — pending operator review (Maverick) and the 48h watch outcome.
-Spine: recfcAUA0cX202utp.
+Status: **ADJUDICATED** (Maverick, spine recoQHgExXLIrnGU1) — implementation lands after the 48h h2-outreach watch closes, behind `H2_SIBLING_RELEASE_LIVE` (off).
+Spine: recfcAUA0cX202utp (doctrine) / recoQHgExXLIrnGU1 (adjudication).
 Author: ops (Claude Code).
-Last revised: 2026-06-11.
+Last revised: 2026-06-11 (adjudications folded in).
 
-> Ruling under review. No code lands until the operator signs off and the 48h h2-outreach watch completes. This doc records the design so Maverick can adjudicate the shape before the implementation PR.
+## GOVERNING PRINCIPLE (Maverick ruling)
+
+> A thread is TERMINAL when **neither side holds an open ask** — no pending
+> offer awaiting answer, no reply we owe. Active follow-up intent is NOT
+> terminal.
+
+Every classification below resolves through that test.
+
+## Adjudications (all four open questions answered)
+
+1. **Tier 0 auto-close → TERMINAL.** It fires only on high-confidence
+   rejections and closes politely with the door open. A different property
+   is a natural fresh engagement. Siblings release after the 24h cooldown.
+2. **`Walked` → TERMINAL** — whichever side walked, nobody holds an open
+   ask. ⚠ Implementation note: if `Walked`'s actual usage in the table
+   diverges from "one side withdrew, no open ask," FLAG the difference to
+   the operator rather than silently applying.
+3. **Dead siblings → EXCLUDED.** Only fresh, never-contacted, sendable
+   siblings release. Agent-level Do-Not-Text blocks ALL of that agent's
+   siblings regardless of per-listing state.
+4. **Opener template (operator-approved, continuity-aware, outcome-neutral):**
+   > "Hi {Agent}, Alex with AKB Solutions again. We spoke about {prior
+   > address}. I'm also interested in {new address} — I can offer ${X}
+   > cash with a quick close. Is the seller open to offers in that range?"
+
+   Hard rules: NEVER reference the prior outcome; price stays MAO-capped
+   and lineage-gated with all brakes inherited; **PACING IS AN INVARIANT —
+   max one sibling opener per agent per 48 HOURS.** A five-listing agent
+   gets them one at a time, never a blast. (Supersedes the draft's
+   per-agent-per-day cap; KV key
+   `h2:sibling_release:<agent_phone_e164>` with a 48h TTL.)
 
 ## The problem the policy solves
 
@@ -60,18 +90,15 @@ All three reads happen from data the h2 selector already has in hand — no new 
 - **No bypass of the lineage rules** (buyer-anchored only, 35% lowball floor — recjsLKqETfQ5r6zK). The sibling opener still flows through `openerMaoGuard` with the same lineage checks. A sibling release cannot circumvent the buyer-anchored gate.
 - **No bypass of working-hours guard.** First-touch and sibling-release both honor the working-hours gate (TX/MI window).
 - **No bypass of idempotency.** Each sibling release gets its own KV claim key keyed on the SIBLING listing's recordId, not the agent phone.
-- **Per-agent per-day cap.** Even if an agent has three sibling listings going terminal at once, only ONE sibling release per agent per 24h. Prevents three-card-monte. Implementation: KV key `h2:sibling_release:<agent_phone_e164>:<YYYY-MM-DD>`.
+- **Per-agent pacing (ADJUDICATED INVARIANT).** Max ONE sibling opener per agent per 48 hours — even if an agent has five sibling listings going terminal at once, they release one at a time. Implementation: KV key `h2:sibling_release:<agent_phone_e164>` with 48h TTL.
 
 ## Backout
 
 Single env flag: `H2_SIBLING_RELEASE_LIVE`. Off by default until the 48h watch closes. On flip, the planner branch unlocks; no schema migrations to roll back.
 
-## Open questions for Maverick
+## Open questions — RESOLVED (see Adjudications above)
 
-1. **Tier 0 auto-close as a terminal trigger.** The Tier 0 rule (`triage.tier === "tier_0_auto_close"`) was built for the agent who rejected once. Do we count Tier 0 as terminal-on-the-primary for sibling release, or do we wait for a second rejection signal? Recommend: Tier 0 IS terminal — the rule fired because the seller's signal was unambiguous and we already closed the loop with the auto-close message.
-2. **"Walked" interpretation.** Some `Walked` statuses are operator-set on records that never had a real terminal — they're operator dispositions, not agent rejections. Should `Walked` count? Recommend: yes — operator disposition is also a terminal signal, just a different source. The sibling opener is still legitimate.
-3. **What if the sibling itself is in `Dead`?** Don't release a dead record. Apply the standard never-resurface check (`lib/never-resurface.isNeverResurfaceLoose`) before the sibling send.
-4. **Opener template under operator review.** "We spoke about X, also interested in Y" — operator-approved phrasing required before code lands. Draft above is a placeholder for Maverick to amend.
+All four questions were adjudicated by Maverick on 2026-06-11 (spine recoQHgExXLIrnGU1). The original question text is preserved in git history; the rulings are at the top of this doc.
 
 ## Sequencing
 
