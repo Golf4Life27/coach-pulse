@@ -30,6 +30,7 @@
 import { NextResponse } from "next/server";
 import { getActiveListingsForBrief, getRehabSweepCandidates } from "@/lib/airtable";
 import { audit } from "@/lib/audit-log";
+import { noteWorkRun, noteZeroRun } from "@/lib/admin/retire-me-signal";
 import {
   aggregateBackfillStatus,
   classifyBackfillEligibility,
@@ -386,6 +387,19 @@ export async function GET(req: Request) {
     decision: truncated_by_budget ? "applied_truncated_by_budget" : "applied",
     ms: Date.now() - t0,
   });
+
+  // 2026-06-11 — retire-me signal. When the eligible cohort empties
+  // across ZERO_RUN_THRESHOLD ticks the cron alerts so the operator
+  // knows to retire the slot (cohort drained means the backfill earned
+  // its slot; no self-modification of vercel.json).
+  if (eligible.length === 0) {
+    await noteZeroRun("appraiser-backfill", {
+      cron_path: "/api/admin/appraiser-backfill?apply=1&selection=rehab_ready&limit=3",
+      reason: "no_eligible_records",
+    });
+  } else {
+    await noteWorkRun("appraiser-backfill");
+  }
 
   return NextResponse.json({
     mode: "apply",

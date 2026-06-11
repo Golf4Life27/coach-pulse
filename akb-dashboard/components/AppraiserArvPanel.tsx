@@ -25,6 +25,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Listing } from "@/lib/types";
+import { isTestArtifact, testArtifactReason } from "@/lib/test-artifact-records";
 
 export interface AppraiserArvPanelProps {
   recordId: string;
@@ -103,6 +104,19 @@ const CONFIDENCE_STYLES: Record<NonNullable<Listing["arvConfidence"]>, { border:
   LOW: { border: "border-orange-700", text: "text-orange-400" },
 };
 
+function TestArtifactBanner({ reason }: { reason: string | null }) {
+  return (
+    <div className="bg-amber-950/40 border border-amber-700/60 rounded px-2 py-1.5 space-y-0.5">
+      <div className="text-[10px] font-semibold text-amber-300 uppercase tracking-wider">
+        ⚠ Test artifact — not production underwriting
+      </div>
+      <p className="text-[10px] text-amber-200/80 leading-snug">
+        {reason ?? "This record's math fields are residue from debug crons. Don't reference these numbers as analysis."}
+      </p>
+    </div>
+  );
+}
+
 export default function AppraiserArvPanel({ recordId, listing }: AppraiserArvPanelProps) {
   const router = useRouter();
   const [running, setRunning] = useState(false);
@@ -110,6 +124,8 @@ export default function AppraiserArvPanel({ recordId, listing }: AppraiserArvPan
   const [error, setError] = useState<string | null>(null);
 
   const hasArv = listing.realArvMedian != null && listing.arvValidatedAt != null;
+  const testArtifact = isTestArtifact(recordId);
+  const testArtifactNote = testArtifactReason(recordId);
   const confidence = listing.arvConfidence ?? null;
   const style = confidence ? CONFIDENCE_STYLES[confidence] : { border: "border-[#30363d]", text: "text-gray-300" };
   const comps = parseComps(listing.arvCompDetailsJson);
@@ -152,6 +168,7 @@ export default function AppraiserArvPanel({ recordId, listing }: AppraiserArvPan
   if (!hasArv) {
     return (
       <div className="bg-[#1c2128] rounded-lg border border-[#30363d] p-3 space-y-2">
+        {testArtifact && <TestArtifactBanner reason={testArtifactNote} />}
         <div className="flex items-center justify-between">
           <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Appraiser</h3>
         </div>
@@ -170,10 +187,11 @@ export default function AppraiserArvPanel({ recordId, listing }: AppraiserArvPan
   }
 
   return (
-    <div className={`bg-[#1c2128] rounded-lg border ${style.border} p-3 space-y-2`}>
+    <div className={`bg-[#1c2128] rounded-lg border ${testArtifact ? "border-amber-700" : style.border} p-3 space-y-2`}>
+      {testArtifact && <TestArtifactBanner reason={testArtifactNote} />}
       <div className="flex items-center justify-between">
-        <h3 className={`text-[10px] font-bold uppercase tracking-wider ${style.text}`}>
-          Appraiser — ARV {confidence ?? ""}
+        <h3 className={`text-[10px] font-bold uppercase tracking-wider ${testArtifact ? "text-amber-300" : style.text}`}>
+          {testArtifact ? "Appraiser — ARV (test scaffolding)" : `Appraiser — ARV ${confidence ?? ""}`}
         </h3>
         <button
           type="button"
