@@ -65,6 +65,12 @@ import {
   type WorkingHoursMeta,
 } from "@/lib/h2-working-hours";
 import { SOURCE_VERSION_V2 } from "@/lib/source-version";
+import { listSeededZips, FALLBACK_SEEDED_ZIPS } from "@/lib/buyer-median-store";
+import {
+  evaluateSupplyFloor,
+  emitSupplyFloorAudit,
+  type SupplyFloorVerdict,
+} from "@/lib/h2-outreach/supply-floor";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -560,6 +566,33 @@ async function handle(req: Request): Promise<Response> {
     ms: Date.now() - t0,
   });
 
+  // ── Supply-floor signal (2026-06-11 doctrine — spine recfcAUA0cX202utp).
+  // Compute sendable_queue_depth (= eligibleCount), name the binding
+  // constraint if below SUPPLY_FLOOR, emit an info-tier audit. NEVER
+  // a quota — the cap holds; the operator gets a named lever to widen.
+  let supplyFloor: SupplyFloorVerdict | null = null;
+  try {
+    let seededZipsCount = FALLBACK_SEEDED_ZIPS.size;
+    try {
+      seededZipsCount = (await listSeededZips()).size;
+    } catch {
+      /* fall back narrows to the hardcoded allowlist — same posture the
+         intake cron uses (fail-narrow, never widen). */
+    }
+    const ctx = {
+      sendableQueueDepth: eligibleCount,
+      stalledBehindAgents: summary.prior_contact_stalled,
+      intakeLive: process.env.CRAWLER_INTAKE_LIVE === "true",
+      seededZipsCount,
+    };
+    supplyFloor = evaluateSupplyFloor(ctx);
+    await emitSupplyFloorAudit(supplyFloor, ctx);
+  } catch (err) {
+    // Best-effort — supply-floor is a signal, never a gate. A failure
+    // here must not affect the cron's primary work.
+    console.error("[h2-outreach] supply-floor evaluator threw:", err);
+  }
+
   // Release the run-mutex on normal completion; the TTL is the backstop for the
   // (record errors are caught per-record, so this path is the common exit).
   if (runLockHeld) await kvProd.del(RUN_LOCK_KEY).catch(() => {});
@@ -572,6 +605,7 @@ async function handle(req: Request): Promise<Response> {
     processed,
     summary,
     opener_guarded: openerGuarded,
+    supply_floor: supplyFloor,
     auth_kind: authKind,
     duration_ms: Date.now() - t0,
   });
