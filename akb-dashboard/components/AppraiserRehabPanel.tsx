@@ -26,6 +26,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Listing } from "@/lib/types";
+import { isTestArtifact, testArtifactReason } from "@/lib/test-artifact-records";
 import { BBC_ANCHOR_PER_SQFT, type BbcTier } from "@/lib/appraiser/rehab-calibration";
 import {
   DRIFT_NOTES_MARKER,
@@ -148,6 +149,19 @@ function extractLatestDriftLine(notes: string | null | undefined): string | null
   return null;
 }
 
+function TestArtifactBanner({ reason }: { reason: string | null }) {
+  return (
+    <div className="bg-amber-950/40 border border-amber-700/60 rounded px-2 py-1.5 space-y-0.5">
+      <div className="text-[10px] font-semibold text-amber-300 uppercase tracking-wider">
+        ⚠ Test artifact — not production underwriting
+      </div>
+      <p className="text-[10px] text-amber-200/80 leading-snug">
+        {reason ?? "This record's math fields are residue from debug crons. Don't reference these numbers as analysis."}
+      </p>
+    </div>
+  );
+}
+
 export default function AppraiserRehabPanel({ recordId, listing }: AppraiserRehabPanelProps) {
   const router = useRouter();
   const [running, setRunning] = useState(false);
@@ -186,6 +200,8 @@ export default function AppraiserRehabPanel({ recordId, listing }: AppraiserReha
 
   const driftActive = hasUnresolvedDriftMarker(listing.notes ?? null);
   const driftLine = driftActive ? extractLatestDriftLine(listing.notes) : null;
+  const testArtifact = isTestArtifact(recordId);
+  const testArtifactNote = testArtifactReason(recordId);
 
   const runRehab = async () => {
     setError(null);
@@ -265,6 +281,7 @@ export default function AppraiserRehabPanel({ recordId, listing }: AppraiserReha
   if (!hasRehab) {
     return (
       <div className="bg-[#1c2128] rounded-lg border border-[#30363d] p-3 space-y-2">
+        {testArtifact && <TestArtifactBanner reason={testArtifactNote} />}
         <div className="flex items-center justify-between">
           <h3 className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">
             Appraiser — Rehab
@@ -362,7 +379,8 @@ export default function AppraiserRehabPanel({ recordId, listing }: AppraiserReha
   }
 
   return (
-    <div className={`bg-[#1c2128] rounded-lg border ${style.border} p-3 space-y-2`}>
+    <div className={`bg-[#1c2128] rounded-lg border ${testArtifact ? "border-amber-700" : style.border} p-3 space-y-2`}>
+      {testArtifact && <TestArtifactBanner reason={testArtifactNote} />}
       {/* INV-005 drift banner — only renders when cron flagged divergence */}
       {driftActive && (
         <div className="bg-amber-950/40 border border-amber-700/60 rounded px-2 py-1.5 space-y-1">

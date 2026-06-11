@@ -3,7 +3,11 @@
 //
 // GET /api/cron/listings-intake[?dry_run=1]
 //
-// Daily 03:00 UTC. ZIPs come from ZIP_Registry (D1 — Market_Tier ∈
+// Schedule: */10 (vercel.json) — was daily 03:00 UTC in the original ship,
+// raised to sub-daily on the Pro plan once continuous new-listing capture
+// became the desired shape. Gated by CRAWLER_INTAKE_LIVE env: when unset,
+// every tick is a dry-run no-op so the slot stays cheap.
+// ZIPs come from ZIP_Registry (D1 — Market_Tier ∈
 // {launch, active} AND NOT Wholesale_Restricted); `?zips=` overrides for
 // manual runs. For each target ZIP:
 //   RentCast /listings/sale → normalize → intake-filter (price/beds/SFR/

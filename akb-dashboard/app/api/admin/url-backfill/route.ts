@@ -27,6 +27,7 @@ import { getUrlLessActiveCandidates, updateListingRecord } from "@/lib/airtable"
 import { verifyListing } from "@/lib/crawler/sources/firecrawl";
 import { strictAddressUrlMatch, formatSubjectAddress } from "@/lib/crawler/url-backfill";
 import { audit } from "@/lib/audit-log";
+import { noteWorkRun, noteZeroRun } from "@/lib/admin/retire-me-signal";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -205,6 +206,19 @@ export async function GET(req: Request) {
     outputSummary: { confirmed, written, unmatched, unmatched_reasons, truncated_by_budget },
     ms: Date.now() - t0,
   });
+
+  // 2026-06-11 — retire-me signal. When the candidate cohort hits zero
+  // for ZERO_RUN_THRESHOLD consecutive ticks the cron alerts so the
+  // operator knows to retire the slot (no self-modification of
+  // vercel.json — roster changes stay deliberate human commits).
+  if (candidates.length === 0) {
+    await noteZeroRun("url-backfill", {
+      cron_path: "/api/admin/url-backfill?apply=1&limit=10",
+      reason: "no_url_less_active_records",
+    });
+  } else {
+    await noteWorkRun("url-backfill");
+  }
 
   return NextResponse.json({
     mode: apply ? "apply" : "dry_run",
