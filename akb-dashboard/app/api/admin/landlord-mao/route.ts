@@ -116,7 +116,7 @@ export async function GET(req: Request) {
 
     const [rentEst, rentcastTaxes, capFloorSrc] = await Promise.all([
       getRentEstimate(addr).catch(() => null),
-      getAnnualPropertyTaxes(addr).catch(() => null),
+      getAnnualPropertyTaxes(addr, recordId).catch(() => null),
       addr.zip ? sourceMarketCapRate(addr.zip, opexRatio).catch(() => null) : Promise.resolve(null),
     ]);
 

@@ -276,8 +276,8 @@ async function handle(req: Request, params: TriageParams) {
       const [rentEst, attomOut, rcTaxes, rcAssessed] = await Promise.all([
         getRentEstimate(addr).catch(() => null),
         fetchAssessor({ address1: addr.address, address2: attomAddr2 }).catch(() => null),
-        getAnnualPropertyTaxes(addr).catch(() => null),
-        getRentCastAssessedValue(addr).catch(() => null),
+        getAnnualPropertyTaxes(addr, listing.id).catch(() => null),
+        getRentCastAssessedValue(addr, listing.id).catch(() => null),
       ]);
       monthlyRent = rentEst?.rent ?? null;
       attomTaxes = attomOut?.data?.annualTaxes ?? null;
