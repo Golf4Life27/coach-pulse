@@ -23,8 +23,18 @@ export const BUYER_MEDIAN_ZIP_TABLE = "tbleoqYRBmnJq5V0Z";
  *  the prod AIRTABLE_PAT is scoped before this table was created), callers
  *  fall back to this hardcoded set of KNOWN-SEEDED ZIPs rather than opening
  *  up to "all priceable markets per state." Keep this list in sync with the
- *  ZIPs we know are seeded — never widen it on a store-read failure. */
-export const FALLBACK_SEEDED_ZIPS: ReadonlySet<string> = new Set(["48227"]);
+ *  ZIPs we know are seeded — never widen it on a store-read failure.
+ *  2026-06-11 expansion (spine recN7rIJ7m2gmlxKs): five Detroit ZIPs seeded
+ *  from InvestorBase exports, both tracks each, read back through
+ *  resolveOpenerCeiling (source=buyer_zip_store_live confirmed). */
+export const FALLBACK_SEEDED_ZIPS: ReadonlySet<string> = new Set([
+  "48227", // 2026-06-09 seed — landlord $55k / flipper $150k
+  "48224", // 2026-06-11 — landlord $64,750 (n=38) / flipper $119,000 (n=160)
+  "48219", // 2026-06-11 — landlord $77,500 (n=60) / flipper $177,000 (n=119)
+  "48204", // 2026-06-11 — landlord $42,000 (n=55) / flipper $142,750 (n=82)
+  "48205", // 2026-06-11 — landlord $45,000 (n=59) / flipper $103,750 (n=148)
+  "48213", // 2026-06-11 — landlord $39,000 (n=43) / flipper $108,000 (n=125)
+]);
 
 const AIRTABLE_PAT = process.env.AIRTABLE_PAT;
 const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
