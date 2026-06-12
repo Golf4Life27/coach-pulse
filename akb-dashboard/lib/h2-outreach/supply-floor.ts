@@ -34,6 +34,7 @@ export const SUPPLY_FLOOR = 10;
 export type BindingConstraint =
   | "intake_dry"
   | "zips_exhausted"
+  | "cohort_stale"
   | "stalled_behind_agents"
   | "natural_low_supply"
   | "supply_healthy";
@@ -52,6 +53,12 @@ export interface SupplyContext {
   /** Count of priceable seeded ZIPs (Buyer_Median_ZIP store ∩ buy-box).
    *  The narrowest binding constraint when the map is one ZIP wide. */
   seededZipsCount: number;
+  /** Records that are outreach-eligible in every respect EXCEPT the 48h
+   *  Last_Verified freshness window (reason === "verify_stale"). The
+   *  2026-06-11 collapse: 174 records went stale at once when the 6/9
+   *  intake cohort crossed 48h — the floor named "stalls" when the true
+   *  lever was a re-verify pass. (spine recZNzKlsgtzlCLkY) */
+  cohortStale: number;
 }
 
 export interface SupplyFloorVerdict {
@@ -97,6 +104,13 @@ export function evaluateSupplyFloor(ctx: SupplyContext): SupplyFloorVerdict {
       `Binding constraint: only ${ctx.seededZipsCount} priceable seeded ZIP in ` +
       `Buyer_Median_ZIP. The map is one ZIP wide; cohort exhausted at the ` +
       `current breadth. Widening means seeding more ZIPs in the store.`;
+  } else if (ctx.cohortStale >= ctx.sendableQueueDepth && ctx.cohortStale > 0) {
+    constraint = "cohort_stale";
+    description =
+      `Sendable queue depth ${ctx.sendableQueueDepth} < floor ${SUPPLY_FLOOR}. ` +
+      `Binding constraint: ${ctx.cohortStale} records are eligible in every ` +
+      `respect except the 48h Last_Verified window (verify_stale). A scoped ` +
+      `freshness re-verify pass is the unlock — ~1 Firecrawl credit per record.`;
   } else if (ctx.stalledBehindAgents >= ctx.sendableQueueDepth) {
     constraint = "stalled_behind_agents";
     description =
@@ -138,6 +152,7 @@ export async function emitSupplyFloorAudit(
       stalled_behind_agents: ctx.stalledBehindAgents,
       intake_live: ctx.intakeLive,
       seeded_zips_count: ctx.seededZipsCount,
+      cohort_stale: ctx.cohortStale,
     },
     outputSummary: {
       floor: verdict.floor,

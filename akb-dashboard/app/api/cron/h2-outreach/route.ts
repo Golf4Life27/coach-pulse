@@ -53,6 +53,7 @@ import type { Listing } from "@/lib/types";
 import {
   isH2Eligible,
   selectOutreachReady,
+  outreachReadyReason,
   buildPriorContactIndex,
   planQueue,
   buildSentNote,
@@ -643,11 +644,18 @@ async function handle(req: Request): Promise<Response> {
       /* fall back narrows to the hardcoded allowlist — same posture the
          intake cron uses (fail-narrow, never widen). */
     }
+    // verify_stale headcount — records eligible in every respect except
+    // the 48h freshness window. Pure pass over the already-fetched set.
+    let cohortStale = 0;
+    for (const l of allListings) {
+      if (outreachReadyReason(l).reason === "verify_stale") cohortStale++;
+    }
     const ctx = {
       sendableQueueDepth: eligibleCount,
       stalledBehindAgents: summary.prior_contact_stalled,
       intakeLive: process.env.CRAWLER_INTAKE_LIVE === "true",
       seededZipsCount,
+      cohortStale,
     };
     supplyFloor = evaluateSupplyFloor(ctx);
     await emitSupplyFloorAudit(supplyFloor, ctx);

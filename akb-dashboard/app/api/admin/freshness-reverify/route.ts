@@ -19,7 +19,7 @@
 // Auth: dashboard cookie / CRON_SECRET / OAuth waterfall.
 
 import { NextResponse } from "next/server";
-import { getActiveListingsForBrief, updateListingRecord } from "@/lib/airtable";
+import { getListings, updateListingRecord } from "@/lib/airtable";
 import { audit } from "@/lib/audit-log";
 import {
   authenticate,
@@ -32,6 +32,7 @@ import { verifyListingByUrl } from "@/lib/crawler/sources/firecrawl";
 import { isPriceableMarket } from "@/lib/markets/actionable";
 import { listSeededZips } from "@/lib/buyer-median-store";
 import { isOutreachFresh, DEFAULT_FRESHNESS_HOURS } from "@/lib/outreach-freshness";
+import { isH2Eligible } from "@/lib/h2-outreach";
 import type { Listing } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -75,10 +76,21 @@ export async function GET(req: Request) {
   const stateScope = (url.searchParams.get("state") ?? "").trim().toUpperCase();
   const now = new Date();
 
+  // Pool (2026-06-11 fix, spine recZNzKlsgtzlCLkY): was getActiveListingsForBrief
+  // — Outreach_Status-BEARING records only — which made the entire status-EMPTY
+  // first-touch supply invisible to the keep-warm pass. The 174-record
+  // five-ZIP cohort went verify_stale with this route unable to even see it.
+  // The pool is now "every record whose freshness MATTERS": H2-eligible
+  // first-touch supply (status empty + Active + Auto Proceed + phone + v2,
+  // via the same isH2Eligible the cron selects with — one gate, no drift)
+  // plus the reply-bearing negotiation statuses the old pool carried.
+  const REPLY_BEARING = new Set(["Negotiating", "Response Received", "Counter Received", "Offer Accepted", "Texted", "Emailed"]);
   let active: Listing[];
   let seededZips: Set<string>;
   try {
-    [active, seededZips] = await Promise.all([getActiveListingsForBrief(), listSeededZips()]);
+    let all: Listing[];
+    [all, seededZips] = await Promise.all([getListings(), listSeededZips()]);
+    active = all.filter((l) => isH2Eligible(l) || REPLY_BEARING.has(l.outreachStatus ?? ""));
   } catch (err) {
     return NextResponse.json({ error: "active_fetch_failed", message: err instanceof Error ? err.message : String(err) }, { status: 502 });
   }
