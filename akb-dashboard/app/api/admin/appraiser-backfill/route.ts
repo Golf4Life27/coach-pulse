@@ -163,7 +163,24 @@ export async function GET(req: Request) {
   const active = rehabReady
     ? await getRehabSweepCandidates()
     : await getActiveListingsForBrief({ recentDays: 7 });
-  const ordered = [...active].sort((a, b) => a.id.localeCompare(b.id));
+  // Ordering (2026-06-11, spine recZNzKlsgtzlCLkY): rehab_ready sweeps
+  // MOST-RECENTLY-VERIFIED first instead of lex-by-id. A freshly
+  // re-verified record is sendable supply whose pricing is the binding
+  // constraint — the sweep should convert it while it's still inside the
+  // 48h outreach-freshness window, not after the lex cursor crawls to it
+  // days later. Verify first, rehab second: a record that died at
+  // re-verify (Live_Status=Off Market) drops out of getRehabSweepCandidates
+  // entirely, so no vision call is ever spent on a dead listing. The
+  // default (brief-active) selection keeps lex order — its ?after cursor
+  // semantics depend on it.
+  const ordered = rehabReady
+    ? [...active].sort((a, b) => {
+        const ta = a.lastVerified ? Date.parse(a.lastVerified) : -Infinity;
+        const tb = b.lastVerified ? Date.parse(b.lastVerified) : -Infinity;
+        if (tb !== ta) return tb - ta;
+        return a.id.localeCompare(b.id);
+      })
+    : [...active].sort((a, b) => a.id.localeCompare(b.id));
   const filtered = ordered.filter(
     (l) => !skipIds.has(l.id) && (after ? l.id.localeCompare(after) > 0 : true),
   );
