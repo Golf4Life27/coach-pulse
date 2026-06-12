@@ -99,6 +99,11 @@ export interface Listing {
    *  THIS track's ceiling as operative — a track-blind ceiling invites
    *  overpricing at DD (Tracey display defect, 2026-06-10). */
   underwrittenMaoTrack?: string | null;
+  /** Property-up ceiling (keystone rewrite 2026-06-12). Written ONLY by the
+   *  property-up pipeline (flipperValue/landlordValue − rehab − fee with a
+   *  matched buyer's sourced margin). The ONLY Tier-C-authorizing field;
+   *  underwrittenMao above is informational-only as of the same date. */
+  underwrittenPropertyMao?: number | null;
   sellerMotivationScore?: number | null;
   listPriceAtSend?: number | null;
   // ── Pre-Send Gate inputs (added 5/13 for orchestrator Gate 2)

@@ -18,7 +18,7 @@ interface FlipperResult {
   arv: number;
   rehab: number;
   closing_costs: number;
-  buyer_profit: number;
+  buyer_profit: number | null;
   investor_mao: number;
   wholesale_fee: number;
   your_mao: number;
@@ -32,7 +32,7 @@ interface LandlordResult {
   landlord_max_offer: number;
   rehab: number;
   closing_costs: number;
-  buyer_profit: number;
+  buyer_profit: number | null;
   wholesale_fee: number;
   your_mao: number;
 }

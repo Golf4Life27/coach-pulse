@@ -241,7 +241,7 @@ describe("computeMaoRange — V2.1 floor math", () => {
     expect(r.modifier_inputs.wholesale_fee).toBe(5_000);
   });
 
-  it("defaults buyer_profit to 30000 when null (surfaced in modifier_inputs only)", () => {
+  it("Buyer_Profit_Target RETIRED (2026-06-12): null passes through, never defaulted to a fabricated 30k", () => {
     const r = computeMaoRange({
       arvMid: 200_000,
       estRehab: 30_000,
@@ -250,7 +250,7 @@ describe("computeMaoRange — V2.1 floor math", () => {
       listPrice: 175_000,
       sellerMotivationScore: null,
     });
-    expect(r.modifier_inputs.buyer_profit).toBe(30_000);
+    expect(r.modifier_inputs.buyer_profit).toBeNull();
     // Floor formula does NOT subtract buyer_profit by design.
     expect(r.floor).toBe(155_000);
   });

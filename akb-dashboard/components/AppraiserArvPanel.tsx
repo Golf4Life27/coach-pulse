@@ -136,7 +136,7 @@ export default function AppraiserArvPanel({ recordId, listing }: AppraiserArvPan
   // that endpoint also returned. Surfaced for at-a-glance reference.
   const floor =
     listing.realArvMedian != null && listing.estRehab != null
-      ? Math.max(listing.realArvMedian - listing.estRehab - (listing.wholesaleFeeTarget ?? 15000), 0)
+      ? Math.max(listing.realArvMedian - listing.estRehab - (listing.wholesaleFeeTarget ?? 5000), 0)
       : null;
   const softCeiling =
     listing.listPrice != null && listing.listPrice > 0

@@ -16,6 +16,7 @@ import AppraiserRehabPanel from "@/components/AppraiserRehabPanel";
 import AppraiserBuyerIntelligencePanel from "@/components/AppraiserBuyerIntelligencePanel";
 import RelatedDealsRecall from "@/components/RelatedDealsRecall";
 import ScribeDealCommentary from "@/components/ScribeDealCommentary";
+import PricingSanityRail from "@/components/PricingSanityRail";
 import type { DealContext } from "@/types/jarvis";
 
 function cleanPhone(phone: string): string {
@@ -254,6 +255,17 @@ export default function DealWorkspace() {
       <ScribeDealCommentary
         recordId={listing.id}
         envelopeId={listing.envelopeId ?? null}
+      />
+
+      {/* Keystone 2026-06-12 — median sanity rail (informs, never gates) */}
+      <PricingSanityRail
+        recordId={listing.id}
+        underwrittenPropertyMao={listing.underwrittenPropertyMao ?? null}
+        displayFloor={
+          listing.realArvMedian != null && listing.estRehab != null
+            ? Math.max(listing.realArvMedian - listing.estRehab - (listing.wholesaleFeeTarget ?? 5000), 0)
+            : null
+        }
       />
 
       {/* Phase 4A.1 — Appraiser ARV panel */}
