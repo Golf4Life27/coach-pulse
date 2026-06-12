@@ -146,7 +146,7 @@ export interface BroCardPricingPhase4 {
       arv_mid: number | null;
       est_rehab: number | null;
       wholesale_fee: number;
-      buyer_profit: number;
+      buyer_profit: number | null;
       list_price: number | null;
       seller_motivation_score: number | null;
       monthly_rent: number | null;
@@ -485,6 +485,18 @@ export interface BuyerRecord {
   formCompletedAt: string | null;
   lastEngagementAt: string | null;
   notes: string | null;
+  // Pricing-keystone fields (adjudication recXJrM7EYK3pEFmF). Min_Deal_Spread
+  // is the Tier-C autonomous margin source — a DOLLAR spread, sourced from
+  // the buyer's own stated criteria via the dispo write-back path, never
+  // defaulted.
+  minDealSpread: number | null;
+  minAssignmentFeeTarget: number | null;
+  maxRehab: number | null;
+  preferredCondition: string[] | null;
+  pofOnFile: boolean;
+  pofExpiryDate: string | null;
+  preferredStates: string | null;
+  strategyType: string[] | null;
 }
 
 export interface BuyerMatch {

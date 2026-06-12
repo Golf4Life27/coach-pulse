@@ -123,12 +123,19 @@ export const LOWBALL_FLOOR_PCT_OF_LIST = (() => {
   return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.35;
 })();
 
-/** Lineages the autonomous h2-outreach cron is authorized to send on
- *  (operator 2026-06-10, standing rule BUYER-ANCHORED ONLY). The cron
- *  passes requireBuyerAnchored=true; deal_math and null are refused. */
-const BUYER_ANCHORED_SOURCES: ReadonlySet<MaoLineage> = new Set([
-  "buyer_underwrite_persisted",
-  "buyer_zip_store_live",
+/** Lineages authorized to drive an AUTONOMOUS offer number.
+ *
+ *  KEYSTONE REWRITE (operator 2026-06-12, spine recfrqeVgAr53CdDP,
+ *  adjudication recXJrM7EYK3pEFmF): a ZIP buyer-median can never price a
+ *  specific property. The median lineages (buyer_underwrite_persisted /
+ *  buyer_zip_store_live) are DEMOTED to informational — they gate markets,
+ *  cross-check numbers, and triage dispo, but never authorize. Only the
+ *  property-up lineage authorizes autonomously (Tier C); it requires a
+ *  matched POF-verified buyer's sourced Min_Deal_Spread and is expected
+ *  to price ZERO records until buyer data accrues — that is correct.
+ *  This supersedes the 2026-06-10 BUYER-ANCHORED ONLY set. */
+const AUTONOMOUS_AUTHORIZED_SOURCES: ReadonlySet<MaoLineage> = new Set([
+  "property_underwrite_persisted",
 ]);
 
 export interface OpenerMaoGuard {
@@ -197,14 +204,14 @@ export function openerMaoGuard(input: {
   // $13,658 → cap $13,500 against ~$100k list, autonomously schedulable
   // without this gate. Refuse explicitly so adding a buyer median (not
   // hardcoding a ZIP) is what opens a market's autonomous lane.
-  if (input.requireBuyerAnchored && (input.source == null || !BUYER_ANCHORED_SOURCES.has(input.source))) {
+  if (input.requireBuyerAnchored && (input.source == null || !AUTONOMOUS_AUTHORIZED_SOURCES.has(input.source))) {
     return {
       ok: false,
       opener: null,
       baseOpener: base,
       mao,
       capped: false,
-      reason: `mao_lineage_not_buyer_anchored (source=${input.source ?? "null"}) — autonomous h2-outreach requires buyer_underwrite_persisted or buyer_zip_store_live; seed the ZIP's buyer median to open the autonomous lane`,
+      reason: `mao_lineage_not_autonomous_authorized (source=${input.source ?? "null"}) — only property_underwrite_persisted authorizes an autonomous offer number (keystone 2026-06-12); median lineages inform, never authorize`,
     };
   }
   // Lowball floor (autonomous-path rule, gated by requireBuyerAnchored —
@@ -248,23 +255,27 @@ export function openerMaoGuard(input: {
 }
 
 export interface OpenerCeiling {
-  /** Underwritten MAO (deal-math) — null on HOLD / unpriceable. */
+  /** The resolved ceiling — null on HOLD / unpriceable. Whether it may
+   *  drive an autonomous number is authorizedForAutonomous, NOT presence. */
   mao: number | null;
   /** Whether the deal's market has a sourced buy-box discount. */
   priceable: boolean;
   /** Resolved market id for audit, or null when no market matched. */
   market: string | null;
-  /** Lineage of the MAO number, written by resolveOpenerCeiling so callers
-   *  can enforce a buyer-anchored policy on autonomous send paths. The
-   *  h2-outreach cron (operator 2026-06-10) refuses to send unless this is
-   *  buyer_underwrite_persisted or buyer_zip_store_live. */
+  /** Lineage of the MAO number. As of the 2026-06-12 keystone, ONLY
+   *  property_underwrite_persisted authorizes autonomously; median
+   *  lineages are informational (sanity rail / alerts / dispo triage). */
   source: MaoLineage | null;
+  /** True only when source ∈ AUTONOMOUS_AUTHORIZED_SOURCES. */
+  authorizedForAutonomous: boolean;
 }
 
 export type MaoLineage =
-  | "buyer_underwrite_persisted"  // (1) listing.underwrittenMao — buyer-anchored
-  | "buyer_zip_store_live"        // (2) UnderwriteContext ZIP-store median — buyer-anchored
-  | "deal_math";                  // (3) evaluateDeal ARV×arv_pct_max-rehab-fee — NOT buyer-anchored
+  | "property_underwrite_persisted" // (0) listing.underwrittenPropertyMao — PROPERTY-UP; the ONLY autonomous-authorizing lineage (keystone 2026-06-12)
+  | "provisional_operator_approved" // Tier B — computeFlipperMax on market arv_pct_max; operator offer-approval flow ONLY, never autonomous
+  | "buyer_underwrite_persisted"    // (1) listing.underwrittenMao — median-based; INFORMATIONAL as of 2026-06-12 (was send-authorizing)
+  | "buyer_zip_store_live"          // (2) UnderwriteContext ZIP-store median — INFORMATIONAL as of 2026-06-12 (was send-authorizing)
+  | "deal_math";                    // (3) evaluateDeal ARV×arv_pct_max-rehab-fee — informs analysis only (unchanged)
 
 /** Pure: resolve the deal's MAO ceiling + market priceability. PRIORITY:
  *  (1) persisted listing.underwrittenMao — what the underwrite station wrote;
@@ -295,22 +306,36 @@ export function resolveOpenerCeiling(
     distressBucket?: string | null;
     distressScore?: number | null;
     underwrittenMao?: number | null;
+    underwrittenPropertyMao?: number | null;
   },
   ctx?: UnderwriteContext,
 ): OpenerCeiling {
   const market = getMarketForListing({ state: listing.state, zip: listing.zip });
   const priceable = market?.buyer_params?.arv_pct_max != null;
+  const out = (mao: number | null, source: MaoLineage | null): OpenerCeiling => ({
+    mao,
+    priceable,
+    market: market?.id ?? null,
+    source,
+    authorizedForAutonomous: source != null && AUTONOMOUS_AUTHORIZED_SOURCES.has(source),
+  });
   if (!priceable) {
-    return { mao: null, priceable: false, market: market?.id ?? null, source: null };
+    return out(null, null);
   }
-  // (1) Persisted Underwritten_MAO — preferred. Buyer-anchored: written by
-  // the buyer-median underwrite, no live I/O dependency.
+  // (0) PROPERTY-UP persisted ceiling — the keystone (2026-06-12). Written
+  // only by the property-up pipeline (ARV − matched buyer margin − rehab −
+  // fee). The ONLY lineage that authorizes an autonomous number.
+  if (typeof listing.underwrittenPropertyMao === "number" && listing.underwrittenPropertyMao > 0) {
+    return out(listing.underwrittenPropertyMao, "property_underwrite_persisted");
+  }
+  // (1) Persisted median-based Underwritten_MAO — INFORMATIONAL as of
+  // 2026-06-12 (was send-authorizing). Surfaces for alerts/sanity-rail;
+  // authorizedForAutonomous=false.
   if (typeof listing.underwrittenMao === "number" && listing.underwrittenMao > 0) {
-    return { mao: listing.underwrittenMao, priceable: true, market: market?.id ?? null, source: "buyer_underwrite_persisted" };
+    return out(listing.underwrittenMao, "buyer_underwrite_persisted");
   }
-  // (2) Track-aware ZIP-store via pre-loaded context — buyer-anchored:
-  // legitimate fallback for intake rows too fresh for the station to have
-  // written yet.
+  // (2) Track-aware ZIP-store via pre-loaded context — INFORMATIONAL as of
+  // 2026-06-12. A ZIP average prices no single house.
   if (ctx) {
     const uw = computeListingMao(
       {
@@ -324,15 +349,11 @@ export function resolveOpenerCeiling(
       ctx,
     );
     if (uw.yourMao != null) {
-      return { mao: uw.yourMao, priceable: true, market: market?.id ?? null, source: "buyer_zip_store_live" };
+      return out(uw.yourMao, "buyer_zip_store_live");
     }
   }
-  // (3) evaluateDeal — NOT buyer-anchored. INFORMS analysis but the
-  // h2-outreach cron path REFUSES this lineage (operator 2026-06-10,
-  // standing rule "BUYER-ANCHORED ONLY"). The 3684 Hunt St breach: this
-  // path produced a $13,658 MAO against a ~$100k list, with no buyer
-  // median for 48207 — autonomous send authorization does not extend
-  // here. Caller enforces via openerMaoGuard { requireBuyerAnchored }.
+  // (3) evaluateDeal — informs analysis only (unchanged posture; the 3684
+  // Hunt St lesson). Never authorizes.
   const hasArvRehab =
     typeof listing.realArvMedian === "number" && listing.realArvMedian > 0 &&
     typeof listing.estRehab === "number" && listing.estRehab >= 0;
@@ -341,10 +362,53 @@ export function resolveOpenerCeiling(
       { arv: listing.realArvMedian, rehab: listing.estRehab, listPrice: listing.listPrice },
       market,
     );
-    return { mao: res.mao, priceable: true, market: market?.id ?? null, source: "deal_math" };
+    return out(res.mao, "deal_math");
   }
-  // No persisted MAO, no ZIP-store median, no ARV+rehab → distinct error.
-  return { mao: null, priceable: true, market: market?.id ?? null, source: null };
+  // No ceiling of any lineage → distinct null.
+  return out(null, null);
+}
+
+// ── Tier A door-opener guard (keystone 2026-06-12, adjudication item 1) ──
+// The autonomous door-opener is 65% of list — a conversation starter, not a
+// committed price. It is NOT capped by any median-derived ceiling (median
+// informs, never authorizes — in either direction). The committed number
+// happens later on Tier B (operator-approved computeFlipperMax ceiling with
+// mandatory inspection contingency) or Tier C (property-up autonomous).
+//
+// Gates that remain on Tier A: priceable market (the median's market-gate
+// role, unchanged), positive opener, the 35%-of-list lowball floor (a 65%
+// opener passes trivially; the floor protects against corrupted MAO_V1
+// values), and never-over-list.
+export interface TierAOpenerGuardResult {
+  ok: boolean;
+  opener: number | null;
+  reason: string | null;
+}
+
+export function tierAOpenerGuard(input: {
+  /** The 65%-of-list door-opener (MAO_V1). */
+  opener: number | null | undefined;
+  listPrice?: number | null;
+  /** Market priceability from resolveOpenerCeiling — the market gate. */
+  priceable: boolean;
+}): TierAOpenerGuardResult {
+  const opener = positiveNum(input.opener) ? input.opener : null;
+  if (!input.priceable) {
+    return { ok: false, opener: null, reason: "market_not_priceable — Tier A sends only in gated markets" };
+  }
+  if (opener == null) {
+    return { ok: false, opener: null, reason: "opener_missing — MAO_V1 (65% of list) is null/zero; will not text a $0 offer" };
+  }
+  if (input.listPrice != null && input.listPrice > 0) {
+    const floor = input.listPrice * LOWBALL_FLOOR_PCT_OF_LIST;
+    if (opener < floor) {
+      return { ok: false, opener: null, reason: `lowball_below_${Math.round(LOWBALL_FLOOR_PCT_OF_LIST * 100)}pct_of_list — opener $${opener.toLocaleString()} < floor $${Math.round(floor).toLocaleString()}; HOLD for operator review` };
+    }
+    if (opener > input.listPrice) {
+      return { ok: false, opener: null, reason: `opener_over_list — $${opener.toLocaleString()} > list $${input.listPrice.toLocaleString()}; corrupted door-opener field` };
+    }
+  }
+  return { ok: true, opener, reason: null };
 }
 
 // ── Alert price read (2026-06-10 smoke-test fix) ─────────────────────

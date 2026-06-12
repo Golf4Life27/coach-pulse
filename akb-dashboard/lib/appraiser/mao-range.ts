@@ -47,7 +47,13 @@ import { DEFAULT_WHOLESALE_FEE } from "@/lib/pre-contract-math";
 
 export type ArvConfidenceLabel = "HIGH" | "MED" | "LOW";
 
-const DEFAULT_BUYER_PROFIT = 30000;
+// Buyer_Profit_Target RETIRED as an authorizing input (keystone rewrite
+// 2026-06-12, adjudication recXJrM7EYK3pEFmF item 4). It was never in the
+// floor formula; it now also never DEFAULTS — a fabricated $30k rendered
+// on a pricing card is what the 4/26 fabrication rule forbids. The raw
+// field (null when unset) passes through modifier_inputs for display.
+// The matched buyer's Min_Deal_Spread (lib/flipper-lane) replaced it as
+// the margin concept.
 const SOFT_CEILING_FRACTION_OF_LIST = 0.75;
 
 /**
@@ -115,10 +121,12 @@ export interface MaoRangeInputs {
   arvMid: number | null;
   /** Listing.Est_Rehab (or Est_Rehab_Mid fallback). */
   estRehab: number | null;
-  /** Listing.Wholesale_Fee_Target; defaults to 15000 when null. */
+  /** Listing.Wholesale_Fee_Target; defaults to DEFAULT_WHOLESALE_FEE
+   *  ($5,000 — operator_locked, Spine 2026-06-03) when null. The old
+   *  doc here claimed 15000 — stale since the fee consolidation. */
   wholesaleFee: number | null;
-  /** Listing.Buyer_Profit_Target; defaults to 30000 when null. Surfaced in
-   *  modifier_inputs but NOT subtracted from floor. */
+  /** Listing.Buyer_Profit_Target — RETIRED (2026-06-12). Never defaulted,
+   *  never authorizes; raw value passes through modifier_inputs only. */
   buyerProfit?: number | null;
   /** Listing.List_Price; surfaced in the envelope for caller reference. */
   listPrice: number | null;
@@ -178,7 +186,7 @@ export interface MaoRange {
     arv_mid: number | null;
     est_rehab: number | null;
     wholesale_fee: number;
-    buyer_profit: number;
+    buyer_profit: number | null;
     list_price: number | null;
     seller_motivation_score: number | null;
     monthly_rent: number | null;
@@ -193,7 +201,7 @@ export interface MaoRange {
  */
 export function computeMaoRange(opts: MaoRangeInputs): MaoRange {
   const wholesaleFee = opts.wholesaleFee ?? DEFAULT_WHOLESALE_FEE;
-  const buyerProfit = opts.buyerProfit ?? DEFAULT_BUYER_PROFIT;
+  const buyerProfit = opts.buyerProfit ?? null; // retired input — no fabricated default
   const softCeiling =
     opts.listPrice != null && opts.listPrice > 0
       ? Math.round(opts.listPrice * SOFT_CEILING_FRACTION_OF_LIST)

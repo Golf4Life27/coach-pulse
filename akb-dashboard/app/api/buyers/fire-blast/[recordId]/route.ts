@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireSendAuth } from "@/lib/send-route-auth";
 import { getListing, updateListingRecord } from "@/lib/airtable";
 import { getBuyerV2, updateBuyerV2, BUYER_V2_FIELDS } from "@/lib/buyers-v2";
 import { sendMessage } from "@/lib/quo";
@@ -31,6 +32,9 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ recordId: string }> },
 ) {
+  // SEV1-B: send-capable route — auth waterfall required.
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
   const { recordId } = await params;
   if (!recordId || !recordId.startsWith("rec")) {
     return NextResponse.json({ error: "Invalid record id", recordId }, { status: 400 });

@@ -52,8 +52,7 @@ import {
   type IntakeCandidate,
 } from "@/lib/crawler/intake-filter";
 import { shouldAutoPromote, type AutoPromoteBlockReason } from "@/lib/crawler/auto-promote";
-import { getZipBuyerMedian } from "@/lib/buyer-median-store";
-import { computeTrackAwareMao, defaultBuyerTrack, type BuyerTrack } from "@/lib/buyer-median-input";
+import { type BuyerTrack } from "@/lib/buyer-median-input";
 import { SOURCE_VERSION_FIELD_NAME, SOURCE_VERSION_V2 } from "@/lib/source-version";
 import { rentcastQuotaAllows, computeBurnRate } from "@/lib/maverick/rentcast-burn-rate";
 import { selectDueZips, type ZipDueResult } from "@/lib/crawler/zip-rotation";
@@ -753,22 +752,10 @@ export async function GET(req: Request) {
     summary.auto_promote.reasons_blocked[reason] = (summary.auto_promote.reasons_blocked[reason] ?? 0) + 1;
   };
 
-  // Pre-load ZIP-store medians once (cohort-default track + the OTHER track
-  // as fallback) so the underwrite-then-promote gate is one O(N) lookup.
-  // Operator 2026-06-09: a lead must never be outreach-eligible without a
-  // computed MAO on it. Belt order: intake → enrich → verify → underwrite →
-  // promote → outreach. Seeded ZIPs are loaded once for the priceable gate.
-  const zipMedians = new Map<string, { value: number; track: BuyerTrack }>();
-  for (const zip of seededZips) {
-    for (const track of ["landlord", "flipper"] as const) {
-      try {
-        const m = await getZipBuyerMedian(zip, track);
-        if (m) zipMedians.set(`${zip}:${track}`, { value: m.value, track });
-      } catch {
-        /* best-effort; absence → mao_not_underwritten downstream */
-      }
-    }
-  }
+  // ZIP-store median pre-load REMOVED (keystone 2026-06-12): intake no
+  // longer computes a median-based Underwritten_MAO (see the stripped
+  // writer block below). The median's surviving intake role is the
+  // priceable-market gate, which reads seededZips directly.
   for (const { item, value: fc } of pool.results) {
     const { candidate: c, zip } = item;
     summary.firecrawl.scrapes_used++;
@@ -863,31 +850,18 @@ export async function GET(req: Request) {
       }
     }
 
-    // ── Underwrite BEFORE promote (operator 2026-06-09) ──
-    // TRACK (2026-06-10 Tracey display defect): an accepted intake candidate
-    // IS the distressed as-is cohort (the Firecrawl classifier requires a
-    // distress signal to accept) — operator ruling: that cohort defaults to
-    // LANDLORD. The previous defaultBuyerTrack({}) returned flipper for
-    // every fresh candidate, which would also have HOLD-blocked promotion
-    // (flipper math needs Est_Rehab, which intake doesn't have).
-    // FALLBACK at the COMPUTE level, not just median presence: if the
-    // preferred track's math HOLDs (e.g. flipper without rehab), try the
-    // other seeded track before giving up.
-    const candZip = (c.zip ?? "").trim();
-    const defaultTrack = defaultBuyerTrack({ distressed: accepted });
-    const otherTrack: BuyerTrack = defaultTrack === "flipper" ? "landlord" : "flipper";
-    let underwrittenMao: number | null = null;
-    let underwrittenMaoTrack: BuyerTrack | null = null;
-    for (const track of [defaultTrack, otherTrack]) {
-      const median = zipMedians.get(`${candZip}:${track}`);
-      if (!median) continue;
-      const uw = computeTrackAwareMao({ track, buyerMedian: median.value, estRehab: null });
-      if (uw.yourMao != null && uw.yourMao > 0) {
-        underwrittenMao = uw.yourMao;
-        underwrittenMaoTrack = track;
-        break;
-      }
-    }
+    // ── Underwritten_MAO writer STRIPPED (keystone rewrite 2026-06-12,
+    // adjudication recXJrM7EYK3pEFmF item 8 / Q3 site #3) ──
+    // This block used to compute a median-based Underwritten_MAO at intake
+    // time and persist it — which made a ZIP average the send-authorizing
+    // ceiling for a specific property. A ZIP average prices no single
+    // house. The property-up pipeline (ARV − matched buyer margin − rehab
+    // − fee) is the only writer of the new Underwritten_Property_MAO, and
+    // it runs downstream after Appraiser ARV + buyer match land — intake
+    // persists NOTHING into either ceiling field. Median's surviving
+    // intake role is the priceable-market gate, which already ran above.
+    const underwrittenMao: number | null = null;
+    const underwrittenMaoTrack: BuyerTrack | null = null;
 
     // Intrinsic auto-promote eligibility, then layer the feature flags.
     const ap = shouldAutoPromote({ accepted, agentPhone: c.agentPhone, state: c.state, listPrice: c.listPrice, underwrittenMao });

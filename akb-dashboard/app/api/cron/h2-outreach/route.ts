@@ -40,7 +40,7 @@ import { NextResponse } from "next/server";
 import { getListings, getListing, updateListingRecord } from "@/lib/airtable";
 import { sendMessageWithId, getMessageStatus } from "@/lib/quo";
 import { audit } from "@/lib/audit-log";
-import { checkFirstOutreachHydration, checkOfferOverList, openerMaoGuard, resolveOpenerCeiling } from "@/lib/outreach-economics";
+import { checkFirstOutreachHydration, checkOfferOverList, tierAOpenerGuard, resolveOpenerCeiling } from "@/lib/outreach-economics";
 import { loadUnderwriteContextForListings } from "@/lib/track-aware-underwrite";
 import {
   authenticate,
@@ -268,43 +268,36 @@ async function handle(req: Request): Promise<Response> {
   // headline matches the real send pool.
   const eligibleCount = recordId ? queue.length : selectOutreachReady(allListings).length;
 
-  // Opener-vs-MAO guard (priceable markets only): the 65%-of-list door-opener
-  // (MAO_V1 = l.mao) must never exceed the deal's underwritten MAO. Cap to MAO,
-  // or skip + flag. Unpriceable markets pass through unchanged.
+  // ── TIER A door-opener guard (keystone rewrite 2026-06-12, adjudication
+  // recXJrM7EYK3pEFmF item 1) ──────────────────────────────────────────
+  // The autonomous door-opener is 65% of list, UNCHANGED and UNCAPPED by
+  // any median-derived ceiling — median informs (market gate, sanity rail,
+  // dispo triage), never authorizes an offer number, in either direction.
+  // The committed price happens later: Tier B (operator-approved
+  // computeFlipperMax ceiling, mandatory inspection contingency) or Tier C
+  // (property-up autonomous — requires a matched POF buyer's sourced
+  // Min_Deal_Spread; expected to price zero records until data accrues).
   //
-  // AUTONOMOUS-PATH RULES (operator 2026-06-10, spine recjsLKqETfQ5r6zK,
-  // post-Hunt-St-breach standing rules — h2-outreach cron is the autonomous
-  // send path, so it enables BOTH):
-  //   1. requireBuyerAnchored — MAO lineage must be buyer-anchored
-  //      (buyer_underwrite_persisted | buyer_zip_store_live). deal_math
-  //      INFORMS analysis but does NOT authorize an autonomous first touch.
-  //      Practical effect today: the autonomous lane is 48227 only;
-  //      seeding a new market's buyer median is what opens that market.
-  //   2. Lowball floor — capped opener < 35% of list HOLDs for operator
-  //      review. A cap that deep means lineage mismatch (3684 Hunt St:
-  //      $13,500 vs $100k list ≈ 13.5%, sourced via deal-math fallback).
+  // Gates that REMAIN on Tier A: priceable market (median's surviving
+  // market-gate role), positive opener, 35% lowball floor, never-over-list,
+  // plus all the downstream send rails (working hours, KV claims, DNT,
+  // hydration, positive-confirmation polling) unchanged.
   //
-  // The controlled batch path (outreach-batch) does NOT pass these flags
-  // — operator supervision substitutes for the autonomous brake.
+  // The resolved ceiling is still computed per record — for TELEMETRY (the
+  // probe shows lineage + informational ceiling so Maverick reviews with
+  // numbers in hand), never to set or cap the sent number.
   const openerGuarded: Array<{ recordId: string; address: string | null; listPrice: number | null; action: "capped" | "skipped"; reason: string | null; from: number | null; to: number | null; source: string | null }> = [];
   const uwCtxCron = await loadUnderwriteContextForListings(queue);
   queue = queue.filter((l) => {
     const ceiling = resolveOpenerCeiling(l, uwCtxCron);
-    const guard = openerMaoGuard({
-      baseOpener: l.mao,
-      mao: ceiling.mao,
-      priceable: ceiling.priceable,
-      source: ceiling.source,
-      requireBuyerAnchored: true,
+    const guard = tierAOpenerGuard({
+      opener: l.mao,
       listPrice: l.listPrice,
+      priceable: ceiling.priceable,
     });
     if (!guard.ok) {
-      openerGuarded.push({ recordId: l.id, address: l.address ?? null, listPrice: l.listPrice ?? null, action: "skipped", reason: guard.reason, from: guard.baseOpener, to: null, source: ceiling.source });
+      openerGuarded.push({ recordId: l.id, address: l.address ?? null, listPrice: l.listPrice ?? null, action: "skipped", reason: guard.reason, from: l.mao ?? null, to: null, source: ceiling.source });
       return false;
-    }
-    if (guard.capped && guard.opener != null) {
-      openerGuarded.push({ recordId: l.id, address: l.address ?? null, listPrice: l.listPrice ?? null, action: "capped", reason: guard.reason, from: guard.baseOpener, to: guard.opener, source: ceiling.source });
-      l.mao = guard.opener; // send the opener at MAO, not 65%-of-list
     }
     return true;
   });

@@ -27,6 +27,7 @@
 // the loop on uncertain entries.
 
 import { NextResponse } from "next/server";
+import { requireSendAuth } from "@/lib/send-route-auth";
 import { sendMessageWithId } from "@/lib/quo";
 import { updateListingRecord } from "@/lib/airtable";
 import { audit } from "@/lib/audit-log";
@@ -49,6 +50,9 @@ function maskPhone(p: string): string {
 
 export async function POST(req: Request) {
   const t0 = Date.now();
+  // SEV1-B: send-capable route — auth waterfall required.
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
   let body: {
     proposalId: string;
     to: string;

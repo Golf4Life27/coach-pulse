@@ -136,6 +136,11 @@ const LISTING_FIELDS: Record<string, string> = {
   // after CMA + rehab — that field MUST stay empty until DD).
   fldTSadqhYKeyKd89: "underwrittenMao",
   fldFuePOkTlAl3NUT: "underwrittenMaoTrack",
+  // Underwritten_Property_MAO (keystone rewrite 2026-06-12, adjudication
+  // recXJrM7EYK3pEFmF item 5): the ONLY field that authorizes Tier-C
+  // autonomous property-up pricing. Underwritten_MAO above is demoted to
+  // informational the same commit — it never authorizes a send again.
+  fldJZpyn5uqYfP0Oc: "underwrittenPropertyMao",
 };
 
 // Reverse map: field name -> prop name (for single-record GET which returns field names)
@@ -194,6 +199,7 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "Contract_Offer_Price": "contractOfferPrice",
   "Underwritten_MAO": "underwrittenMao",
   "Underwritten_MAO_Track": "underwrittenMaoTrack",
+  "Underwritten_Property_MAO": "underwrittenPropertyMao",
   "Seller_Motivation_Score": "sellerMotivationScore",
   "List_Price_At_Send": "listPriceAtSend",
   // ── Phase 3: photo analysis / rehab ──────────────────────────────────────

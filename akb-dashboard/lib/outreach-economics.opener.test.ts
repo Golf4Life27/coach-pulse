@@ -203,7 +203,7 @@ describe("openerMaoGuard — autonomous-cron rules (operator 2026-06-10, spine r
       listPrice: 100_000,
     });
     expect(g.ok).toBe(false);
-    expect(g.reason).toMatch(/mao_lineage_not_buyer_anchored.*deal_math/);
+    expect(g.reason).toMatch(/mao_lineage_not_autonomous_authorized.*deal_math/);
   });
 
   it("RULE 1: requireBuyerAnchored REFUSES null source (no MAO computable)", () => {
@@ -216,10 +216,10 @@ describe("openerMaoGuard — autonomous-cron rules (operator 2026-06-10, spine r
       listPrice: 100_000,
     });
     expect(g.ok).toBe(false);
-    expect(g.reason).toMatch(/mao_lineage_not_buyer_anchored.*null/);
+    expect(g.reason).toMatch(/mao_lineage_not_autonomous_authorized.*null/);
   });
 
-  it("RULE 1: requireBuyerAnchored ACCEPTS buyer_underwrite_persisted (48227 path)", () => {
+  it("KEYSTONE 2026-06-12: buyer_underwrite_persisted is now REFUSED on the autonomous path (median demoted)", () => {
     const g = openerMaoGuard({
       baseOpener: 48_750,
       mao: 50_000,
@@ -228,11 +228,24 @@ describe("openerMaoGuard — autonomous-cron rules (operator 2026-06-10, spine r
       requireBuyerAnchored: true,
       listPrice: 74_900,
     });
+    expect(g.ok).toBe(false);
+    expect(g.reason).toMatch(/mao_lineage_not_autonomous_authorized/);
+  });
+
+  it("KEYSTONE 2026-06-12: property_underwrite_persisted is the ONLY autonomous-authorizing lineage", () => {
+    const g = openerMaoGuard({
+      baseOpener: 48_750,
+      mao: 50_000,
+      priceable: true,
+      source: "property_underwrite_persisted",
+      requireBuyerAnchored: true,
+      listPrice: 74_900,
+    });
     expect(g.ok).toBe(true);
     expect(g.opener).toBe(48_750);
   });
 
-  it("RULE 1: requireBuyerAnchored ACCEPTS buyer_zip_store_live (fresh intake path)", () => {
+  it("KEYSTONE 2026-06-12: buyer_zip_store_live is now REFUSED on the autonomous path (a ZIP average prices no single house)", () => {
     const g = openerMaoGuard({
       baseOpener: 22_000,
       mao: 50_000,
@@ -241,7 +254,8 @@ describe("openerMaoGuard — autonomous-cron rules (operator 2026-06-10, spine r
       requireBuyerAnchored: true,
       listPrice: 33_900,
     });
-    expect(g.ok).toBe(true);
+    expect(g.ok).toBe(false);
+    expect(g.reason).toMatch(/mao_lineage_not_autonomous_authorized/);
   });
 
   it("RULE 1 is OPT-IN: the controlled batch (no requireBuyerAnchored) still accepts deal_math", () => {
@@ -266,7 +280,7 @@ describe("openerMaoGuard — autonomous-cron rules (operator 2026-06-10, spine r
       baseOpener: 65_000,
       mao: 13_658,
       priceable: true,
-      source: "buyer_underwrite_persisted", // even on buyer-anchored, the lowball signal HOLDS
+      source: "property_underwrite_persisted", // even on the authorized lineage, the lowball signal HOLDS
       requireBuyerAnchored: true,
       listPrice: 100_000,
     });
@@ -281,7 +295,7 @@ describe("openerMaoGuard — autonomous-cron rules (operator 2026-06-10, spine r
       baseOpener: 12_000,
       mao: 15_000,
       priceable: true,
-      source: "buyer_underwrite_persisted",
+      source: "property_underwrite_persisted",
       requireBuyerAnchored: true,
       listPrice: 100_000,
     });
@@ -290,8 +304,8 @@ describe("openerMaoGuard — autonomous-cron rules (operator 2026-06-10, spine r
   });
 
   it("RULE 2: 35.1% passes, 34.9% HOLDs (boundary)", () => {
-    expect(openerMaoGuard({ baseOpener: 35_100, mao: 50_000, priceable: true, source: "buyer_underwrite_persisted", requireBuyerAnchored: true, listPrice: 100_000 }).ok).toBe(true);
-    expect(openerMaoGuard({ baseOpener: 34_900, mao: 50_000, priceable: true, source: "buyer_underwrite_persisted", requireBuyerAnchored: true, listPrice: 100_000 }).ok).toBe(false);
+    expect(openerMaoGuard({ baseOpener: 35_100, mao: 50_000, priceable: true, source: "property_underwrite_persisted", requireBuyerAnchored: true, listPrice: 100_000 }).ok).toBe(true);
+    expect(openerMaoGuard({ baseOpener: 34_900, mao: 50_000, priceable: true, source: "property_underwrite_persisted", requireBuyerAnchored: true, listPrice: 100_000 }).ok).toBe(false);
   });
 
   it("RULE 2 is also opt-in: no listPrice → lowball check skipped (back-compat)", () => {
@@ -311,6 +325,44 @@ describe("openerMaoGuard — autonomous-cron rules (operator 2026-06-10, spine r
     expect(g.ok).toBe(false);
     // Rule 1 wins the refusal order (lineage check is first), but the
     // lowball would also have refused — the test ensures both are wired.
-    expect(g.reason).toMatch(/mao_lineage_not_buyer_anchored/);
+    expect(g.reason).toMatch(/mao_lineage_not_autonomous_authorized/);
+  });
+});
+
+// ── Tier A door-opener guard (keystone 2026-06-12) ──────────────────
+import { tierAOpenerGuard } from "./outreach-economics";
+
+describe("tierAOpenerGuard — the autonomous door-opener (65% of list, uncapped by median)", () => {
+  it("passes the standard 65%-of-list opener untouched", () => {
+    const g = tierAOpenerGuard({ opener: 65_000, listPrice: 100_000, priceable: true });
+    expect(g.ok).toBe(true);
+    expect(g.opener).toBe(65_000);
+  });
+  it("does NOT cap to any median ceiling — median informs, never authorizes (Saint Marys shape)", () => {
+    // 14128 Saint Marys: list $149,900, 65% opener $97,500, median-derived
+    // UW_MAO was $50k. Old doctrine capped to $50k then lowball-HELD.
+    // Tier A sends the door-opener as the conversation starter.
+    const g = tierAOpenerGuard({ opener: 97_500, listPrice: 149_900, priceable: true });
+    expect(g.ok).toBe(true);
+    expect(g.opener).toBe(97_500);
+  });
+  it("market gate holds: unpriceable market → skip", () => {
+    const g = tierAOpenerGuard({ opener: 65_000, listPrice: 100_000, priceable: false });
+    expect(g.ok).toBe(false);
+    expect(g.reason).toContain("market_not_priceable");
+  });
+  it("null/zero opener → skip (never text a $0 offer)", () => {
+    expect(tierAOpenerGuard({ opener: null, listPrice: 100_000, priceable: true }).ok).toBe(false);
+    expect(tierAOpenerGuard({ opener: 0, listPrice: 100_000, priceable: true }).ok).toBe(false);
+  });
+  it("lowball floor holds on corrupted door-opener values", () => {
+    const g = tierAOpenerGuard({ opener: 20_000, listPrice: 100_000, priceable: true });
+    expect(g.ok).toBe(false);
+    expect(g.reason).toMatch(/lowball_below_35pct_of_list/);
+  });
+  it("never over list (corrupted MAO_V1)", () => {
+    const g = tierAOpenerGuard({ opener: 120_000, listPrice: 100_000, priceable: true });
+    expect(g.ok).toBe(false);
+    expect(g.reason).toContain("opener_over_list");
   });
 });
