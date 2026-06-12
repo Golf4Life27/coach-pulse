@@ -285,7 +285,7 @@ async function handle(req: Request): Promise<Response> {
   //
   // The controlled batch path (outreach-batch) does NOT pass these flags
   // — operator supervision substitutes for the autonomous brake.
-  const openerGuarded: Array<{ recordId: string; action: "capped" | "skipped"; reason: string | null; from: number | null; to: number | null; source: string | null }> = [];
+  const openerGuarded: Array<{ recordId: string; address: string | null; listPrice: number | null; action: "capped" | "skipped"; reason: string | null; from: number | null; to: number | null; source: string | null }> = [];
   const uwCtxCron = await loadUnderwriteContextForListings(queue);
   queue = queue.filter((l) => {
     const ceiling = resolveOpenerCeiling(l, uwCtxCron);
@@ -298,15 +298,79 @@ async function handle(req: Request): Promise<Response> {
       listPrice: l.listPrice,
     });
     if (!guard.ok) {
-      openerGuarded.push({ recordId: l.id, action: "skipped", reason: guard.reason, from: guard.baseOpener, to: null, source: ceiling.source });
+      openerGuarded.push({ recordId: l.id, address: l.address ?? null, listPrice: l.listPrice ?? null, action: "skipped", reason: guard.reason, from: guard.baseOpener, to: null, source: ceiling.source });
       return false;
     }
     if (guard.capped && guard.opener != null) {
-      openerGuarded.push({ recordId: l.id, action: "capped", reason: guard.reason, from: guard.baseOpener, to: guard.opener, source: ceiling.source });
+      openerGuarded.push({ recordId: l.id, address: l.address ?? null, listPrice: l.listPrice ?? null, action: "capped", reason: guard.reason, from: guard.baseOpener, to: guard.opener, source: ceiling.source });
       l.mao = guard.opener; // send the opener at MAO, not 65%-of-list
     }
     return true;
   });
+
+  // ── HOLD surface (operator 2026-06-11): a guard-SKIPPED record is a
+  // decision waiting on the operator (send the deep lowball anyway / skip /
+  // watch for a price cut). Until tonight it lived only in this response's
+  // JSON + the audit row — a silent HOLD. Now each skip writes ONE Pending
+  // Agent_Proposals row (h2_opener_hold), which surfaces on the existing
+  // /queue decision dashboard. Idempotent per record: an already-Pending
+  // hold for the same record is not re-created on the next daily tick.
+  // Best-effort — a proposals-write failure never blocks the send loop.
+  const holdProposals = { attempted: 0, created: 0, deduped: 0, error: null as string | null };
+  const skippedHolds = openerGuarded.filter((g) => g.action === "skipped");
+  const proposalsTable = process.env.AGENT_PROPOSALS_TABLE_ID ?? null;
+  if (skippedHolds.length > 0 && proposalsTable && process.env.AIRTABLE_PAT) {
+    try {
+      const baseId = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
+      const pendingRes = await fetch(
+        `https://api.airtable.com/v0/${baseId}/${proposalsTable}?` +
+          new URLSearchParams({
+            filterByFormula: `AND({Status}="Pending",{Proposal_Type}="h2_opener_hold")`,
+            "fields[]": "Record_ID",
+          }).toString(),
+        { headers: { Authorization: `Bearer ${process.env.AIRTABLE_PAT}` }, cache: "no-store" },
+      );
+      const pendingIds = new Set<string>();
+      if (pendingRes.ok) {
+        const body = (await pendingRes.json()) as { records?: Array<{ fields: Record<string, unknown> }> };
+        for (const r of body.records ?? []) {
+          if (typeof r.fields.Record_ID === "string") pendingIds.add(r.fields.Record_ID);
+        }
+      }
+      const toCreate = skippedHolds.filter((g) => !pendingIds.has(g.recordId));
+      holdProposals.attempted = skippedHolds.length;
+      holdProposals.deduped = skippedHolds.length - toCreate.length;
+      if (toCreate.length > 0) {
+        const createRes = await fetch(`https://api.airtable.com/v0/${baseId}/${proposalsTable}`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${process.env.AIRTABLE_PAT}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            records: toCreate.slice(0, 10).map((g, i) => ({
+              fields: {
+                Proposal_ID: `h2_opener_hold-${Date.now()}-${i}`,
+                Proposal_Type: "h2_opener_hold",
+                Priority: "NORMAL",
+                Record_ID: g.recordId,
+                Record_Address: g.address ?? "",
+                Reasoning:
+                  `H2 opener HOLD [${g.reason ?? "guard_refused"}]: buyer-anchored ceiling ` +
+                  `$${(g.to ?? g.from ?? 0).toLocaleString()} vs list $${(g.listPrice ?? 0).toLocaleString()} ` +
+                  `(source=${g.source ?? "none"}). Decide: send the deep offer manually, skip, or watch for a price cut. ` +
+                  `Autonomous send refused by the lowball floor / lineage rules.`,
+                Suggested_Action_Payload: JSON.stringify({ recordId: g.recordId, action: "h2_opener_hold", guard: g }),
+                Status: "Pending",
+              },
+            })),
+            typecast: true,
+          }),
+        });
+        if (createRes.ok) holdProposals.created = Math.min(toCreate.length, 10);
+        else holdProposals.error = `proposals_create_${createRes.status}`;
+      }
+    } catch (err) {
+      holdProposals.error = err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200);
+    }
+  }
 
   const priorIndex = buildPriorContactIndex(allListings);
   const plans = planQueue(queue, priorIndex);
@@ -605,6 +669,7 @@ async function handle(req: Request): Promise<Response> {
     processed,
     summary,
     opener_guarded: openerGuarded,
+    hold_proposals: holdProposals,
     supply_floor: supplyFloor,
     auth_kind: authKind,
     duration_ms: Date.now() - t0,
