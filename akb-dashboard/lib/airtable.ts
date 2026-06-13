@@ -136,6 +136,12 @@ const LISTING_FIELDS: Record<string, string> = {
   // after CMA + rehab — that field MUST stay empty until DD).
   fldTSadqhYKeyKd89: "underwrittenMao",
   fldFuePOkTlAl3NUT: "underwrittenMaoTrack",
+  // Your_MAO formula field — operator brief 2026-06-13 (spine
+  // recZ6tBZRmfFOLwqo): the per-record penciling ceiling that drives
+  // the autonomous opener. Maverick hand-checked 26 fully-populated
+  // Detroit records 6/12 against this formula; it's correct. Formula
+  // is read-only; the autonomous send refuses on null/≤0 (hard gate).
+  fldfE06eS402RcPCN: "yourMaoFormula",
   // Underwritten_Property_MAO (keystone rewrite 2026-06-12, adjudication
   // recXJrM7EYK3pEFmF item 5): the ONLY field that authorizes Tier-C
   // autonomous property-up pricing. Underwritten_MAO above is demoted to
@@ -239,6 +245,7 @@ const LISTING_NAME_MAP: Record<string, string> = {
   // legacy_Your_MAO in Airtable). null → HOLD until V2.1 computes.
   "Investor_MAO_V21": "investorMao",
   "Your_MAO_V21": "yourMao",
+  "legacy_Your_MAO": "yourMaoFormula",
   "Annual_Taxes_Confirmed": "confirmedTaxes",
   "Annual_Taxes_Source": "confirmedTaxesSource",
   "Auto_Approve_v2": "autoApproveV2",
