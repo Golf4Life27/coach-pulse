@@ -104,11 +104,8 @@ export interface Listing {
    *  matched buyer's sourced margin). The ONLY Tier-C-authorizing field;
    *  underwrittenMao above is informational-only as of the same date. */
   underwrittenPropertyMao?: number | null;
-  /** Your_MAO formula field (legacy_Your_MAO, fldfE06eS402RcPCN). The
-   *  per-record penciling ceiling that drives the autonomous opener
-   *  (operator brief 2026-06-13). Hand-verified 6/12 across 26
-   *  fully-populated Detroit records — null/≤0 hard-gates the send. */
-  yourMaoFormula?: number | null;
+  // (yourMaoFormula prop deleted 2026-06-13 with legacy_Your_MAO field —
+  // spine recbC1XxAKRwRiOvq. Opener now reads yourMao (Your_MAO_V21).)
   sellerMotivationScore?: number | null;
   listPriceAtSend?: number | null;
   // ── Pre-Send Gate inputs (added 5/13 for orchestrator Gate 2)

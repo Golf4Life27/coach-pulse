@@ -311,7 +311,16 @@ async function handle(req: Request): Promise<Response> {
       anchorCache.set(marketId, anchorPct);
     }
     const gate = yourMaoOpenerGate({
-      yourMao: l.yourMaoFormula ?? null,
+      // KEYSTONE 2026-06-13 (spine recwyqEQhPIFyaw1K / recbC1XxAKRwRiOvq):
+      // Repointed from l.yourMaoFormula (legacy_Your_MAO — AVM-poison
+      // Airtable formula, deleted same commit) to l.yourMao (clean,
+      // code-computed Your_MAO_V21). 0% population on the priceable
+      // cohort is the CORRECT behavior under the doctrine — null →
+      // hard gate, autonomous send refused. Population-timing problem
+      // (V21 writer only runs on >14d-stale records) is logged for
+      // the next adjudication; until that writer trigger broadens,
+      // the gate HOLDs the cohort, which is doctrinally right.
+      yourMao: l.yourMao ?? null,
       anchorPct,
       priceable: ceiling.priceable,
     });
