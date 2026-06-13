@@ -98,8 +98,9 @@ export async function GET(req: Request) {
   }
 
   // Candidate selection — pure decision per record.
-  const candidates: Array<{ l: Listing; priceable: boolean }> = [];
+  const candidates: Array<{ l: Listing; lane: "landlord" | "landlord_provisional" }> = [];
   const skipBreakdown: Record<string, number> = {};
+  const laneCount = { landlord: 0, landlord_provisional: 0 };
   for (const l of listings) {
     const zip = (l.zip ?? "").trim();
     if (zipScope.size > 0 && !zipScope.has(zip)) continue;
@@ -109,15 +110,19 @@ export async function GET(req: Request) {
       { liveStatus: l.liveStatus, yourMao: l.yourMao, state: l.state, zip: l.zip, redFlags: l.redFlags, distressBucket: l.distressBucket, distressScore: l.distressScore },
       { priceable },
     );
-    if (d.write) candidates.push({ l, priceable });
-    else skipBreakdown[d.reason] = (skipBreakdown[d.reason] ?? 0) + 1;
+    if (d.write) {
+      candidates.push({ l, lane: d.lane });
+      laneCount[d.lane]++;
+    } else {
+      skipBreakdown[d.reason] = (skipBreakdown[d.reason] ?? 0) + 1;
+    }
   }
 
   const batch = candidates.slice(0, limit);
   const results: Array<Record<string, unknown>> = [];
   let written = 0;
 
-  for (const { l } of batch) {
+  for (const { l, lane } of batch) {
     if (Date.now() - t0 > BUDGET_MS) break;
     const addr = { address: l.address ?? "", city: l.city ?? "", state: l.state ?? "", zip: l.zip ?? "" };
 
@@ -149,16 +154,21 @@ export async function GET(req: Request) {
     });
 
     const row = {
-      recordId: l.id, address: l.address, zip: l.zip,
+      recordId: l.id, address: l.address, zip: l.zip, lane,
       status: v21.status, your_mao_v21: v21.yourMao, investor_mao_v21: v21.investorMao,
       cap: v21.cap, rent: monthlyRent, taxes: taxResolution.annualTaxes, tax_source: taxResolution.source,
       reason: v21.reason,
+      // A-prime: a provisional V21 is WRITTEN but flagged; it cannot
+      // authorize a contract until DD corroborates (evaluateV21Contract
+      // Authorization is the enforcement point).
+      provisional: lane === "landlord_provisional",
+      authorizes_contract_now: lane === "landlord" && v21.status === "ok",
     };
     results.push(row);
 
     if (apply && v21.status === "ok" && v21.yourMao != null) {
       const marker = buildMaoV21Marker(
-        { status: v21.status, yourMao: v21.yourMao, investorMao: v21.investorMao, cap: v21.cap, rent: monthlyRent, taxes: taxResolution.annualTaxes },
+        { status: v21.status, lane, yourMao: v21.yourMao, investorMao: v21.investorMao, cap: v21.cap, rent: monthlyRent, taxes: taxResolution.annualTaxes },
         new Date(),
       );
       try {
@@ -181,18 +191,22 @@ export async function GET(req: Request) {
     event: apply ? "underwrite_v21_fresh_applied" : "underwrite_v21_fresh_dry_run",
     status: "confirmed_success",
     inputSummary: { auth_kind: authKind, apply, limit, zips: [...zipScope] },
-    outputSummary: { candidate_total: candidates.length, examined: batch.length, written, skip_breakdown: skipBreakdown },
+    outputSummary: { candidate_total: candidates.length, lane_count: laneCount, examined: batch.length, written, skip_breakdown: skipBreakdown },
     ms: Date.now() - t0,
   });
 
   return NextResponse.json({
     mode: apply ? "apply" : "dry_run",
     candidate_total: candidates.length,
+    lane_count: laneCount,
     examined: batch.length,
     written,
     skip_breakdown: skipBreakdown,
     results,
-    note: "NOT scheduled in vercel.json — activation pending Maverick dry-run review. FLAG-1: landlord-only-on-distress; flipper records HOLD.",
+    note:
+      "NOT scheduled in vercel.json — activation pending Maverick dry-run review. A-prime: " +
+      "landlord (scored) authorizes now; landlord_provisional (vision-only redflag) is WRITTEN but " +
+      "CANNOT authorize a contract until the DD loop corroborates (lib/v21-contract-authorization).",
     elapsed_ms: Date.now() - t0,
   });
 }

@@ -1,27 +1,39 @@
-// V21 writer fire-decision (keystone 2026-06-13, spine recmgjlZSwhECn1W0,
-// Maverick Flag-1 ruling). @agent: appraiser
+// V21 writer fire-decision (keystone 2026-06-13, spine recUA3woaBnF5SBK5,
+// Maverick ruling A-prime). @agent: appraiser
 //
 // THE PRECISE CONTRACT lane. Decides whether a fresh record should get a
-// landlord V2.1 Your_MAO written. Flag-1 doctrine (absolute):
-//   - Write landlord V21 ONLY when distress signals are present (the
-//     distressed-as-is cohort, where the landlord NOI/cap lane is the
-//     correct one).
-//   - A flipper-track record (no distress) returns HOLD — it does NOT
-//     borrow the landlord lane. Flipper comp-ARV math is future; until
-//     it ships, flipper records HOLD. HOLD is honest; a wrong-lane
-//     ceiling is the exact error that killed prior deals.
+// landlord V2.1 Your_MAO written, and at what CONFIDENCE TIER.
 //
-// Idempotent: never recompute a record that already has Your_MAO_V21
-// (the writer fills nulls, never overwrites a live value).
+// Ruling A-prime (supersedes "all 5 HOLD"):
+//   1. resolveCohortTrack stays the SINGLE distress predicate system-wide.
+//      water_damage / as-is condition redflags DO count as distress. No
+//      forked predicate (that's the drift we kill).
+//   2. BUT a redflag-only classification (null distressScore, distress
+//      resting on VISION alone) is not trustworthy enough to AUTHORIZE a
+//      contract write — vision is the known-lying input (Rosemary: vision
+//      flagged water_damage + $25,769 rehab on a renovated house).
+//   3. So the landlord set splits by confidence TIER (not by predicate):
+//        landlord            — distressScore > 0: human/scored signal,
+//                              authorized to write a real V21 now.
+//        landlord_provisional— redflag-only (vision-only): write V21 but
+//                              mark provisional; it CANNOT authorize a
+//                              contract/send until the DD loop corroborates
+//                              the condition with the agent. Agent confirms
+//                              damage → promote; agent says renovated →
+//                              vision noise → fall back to flipper, no
+//                              number was ever authorized on a hallucination.
 //
-// Reuses lib/track-aware-underwrite.resolveCohortTrack — the SAME
-// distressed→landlord resolver the rest of the system uses. No parallel
-// distress predicate.
+// PRINCIPLE: a vision-only signal informs and routes, it never authorizes.
+// Same doctrine as rough-opener-vs-precise-contract and DD-pins-rehab.
+//
+// Idempotent: never recompute a record that already has Your_MAO_V21.
 
 import { resolveCohortTrack } from "@/lib/track-aware-underwrite";
 
+export type V21Lane = "landlord" | "landlord_provisional";
+
 export type V21WriteDecision =
-  | { write: true; lane: "landlord" }
+  | { write: true; lane: V21Lane }
   | { write: false; reason: "not_priceable" | "not_active" | "already_has_v21" | "flipper_lane_holds_no_comp_arv_math" };
 
 export interface V21WriteCandidate {
@@ -46,7 +58,7 @@ export function decideV21Write(
   if (typeof listing.yourMao === "number" && Number.isFinite(listing.yourMao) && listing.yourMao > 0) {
     return { write: false, reason: "already_has_v21" };
   }
-  // Flag-1: landlord-only-on-distress. Flipper → HOLD (no comp-ARV math).
+  // Ruling #1: resolveCohortTrack is the SINGLE distress predicate.
   const track = resolveCohortTrack({
     state: listing.state ?? null,
     zip: listing.zip ?? null,
@@ -57,5 +69,10 @@ export function decideV21Write(
   if (track !== "landlord") {
     return { write: false, reason: "flipper_lane_holds_no_comp_arv_math" };
   }
-  return { write: true, lane: "landlord" };
+  // Rulings #2/#3: confidence tier on the SAME predicate's landlord output.
+  // distressScore > 0 = scored/authorized; redflag-only = vision-only =
+  // PROVISIONAL (must be DD-corroborated before it authorizes anything).
+  const scoreBacked = typeof listing.distressScore === "number" && listing.distressScore > 0;
+  return { write: true, lane: scoreBacked ? "landlord" : "landlord_provisional" };
 }
+

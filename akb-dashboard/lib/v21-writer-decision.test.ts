@@ -3,22 +3,26 @@ import { decideV21Write } from "./v21-writer-decision";
 
 const base = { liveStatus: "Active", yourMao: null, state: "MI", zip: "48227" };
 
-describe("decideV21Write — Flag-1 landlord-only-on-distress", () => {
-  it("distressed (distressScore>0) + priceable + Active + no V21 → WRITE landlord", () => {
-    const d = decideV21Write({ ...base, distressScore: 7.4 }, { priceable: true });
-    expect(d).toEqual({ write: true, lane: "landlord" });
+describe("decideV21Write — A-prime confidence tiers (single predicate, two tiers)", () => {
+  it("distressScore>0 → landlord AUTHORIZED (scored)", () => {
+    expect(decideV21Write({ ...base, distressScore: 7.4 }, { priceable: true })).toEqual({ write: true, lane: "landlord" });
   });
-  it("distressed via condition keyword (disrepair) → WRITE landlord", () => {
-    const d = decideV21Write({ ...base, redFlags: ["disrepair"], distressScore: null }, { priceable: true });
-    expect(d).toEqual({ write: true, lane: "landlord" });
+  it("score + redflag both → landlord AUTHORIZED (scored wins)", () => {
+    expect(decideV21Write({ ...base, distressScore: 4.5, redFlags: ["water_damage"] }, { priceable: true })).toEqual({ write: true, lane: "landlord" });
   });
-  it("NO distress signal → flipper HOLD (does NOT borrow landlord lane)", () => {
-    const d = decideV21Write({ ...base, distressScore: null }, { priceable: true });
-    expect(d).toEqual({ write: false, reason: "flipper_lane_holds_no_comp_arv_math" });
+  it("redflag-only (null score, vision-only) → landlord_PROVISIONAL", () => {
+    expect(decideV21Write({ ...base, redFlags: ["water_damage"], distressScore: null }, { priceable: true })).toEqual({ write: true, lane: "landlord_provisional" });
   });
-  it("the 5 eyeball records' shape (ARV+rehab present, distress null) → flipper HOLD", () => {
-    // Rosemary/Frisbee/etc: no distressScore → flipper → contract HOLD
-    expect(decideV21Write({ ...base, zip: "48213", distressScore: null }, { priceable: true }).write).toBe(false);
+  it("disrepair redflag, null score → provisional (vision-only)", () => {
+    expect(decideV21Write({ ...base, redFlags: ["disrepair"], distressScore: null }, { priceable: true })).toEqual({ write: true, lane: "landlord_provisional" });
+  });
+  it("Rosemary shape (water_damage redflag, null score) → provisional, NOT a clean write", () => {
+    const d = decideV21Write({ ...base, zip: "48213", redFlags: ["overgrown_lot", "signs_of_squatting", "water_damage"], distressScore: null }, { priceable: true });
+    expect(d).toEqual({ write: true, lane: "landlord_provisional" });
+  });
+  it("no distress at all (no score, no condition redflag) → flipper HOLD", () => {
+    expect(decideV21Write({ ...base, distressScore: null, redFlags: ["debris_present"] }, { priceable: true }))
+      .toEqual({ write: false, reason: "flipper_lane_holds_no_comp_arv_math" });
   });
 });
 
