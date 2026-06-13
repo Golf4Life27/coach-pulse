@@ -41,7 +41,9 @@ import { getListings, getListing, updateListingRecord } from "@/lib/airtable";
 import { sendMessageWithId, getMessageStatus } from "@/lib/quo";
 import { audit } from "@/lib/audit-log";
 import { checkFirstOutreachHydration, checkOfferOverList, resolveOpenerCeiling } from "@/lib/outreach-economics";
-import { yourMaoOpenerGate } from "@/lib/h2-outreach/your-mao-opener-gate";
+import { anchoredOpenerGate } from "@/lib/h2-outreach/your-mao-opener-gate";
+import { computeRoughOpenerCeiling } from "@/lib/rough-opener-ceiling";
+import { getMarketForListing } from "@/lib/markets/registry";
 import { resolveAnchorPct } from "@/lib/markets/anchor";
 import { loadUnderwriteContextForListings } from "@/lib/track-aware-underwrite";
 import {
@@ -296,7 +298,7 @@ async function handle(req: Request): Promise<Response> {
   // at launch); the silent weekly calibration adjusts it. The resolved
   // ceiling (informational lineage) is still computed for the probe's
   // telemetry block so Maverick reviews with full numbers in hand.
-  const openerGuarded: Array<{ recordId: string; address: string | null; listPrice: number | null; action: "skipped"; reason: string | null; yourMao: number | null; anchorPct: number | null; opener: number | null; source: string | null }> = [];
+  const openerGuarded: Array<{ recordId: string; address: string | null; listPrice: number | null; action: "skipped"; reason: string | null; ceiling: number | null; ceilingSource: string | null; anchorPct: number | null; opener: number | null; source: string | null }> = [];
   const uwCtxCron = await loadUnderwriteContextForListings(queue);
   // One anchor read per market per tick — cached so a 100-record cohort
   // doesn't hit KV per record.
@@ -310,17 +312,22 @@ async function handle(req: Request): Promise<Response> {
       anchorPct = await resolveAnchorPct(marketId || null);
       anchorCache.set(marketId, anchorPct);
     }
-    const gate = yourMaoOpenerGate({
-      // KEYSTONE 2026-06-13 (spine recwyqEQhPIFyaw1K / recbC1XxAKRwRiOvq):
-      // Repointed from l.yourMaoFormula (legacy_Your_MAO — AVM-poison
-      // Airtable formula, deleted same commit) to l.yourMao (clean,
-      // code-computed Your_MAO_V21). 0% population on the priceable
-      // cohort is the CORRECT behavior under the doctrine — null →
-      // hard gate, autonomous send refused. Population-timing problem
-      // (V21 writer only runs on >14d-stale records) is logged for
-      // the next adjudication; until that writer trigger broadens,
-      // the gate HOLDs the cohort, which is doctrinally right.
-      yourMao: l.yourMao ?? null,
+    // KEYSTONE 2026-06-13 (spine recmgjlZSwhECn1W0 — Maverick Flag-2):
+    // The opener caps on the cheap ROUGH OPENER CEILING (rough ARV −
+    // rough rehab − fee, list-fraction fallback), NOT Your_MAO_V21.
+    // V21 is the PRECISE CONTRACT number; using it here would re-conflate
+    // the two. The rough ceiling reads only already-stored cheap fields,
+    // so the opener never waits on sourced rent/cap.
+    const rough = computeRoughOpenerCeiling({
+      realArvMedian: l.realArvMedian ?? null,
+      estRehabMid: l.estRehabMid ?? null,
+      estRehab: l.estRehab ?? null,
+      listPrice: l.listPrice ?? null,
+      arvPctMax: getMarketForListing({ state: l.state, zip: l.zip })?.buyer_params?.arv_pct_max ?? null,
+      wholesaleFee: l.wholesaleFeeTarget ?? null,
+    });
+    const gate = anchoredOpenerGate({
+      ceiling: rough.ceiling,
       anchorPct,
       priceable: ceiling.priceable,
     });
@@ -331,7 +338,8 @@ async function handle(req: Request): Promise<Response> {
         listPrice: l.listPrice ?? null,
         action: "skipped",
         reason: gate.reason,
-        yourMao: gate.yourMao,
+        ceiling: rough.ceiling,
+        ceilingSource: rough.source,
         anchorPct: gate.anchorPct,
         opener: null,
         source: ceiling.source,
@@ -390,11 +398,11 @@ async function handle(req: Request): Promise<Response> {
                 Record_ID: g.recordId,
                 Record_Address: g.address ?? "",
                 Reasoning:
-                  `H2 opener HOLD [${g.reason ?? "guard_refused"}]: Your_MAO ` +
-                  `${g.yourMao == null ? "missing" : "$" + g.yourMao.toLocaleString()} ` +
-                  `(anchor ${g.anchorPct ?? "?"}) vs list $${(g.listPrice ?? 0).toLocaleString()}. ` +
-                  `Decide: source the inputs and re-run, or skip this record. ` +
-                  `Autonomous send refused — Your_MAO doctrine (2026-06-13) requires a non-null penciling ceiling.`,
+                  `H2 opener HOLD [${g.reason ?? "guard_refused"}]: rough ceiling ` +
+                  `${g.ceiling == null ? "null" : "$" + g.ceiling.toLocaleString()} (${g.ceilingSource ?? "?"}) ` +
+                  `× anchor ${g.anchorPct ?? "?"} vs list $${(g.listPrice ?? 0).toLocaleString()}. ` +
+                  `Decide: source ARV/rehab and re-run, or skip this record. ` +
+                  `Autonomous send refused — rough opener ceiling null or non-penciling (keystone 2026-06-13).`,
                 Suggested_Action_Payload: JSON.stringify({ recordId: g.recordId, action: "h2_opener_hold", guard: g }),
                 Status: "Pending",
               },
