@@ -29,10 +29,15 @@
 // trigger's. This loop is silence-only.
 //
 // SCOPED SEND LIFT: H2_OUTREACH_HARD_DISABLE stays ON for outreach-fire
-// and h2-outreach (the cold-opener paths). This route lifts it for THIS
-// path only via PARKED_FOLLOWUP_ENABLED=true. Default behavior with the
-// env unset is dry-run report only — same safety posture as outreach-fire
-// pre-lift.
+// and h2-outreach (the cold-opener paths). This route uses a SEPARATE,
+// independently-certified flag FOLLOWUP_SEND_ENABLED (default off).
+//
+// Why two flags instead of reusing the hard-disable: the follow-up loop is
+// the only autonomous SMS path that fires while the main switch is off.
+// Sharing the flag would couple two launches that must sequence separately
+// — flipping the opener firehose on must NOT simultaneously blast 30/60-day
+// nudges at the unreviewed parked backlog. Each path gets its own opt-in.
+// Main hard-disable governs openers; this flag governs follow-ups.
 //
 // GET /api/cron/parked-followup
 //   ?apply=1       actually send + write (default: dry-run report)
@@ -77,7 +82,7 @@ const RECENT_TOUCHED_WINDOW_DAYS = cadenceConfig.config.recently_touched_window_
 // The send-posture flag — scoped lift on H2_OUTREACH_HARD_DISABLE for THIS
 // path only. Defaults OFF (dry-run report) — operator flips on after a
 // watched first run, same posture pattern as V21-fresh.
-const PARKED_FOLLOWUP_ENABLED = () => process.env.PARKED_FOLLOWUP_ENABLED === "true";
+const isFollowupSendEnabled = () => process.env.FOLLOWUP_SEND_ENABLED === "true";
 
 // Outreach_Status values the parked-on-silence loop pulls from. Texted is
 // the standard active outreach cohort that ages into silence; Parked is
@@ -236,11 +241,11 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "kv_not_configured" }, { status: 500 });
   }
 
-  // SCOPED LIFT — apply=1 requires PARKED_FOLLOWUP_ENABLED=true. Default
+  // SCOPED LIFT — apply=1 requires FOLLOWUP_SEND_ENABLED=true. Default
   // (env unset) holds the cron in dry-run report. This is the operator-
   // controlled gate that lets the cron run on cron-auth without lifting
   // the global H2_OUTREACH_HARD_DISABLE flag for any other send path.
-  const sendEnabled = PARKED_FOLLOWUP_ENABLED();
+  const sendEnabled = isFollowupSendEnabled();
   const effectiveApply = apply && sendEnabled;
 
   let listings: Listing[];
@@ -490,7 +495,7 @@ export async function GET(req: Request) {
         status: "skipped_dry_run",
         detail:
           (!sendEnabled
-            ? "[dry-run] PARKED_FOLLOWUP_ENABLED!=true — would send: "
+            ? "[dry-run] FOLLOWUP_SEND_ENABLED!=true — would send: "
             : "[dry-run] apply!=1 — would send: ") + JSON.stringify(built.text),
         firecrawl: { creditsUsed: fc?.creditsUsed ?? 0, stillActive: true, outcome: "accept" },
       });
@@ -575,10 +580,10 @@ export async function GET(req: Request) {
     mode: effectiveApply ? "apply" : (sendEnabled ? "dry_run_apply_off" : "dry_run_send_disabled"),
     note:
       effectiveApply
-        ? "PARKED_FOLLOWUP_ENABLED=true AND ?apply=1 — real sends + writes."
+        ? "FOLLOWUP_SEND_ENABLED=true AND ?apply=1 — real sends + writes."
         : (sendEnabled
-            ? "PARKED_FOLLOWUP_ENABLED=true but ?apply=1 not set — report only."
-            : "PARKED_FOLLOWUP_ENABLED unset/false — report only regardless of ?apply. Scoped lift on H2_OUTREACH_HARD_DISABLE is currently OFF."),
+            ? "FOLLOWUP_SEND_ENABLED=true but ?apply=1 not set — report only."
+            : "FOLLOWUP_SEND_ENABLED unset/false — report only regardless of ?apply. Scoped lift on H2_OUTREACH_HARD_DISABLE is currently OFF."),
     summary,
     outcomes,
     elapsed_ms: Date.now() - t0,

@@ -5,6 +5,12 @@
 // scripts/outreach/) and an optional banner. Caller decides whether to
 // actually fire — this module produces decisions, not side effects.
 //
+// ONE CADENCE FOR ALL NON-RESPONDERS (Maverick 2026-06-14, rebuild-stale-
+// deal-handling): ~30-day gaps, max 2 attempts, then dispose. The prior
+// 3/7/14 active-lead regime is RETIRED — a fresh opener with no reply
+// waits to the 30-day parked nudge like everything else; no tight early
+// follow-ups on fresh no-replies, no two-regime split.
+//
 // Two principles ground every decision (Spine recmmidVrMyrLzjZp +
 // recxxNF0U59MxYUqu):
 //

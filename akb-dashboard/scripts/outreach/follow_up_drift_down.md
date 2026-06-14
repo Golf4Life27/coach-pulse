@@ -2,17 +2,17 @@
 id: follow_up_drift_down
 status: DRAFT
 approval_required: alex
-purpose: Follow-up template fired when current List_Price has dropped >10% since the original outreach was sent, on a record that is otherwise in standard follow_up_3/7/14 cadence. References the stored OfferPrice — the seller's price drop is leverage for AKB's existing number, not justification to lower it.
+purpose: Follow-up template fired when current List_Price has dropped >10% since the original outreach was sent, on a record that is otherwise in the parked-on-silence follow_up_attempt_1/2 cadence. References the stored OfferPrice — the seller's price drop is leverage for AKB's existing number, not justification to lower it.
 direction: outbound_sms
 sender: openphone_quo
 created: 2026-05-13
+revised: 2026-06-14 (rebuild-stale-deal-handling — retired 3/7/14 regime)
 principles_applied:
   - offer_discipline
 drift_threshold_pct: 10
 fires_in_place_of:
-  - follow_up_3
-  - follow_up_7
-  - follow_up_14
+  - follow_up_attempt_1
+  - follow_up_attempt_2
 ---
 
 # follow_up_drift_down
@@ -33,7 +33,7 @@ Hey {first_name}, my ${offer_amount} offer on {address} still stands. With the n
 
 D3 cadence engine selects this template at send-time when:
 
-1. Record is in standard follow_up_3/7/14 send window (days_since_send matches schedule)
+1. Record is in standard follow_up_attempt_1/2 send window (days_since_send matches schedule, currently 30/30 gap-based)
 2. Current List_Price has dropped > drift_threshold_pct (10%) vs the List_Price captured at outreach time
 3. No negotiation reply has landed yet (else cadence stops and orchestrator Gate 3 picks up)
 
