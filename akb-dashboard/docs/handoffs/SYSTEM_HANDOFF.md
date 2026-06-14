@@ -135,3 +135,54 @@ ceiling) as a visible gate on the deal page so step 4 can't fire half-blind.
 *Companion artifact: `docs/handoffs/system-map.png` — the one-picture view of this same loop,
 color-coded green (runs itself) / yellow (runs but needs data) / red (manual or not
 built).*
+
+---
+
+## Rehab method (operator-authored 2026-06-13, spine recZ6tBZRmfFOLwqo)
+
+This is doctrine. Read it before touching any rehab number or any offer-readiness gate.
+
+### The problem the method solves
+
+InvestorBase, PropStream, ATTOM, Zillow, Redfin: **none of them contain a rehab cost.**
+A rehab number lives in the contractor's head after he walks the property. No dataset
+has it. So pretending we can compute one to the dollar from listing photos alone is a
+lie, and that lie has produced the system's loudest failures — $25,769 on a renovated
+turnkey rental, fabricated single numbers on records nobody walked. Stop pretending.
+
+### The method, in three stages
+
+1. **Photos NARROW it.** Listing photos + Street View tell us the *band* — light /
+   medium / heavy. They cannot tell us $25,769; reporting that precision is dishonest.
+   Honest rehab output at this stage is a **band**, e.g. "Light: $15-30k."
+2. **DD answers PIN it.** The DD volley already asks the right questions in text #2:
+   *"Rough ages on roof, HVAC, water heater, electrical, and plumbing? Any known
+   foundation issues, active leaks, or sewer problems?"* The agent's answers collapse
+   the band — original 1929 electrical pulls the band up, post-1980 updates pull it
+   down. **The structured content of the answer must persist and adjust the rehab
+   number** — not just "DD item: answered: yes."
+3. **Walkthrough RESOLVES it.** If band is still wide after DD, schedule a walkthrough
+   before contract. Contract-grade precision belongs at the bottom of the funnel, on
+   the handful of records where it pays — not at the cold top on 2,500.
+
+### Two gates this method puts on offer-readiness
+
+- **No autonomous send on a record with zero DD answers parsed.** The first agent text
+  is the door-opener (65% of list, conversational). A *committed* offer requires the
+  DD-rehab loop has been at least begun — text 2 sent, an answer parsed.
+- **No contract-stage offer (above the door-opener) without a rehab band narrowed by
+  DD or a walkthrough.** The vision number alone does not authorize a contract price.
+
+### Operator-facing rehab display
+
+Bands, not phantom precision. "Light $18-28k" beats "$25,769" every time. The deal page
+should render the band + the source (photos / photos+DD / walkthrough), so the
+operator instantly sees how much the number is worth.
+
+### The four-data checklist (carrying the existing doctrine)
+
+The hard gate before any autonomous offer is unchanged: **comps/ARV, rehab, CMA, buyer
+ceiling.** Rehab in that list now means *rehab band whose width is acceptable for the
+stage* — not a single fabricated number. A band wider than ±25% at contract stage is
+the same as no rehab data and must HOLD.
+

@@ -136,6 +136,11 @@ const LISTING_FIELDS: Record<string, string> = {
   // after CMA + rehab — that field MUST stay empty until DD).
   fldTSadqhYKeyKd89: "underwrittenMao",
   fldFuePOkTlAl3NUT: "underwrittenMaoTrack",
+  // (legacy_Your_MAO fldfE06eS402RcPCN DELETED 2026-06-13 — spine
+  // recbC1XxAKRwRiOvq. AVM-poison Airtable formula, the field that
+  // priced Rosemary at $7,370 → $6,634 insult. Zero readers on main;
+  // the one branch reader at h2-outreach was repointed to yourMao
+  // (Your_MAO_V21, clean code-computed) in the same commit.)
   // Underwritten_Property_MAO (keystone rewrite 2026-06-12, adjudication
   // recXJrM7EYK3pEFmF item 5): the ONLY field that authorizes Tier-C
   // autonomous property-up pricing. Underwritten_MAO above is demoted to
@@ -239,6 +244,7 @@ const LISTING_NAME_MAP: Record<string, string> = {
   // legacy_Your_MAO in Airtable). null → HOLD until V2.1 computes.
   "Investor_MAO_V21": "investorMao",
   "Your_MAO_V21": "yourMao",
+  // (legacy_Your_MAO mapping deleted 2026-06-13, spine recbC1XxAKRwRiOvq)
   "Annual_Taxes_Confirmed": "confirmedTaxes",
   "Annual_Taxes_Source": "confirmedTaxesSource",
   "Auto_Approve_v2": "autoApproveV2",

@@ -117,6 +117,18 @@ describe("MAO_V2.1 provenance marker (quarantine boundary)", () => {
     expect(parseMaoV21Marker(line)!.yourMao).toBe(-12556);
   });
 
+  it("round-trips the lane (A-prime confidence tier)", () => {
+    const prov = buildMaoV21Marker({ status: "ok", lane: "landlord_provisional", yourMao: 42000, investorMao: 47000, cap: 0.09, rent: 1400, taxes: 3000 }, now);
+    expect(prov).toContain("lane=landlord_provisional");
+    expect(parseMaoV21Marker(prov)!.lane).toBe("landlord_provisional");
+  });
+
+  it("a legacy marker without l= defaults to landlord on parse (back-compat)", () => {
+    // simulate a stale-deal-triage marker written before the lane key existed
+    const legacy = `[${MAO_V21_SENTINEL} status=ok your_mao=50000 investor_mao=55000 cap=0.0900 rent=1400 taxes=3000 @2026-06-05]`;
+    expect(parseMaoV21Marker(legacy)!.lane).toBe("landlord");
+  });
+
   it("parses null fields as '-' → null", () => {
     const line = buildMaoV21Marker({ status: "hold", yourMao: null, investorMao: null, cap: 0.09, rent: 1890, taxes: null }, now);
     const p = parseMaoV21Marker(line)!;

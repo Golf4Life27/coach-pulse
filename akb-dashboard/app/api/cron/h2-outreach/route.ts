@@ -40,7 +40,11 @@ import { NextResponse } from "next/server";
 import { getListings, getListing, updateListingRecord } from "@/lib/airtable";
 import { sendMessageWithId, getMessageStatus } from "@/lib/quo";
 import { audit } from "@/lib/audit-log";
-import { checkFirstOutreachHydration, checkOfferOverList, tierAOpenerGuard, resolveOpenerCeiling } from "@/lib/outreach-economics";
+import { checkFirstOutreachHydration, checkOfferOverList, resolveOpenerCeiling } from "@/lib/outreach-economics";
+import { anchoredOpenerGate } from "@/lib/h2-outreach/your-mao-opener-gate";
+import { computeRoughOpenerCeiling } from "@/lib/rough-opener-ceiling";
+import { getMarketForListing } from "@/lib/markets/registry";
+import { resolveAnchorPct } from "@/lib/markets/anchor";
 import { loadUnderwriteContextForListings } from "@/lib/track-aware-underwrite";
 import {
   authenticate,
@@ -286,21 +290,68 @@ async function handle(req: Request): Promise<Response> {
   // The resolved ceiling is still computed per record — for TELEMETRY (the
   // probe shows lineage + informational ceiling so Maverick reviews with
   // numbers in hand), never to set or cap the sent number.
-  const openerGuarded: Array<{ recordId: string; address: string | null; listPrice: number | null; action: "capped" | "skipped"; reason: string | null; from: number | null; to: number | null; source: string | null }> = [];
+  // ── Your_MAO opener gate (operator brief 2026-06-13, spine
+  // recZ6tBZRmfFOLwqo) ─────────────────────────────────────────────────
+  // SUPERSEDES the 65%-of-list door-opener. opener = anchor_pct ×
+  // Your_MAO. HARD GATE: null/≤0 Your_MAO routes to operator review
+  // (existing dead-path), never sends. Per-market anchor (Detroit 0.90
+  // at launch); the silent weekly calibration adjusts it. The resolved
+  // ceiling (informational lineage) is still computed for the probe's
+  // telemetry block so Maverick reviews with full numbers in hand.
+  const openerGuarded: Array<{ recordId: string; address: string | null; listPrice: number | null; action: "skipped"; reason: string | null; ceiling: number | null; ceilingSource: string | null; anchorPct: number | null; opener: number | null; source: string | null }> = [];
   const uwCtxCron = await loadUnderwriteContextForListings(queue);
-  queue = queue.filter((l) => {
+  // One anchor read per market per tick — cached so a 100-record cohort
+  // doesn't hit KV per record.
+  const anchorCache = new Map<string, number>();
+  const filteredQueue: typeof queue = [];
+  for (const l of queue) {
     const ceiling = resolveOpenerCeiling(l, uwCtxCron);
-    const guard = tierAOpenerGuard({
-      opener: l.mao,
-      listPrice: l.listPrice,
+    const marketId = ceiling.market ?? "";
+    let anchorPct = anchorCache.get(marketId);
+    if (anchorPct == null) {
+      anchorPct = await resolveAnchorPct(marketId || null);
+      anchorCache.set(marketId, anchorPct);
+    }
+    // KEYSTONE 2026-06-13 (spine recmgjlZSwhECn1W0 — Maverick Flag-2):
+    // The opener caps on the cheap ROUGH OPENER CEILING (rough ARV −
+    // rough rehab − fee, list-fraction fallback), NOT Your_MAO_V21.
+    // V21 is the PRECISE CONTRACT number; using it here would re-conflate
+    // the two. The rough ceiling reads only already-stored cheap fields,
+    // so the opener never waits on sourced rent/cap.
+    const rough = computeRoughOpenerCeiling({
+      realArvMedian: l.realArvMedian ?? null,
+      estRehabMid: l.estRehabMid ?? null,
+      estRehab: l.estRehab ?? null,
+      listPrice: l.listPrice ?? null,
+      arvPctMax: getMarketForListing({ state: l.state, zip: l.zip })?.buyer_params?.arv_pct_max ?? null,
+      wholesaleFee: l.wholesaleFeeTarget ?? null,
+    });
+    const gate = anchoredOpenerGate({
+      ceiling: rough.ceiling,
+      anchorPct,
       priceable: ceiling.priceable,
     });
-    if (!guard.ok) {
-      openerGuarded.push({ recordId: l.id, address: l.address ?? null, listPrice: l.listPrice ?? null, action: "skipped", reason: guard.reason, from: l.mao ?? null, to: null, source: ceiling.source });
-      return false;
+    if (!gate.ok) {
+      openerGuarded.push({
+        recordId: l.id,
+        address: l.address ?? null,
+        listPrice: l.listPrice ?? null,
+        action: "skipped",
+        reason: gate.reason,
+        ceiling: rough.ceiling,
+        ceilingSource: rough.source,
+        anchorPct: gate.anchorPct,
+        opener: null,
+        source: ceiling.source,
+      });
+      continue;
     }
-    return true;
-  });
+    // SUCCESS — overwrite l.mao with the Your_MAO × anchor opener so all
+    // downstream rails (send composer, idempotency, audit) read one value.
+    l.mao = gate.opener;
+    filteredQueue.push(l);
+  }
+  queue = filteredQueue;
 
   // ── HOLD surface (operator 2026-06-11): a guard-SKIPPED record is a
   // decision waiting on the operator (send the deep lowball anyway / skip /
@@ -347,10 +398,11 @@ async function handle(req: Request): Promise<Response> {
                 Record_ID: g.recordId,
                 Record_Address: g.address ?? "",
                 Reasoning:
-                  `H2 opener HOLD [${g.reason ?? "guard_refused"}]: buyer-anchored ceiling ` +
-                  `$${(g.to ?? g.from ?? 0).toLocaleString()} vs list $${(g.listPrice ?? 0).toLocaleString()} ` +
-                  `(source=${g.source ?? "none"}). Decide: send the deep offer manually, skip, or watch for a price cut. ` +
-                  `Autonomous send refused by the lowball floor / lineage rules.`,
+                  `H2 opener HOLD [${g.reason ?? "guard_refused"}]: rough ceiling ` +
+                  `${g.ceiling == null ? "null" : "$" + g.ceiling.toLocaleString()} (${g.ceilingSource ?? "?"}) ` +
+                  `× anchor ${g.anchorPct ?? "?"} vs list $${(g.listPrice ?? 0).toLocaleString()}. ` +
+                  `Decide: source ARV/rehab and re-run, or skip this record. ` +
+                  `Autonomous send refused — rough opener ceiling null or non-penciling (keystone 2026-06-13).`,
                 Suggested_Action_Payload: JSON.stringify({ recordId: g.recordId, action: "h2_opener_hold", guard: g }),
                 Status: "Pending",
               },

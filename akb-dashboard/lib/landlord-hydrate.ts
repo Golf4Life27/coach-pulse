@@ -309,13 +309,19 @@ export interface MaoV21Marker {
   rent: number | null;
   taxes: number | null;
   status: "ok" | "hold";
+  /** Confidence tier (keystone 2026-06-13, A-prime). "landlord" =
+   *  scored/authorized; "landlord_provisional" = vision-only distress,
+   *  CANNOT authorize a contract until the DD loop corroborates. Absent
+   *  on a parsed legacy/stale-deal-triage marker → defaults "landlord". */
+  lane?: "landlord" | "landlord_provisional";
 }
 
 /** Pure: build the single-line provenance marker. */
 export function buildMaoV21Marker(m: MaoV21Marker, now: Date): string {
   const f = (v: number | null) => (v == null ? "-" : String(v));
   const stamp = `${now.getUTCFullYear()}-${pad2(now.getUTCMonth() + 1)}-${pad2(now.getUTCDate())}`;
-  return `[${MAO_V21_SENTINEL} status=${m.status} your_mao=${f(m.yourMao)} investor_mao=${f(m.investorMao)} cap=${m.cap == null ? "-" : m.cap.toFixed(4)} rent=${f(m.rent)} taxes=${f(m.taxes)} @${stamp}]`;
+  const lane = m.lane ?? "landlord";
+  return `[${MAO_V21_SENTINEL} status=${m.status} lane=${lane} your_mao=${f(m.yourMao)} investor_mao=${f(m.investorMao)} cap=${m.cap == null ? "-" : m.cap.toFixed(4)} rent=${f(m.rent)} taxes=${f(m.taxes)} @${stamp}]`;
 }
 
 /** Pure: parse the LAST MAO_V2.1 marker out of a notes blob. null when
@@ -336,8 +342,10 @@ export function parseMaoV21Marker(notes: string | null | undefined): MaoV21Marke
     return Number.isFinite(n) ? n : null;
   };
   const status = get("status");
+  const laneRaw = get("lane");
   return {
     status: status === "ok" ? "ok" : "hold",
+    lane: laneRaw === "landlord_provisional" ? "landlord_provisional" : "landlord",
     yourMao: num("your_mao"),
     investorMao: num("investor_mao"),
     cap: num("cap"),

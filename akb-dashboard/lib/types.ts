@@ -104,6 +104,8 @@ export interface Listing {
    *  matched buyer's sourced margin). The ONLY Tier-C-authorizing field;
    *  underwrittenMao above is informational-only as of the same date. */
   underwrittenPropertyMao?: number | null;
+  // (yourMaoFormula prop deleted 2026-06-13 with legacy_Your_MAO field —
+  // spine recbC1XxAKRwRiOvq. Opener now reads yourMao (Your_MAO_V21).)
   sellerMotivationScore?: number | null;
   listPriceAtSend?: number | null;
   // ── Pre-Send Gate inputs (added 5/13 for orchestrator Gate 2)
