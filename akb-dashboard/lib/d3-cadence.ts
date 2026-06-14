@@ -5,6 +5,12 @@
 // scripts/outreach/) and an optional banner. Caller decides whether to
 // actually fire — this module produces decisions, not side effects.
 //
+// ONE CADENCE FOR ALL NON-RESPONDERS (Maverick 2026-06-14, rebuild-stale-
+// deal-handling): ~30-day gaps, max 2 attempts, then dispose. The prior
+// 3/7/14 active-lead regime is RETIRED — a fresh opener with no reply
+// waits to the 30-day parked nudge like everything else; no tight early
+// follow-ups on fresh no-replies, no two-regime split.
+//
 // Two principles ground every decision (Spine recmmidVrMyrLzjZp +
 // recxxNF0U59MxYUqu):
 //
@@ -42,16 +48,19 @@ const RECENT_TOUCHED_WINDOW_DAYS = cadenceConfig.config.recently_touched_window_
 
 export type CadenceAction =
   | "send_status_check"
-  | "send_follow_up_3"
-  | "send_follow_up_7"
-  | "send_follow_up_14"
+  // Parked-on-silence follow-up loop (Maverick 2026-06-14 rebuild-stale-
+  // deal-handling). Two attempts on a ~30-day cadence (gap-based), then
+  // auto_dead_followup_timeout. attempt_1 = first follow-up after silence
+  // threshold; attempt_2 = the final attempt 30d later.
+  | "send_follow_up_attempt_1"
+  | "send_follow_up_attempt_2"
   | "send_follow_up_drift_down"
   | "draft_positive_reply"
   | "hold_manual_review_drift_up"
   // Layer 1 depth-gate (5/14). Triggers when the listing's agent has
   // prior outreach on OTHER Listings_V1 records (cross-listing match
   // via normalized phone). Applies to ALL cadence-initiated outbound
-  // — status_check, follow_up_3/7/14, follow_up_drift_down. Preserves
+  // — status_check, follow_up_attempt_1/2, follow_up_drift_down. Preserves
   // relationship warmth that cold templates would burn.
   | "hold_warm_contact_manual_draft"
   | "auto_dead_status_check_timeout"
@@ -295,7 +304,9 @@ export function classifyCadence(opts: CadenceInputs): CadenceDecision {
     }
   }
 
-  // Active eligible path — standard follow_up_3/7/14 cadence.
+  // Active eligible path — parked-on-silence follow_up_attempt_1/2 cadence
+  // (Maverick 2026-06-14 rebuild-stale-deal-handling). SCHEDULE is gap-
+  // based: time since LAST send, not since initial contact.
   if (bucket === "active_eligible") {
     if (!lastSendAt) {
       return {
@@ -414,15 +425,15 @@ export function classifyCadence(opts: CadenceInputs): CadenceDecision {
       };
     }
 
-    // Within ±10% — standard follow-up.
-    const templateId =
-      nextDay === 3 ? "follow_up_3" : nextDay === 7 ? "follow_up_7" : "follow_up_14";
+    // Within ±10% — standard follow-up. Template / action are keyed off
+    // the followUpCount (attempt number), NOT the gap-day value — the
+    // gap is currently uniform (30/30) but could be tuned per market
+    // without forking the template namespace.
+    const templateId = followUpCount === 0 ? "follow_up_attempt_1" : "follow_up_attempt_2";
     const actionId =
-      nextDay === 3
-        ? ("send_follow_up_3" as const)
-        : nextDay === 7
-          ? ("send_follow_up_7" as const)
-          : ("send_follow_up_14" as const);
+      followUpCount === 0
+        ? ("send_follow_up_attempt_1" as const)
+        : ("send_follow_up_attempt_2" as const);
 
     return {
       recordId,
@@ -513,9 +524,8 @@ export interface CadenceSummary {
 export function summarizeCadence(decisions: CadenceDecision[]): CadenceSummary {
   const by_action: Record<CadenceAction, number> = {
     send_status_check: 0,
-    send_follow_up_3: 0,
-    send_follow_up_7: 0,
-    send_follow_up_14: 0,
+    send_follow_up_attempt_1: 0,
+    send_follow_up_attempt_2: 0,
     send_follow_up_drift_down: 0,
     draft_positive_reply: 0,
     hold_manual_review_drift_up: 0,

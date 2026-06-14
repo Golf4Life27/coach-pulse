@@ -1,26 +1,26 @@
 {
-  "_doc": "D3 follow-up cadence config. Drives routing decisions in lib/d3-cadence.ts based on Phase 0a scrub bucket + recency + reply state. Templates referenced here live in scripts/outreach/ as DRAFT until Alex approval.",
+  "_doc": "D3 follow-up cadence config. Drives routing decisions in lib/d3-cadence.ts. ONE cadence for all non-responders: ~30-day gaps, max 2 attempts, then dispose. The prior 3/7/14 active-lead regime was fully retired 2026-06-14 (Maverick rebuild-stale-deal-handling — a fresh opener with no reply waits to the 30-day parked nudge like everything else; no tight early follow-ups). Sent via /api/cron/parked-followup, autonomous SMS gated by FOLLOWUP_SEND_ENABLED (separate flag from H2_OUTREACH_HARD_DISABLE so the two launches sequence independently), no paid data API in the loop. The pending_reverification status_check probe path is separate (one-shot Live_Status reverify, not a follow-up). Templates referenced here live in scripts/outreach/ as DRAFT until Alex approval.",
   "_principles": [
     "65_rule (Spine recmmidVrMyrLzjZp)",
-    "offer_discipline (Spine recxxNF0U59MxYUqu)"
+    "offer_discipline (Spine recxxNF0U59MxYUqu)",
+    "non_responses_must_be_free (Maverick 2026-06-14 rebuild-stale-deal-handling)"
   ],
   "config": {
-    "follow_up_schedule_days": [3, 7, 14],
-    "follow_up_schedule_days_note": "Standard cadence for active_eligible records that haven't replied. Day 3 = first follow-up, Day 7 = second, Day 14 = final. After Day 14 + no reply within auto_dead_no_followup_reply_days, record auto-deads.",
+    "follow_up_schedule_days": [30, 30],
+    "follow_up_schedule_days_note": "Gap-based: time SINCE LAST SEND (not since initial contact). With auto_dead at 30, the parked-on-silence loop fires day 30 (first follow-up — 30d after initial Texted send), day 60 (second follow-up — 30d after the first), dispose day 90 (30d after the second). Maximum cost per parked lead: 2 SMS @ ~$0.01 each, plus a single Firecrawl liveness check before each text (no paid data API after the initial underwrite).",
     "drift_threshold_pct": 0.10,
-    "drift_threshold_pct_note": "List_Price change vs stored List_Price-at-send. Drift down >10% → follow_up_drift_down template. Drift up >10% → hold + Manual Review banner. Within ±10% → standard follow_up_3/7/14.",
+    "drift_threshold_pct_note": "List_Price change vs stored List_Price-at-send. Drift down >10% → follow_up_drift_down template. Drift up >10% → hold + Manual Review banner. Within ±10% → standard follow_up_attempt_1/2.",
     "auto_dead_no_status_check_reply_days": 3,
     "auto_dead_no_status_check_reply_days_note": "If status_check probe gets no reply within 3 days, record → Pipeline_Stage=dead, Outreach_Status=Dead.",
-    "auto_dead_no_followup_reply_days": 14,
-    "auto_dead_no_followup_reply_days_note": "If no reply within 14 days after follow_up_14 fires, record → Pipeline_Stage=dead, Outreach_Status=Dead.",
+    "auto_dead_no_followup_reply_days": 30,
+    "auto_dead_no_followup_reply_days_note": "If no reply within 30 days after follow_up_attempt_2 fires, record → Pipeline_Stage=dead, Outreach_Status=Dead. With follow_up_schedule_days=[30,30] this lands the disposal at day ~90 from initial contact — matches Maverick's '~30-day cadence, max 2 attempts, then dispose'.",
     "manual_review_banner_drift_up": "PRICE DRIFT UP — seller got aggressive, review before sending",
     "recently_touched_window_days": 30,
     "recently_touched_window_days_note": "Layer 1 depth-gate widening (5/15 Alex directive): if an agent's phone was touched within this window on a DIFFERENT listing — regardless of that other listing's current Outreach_Status — treat the current listing as a warm contact. Catches the case where the prior listing went Dead but the human agent still remembers our outreach. Matches the 30-day stale-records threshold from the bulk-dead policy.",
     "templates": {
       "status_check": "scripts/outreach/status_check.md",
-      "follow_up_3": "scripts/outreach/follow_up_3.md",
-      "follow_up_7": "scripts/outreach/follow_up_7.md",
-      "follow_up_14": "scripts/outreach/follow_up_14.md",
+      "follow_up_attempt_1": "scripts/outreach/follow_up_attempt_1.md",
+      "follow_up_attempt_2": "scripts/outreach/follow_up_attempt_2.md",
       "follow_up_drift_down": "scripts/outreach/follow_up_drift_down.md",
       "follow_up_positive_reply": "scripts/outreach/follow_up_positive_reply.md"
     }

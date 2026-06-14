@@ -100,9 +100,13 @@ async function handleScan(req: Request) {
   try {
     const listings = await getListings();
 
-    // Only check listings that have been texted and have agent phones
+    // Only check listings that have been texted and have agent phones.
+    // Parked added 2026-06-14 (rebuild-stale-deal-handling): a Parked
+    // record is a Texted record that's gone quiet and entered the cold
+    // follow-up loop — if the agent finally replies, scan-replies must
+    // pick it up so autoRunOnEngaged fires the re-price.
     const CHECKABLE_STATUSES = new Set([
-      "Texted", "Response Received", "Negotiating", "Offer Accepted", "Emailed",
+      "Texted", "Response Received", "Negotiating", "Offer Accepted", "Emailed", "Parked",
     ]);
     const checkable = listings.filter(
       (l) => l.agentPhone && CHECKABLE_STATUSES.has(l.outreachStatus ?? "")
@@ -197,6 +201,10 @@ async function handleScan(req: Request) {
                   rehabHttpStatus: null,
                   rehabElapsedMs: 0,
                   rehabError: String(err).slice(0, 240),
+                  reprice: "failed",
+                  repriceYourMao: null,
+                  repriceElapsedMs: 0,
+                  repriceError: String(err).slice(0, 240),
                 });
               }
             }
@@ -232,6 +240,10 @@ async function handleScan(req: Request) {
         arvOk: autoRunResults.filter((r) => r.arvOk).length,
         rehabOk: autoRunResults.filter((r) => r.rehab === "ok").length,
         rehabSkipped: autoRunResults.filter((r) => r.rehab.startsWith("skipped")).length,
+        // Reply-triggered landlord re-price (Maverick 2026-06-14).
+        repriceOk: autoRunResults.filter((r) => r.reprice === "ok").length,
+        repriceHold: autoRunResults.filter((r) => r.reprice === "hold").length,
+        repriceSkipped: autoRunResults.filter((r) => r.reprice.startsWith("skipped")).length,
         results: autoRunResults,
       } : undefined,
       errors: errors.length > 0 ? errors : undefined,

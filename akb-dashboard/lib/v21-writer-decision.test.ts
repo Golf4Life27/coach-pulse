@@ -37,3 +37,25 @@ describe("decideV21Write — gates", () => {
     expect(decideV21Write({ ...base, yourMao: 42000, distressScore: 10 }, { priceable: true })).toEqual({ write: false, reason: "already_has_v21" });
   });
 });
+
+describe("decideV21Write — reply-triggered re-price (allowReprice bypass)", () => {
+  it("allowReprice bypasses the idempotency guard on an already-underwritten record", () => {
+    // Same input that skips with already_has_v21 above — but the reply
+    // trigger deliberately recomputes, so the guard is lifted.
+    expect(decideV21Write({ ...base, yourMao: 42000, distressScore: 10 }, { priceable: true, allowReprice: true }))
+      .toEqual({ write: true, lane: "landlord" });
+  });
+  it("allowReprice preserves the provisional tier (vision-only distress)", () => {
+    expect(decideV21Write({ ...base, yourMao: 38000, redFlags: ["water_damage"], distressScore: null }, { priceable: true, allowReprice: true }))
+      .toEqual({ write: true, lane: "landlord_provisional" });
+  });
+  it("allowReprice still respects priceable/active/landlord-track gates", () => {
+    // A flipper-track record's re-price is its ARV refresh, never this lane.
+    expect(decideV21Write({ ...base, yourMao: 42000, distressScore: null, redFlags: ["debris_present"] }, { priceable: true, allowReprice: true }))
+      .toEqual({ write: false, reason: "flipper_lane_holds_no_comp_arv_math" });
+    expect(decideV21Write({ ...base, yourMao: 42000, liveStatus: "Off Market", distressScore: 10 }, { priceable: true, allowReprice: true }))
+      .toEqual({ write: false, reason: "not_active" });
+    expect(decideV21Write({ ...base, yourMao: 42000, distressScore: 10 }, { priceable: false, allowReprice: true }))
+      .toEqual({ write: false, reason: "not_priceable" });
+  });
+});
