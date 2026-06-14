@@ -89,6 +89,38 @@ export async function GET(req: Request) {
     (url.searchParams.get("zips") ?? "").split(",").map((z) => z.trim()).filter((z) => /^\d{5}$/.test(z)),
   );
 
+  // ── WATCHED-FIRST-RUN GATE (Maverick recbAn1F9yOgIfcit, "then stop") ──
+  // A cron-auth applied run can only fire ONCE until Maverick clears the
+  // KV flag. Subsequent cron-auth applies return 503 with explicit reason.
+  // Dashboard/manual runs bypass — Alex can re-fire without consuming the
+  // budget. The flag is set AFTER the first cron-auth applied run completes
+  // successfully (whether 0 or N records written), so the route fires once,
+  // we audit + report, and the second tick stays dark until uncap is
+  // committed (env clear or KV del). Fails-OPEN on KV miss because the
+  // outer per-run limit already provides a small reviewable batch — if KV
+  // is unreachable we degrade to "small batches forever" rather than to
+  // "writes everything." Safer side of the trade.
+  const WATCHED_FLAG_KEY = "v21_writer:watched_first_run_done";
+  const watchedBypass = process.env.V21_WRITER_UNCAPPED === "true";
+  if (apply && authKind === "cron" && !watchedBypass && kvConfigured()) {
+    try {
+      const flag = await kvProd.get(WATCHED_FLAG_KEY);
+      if (flag) {
+        return NextResponse.json({
+          mode: "blocked",
+          reason: "watched_first_run_complete_awaiting_uncap_decision",
+          detail:
+            "the watched first run already completed; subsequent cron-auth applied runs are blocked until Maverick reviews the batch and authorizes uncap " +
+            "(set env V21_WRITER_UNCAPPED=true OR del KV key " + WATCHED_FLAG_KEY + "). " +
+            "Manual dashboard/operator runs bypass this gate.",
+          flag_set_at: flag,
+        }, { status: 503 });
+      }
+    } catch {
+      // Fail OPEN — the per-run limit is still the small reviewable batch.
+    }
+  }
+
   let listings: Listing[];
   let seededZips: Set<string>;
   try {
@@ -194,6 +226,19 @@ export async function GET(req: Request) {
     outputSummary: { candidate_total: candidates.length, lane_count: laneCount, examined: batch.length, written, skip_breakdown: skipBreakdown },
     ms: Date.now() - t0,
   });
+
+  // Set the watched-first-run flag AFTER a cron-auth applied run completes.
+  // Subsequent cron-auth applies block until Maverick clears the flag (env
+  // V21_WRITER_UNCAPPED=true or KV del). 7-day TTL is a safety net — if no
+  // one acts in a week the gate clears itself so the cron isn't permanently
+  // wedged on an abandoned watch.
+  if (apply && authKind === "cron" && !watchedBypass && kvConfigured()) {
+    try {
+      await kvProd.setEx(WATCHED_FLAG_KEY, new Date().toISOString(), 7 * 24 * 3600);
+    } catch {
+      /* fail open — guard is best-effort */
+    }
+  }
 
   return NextResponse.json({
     mode: apply ? "apply" : "dry_run",

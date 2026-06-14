@@ -65,6 +65,10 @@
       "schedule": "20 * * * *"
     },
     {
+      "path": "/api/cron/underwrite-v21-fresh?apply=1&limit=12",
+      "schedule": "0 5 * * *"
+    },
+    {
       "path": "/api/admin/freshness-reverify?apply=1&limit=50&zips=48224,48219,48204,48205,48213,48227",
       "schedule": "*/10 * * * *"
     },
