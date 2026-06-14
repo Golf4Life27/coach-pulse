@@ -75,6 +75,88 @@ describe("priceOpener — flat 65%-of-list fallback (ruling #3)", () => {
   });
 });
 
+describe("GUARD A — never-over-list cap (Hole A)", () => {
+  it("clamps an over-list opener down to the list price and flags re-seed", () => {
+    // 14299 Kilbourne: garbage-high ARV → opener would be ~$87,882 on a
+    // $47,900 list. Must cap to list, never over asking.
+    const r = priceOpener({
+      listPrice: 47_900,
+      realArvMedian: 230_120,
+      estRehabMid: 46_024,
+      wholesaleFee: 5_000,
+      arvPctMax: DETROIT_BUYBOX,
+      anchorPct: 0.90,
+    });
+    expect(r.cappedToList).toBe(true);
+    expect(r.opener).toBe(47_900); // = list, never above
+    expect(r.flagReseed).toBe(true);
+  });
+});
+
+describe("GUARD B — low-opener floor (Hole B)", () => {
+  it("routes a sub-floor buy-box micro-opener to the clean 65% rail", () => {
+    // 16093 Liberal: ARV $72,518 (> list, so sanity passes) but $39,950
+    // rehab squeezes the ceiling → ~$1,714 opener. Floor → 65% of list.
+    const r = priceOpener({
+      listPrice: 20_000,
+      realArvMedian: 72_518,
+      estRehabMid: 39_950,
+      wholesaleFee: 5_000,
+      arvPctMax: DETROIT_BUYBOX,
+      anchorPct: 0.90,
+    });
+    expect(r.flooredToFallback).toBe(true);
+    expect(r.basis).toBe("list_fraction_65");
+    expect(r.opener).toBe(13_000); // 0.65 × 20000, not the $1,714 micro-number
+  });
+
+  it("a healthy buy-box opener above the floor and below list survives unguarded", () => {
+    // 16241 E State Fair: ARV $137,456 > list, opener ~$50,687 (57% of list).
+    const r = priceOpener({
+      listPrice: 88_500,
+      realArvMedian: 137_456,
+      estRehabMid: 27_491,
+      wholesaleFee: 5_000,
+      arvPctMax: DETROIT_BUYBOX,
+      anchorPct: 0.90,
+    });
+    expect(r.basis).toBe("arv_buybox");
+    expect(r.flooredToFallback).toBe(false);
+    expect(r.cappedToList).toBe(false);
+    expect(r.arvDistrusted).toBe(false);
+    expect(r.opener).toBe(50_687);
+  });
+});
+
+describe("GUARD C — ARV-sanity gate (Hole C)", () => {
+  it("distrusts a below-list ARV, drops to 65% rail, flags re-seed", () => {
+    // 15509 Lauder: ARV $93,818 < list $119,000 → as-is/wrong-basis.
+    const r = priceOpener({
+      listPrice: 119_000,
+      realArvMedian: 93_818,
+      estRehabMid: 34_425,
+      arvPctMax: DETROIT_BUYBOX,
+      anchorPct: 0.90,
+    });
+    expect(r.arvDistrusted).toBe(true);
+    expect(r.flagReseed).toBe(true);
+    expect(r.basis).toBe("list_fraction_65");
+    expect(r.opener).toBe(77_350); // 0.65 × 119000
+  });
+
+  it("an ARV at/above list is trusted (no distrust)", () => {
+    const r = priceOpener({
+      listPrice: 88_500,
+      realArvMedian: 137_456,
+      estRehabMid: 27_491,
+      arvPctMax: DETROIT_BUYBOX,
+      anchorPct: 0.90,
+    });
+    expect(r.arvDistrusted).toBe(false);
+    expect(r.basis).toBe("arv_buybox");
+  });
+});
+
 describe("priceOpener — genuine hold", () => {
   it("no ARV and no list → opener null, basis hold_no_inputs", () => {
     const r = priceOpener({});
