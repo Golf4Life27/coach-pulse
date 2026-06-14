@@ -22,11 +22,12 @@
 import { NextResponse } from "next/server";
 import { getListings } from "@/lib/airtable";
 import { audit } from "@/lib/audit-log";
-import { priceOpener } from "@/lib/per-market-pricer";
+import { priceOpenerWithSeed } from "@/lib/opener-pricing";
 import { evaluateLowballEligibility } from "@/lib/lowball-eligibility";
 import { resolveCumulativeDom } from "@/lib/attom/cumulative-dom";
 import { getMarketForListing } from "@/lib/markets/registry";
 import { resolveAnchorPct } from "@/lib/markets/anchor";
+import { getZipArvSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import {
   authenticate,
   hasDashboardSession,
@@ -38,13 +39,6 @@ import type { Listing } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
-
-/** Map a stored ARV confidence to the pricer's STRONG/THIN. */
-function mapArvConfidence(c: Listing["arvConfidence"]): "STRONG" | "THIN" | null {
-  if (c === "HIGH") return "STRONG";
-  if (c === "MED" || c === "LOW") return "THIN";
-  return null;
-}
 
 /** Approximate the live distress signals from stored cohort fields. The live
  *  crawler computes these fresh from Firecrawl (listing language) + rehab
@@ -119,11 +113,16 @@ export async function GET(req: Request) {
     lowball_not_eligible: 0,
     by_tier: {} as Record<string, number>,
     would_send_aggressive: 0, // eligible AND has an opener
+    by_arv_source: { seed_renovated: 0, stored: 0, none: 0 } as Record<string, number>,
+    reseed_flagged: 0,
     opener_sum: 0,
     opener_n: 0,
   };
   const rows: Array<Record<string, unknown>> = [];
   const anchorCache = new Map<string, number>();
+  // Per-ZIP renovated-comp seed cache (source-swap away from contaminated
+  // stored ARV). Loaded once per ZIP; null when the ZIP isn't seeded yet.
+  const seedCache = new Map<string, ZipArvSeed | null>();
 
   for (const l of scoped.slice(0, limit === Infinity ? scoped.length : limit)) {
     agg.scanned++;
@@ -135,16 +134,23 @@ export async function GET(req: Request) {
       anchorCache.set(marketId, anchorPct);
     }
 
-    const priced = priceOpener({
+    if (l.zip && !seedCache.has(l.zip)) {
+      seedCache.set(l.zip, await getZipArvSeed(l.zip).catch(() => null));
+    }
+    const seed = l.zip ? seedCache.get(l.zip) ?? null : null;
+    const pricedW = priceOpenerWithSeed({
       listPrice: l.listPrice ?? null,
-      realArvMedian: l.realArvMedian ?? null,
+      storedArv: l.realArvMedian ?? null,
+      storedArvConfidence: l.arvConfidence ?? null,
       estRehabMid: l.estRehabMid ?? null,
       estRehab: l.estRehab ?? null,
+      sqft: l.buildingSqFt ?? null,
       arvPctMax: market?.buyer_params?.arv_pct_max ?? null,
       wholesaleFee: l.wholesaleFeeTarget ?? null,
       anchorPct,
-      arvConfidence: mapArvConfidence(l.arvConfidence),
+      seed,
     });
+    const priced = pricedW.result;
 
     const dom = resolveCumulativeDom({ mlsDomV2: l.dom });
     const lowball = evaluateLowballEligibility({
@@ -158,6 +164,8 @@ export async function GET(req: Request) {
     agg.by_basis[priced.basis] = (agg.by_basis[priced.basis] ?? 0) + 1;
     agg.by_confidence[priced.confidence] = (agg.by_confidence[priced.confidence] ?? 0) + 1;
     agg.by_tier[lowball.tier] = (agg.by_tier[lowball.tier] ?? 0) + 1;
+    agg.by_arv_source[pricedW.arvSource] = (agg.by_arv_source[pricedW.arvSource] ?? 0) + 1;
+    if (priced.flagReseed) agg.reseed_flagged++;
     if (priced.opener != null) {
       agg.priced++;
       agg.opener_sum += priced.opener;
@@ -180,8 +188,13 @@ export async function GET(req: Request) {
         list_price: l.listPrice ?? null,
         arv: l.realArvMedian ?? null,
         opener: priced.opener,
-        opener_basis: priced.basis,
+        opener_basis: pricedW.basisLabel,
+        arv_source: pricedW.arvSource,
+        arv_used: pricedW.arvUsed,
+        stored_arv: l.realArvMedian ?? null,
+        seed_per_sqft: seed?.renovatedPerSqft ?? null,
         opener_confidence: priced.confidence,
+        reseed_flagged: priced.flagReseed,
         opener_vs_list_pct: l.listPrice ? Math.round((100 * (priced.opener ?? 0)) / l.listPrice) : null,
         ceiling: priced.ceiling,
         anchor_pct: priced.anchorPct,

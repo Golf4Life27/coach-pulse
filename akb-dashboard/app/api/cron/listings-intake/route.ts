@@ -63,6 +63,14 @@ import { checkFirecrawlBreaker, recordFirecrawlSpend } from "@/lib/crawler/firec
 import { runAsyncPool, makeRateGate } from "@/lib/crawler/async-pool";
 import { getActiveIntakeRows, updateZipStats } from "@/lib/zip-registry";
 import { getVerifiedThisCycle, markVerifiedThisCycle } from "@/lib/crawler/verify-cache";
+// National crawler (Maverick 2026-06-14) — auto-seed + opener-write, all
+// behind CRAWLER_AUTOSEED_LIVE (default off → these paths never execute).
+import { decideAutoSeed, runAutoSeed } from "@/lib/crawler/auto-seed";
+import { listArvSeededZips, getZipArvSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
+import { resolveSeedBudget } from "@/lib/spend/daily-budget";
+import { priceOpenerWithSeed } from "@/lib/opener-pricing";
+import { getMarketForListing } from "@/lib/markets/registry";
+import { resolveAnchorPct } from "@/lib/markets/anchor";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -142,6 +150,7 @@ async function createIntakeListing(
   matchedPortfolioKeywords: string[] = [],
   underwrittenMao: number | null = null,
   underwrittenMaoTrack: string | null = null,
+  opener: { amount: number | null; basis: string; reseed: boolean } | null = null,
 ): Promise<string> {
   if (!AIRTABLE_PAT) throw new Error("AIRTABLE_PAT not set");
   const url = `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}`;
@@ -223,6 +232,15 @@ async function createIntakeListing(
   if (underwrittenMaoTrack === "landlord" || underwrittenMaoTrack === "flipper") {
     fields["Underwritten_MAO_Track"] = underwrittenMaoTrack;
   }
+  // Guarded rough opener (national crawler). Opener-only — never a contract
+  // number. Written off the renovated-comp seed when available (source-swap).
+  if (opener) {
+    if (typeof opener.amount === "number" && Number.isFinite(opener.amount) && opener.amount > 0) {
+      fields["Rough_Opener_Amount"] = opener.amount;
+    }
+    fields["Opener_Basis"] = opener.basis;
+    if (opener.reseed) fields["Opener_Reseed_Flag"] = true;
+  }
   const res = await fetch(url, {
     method: "POST",
     headers: { Authorization: `Bearer ${AIRTABLE_PAT}`, "Content-Type": "application/json" },
@@ -264,6 +282,16 @@ export async function GET(req: Request) {
   const liveEnv = process.env.CRAWLER_INTAKE_LIVE === "true";
   const forcedDry = url.searchParams.get("dry_run") === "1";
   const dryRun = !liveEnv || forcedDry;
+
+  // National-crawler auto-seed + opener-write gate (Maverick 2026-06-14).
+  // Default OFF — when unset, every block below guarded by this is skipped,
+  // so intake behaves exactly as before. When ON, the loop seeds unseeded
+  // live ZIPs from renovated comps (one paid pull/ZIP, budget-clamped) and
+  // writes guarded openers off the renovated-comp seed (source-swap away
+  // from the contaminated Real_ARV_Median). The seed pull is a paid call, so
+  // it is intentionally NOT gated by the intake dry-run flag — the watched
+  // run seeds + prices (dry) while sends stay dark via H2_OUTREACH_HARD_DISABLE.
+  const autoseedLive = process.env.CRAWLER_AUTOSEED_LIVE === "true";
 
   // Auto-promote flags (INV-CRAWLER-AGENT-ENRICHMENT). Independent of the
   // intake dry/live gate above: even on a live intake run, clean accepts only
@@ -502,6 +530,9 @@ export async function GET(req: Request) {
   // batch resolves, so there are no intra-run dedup races.
   const ZIP_FETCH_CONCURRENCY = 3;
   const perZipRaw = new Map<string, number>();
+  // First fetched candidate per ZIP — the representative subject the auto-
+  // seed pulls renovated comps against (comps are address-based).
+  const perZipRepresentative = new Map<string, IntakeCandidate>();
   const perZipAccepted = new Map<string, number>();
   const perZipReview = new Map<string, number>();
   // D1 stats accumulators (per-ZIP) for the ZIP_Registry write-back.
@@ -592,6 +623,9 @@ export async function GET(req: Request) {
       zipsProcessedOk.add(zip);
       summary.raw_candidates += fetchResult.candidates.length;
       perZipRaw.set(zip, fetchResult.candidates.length);
+      if (autoseedLive && fetchResult.candidates.length > 0 && !perZipRepresentative.has(zip)) {
+        perZipRepresentative.set(zip, fetchResult.candidates[0]);
+      }
 
       const { accepted, rejected } = filterIntakeCandidates(fetchResult.candidates, now, { seededZips, requirePriceable });
       summary.rejected += rejected.length;
@@ -615,6 +649,74 @@ export async function GET(req: Request) {
   }
 
   const collectMs = Date.now() - tCollectStart;
+
+  // ── AUTO-SEED PASS (Maverick 2026-06-14, root-cause fix) ───────────────
+  // The contaminated Real_ARV_Median field is repaired at the ZIP level: for
+  // each live ZIP with no ZIP_ARV_Seed yet, pull renovated comps once (one
+  // paid call, self-audited), derive the renovated $/sqft, and cache it.
+  // Budget-clamped (DAILY_INTAKE_BUDGET_USD): at the cap, NEW seeds pause
+  // while already-seeded ZIPs keep pricing free. Restricted states are never
+  // seeded (load-frozen in the market registry). Entirely gated by
+  // CRAWLER_AUTOSEED_LIVE — when off, this whole block is skipped.
+  const zipSeedMap = new Map<string, ZipArvSeed | null>();
+  const autoSeed = {
+    live: autoseedLive,
+    attempted: 0,
+    seeded: 0,
+    comp_pulls: 0,
+    skipped: {} as Record<string, number>,
+    errors: [] as string[],
+    budget: null as null | { spentUsd: number; budgetUsd: number; seedsRemaining: number },
+  };
+  if (autoseedLive) {
+    let arvSeeded: Set<string>;
+    try {
+      arvSeeded = await listArvSeededZips();
+    } catch {
+      arvSeeded = new Set<string>();
+    }
+    let budget = await resolveSeedBudget();
+    autoSeed.budget = { spentUsd: budget.spentUsd, budgetUsd: budget.budgetUsd, seedsRemaining: budget.seedsRemaining };
+    for (const zip of zipsProcessedOk) {
+      const rep = perZipRepresentative.get(zip);
+      const decision = decideAutoSeed({
+        zip,
+        state: rep?.state ?? null,
+        alreadySeeded: arvSeeded.has(zip),
+        canSeed: budget.canSeed,
+        hasRepresentativeSubject: !!(rep && rep.address),
+      });
+      if (!decision.seed) {
+        autoSeed.skipped[decision.reason] = (autoSeed.skipped[decision.reason] ?? 0) + 1;
+        continue;
+      }
+      autoSeed.attempted++;
+      autoSeed.comp_pulls++;
+      const res = await runAutoSeed({
+        address: rep!.address!,
+        city: rep!.city ?? "",
+        state: rep!.state ?? "",
+        zip,
+        bedrooms: rep!.beds ?? null,
+        bathrooms: rep!.bathrooms ?? null,
+        squareFootage: rep!.squareFootage ?? null,
+      });
+      if (res.seeded) {
+        autoSeed.seeded++;
+        arvSeeded.add(zip);
+        budget = await resolveSeedBudget(); // re-read the meter after the spend
+      } else {
+        autoSeed.errors.push(`${zip}: ${res.reason}`);
+      }
+    }
+    // Load the (now-current) seeds for every processed ZIP so opener-write
+    // prices off the renovated-comp ARV.
+    for (const zip of zipsProcessedOk) {
+      if (!zipSeedMap.has(zip)) {
+        zipSeedMap.set(zip, await getZipArvSeed(zip).catch(() => null));
+      }
+    }
+  }
 
   // ── Guard (3): drop candidates already verified THIS cycle (KV cache)
   // BEFORE any paid Firecrawl call. Catches partial-ZIP-retry re-searches
@@ -924,10 +1026,34 @@ export async function GET(req: Request) {
 
   // ── Phase 4: writes (live only; sequential, post-pool — no concurrent
   // Airtable writes / intra-run dup races). ──
+  const anchorCacheIntake = new Map<string, number>();
   if (!dryRun) {
     for (const { candidate: c, zip, promote, firecrawlUrl, portfolioDetected, matchedPortfolioKeywords, underwrittenMao, underwrittenMaoTrack } of toWrite) {
       try {
-        await createIntakeListing(c, promote, firecrawlUrl, portfolioDetected, matchedPortfolioKeywords, underwrittenMao, underwrittenMaoTrack);
+        // Opener-write (gated): price the new record off the renovated-comp
+        // ZIP seed (source-swap). New intake records carry no stored ARV, so
+        // the seed — or the flat 65% fallback — is the only basis.
+        let opener: { amount: number | null; basis: string; reseed: boolean } | null = null;
+        if (autoseedLive) {
+          const market = getMarketForListing({ state: c.state, zip: c.zip });
+          const marketId = market?.id ?? "";
+          let anchorPct = anchorCacheIntake.get(marketId);
+          if (anchorPct == null) {
+            anchorPct = await resolveAnchorPct(marketId || null);
+            anchorCacheIntake.set(marketId, anchorPct);
+          }
+          const priced = priceOpenerWithSeed({
+            listPrice: c.listPrice ?? null,
+            storedArv: null,
+            estRehabMid: null,
+            sqft: c.squareFootage ?? null,
+            arvPctMax: market?.buyer_params?.arv_pct_max ?? null,
+            anchorPct,
+            seed: zipSeedMap.get(zip) ?? null,
+          });
+          opener = { amount: priced.result.opener, basis: priced.basisLabel, reseed: priced.result.flagReseed };
+        }
+        await createIntakeListing(c, promote, firecrawlUrl, portfolioDetected, matchedPortfolioKeywords, underwrittenMao, underwrittenMaoTrack, opener);
         summary.written++;
       } catch (err) {
         summary.per_zip_errors.push({
@@ -1107,6 +1233,7 @@ export async function GET(req: Request) {
         }
       : null,
     registry: registryWriteback,
+    auto_seed: autoSeed,
     ...summary,
     ...(debug
       ? {
