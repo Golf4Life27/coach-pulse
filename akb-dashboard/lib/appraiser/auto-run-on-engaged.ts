@@ -32,6 +32,9 @@
 // compute. A re-run on an already-priced record just refreshes those
 // timestamps (same surface a Refresh click produces).
 
+import { getListing } from "@/lib/airtable";
+import { underwriteV21Record } from "@/lib/v21-underwrite-record";
+
 const CRON_SECRET = process.env.CRON_SECRET;
 
 // Worst-case wall time we reserve before attempting an awaited rehab run
@@ -50,6 +53,26 @@ export interface EngagedAutoRunResult {
   rehabHttpStatus: number | null;
   rehabElapsedMs: number;
   rehabError: string | null;
+  // ── Reply-triggered RE-PRICE (Maverick 2026-06-14) ────────────────
+  // The landlord V2.1 MAO recompute on a seller reply, off fresh inputs.
+  // Fires ONLY for records ALREADY underwritten (Your_MAO_V21 present) —
+  // the initial underwrite is the V21-fresh cron's job, not this trigger.
+  //   ok                        → recomputed + written
+  //   hold                      → recompute produced no number (HOLD)
+  //   skipped_not_underwritten  → no existing V21 (cron underwrites first)
+  //   skipped_not_landlord      → priceable/active gate or flipper lane
+  //   skipped_by_caller         → skipReprice set
+  //   failed                    → threw / write error
+  reprice:
+    | "ok"
+    | "hold"
+    | "skipped_not_underwritten"
+    | "skipped_not_landlord"
+    | "skipped_by_caller"
+    | "failed";
+  repriceYourMao: number | null;
+  repriceElapsedMs: number;
+  repriceError: string | null;
 }
 
 export interface EngagedAutoRunInput {
@@ -61,6 +84,8 @@ export interface EngagedAutoRunInput {
   /** Skip the rehab run entirely (callers that already know there are
    *  no photos, or ARV-only sweeps). */
   skipRehab?: boolean;
+  /** Skip the landlord V2.1 re-price step. */
+  skipReprice?: boolean;
   /** Epoch ms after which the CALLER's lambda budget is exhausted.
    *  Rehab is only attempted when at least REHAB_BUDGET_MS remains.
    *  Omit to always attempt (callers with their own budget loop). */
@@ -97,7 +122,7 @@ async function callRoute(
 export async function autoRunOnEngaged(
   input: EngagedAutoRunInput,
 ): Promise<EngagedAutoRunResult> {
-  const { recordId, origin, cookie, skipRehab, deadlineAtMs } = input;
+  const { recordId, origin, cookie, skipRehab, skipReprice, deadlineAtMs } = input;
 
   const headers: Record<string, string> = {};
   if (cookie) headers.cookie = cookie;
@@ -132,6 +157,60 @@ export async function autoRunOnEngaged(
     rehabError = r.error;
   }
 
+  // ── Reply-triggered RE-PRICE (Maverick 2026-06-14) ──────────────────
+  // The landlord lane recompute. ARV/rehab above refreshed the FLIPPER
+  // lane (comps) + vision rehab; this refreshes the LANDLORD V2.1 MAO off
+  // fresh rent + county taxes. Re-fetch the record so we read the rehab
+  // route's fresh Est_Rehab_Mid and the current Your_MAO_V21. Only an
+  // ALREADY-underwritten record re-prices — initial underwrite is the
+  // V21-fresh cron's job (Maverick: "fresh paid pulls on an ALREADY-
+  // underwritten record, fires ONLY on a seller reply").
+  let reprice: EngagedAutoRunResult["reprice"];
+  let repriceYourMao: number | null = null;
+  let repriceElapsedMs = 0;
+  let repriceError: string | null = null;
+
+  if (skipReprice) {
+    reprice = "skipped_by_caller";
+  } else {
+    const t0 = Date.now();
+    try {
+      const listing = await getListing(recordId);
+      const hasV21 =
+        listing != null &&
+        typeof listing.yourMao === "number" &&
+        Number.isFinite(listing.yourMao) &&
+        listing.yourMao > 0;
+      if (!listing || !hasV21) {
+        reprice = "skipped_not_underwritten";
+      } else {
+        const outcome = await underwriteV21Record(listing, {
+          apply: true,
+          allowReprice: true,
+          forceFreshRent: true,
+        });
+        if (outcome.decision.write === false) {
+          // priceable/active gate or flipper lane — landlord re-price N/A.
+          reprice = "skipped_not_landlord";
+        } else if (outcome.written) {
+          reprice = "ok";
+          repriceYourMao = outcome.result?.yourMao ?? null;
+        } else if (outcome.writeError) {
+          reprice = "failed";
+          repriceError = outcome.writeError;
+        } else {
+          // decision was write:true but compute HELD (missing rent/taxes/
+          // cap/rehab or NOI≤0) → no number written.
+          reprice = "hold";
+        }
+      }
+    } catch (err) {
+      reprice = "failed";
+      repriceError = err instanceof Error ? err.message.slice(0, 240) : String(err).slice(0, 240);
+    }
+    repriceElapsedMs = Date.now() - t0;
+  }
+
   return {
     recordId,
     arvOk: arv.ok,
@@ -142,6 +221,10 @@ export async function autoRunOnEngaged(
     rehabHttpStatus,
     rehabElapsedMs,
     rehabError,
+    reprice,
+    repriceYourMao,
+    repriceElapsedMs,
+    repriceError,
   };
 }
 

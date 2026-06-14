@@ -48,14 +48,22 @@ export interface V21WriteCandidate {
 
 export function decideV21Write(
   listing: V21WriteCandidate,
-  ctx: { priceable: boolean },
+  ctx: { priceable: boolean; allowReprice?: boolean },
 ): V21WriteDecision {
   if (!ctx.priceable) return { write: false, reason: "not_priceable" };
   if ((listing.liveStatus ?? "").trim().toLowerCase() !== "active") {
     return { write: false, reason: "not_active" };
   }
-  // Idempotent — never overwrite a live V21 value.
-  if (typeof listing.yourMao === "number" && Number.isFinite(listing.yourMao) && listing.yourMao > 0) {
+  // Idempotent — never overwrite a live V21 value on the INITIAL-underwrite
+  // path (the V21-fresh cron fires once per cold priceable record).
+  //
+  // EXCEPTION — reply-triggered RE-PRICE (Maverick 2026-06-14, "fresh paid
+  // pulls on an ALREADY-underwritten record, fires ONLY on a seller reply").
+  // When ctx.allowReprice is set the caller is the reply trigger deliberately
+  // recomputing an existing number off fresh inputs, so the idempotency guard
+  // is bypassed. Re-price still demands priceable + active + landlord-track
+  // below — a flipper-track record's re-price is its ARV refresh, not this.
+  if (!ctx.allowReprice && typeof listing.yourMao === "number" && Number.isFinite(listing.yourMao) && listing.yourMao > 0) {
     return { write: false, reason: "already_has_v21" };
   }
   // Ruling #1: resolveCohortTrack is the SINGLE distress predicate.

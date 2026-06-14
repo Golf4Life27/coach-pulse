@@ -197,6 +197,10 @@ async function handleScan(req: Request) {
                   rehabHttpStatus: null,
                   rehabElapsedMs: 0,
                   rehabError: String(err).slice(0, 240),
+                  reprice: "failed",
+                  repriceYourMao: null,
+                  repriceElapsedMs: 0,
+                  repriceError: String(err).slice(0, 240),
                 });
               }
             }
@@ -232,6 +236,10 @@ async function handleScan(req: Request) {
         arvOk: autoRunResults.filter((r) => r.arvOk).length,
         rehabOk: autoRunResults.filter((r) => r.rehab === "ok").length,
         rehabSkipped: autoRunResults.filter((r) => r.rehab.startsWith("skipped")).length,
+        // Reply-triggered landlord re-price (Maverick 2026-06-14).
+        repriceOk: autoRunResults.filter((r) => r.reprice === "ok").length,
+        repriceHold: autoRunResults.filter((r) => r.reprice === "hold").length,
+        repriceSkipped: autoRunResults.filter((r) => r.reprice.startsWith("skipped")).length,
         results: autoRunResults,
       } : undefined,
       errors: errors.length > 0 ? errors : undefined,

@@ -32,16 +32,8 @@
 
 import { NextResponse } from "next/server";
 import { audit } from "@/lib/audit-log";
-import { getListings, updateListingRecord } from "@/lib/airtable";
-import { getRentEstimate, getAnnualPropertyTaxes, getRentCastAssessedValue } from "@/lib/rentcast";
-import {
-  resolveAnnualTaxes,
-  defaultInvestorCapFor,
-  computeV21LandlordMao,
-  buildMaoV21Marker,
-  upsertMaoV21Marker,
-  type V21MaoResult,
-} from "@/lib/landlord-hydrate";
+import { getListings } from "@/lib/airtable";
+import { underwriteV21Record } from "@/lib/v21-underwrite-record";
 import { decideV21Write } from "@/lib/v21-writer-decision";
 import { getMarketForListing } from "@/lib/markets/registry";
 import { listSeededZips } from "@/lib/buyer-median-store";
@@ -156,66 +148,29 @@ export async function GET(req: Request) {
 
   for (const { l, lane } of batch) {
     if (Date.now() - t0 > BUDGET_MS) break;
-    const addr = { address: l.address ?? "", city: l.city ?? "", state: l.state ?? "", zip: l.zip ?? "" };
 
-    // Rent: stored estimate preferred (free), else a RentCast call.
-    let monthlyRent = l.estimatedMonthlyRent ?? null;
-    if (monthlyRent == null) {
-      const rentEst = await getRentEstimate(addr, l.id).catch(() => null);
-      monthlyRent = rentEst?.rent ?? null;
-    }
-    // Taxes: same resolver precedence stale-deal-triage uses.
-    const rcTaxes = await getAnnualPropertyTaxes(addr, l.id).catch(() => null);
-    const rcAssessed = await getRentCastAssessedValue(addr, l.id).catch(() => null);
-    const taxResolution = resolveAnnualTaxes({
-      state: l.state,
-      confirmedTaxes: l.confirmedTaxes,
-      confirmedLabel: l.confirmedTaxesSource,
-      attomTaxes: null,
-      attomAssessedValue: null,
-      rentcastTaxes: rcTaxes,
-      assessedValue: rcAssessed,
-    });
-    const cap = defaultInvestorCapFor(l.state, l.zip);
-    const estRehab = (l.estRehabMid ?? l.estRehab ?? null) as number | null;
-    const v21: V21MaoResult = computeV21LandlordMao({
-      monthlyRent,
-      annualTaxes: taxResolution.annualTaxes,
-      estRehab,
-      capRate: cap,
-    });
+    // INITIAL underwrite — delegate to the shared per-record writer
+    // (single source of truth, also used by the reply-triggered re-price
+    // path). allowReprice stays OFF here: this cron fires once per cold
+    // priceable record, the idempotency guard holds. forceFreshRent OFF:
+    // a cold record's stored rent is fine, don't pay to refetch.
+    const outcome = await underwriteV21Record(l, { apply, seededZips });
+    const v21 = outcome.result;
 
     const row = {
       recordId: l.id, address: l.address, zip: l.zip, lane,
-      status: v21.status, your_mao_v21: v21.yourMao, investor_mao_v21: v21.investorMao,
-      cap: v21.cap, rent: monthlyRent, taxes: taxResolution.annualTaxes, tax_source: taxResolution.source,
-      reason: v21.reason,
+      status: v21?.status ?? "skip", your_mao_v21: v21?.yourMao ?? null, investor_mao_v21: v21?.investorMao ?? null,
+      cap: v21?.cap ?? null, rent: outcome.monthlyRent, taxes: outcome.taxes, tax_source: outcome.taxSource,
+      reason: v21?.reason ?? (outcome.decision.write === false ? outcome.decision.reason : ""),
       // A-prime: a provisional V21 is WRITTEN but flagged; it cannot
       // authorize a contract until DD corroborates (evaluateV21Contract
       // Authorization is the enforcement point).
       provisional: lane === "landlord_provisional",
-      authorizes_contract_now: lane === "landlord" && v21.status === "ok",
+      authorizes_contract_now: lane === "landlord" && v21?.status === "ok",
+      ...(outcome.writeError ? { write_error: outcome.writeError } : {}),
     };
     results.push(row);
-
-    if (apply && v21.status === "ok" && v21.yourMao != null) {
-      const marker = buildMaoV21Marker(
-        { status: v21.status, lane, yourMao: v21.yourMao, investorMao: v21.investorMao, cap: v21.cap, rent: monthlyRent, taxes: taxResolution.annualTaxes },
-        new Date(),
-      );
-      try {
-        await updateListingRecord(l.id, {
-          Your_MAO_V21: v21.yourMao,
-          Investor_MAO_V21: v21.investorMao,
-          Underwritten_MAO_Track: "landlord",
-          Estimated_Monthly_Rent: monthlyRent,
-          Verification_Notes: upsertMaoV21Marker(l.notes ?? null, marker),
-        });
-        written++;
-      } catch (err) {
-        (row as Record<string, unknown>).write_error = String(err).slice(0, 200);
-      }
-    }
+    if (outcome.written) written++;
   }
 
   await audit({

@@ -57,10 +57,6 @@
       "schedule": "*/5 * * * *"
     },
     {
-      "path": "/api/cron/stale-deal-triage?apply=1&limit=50",
-      "schedule": "15,45 * * * *"
-    },
-    {
       "path": "/api/cron/quo-sync?limit=40&hours_back=24",
       "schedule": "20 * * * *"
     },
