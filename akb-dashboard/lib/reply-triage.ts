@@ -169,7 +169,12 @@ export function determineNewStatus(
     return "Counter Received";
   }
   if (classification === "interest") return "Negotiating";
-  if (currentStatus === "Texted") return "Response Received";
+  // Texted OR Parked → Response Received. Parked added 2026-06-14
+  // (rebuild-stale-deal-handling): a Parked record is one that aged out
+  // of active outreach into the cold follow-up loop; a reply on it is
+  // STILL the same Response-Received transition, and must fire the
+  // autoRunOnEngaged re-price the same way.
+  if (currentStatus === "Texted" || currentStatus === "Parked") return "Response Received";
   return null;
 }
 

@@ -132,6 +132,10 @@ export function inferDealStage(input: InferStageInput): DealStage {
 
   if (status === "Response Received" || status === "Inbound Lead") return "engaged";
   if (status === "Texted" || status === "Emailed") return "outreach";
+  // Parked = aged-out of active outreach into the cold follow-up loop
+  // (Maverick 2026-06-14 rebuild-stale-deal-handling). Conceptually still
+  // outreach (we're still texting them; just on a 30-day cadence).
+  if (status === "Parked") return "outreach";
   return "cold";
 }
 

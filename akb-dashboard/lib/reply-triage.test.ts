@@ -84,6 +84,12 @@ describe("determineNewStatus", () => {
     expect(determineNewStatus("unknown", "Texted")).toBe("Response Received");
     expect(determineNewStatus("unknown", "Negotiating")).toBeNull();
   });
+  it("unknown also promotes a Parked record (rebuild-stale-deal-handling 2026-06-14)", () => {
+    // A Parked record is one that aged into the cold follow-up loop. A
+    // belated reply on it is STILL the same Response-Received transition
+    // — must promote so autoRunOnEngaged fires the re-price.
+    expect(determineNewStatus("unknown", "Parked")).toBe("Response Received");
+  });
 });
 
 describe("triageSellerReply — alert tiers (operator 2026-06-10)", () => {

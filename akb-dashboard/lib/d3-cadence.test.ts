@@ -20,7 +20,7 @@
 //   T12 active_eligible, within window                  → wait_in_cadence
 //   T13 active_eligible, send time, drift up >10%       → hold_manual_review_drift_up
 //   T14 active_eligible, send time, drift down >10%     → send_follow_up_drift_down
-//   T15 active_eligible, send time, drift within ±10%   → send_follow_up_3
+//   T15 active_eligible, send time, drift within ±10%   → send_follow_up_attempt_1
 //   T16 pending_reverification, no prior probe          → send_status_check
 //   T17 pending_reverification, prior probe + timeout   → auto_dead_status_check_timeout
 //   T18 pending_reverification, prior probe, no timeout → wait_in_cadence
@@ -275,11 +275,14 @@ describe("classifyCadence — active_eligible cadence positions", () => {
     expect(d.reasoning).toContain("can't compute cadence position");
   });
 
-  it("T10: schedule exhausted, 15d since last send → auto_dead_followup_timeout", () => {
+  // Parked-on-silence regime (Maverick 2026-06-14): schedule [30, 30] gap-
+  // based, max 2 attempts, auto-dead 30d after the final send. Matches the
+  // operator's '30/60 — 2 attempts, then dispose' selection.
+  it("T10: schedule exhausted, 35d since last send → auto_dead_followup_timeout", () => {
     const d = classifyCadence({
       listing: listing({
-        lastOutboundAt: daysAgo(15),
-        followUpCount: 3,
+        lastOutboundAt: daysAgo(35),
+        followUpCount: 2,
       }),
       bucket: "active_eligible",
       now: NOW,
@@ -291,11 +294,11 @@ describe("classifyCadence — active_eligible cadence positions", () => {
     });
   });
 
-  it("T11: schedule exhausted, 5d since last send → wait_in_cadence", () => {
+  it("T11: schedule exhausted, 10d since last send → wait_in_cadence (within auto-dead window)", () => {
     const d = classifyCadence({
       listing: listing({
-        lastOutboundAt: daysAgo(5),
-        followUpCount: 3,
+        lastOutboundAt: daysAgo(10),
+        followUpCount: 2,
       }),
       bucket: "active_eligible",
       now: NOW,
@@ -303,23 +306,23 @@ describe("classifyCadence — active_eligible cadence positions", () => {
     expect(d.action).toBe("wait_in_cadence");
   });
 
-  it("T12: 2d since send, followUpCount=0 (next at day 3) → wait_in_cadence", () => {
+  it("T12: 5d since send, followUpCount=0 (next at day 30) → wait_in_cadence", () => {
     const d = classifyCadence({
       listing: listing({
-        lastOutboundAt: daysAgo(2),
+        lastOutboundAt: daysAgo(5),
         followUpCount: 0,
       }),
       bucket: "active_eligible",
       now: NOW,
     });
     expect(d.action).toBe("wait_in_cadence");
-    expect(d.reasoning).toContain("day 3");
+    expect(d.reasoning).toContain("day 30");
   });
 
   it("T13: drift up >10% at send time → hold_manual_review_drift_up", () => {
     const d = classifyCadence({
       listing: listing({
-        lastOutboundAt: daysAgo(3),
+        lastOutboundAt: daysAgo(30),
         followUpCount: 0,
         listPriceAtSend: 100000,
         listPrice: 115000, // +15%
@@ -334,7 +337,7 @@ describe("classifyCadence — active_eligible cadence positions", () => {
   it("T14: drift down >10% at send time → send_follow_up_drift_down", () => {
     const d = classifyCadence({
       listing: listing({
-        lastOutboundAt: daysAgo(3),
+        lastOutboundAt: daysAgo(30),
         followUpCount: 0,
         listPriceAtSend: 100000,
         listPrice: 85000, // -15%
@@ -346,10 +349,10 @@ describe("classifyCadence — active_eligible cadence positions", () => {
     expect(d.template_id).toBe("follow_up_drift_down");
   });
 
-  it("T15: drift within ±10% at send time, followUpCount=0 → send_follow_up_3", () => {
+  it("T15: drift within ±10%, followUpCount=0, 30d since send → send_follow_up_attempt_1", () => {
     const d = classifyCadence({
       listing: listing({
-        lastOutboundAt: daysAgo(3),
+        lastOutboundAt: daysAgo(30),
         followUpCount: 0,
         listPriceAtSend: 100000,
         listPrice: 95000, // -5%
@@ -357,14 +360,14 @@ describe("classifyCadence — active_eligible cadence positions", () => {
       bucket: "active_eligible",
       now: NOW,
     });
-    expect(d.action).toBe("send_follow_up_3");
-    expect(d.template_id).toBe("follow_up_3");
+    expect(d.action).toBe("send_follow_up_attempt_1");
+    expect(d.template_id).toBe("follow_up_attempt_1");
   });
 
-  it("T15b: drift within window, followUpCount=1 → send_follow_up_7", () => {
+  it("T15b: drift within window, followUpCount=1, 30d since prior follow-up → send_follow_up_attempt_2", () => {
     const d = classifyCadence({
       listing: listing({
-        lastOutboundAt: daysAgo(7),
+        lastOutboundAt: daysAgo(30),
         followUpCount: 1,
         listPriceAtSend: 100000,
         listPrice: 100000,
@@ -372,21 +375,8 @@ describe("classifyCadence — active_eligible cadence positions", () => {
       bucket: "active_eligible",
       now: NOW,
     });
-    expect(d.action).toBe("send_follow_up_7");
-  });
-
-  it("T15c: drift within window, followUpCount=2 → send_follow_up_14", () => {
-    const d = classifyCadence({
-      listing: listing({
-        lastOutboundAt: daysAgo(14),
-        followUpCount: 2,
-        listPriceAtSend: 100000,
-        listPrice: 100000,
-      }),
-      bucket: "active_eligible",
-      now: NOW,
-    });
-    expect(d.action).toBe("send_follow_up_14");
+    expect(d.action).toBe("send_follow_up_attempt_2");
+    expect(d.template_id).toBe("follow_up_attempt_2");
   });
 });
 

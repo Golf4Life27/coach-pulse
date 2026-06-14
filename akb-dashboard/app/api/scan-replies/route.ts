@@ -100,9 +100,13 @@ async function handleScan(req: Request) {
   try {
     const listings = await getListings();
 
-    // Only check listings that have been texted and have agent phones
+    // Only check listings that have been texted and have agent phones.
+    // Parked added 2026-06-14 (rebuild-stale-deal-handling): a Parked
+    // record is a Texted record that's gone quiet and entered the cold
+    // follow-up loop — if the agent finally replies, scan-replies must
+    // pick it up so autoRunOnEngaged fires the re-price.
     const CHECKABLE_STATUSES = new Set([
-      "Texted", "Response Received", "Negotiating", "Offer Accepted", "Emailed",
+      "Texted", "Response Received", "Negotiating", "Offer Accepted", "Emailed", "Parked",
     ]);
     const checkable = listings.filter(
       (l) => l.agentPhone && CHECKABLE_STATUSES.has(l.outreachStatus ?? "")
