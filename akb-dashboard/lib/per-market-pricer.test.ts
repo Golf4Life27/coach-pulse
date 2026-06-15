@@ -92,6 +92,37 @@ describe("GUARD A — never-over-list cap (Hole A)", () => {
     expect(r.flagReseed).toBe(true);
   });
 
+  it("a STRONG seed that gets capped is NOT flagged for re-seed (guard fired, seed trusted)", () => {
+    // Deep-discount listing: STRONG renovated seed → ARV ≫ list → opener > cap.
+    // The cap fires (cappedToList) but the seed is good, so flagReseed stays false.
+    const r = priceOpener({
+      listPrice: 47_900,
+      realArvMedian: 230_120,
+      estRehabMid: 46_024,
+      wholesaleFee: 5_000,
+      arvPctMax: DETROIT_BUYBOX,
+      anchorPct: 0.90,
+      arvConfidence: "STRONG",
+    });
+    expect(r.cappedToList).toBe(true);
+    expect(r.flagReseed).toBe(false); // STRONG → trusted, not a re-seed candidate
+    expect(r.opener).toBe(43_110);
+  });
+
+  it("a THIN/unlabeled ARV that gets capped IS flagged for re-seed", () => {
+    const r = priceOpener({
+      listPrice: 47_900,
+      realArvMedian: 230_120,
+      estRehabMid: 46_024,
+      wholesaleFee: 5_000,
+      arvPctMax: DETROIT_BUYBOX,
+      anchorPct: 0.90,
+      arvConfidence: "THIN",
+    });
+    expect(r.cappedToList).toBe(true);
+    expect(r.flagReseed).toBe(true); // THIN → re-pull could fix it
+  });
+
   it("caps at 90% of list (default), leaving negotiating room — never opens at asking", () => {
     expect(NEVER_OVER_LIST_PCT).toBe(0.90);
     // Strong deal: renovated ARV far above a low list → buy-box wants > list.
@@ -158,6 +189,21 @@ describe("GUARD C — ARV-sanity gate (Hole C)", () => {
     expect(r.flagReseed).toBe(true);
     expect(r.basis).toBe("list_fraction_65");
     expect(r.opener).toBe(77_350); // 0.65 × 119000
+  });
+
+  it("a STRONG seed below list is distrusted for pricing but NOT flagged for re-seed (over-ARV listing, good seed)", () => {
+    const r = priceOpener({
+      listPrice: 119_000,
+      realArvMedian: 93_818,
+      estRehabMid: 34_425,
+      arvPctMax: DETROIT_BUYBOX,
+      anchorPct: 0.90,
+      arvConfidence: "STRONG",
+    });
+    expect(r.arvDistrusted).toBe(true);   // still drops to the 65% rail for pricing
+    expect(r.flagReseed).toBe(false);     // but the STRONG seed is trusted — listing is just over-ARV
+    expect(r.basis).toBe("list_fraction_65");
+    expect(r.opener).toBe(77_350);
   });
 
   it("an ARV at/above list is trusted (no distrust)", () => {
