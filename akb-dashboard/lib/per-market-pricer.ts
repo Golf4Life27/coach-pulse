@@ -71,6 +71,14 @@ export const LOW_OPENER_FLOOR_USD = (() => {
   return Number.isFinite(raw) && raw >= 0 ? raw : 10_000;
 })();
 
+/** Never-over-list cap: the opener can never exceed this fraction of list.
+ *  0.90 (Maverick 2026-06-14) leaves negotiating room on strong deals
+ *  instead of opening at asking. Env-tunable; clamped to (0,1]. */
+export const NEVER_OVER_LIST_PCT = (() => {
+  const raw = Number(process.env.NEVER_OVER_LIST_PCT);
+  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.90;
+})();
+
 export type OpenerBasis =
   | "arv_buybox"        // anchor × (ARV × buy-box − rehab − fee)
   | "list_fraction_65"  // flat 65%-of-list fallback (thin/no ARV)
@@ -273,15 +281,19 @@ export function priceOpener(input: PricerInput): PricerResult {
   };
 }
 
-/** GUARD: NEVER-OVER-LIST CAP (Hole A). An opener can never exceed asking.
- *  When the cap bites, the stored ARV was implausibly high → flag re-seed. */
+/** GUARD: NEVER-OVER-LIST CAP (Hole A). The opener can never exceed
+ *  NEVER_OVER_LIST_PCT × list (0.90 — leaves negotiating room on strong
+ *  deals). When the cap bites, the stored ARV was implausibly high → flag
+ *  re-seed. */
 function applyOverListCap(r: PricerResult, list: number | null): PricerResult {
-  if (list == null || r.opener == null || r.opener <= list) return r;
+  if (list == null || r.opener == null) return r;
+  const cap = Math.round(list * NEVER_OVER_LIST_PCT);
+  if (r.opener <= cap) return r;
   return {
     ...r,
-    opener: list,
+    opener: cap,
     cappedToList: true,
     flagReseed: true,
-    detail: `${r.detail} | CAPPED to list $${list.toLocaleString()} (opener exceeded asking — stored ARV implausibly high, flagged for re-seed)`,
+    detail: `${r.detail} | CAPPED to ${Math.round(NEVER_OVER_LIST_PCT * 100)}% of list = $${cap.toLocaleString()} (opener exceeded the cap — stored ARV implausibly high, flagged for re-seed)`,
   };
 }

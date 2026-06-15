@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { priceOpener, FALLBACK_OPENER_PCT_OF_LIST } from "./per-market-pricer";
+import { priceOpener, FALLBACK_OPENER_PCT_OF_LIST, NEVER_OVER_LIST_PCT } from "./per-market-pricer";
 
 const DETROIT_BUYBOX = 0.6461;
 
@@ -88,8 +88,24 @@ describe("GUARD A — never-over-list cap (Hole A)", () => {
       anchorPct: 0.90,
     });
     expect(r.cappedToList).toBe(true);
-    expect(r.opener).toBe(47_900); // = list, never above
+    expect(r.opener).toBe(43_110); // 0.90 × 47,900 — capped with negotiating room
     expect(r.flagReseed).toBe(true);
+  });
+
+  it("caps at 90% of list (default), leaving negotiating room — never opens at asking", () => {
+    expect(NEVER_OVER_LIST_PCT).toBe(0.90);
+    // Strong deal: renovated ARV far above a low list → buy-box wants > list.
+    const r = priceOpener({
+      listPrice: 79_000,
+      realArvMedian: 212_860,
+      estRehabMid: 37_434,
+      wholesaleFee: 5_000,
+      arvPctMax: DETROIT_BUYBOX,
+      anchorPct: 0.90,
+    });
+    expect(r.cappedToList).toBe(true);
+    expect(r.opener).toBe(71_100); // 0.90 × 79,000, not 79,000
+    expect(r.opener).toBeLessThan(79_000);
   });
 });
 
