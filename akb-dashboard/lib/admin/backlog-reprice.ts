@@ -43,3 +43,51 @@ export function isReviewBacklogInScope(l: Listing, opts: BacklogScopeOpts): bool
   if (typeof l.roughOpenerAmount === "number" && l.roughOpenerAmount > 0) return false;
   return true;
 }
+
+// ── ROUTING (Maverick 2026-06-15) — after pricing a LIVE record, decide
+// whether it stays in Review (the sendable set) or routes to Manual Review. ──
+
+/** Hot-seed caution: an opener ABOVE this fraction of list routes to Manual
+ *  Review (existing >75%-of-list doctrine). The capped_to_list basis (0.90 of
+ *  list) always trips it. Env-tunable. */
+export const HOT_SEED_PCT_OF_LIST = (() => {
+  const raw = Number(process.env.BACKLOG_HOT_SEED_PCT);
+  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.75;
+})();
+
+/** Detroit buy-box list-price ceiling: any record listed ABOVE this routes to
+ *  Manual Review regardless of pricing basis (luxury / 65%-fallback mis-shape
+ *  catch). An arv_buybox record above the ceiling goes to Manual Review too —
+ *  a human look, not an auto-reject. Env-tunable. */
+export const DETROIT_LIST_CEILING_USD = (() => {
+  const raw = Number(process.env.BACKLOG_LIST_CEILING_USD);
+  return Number.isFinite(raw) && raw > 0 ? raw : 250_000;
+})();
+
+export type BacklogRoute = "review" | "manual_review";
+export interface BacklogRouteVerdict {
+  route: BacklogRoute;
+  manualReview: boolean;
+  reasons: string[];
+}
+
+/** Pure: route a LIVE, priced record. Manual Review when the list price
+ *  exceeds the Detroit ceiling OR the opener lands above the hot-seed fraction
+ *  of list; otherwise it stays Review (sendable). Tested. */
+export function routeBacklogStatus(
+  input: { opener: number | null; listPrice: number | null },
+  opts?: { hotSeedPct?: number; listCeilingUsd?: number },
+): BacklogRouteVerdict {
+  const hotPct = opts?.hotSeedPct ?? HOT_SEED_PCT_OF_LIST;
+  const ceiling = opts?.listCeilingUsd ?? DETROIT_LIST_CEILING_USD;
+  const reasons: string[] = [];
+  const list = typeof input.listPrice === "number" && input.listPrice > 0 ? input.listPrice : null;
+  if (list != null && list > ceiling) {
+    reasons.push(`list $${Math.round(list).toLocaleString()} > $${ceiling.toLocaleString()} ceiling (luxury)`);
+  }
+  if (input.opener != null && list != null && input.opener > hotPct * list) {
+    reasons.push(`opener ${Math.round((100 * input.opener) / list)}% > ${Math.round(hotPct * 100)}% of list (hot-seed)`);
+  }
+  const manualReview = reasons.length > 0;
+  return { route: manualReview ? "manual_review" : "review", manualReview, reasons };
+}
