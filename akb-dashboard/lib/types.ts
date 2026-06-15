@@ -1,5 +1,8 @@
 export interface Listing {
   id: string;
+  /** Airtable's built-in record creation timestamp (ISO). Present on records
+   *  loaded via getListings; used for cohort-by-recency scoping. */
+  createdTime?: string | null;
   address: string;
   city: string;
   zip: string;
@@ -167,6 +170,9 @@ export interface Listing {
   // Defaults: wholesaleFeeTarget 15000, buyerProfitTarget 30000 (Bible v3).
   wholesaleFeeTarget?: number | null;
   buyerProfitTarget?: number | null;
+  /** Rough opener written by the national crawler / Review-backlog re-price
+   *  pass. Blank = not yet priced (the re-price cursor selects on this). */
+  roughOpenerAmount?: number | null;
   investorMao?: number | null;
   yourMao?: number | null;
   // Confirmed-override taxes (2026-06-06). Operator/CAD-sourced; survives

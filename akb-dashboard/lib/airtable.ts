@@ -239,6 +239,9 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "ARV_Comp_Details_JSON": "arvCompDetailsJson",
   "Wholesale_Fee_Target": "wholesaleFeeTarget",
   "Buyer_Profit_Target": "buyerProfitTarget",
+  // Rough opener (national crawler). Read here so the Review-backlog re-price
+  // pass can skip records already priced (idempotent cursor).
+  "Rough_Opener_Amount": "roughOpenerAmount",
   // Economics quarantine (see ID-map note): map to the clean V2.1 fields,
   // NOT the legacy ARV-driven formula fields (legacy_Investor_MAO /
   // legacy_Your_MAO in Airtable). null → HOLD until V2.1 computes.
@@ -398,6 +401,10 @@ function mapRecord<T>(
   const fields = record.fields as Record<string, unknown>;
   const mapped: Record<string, unknown> = { id: record.id };
 
+  // Airtable's built-in record creation timestamp (ISO). Surfaced for
+  // cohort-by-recency scoping (e.g. the Review-backlog re-price pass).
+  if (record.createdTime) mapped.createdTime = record.createdTime as string;
+
   for (const [fieldId, propName] of Object.entries(fieldMap)) {
     mapped[propName] = fields[fieldId] ?? null;
   }
@@ -411,6 +418,8 @@ function mapRecordByName<T>(
 ): T {
   const fields = record.fields as Record<string, unknown>;
   const mapped: Record<string, unknown> = { id: record.id };
+
+  if (record.createdTime) mapped.createdTime = record.createdTime as string;
 
   // Map known field names to prop names
   for (const [fieldName, propName] of Object.entries(nameMap)) {
