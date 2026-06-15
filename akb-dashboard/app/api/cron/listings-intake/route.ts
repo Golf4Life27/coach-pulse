@@ -666,6 +666,7 @@ export async function GET(req: Request) {
     dont_priced: 0,
     comp_pulls: 0,
     reseed: false,
+    seed_only: false,
     skipped: {} as Record<string, number>,
     errors: [] as string[],
     budget: null as null | { spentUsd: number; budgetUsd: number; seedsRemaining: number },
@@ -675,6 +676,12 @@ export async function GET(req: Request) {
   // re-seed after a gate/widen change. Ignored on registry-driven fires.
   const reseed = url.searchParams.get("reseed") === "1" && overrideUsed;
   autoSeed.reseed = reseed;
+  // ?seed_only=1 (manual-override runs only): do the auto-seed pass, then STOP
+  // before the Firecrawl listing-verification phase. Seeding never uses verify,
+  // so a re-seed should cost comp pulls only (~$0.20/ZIP), not ~168 Firecrawl
+  // credits/run. Keeps the watched re-seed loop cheap + off the Firecrawl wallet.
+  const seedOnly = url.searchParams.get("seed_only") === "1" && overrideUsed;
+  autoSeed.seed_only = seedOnly;
   if (autoseedLive) {
     let arvSeeded: Set<string>;
     try {
@@ -729,6 +736,33 @@ export async function GET(req: Request) {
         zipSeedMap.set(zip, await getZipArvSeed(zip).catch(() => null));
       }
     }
+  }
+
+  // ── seed_only short-circuit: the auto-seed pass is done; skip the entire
+  // Firecrawl verify/classify/write phase (it is irrelevant to seeding and is
+  // what drains the Firecrawl wallet). Manual-override runs only. ──
+  if (seedOnly) {
+    await audit({
+      agent: "scout",
+      event: "listings_intake_seed_only",
+      status: "confirmed_success",
+      inputSummary: { auth_kind: authKind, zips, reseed },
+      outputSummary: { auto_seed: autoSeed, raw_candidates: summary.raw_candidates, duration_ms: Date.now() - t0 },
+    });
+    return NextResponse.json({
+      ok: true,
+      mode: "seed_only",
+      note: "Auto-seed pass only — Firecrawl verify/classify/write skipped (zero Firecrawl spend). Use without seed_only for a full intake.",
+      auth_kind: authKind,
+      zip_source: zipSource,
+      zips_scanned: zips.length,
+      zips_fetched_ok: zipsProcessedOk.size,
+      raw_candidates: summary.raw_candidates,
+      auto_seed: autoSeed,
+      seeded_zips_source: summary.seeded_zips_source,
+      per_zip_errors: summary.per_zip_errors,
+      duration_ms: Date.now() - t0,
+    });
   }
 
   // ── Guard (3): drop candidates already verified THIS cycle (KV cache)
