@@ -52,6 +52,29 @@ export function evaluateBreaker(spentRecent: number, cap: number = FIRECRAWL_HOU
   return { tripped: spent >= cap, spentRecent: spent, cap, headroom: Math.max(0, cap - spent) };
 }
 
+export type VerifyHaltReason = "spend_cap" | "balance_nonpositive" | null;
+
+export interface VerifyHaltVerdict {
+  halt: boolean;
+  reason: VerifyHaltReason;
+  balanceUnhealthy: boolean;
+}
+
+/** Pure: should the Firecrawl verify phase be skipped before dispatch?
+ *  Two health checks, either of which halts (zero spend, ZIPs stay due):
+ *   - the rolling-hour spend breaker is tripped, OR
+ *   - the REAL wallet balance is known and ≤ 0 (drained → every verify would
+ *     402/error; attempting just loop-burns the breaker every tick).
+ *  A null balance (probe failed/unknown) does NOT halt — we don't block on an
+ *  unknown balance; the spend breaker stays the backstop. Balance takes
+ *  precedence in the reason when both fire (it's the root cause to fix). */
+export function shouldHaltVerify(input: { breakerTripped: boolean; balanceRemaining: number | null }): VerifyHaltVerdict {
+  const balanceUnhealthy = input.balanceRemaining != null && input.balanceRemaining <= 0;
+  const halt = input.breakerTripped || balanceUnhealthy;
+  const reason: VerifyHaltReason = balanceUnhealthy ? "balance_nonpositive" : input.breakerTripped ? "spend_cap" : null;
+  return { halt, reason, balanceUnhealthy };
+}
+
 /** Credits spent in the current + previous hour bucket (rolling window).
  *  0 when KV is unconfigured (breaker tracking disabled — fail open). */
 export async function firecrawlSpentRecent(now: Date = new Date()): Promise<number> {

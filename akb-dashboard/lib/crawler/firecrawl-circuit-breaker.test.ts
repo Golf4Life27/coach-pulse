@@ -1,5 +1,36 @@
 import { describe, it, expect } from "vitest";
-import { evaluateBreaker, FIRECRAWL_HOURLY_CREDIT_CAP } from "./firecrawl-circuit-breaker";
+import { evaluateBreaker, shouldHaltVerify, FIRECRAWL_HOURLY_CREDIT_CAP } from "./firecrawl-circuit-breaker";
+
+describe("shouldHaltVerify — balance/breaker gate", () => {
+  it("does not halt when healthy (breaker ok, positive balance)", () => {
+    const v = shouldHaltVerify({ breakerTripped: false, balanceRemaining: 5_000 });
+    expect(v.halt).toBe(false);
+    expect(v.reason).toBeNull();
+  });
+
+  it("halts on a drained wallet (balance ≤ 0) — the loop-burn root cause", () => {
+    expect(shouldHaltVerify({ breakerTripped: false, balanceRemaining: -821 })).toEqual({
+      halt: true, reason: "balance_nonpositive", balanceUnhealthy: true,
+    });
+    expect(shouldHaltVerify({ breakerTripped: false, balanceRemaining: 0 }).halt).toBe(true);
+  });
+
+  it("halts on a tripped spend breaker even with positive balance", () => {
+    const v = shouldHaltVerify({ breakerTripped: true, balanceRemaining: 5_000 });
+    expect(v.halt).toBe(true);
+    expect(v.reason).toBe("spend_cap");
+  });
+
+  it("does NOT halt on an unknown (null) balance — never block on an unknown; breaker stays the backstop", () => {
+    const v = shouldHaltVerify({ breakerTripped: false, balanceRemaining: null });
+    expect(v.halt).toBe(false);
+    expect(v.balanceUnhealthy).toBe(false);
+  });
+
+  it("balance reason takes precedence when both fire (root cause to fix)", () => {
+    expect(shouldHaltVerify({ breakerTripped: true, balanceRemaining: -1 }).reason).toBe("balance_nonpositive");
+  });
+});
 
 describe("evaluateBreaker", () => {
   it("does not trip under the cap", () => {
