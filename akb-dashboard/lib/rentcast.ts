@@ -142,7 +142,21 @@ interface AvmInput {
   squareFootage?: number | null;
 }
 
-function buildAvmParams(input: AvmInput): URLSearchParams {
+/** Optional comp-pull widening for /avm/value. These are query params on the
+ *  SAME single request — RentCast bills per call (flat), not per comp, so
+ *  widening returns more raw comps at zero extra cost. Used by the national
+ *  crawler's ZIP auto-seed to gather enough clean sales in thin markets;
+ *  omitted everywhere else (today's default RentCast behavior). */
+export interface CompPullWiden {
+  /** Number of comparables to request (RentCast caps ~25). */
+  compCount?: number;
+  /** Search radius in miles. */
+  maxRadius?: number;
+  /** Max comp age in days (relax recency). */
+  daysOld?: number;
+}
+
+function buildAvmParams(input: AvmInput, widen?: CompPullWiden): URLSearchParams {
   const p = new URLSearchParams({
     address: input.address,
     city: input.city,
@@ -152,6 +166,9 @@ function buildAvmParams(input: AvmInput): URLSearchParams {
   if (input.bedrooms != null) p.set("bedrooms", String(input.bedrooms));
   if (input.bathrooms != null) p.set("bathrooms", String(input.bathrooms));
   if (input.squareFootage != null) p.set("squareFootage", String(input.squareFootage));
+  if (widen?.compCount != null) p.set("compCount", String(widen.compCount));
+  if (widen?.maxRadius != null) p.set("maxRadius", String(widen.maxRadius));
+  if (widen?.daysOld != null) p.set("daysOld", String(widen.daysOld));
   return p;
 }
 
@@ -192,11 +209,12 @@ export async function getAvmValue(
 export async function getSaleComparables(
   input: AvmInput,
   recordId?: string,
+  widen?: CompPullWiden,
 ): Promise<RentCastSaleComp[]> {
   if (!RENTCAST_API_KEY) {
     throw new Error("RENTCAST_API_KEY not set");
   }
-  const url = `${BASE}/avm/value?${buildAvmParams(input).toString()}`;
+  const url = `${BASE}/avm/value?${buildAvmParams(input, widen).toString()}`;
   const res = await paidFetch(
     "avm/value",
     url,

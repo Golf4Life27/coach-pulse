@@ -114,6 +114,7 @@ export async function GET(req: Request) {
     by_tier: {} as Record<string, number>,
     would_send_aggressive: 0, // eligible AND has an opener
     by_arv_source: { seed_renovated: 0, stored: 0, none: 0 } as Record<string, number>,
+    seed_dont_price: 0,
     reseed_flagged: 0,
     opener_sum: 0,
     opener_n: 0,
@@ -138,6 +139,7 @@ export async function GET(req: Request) {
       seedCache.set(l.zip, await getZipArvSeed(l.zip).catch(() => null));
     }
     const seed = l.zip ? seedCache.get(l.zip) ?? null : null;
+    if (seed?.dontPrice) agg.seed_dont_price++;
     const pricedW = priceOpenerWithSeed({
       listPrice: l.listPrice ?? null,
       storedArv: l.realArvMedian ?? null,

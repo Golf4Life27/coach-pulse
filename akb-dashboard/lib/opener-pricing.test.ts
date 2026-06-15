@@ -7,7 +7,7 @@ const DETROIT = 0.6461;
 function seed(over: Partial<ZipArvSeed> = {}): ZipArvSeed {
   return {
     zip: "48227", renovatedPerSqft: 150, arvLowPerSqft: 110, compCount: 7,
-    confidence: "STRONG", source: "rentcast_avm", market: "Detroit", state: "MI",
+    confidence: "STRONG", dontPrice: false, source: "rentcast_avm", market: "Detroit", state: "MI",
     fetchedAt: null, receiptsJson: null, recordId: "rec1", ...over,
   };
 }
@@ -65,5 +65,21 @@ describe("priceOpenerWithSeed — source-swap", () => {
     const r = priceOpenerWithSeed({ listPrice: 80_000, sqft: null, seed: seed() });
     expect(r.arvSource).toBe("none"); // no sqft → seed unusable, no stored ARV
     expect(r.result.basis).toBe("list_fraction_65");
+  });
+
+  it("a DONT_PRICE seed routes to 65%-of-list and NEVER to the stored ARV", () => {
+    // The seed-quality gate marked this ZIP do-not-price. Even though a stored
+    // ARV exists, the pricer must NOT use it — it goes to the flat 65% rail.
+    const r = priceOpenerWithSeed({
+      listPrice: 80_000,
+      storedArv: 120_000, storedArvConfidence: "HIGH",
+      sqft: 1_000, arvPctMax: DETROIT, anchorPct: 0.90,
+      estRehabMid: 20_000, wholesaleFee: 5_000,
+      seed: seed({ confidence: "DONT_PRICE", dontPrice: true, renovatedPerSqft: 0, arvLowPerSqft: null }),
+    });
+    expect(r.arvSource).toBe("none"); // NOT "stored"
+    expect(r.arvUsed).toBeNull();
+    expect(r.result.basis).toBe("list_fraction_65");
+    expect(r.result.opener).toBe(52_000); // 0.65 × 80k
   });
 });

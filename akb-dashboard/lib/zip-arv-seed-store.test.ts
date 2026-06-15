@@ -38,7 +38,7 @@ describe("validateSeedWrite", () => {
 describe("arvForSubjectFromSeed — THIN biases to the low end", () => {
   const base: ZipArvSeed = {
     zip: "48227", renovatedPerSqft: 150, arvLowPerSqft: 110, compCount: 0,
-    confidence: "STRONG", source: "rentcast_avm", market: "Detroit", state: "MI",
+    confidence: "STRONG", dontPrice: false, source: "rentcast_avm", market: "Detroit", state: "MI",
     fetchedAt: null, receiptsJson: null, recordId: "rec1",
   };
 
@@ -56,6 +56,27 @@ describe("arvForSubjectFromSeed — THIN biases to the low end", () => {
 
   it("null sqft → null", () => {
     expect(arvForSubjectFromSeed(base, null)).toBeNull();
+  });
+
+  it("DONT_PRICE seed → null even with sqft + a positive $/sqft on the row", () => {
+    expect(arvForSubjectFromSeed({ ...base, confidence: "DONT_PRICE", dontPrice: true }, 1000)).toBeNull();
+  });
+});
+
+describe("validateSeedWrite — DONT_PRICE sentinel", () => {
+  it("accepts a dont-price write with no $/sqft and stamps DONT_PRICE", () => {
+    const v = validateSeedWrite({ zip: "48205", dontPrice: true, compCount: 1, source: "rentcast_avm" });
+    expect(v.ok).toBe(true);
+    if (v.ok) {
+      expect(v.data.confidence).toBe("DONT_PRICE");
+      expect(v.data.renovatedPerSqft).toBe(0);
+      expect(v.data.dontPrice).toBe(true);
+    }
+  });
+
+  it("still enforces a valid ZIP + source on a dont-price write", () => {
+    expect(validateSeedWrite({ zip: "4820", dontPrice: true, compCount: 0, source: "rentcast_avm" }).ok).toBe(false);
+    expect(validateSeedWrite({ zip: "48205", dontPrice: true, compCount: 0, source: "guess" as never }).ok).toBe(false);
   });
 });
 
