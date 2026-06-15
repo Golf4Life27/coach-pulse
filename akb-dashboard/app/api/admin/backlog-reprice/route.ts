@@ -39,12 +39,14 @@ import {
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { verifyListing, verifyListingByUrl, probeFirecrawlBalance } from "@/lib/crawler/sources/firecrawl";
 import { checkFirecrawlBreaker, recordFirecrawlSpend, shouldHaltVerify } from "@/lib/crawler/firecrawl-circuit-breaker";
+import { runAsyncPool } from "@/lib/crawler/async-pool";
 import { priceOpenerWithSeed } from "@/lib/opener-pricing";
 import { getMarketForListing } from "@/lib/markets/registry";
 import { resolveAnchorPct } from "@/lib/markets/anchor";
 import { getZipArvSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import {
   isReviewBacklogInScope,
+  routeBacklogStatus,
   BACKLOG_DEFAULT_SINCE,
   BACKLOG_DEFAULT_STATE,
 } from "@/lib/admin/backlog-reprice";
@@ -54,8 +56,22 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 const DEFAULT_LIMIT = 25;
-const MAX_LIMIT = 300;
+const MAX_LIMIT = 1000;
 const BUDGET_MS = 180_000;
+// Bounded parallelism over the verify+price+write pass — sequential ran ~22
+// records/call; ~6 in flight clears ~200/call within the lambda budget while
+// staying under Airtable's ~5 writes/s and Firecrawl's rate limit. Env-tunable.
+const CONCURRENCY = (() => {
+  const raw = Number(process.env.BACKLOG_CONCURRENCY);
+  return Number.isFinite(raw) && raw >= 1 && raw <= 20 ? Math.floor(raw) : 6;
+})();
+// Empirically-calibrated dry-run cost estimate: the first slice burned ~3.3
+// Firecrawl credits/record (balance delta), NOT the 1-2 the per-call API field
+// (often 0) suggested. Env-tunable so the estimate stays trustworthy.
+const EST_CREDITS_PER_RECORD = (() => {
+  const raw = Number(process.env.BACKLOG_EST_CREDITS_PER_RECORD);
+  return Number.isFinite(raw) && raw > 0 ? raw : 3.5;
+})();
 
 export async function GET(req: Request) {
   const t0 = Date.now();
@@ -99,8 +115,9 @@ export async function GET(req: Request) {
   inScope.sort((a, b) => (Date.parse(a.createdTime ?? "") || 0) - (Date.parse(b.createdTime ?? "") || 0));
   const batch = inScope.slice(0, limit);
   const withUrl = batch.filter((l) => !!(l.verificationUrl && l.verificationUrl.trim())).length;
-  // Estimated credits: 1 per known-URL re-scrape, 2 per address discovery.
-  const estCredits = withUrl * 1 + (batch.length - withUrl) * 2;
+  // Empirically-calibrated estimate (~3.3 credits/record observed), not the
+  // unreliable per-call API field.
+  const estCredits = Math.round(batch.length * EST_CREDITS_PER_RECORD);
 
   const scope = { state, since: new Date(sinceMs).toISOString(), zips: [...zips] };
 
@@ -154,138 +171,141 @@ export async function GET(req: Request) {
     });
   }
 
-  // ── Apply: liveness re-verify → price the live ones ──
+  // ── Apply: PRE-LOAD seeds + anchors so the concurrent workers only READ the
+  // caches (no write races / duplicate loads). Both are free Airtable/KV reads. ──
   const seedCache = new Map<string, ZipArvSeed | null>();
   const anchorCache = new Map<string, number>();
-  let creditsUsed = 0;
+  const distinctZips = [...new Set(batch.map((l) => (l.zip ?? "").trim()).filter(Boolean))];
+  const distinctMarkets = [...new Set(batch.map((l) => getMarketForListing({ state: l.state, zip: l.zip })?.id ?? ""))];
+  await Promise.all([
+    ...distinctZips.map(async (z) => { seedCache.set(z, await getZipArvSeed(z).catch(() => null)); }),
+    ...distinctMarkets.map(async (m) => { anchorCache.set(m, await resolveAnchorPct(m || null)); }),
+  ]);
+
   let paymentRequired = false;
-  let budgetHit = false;
-  const results: Array<Record<string, unknown>> = [];
+  let creditsReported = 0; // sum of the per-call API field (often ~0 — unreliable)
 
-  for (const l of batch) {
-    if (Date.now() - t0 > BUDGET_MS) { budgetHit = true; break; }
-    if (!l.address || l.address.trim() === "") {
-      results.push({ recordId: l.id, action: "skipped_no_address" });
-      continue;
-    }
-    const iso = new Date().toISOString();
+  // Per-record worker: liveness re-verify FIRST → mark dead, or price + route.
+  // Bounded concurrency lifts throughput from ~22 to ~200 records/call.
+  const pool = await runAsyncPool<Listing, Record<string, unknown>>({
+    items: batch,
+    concurrency: CONCURRENCY,
+    shouldStopDispatch: () => paymentRequired || Date.now() - t0 > BUDGET_MS,
+    worker: async (l): Promise<Record<string, unknown>> => {
+      if (!l.address || l.address.trim() === "") return { recordId: l.id, action: "skipped_no_address" };
+      const iso = new Date().toISOString();
 
-    // (1) LIVENESS re-verify FIRST.
-    let fc;
-    try {
-      const hasUrl = !!(l.verificationUrl && l.verificationUrl.trim());
-      fc = hasUrl ? await verifyListingByUrl(l.verificationUrl, l.address) : await verifyListing(l.address);
-    } catch (err) {
-      results.push({ recordId: l.id, address: l.address, action: "verify_error", error: String(err).slice(0, 160) });
-      continue;
-    }
-    creditsUsed += fc.creditsUsed;
-    if (fc.paymentRequired) {
-      paymentRequired = true;
-      results.push({ recordId: l.id, address: l.address, action: "payment_required", credits: fc.creditsUsed });
-      break; // wallet emptied mid-run — stop
-    }
-    if (!fc.resolved) {
-      // Infra miss — do NOT mark dead on an unresolved scrape; leave as-is.
-      results.push({ recordId: l.id, address: l.address, action: "unresolved", credits: fc.creditsUsed, error: fc.error ?? null });
-      continue;
-    }
-
-    // (2a) Not live → mark Dead. Never priced, never texted.
-    if (!fc.stillActive) {
+      // (1) LIVENESS re-verify FIRST.
+      let fc;
       try {
-        await updateListingRecord(l.id, { Live_Status: "Off Market", Outreach_Status: "Dead", Last_Verified: iso });
-        results.push({ recordId: l.id, address: l.address, zip: l.zip, action: "marked_dead", credits: fc.creditsUsed });
-        await audit({
-          agent: "scout", event: "backlog_reprice_dead", status: "confirmed_success", recordId: l.id, ms: 0,
-          inputSummary: { url: l.verificationUrl ?? null }, outputSummary: { still_active: false, credits: fc.creditsUsed },
-          decision: "marked_dead_delisted",
-        });
+        const hasUrl = !!(l.verificationUrl && l.verificationUrl.trim());
+        fc = hasUrl ? await verifyListingByUrl(l.verificationUrl, l.address) : await verifyListing(l.address);
       } catch (err) {
-        results.push({ recordId: l.id, address: l.address, action: "dead_write_failed", error: String(err).slice(0, 160) });
+        return { recordId: l.id, address: l.address, action: "verify_error", error: String(err).slice(0, 160) };
       }
-      continue;
-    }
+      creditsReported += fc.creditsUsed;
+      if (fc.paymentRequired) { paymentRequired = true; return { recordId: l.id, address: l.address, action: "payment_required" }; }
+      // Infra miss → do NOT mark dead; leave as-is (stays due for a retry).
+      if (!fc.resolved) return { recordId: l.id, address: l.address, action: "unresolved", error: fc.error ?? null };
 
-    // (2b) Live → price off the seed table.
-    const market = getMarketForListing({ state: l.state, zip: l.zip });
-    const marketId = market?.id ?? "";
-    let anchorPct = anchorCache.get(marketId);
-    if (anchorPct == null) { anchorPct = await resolveAnchorPct(marketId || null); anchorCache.set(marketId, anchorPct); }
-    if (l.zip && !seedCache.has(l.zip)) seedCache.set(l.zip, await getZipArvSeed(l.zip).catch(() => null));
-    const seed = l.zip ? seedCache.get(l.zip) ?? null : null;
+      // (2a) Not live → mark Dead. NEVER priced, never texted.
+      if (!fc.stillActive) {
+        try {
+          await updateListingRecord(l.id, { Live_Status: "Off Market", Outreach_Status: "Dead", Last_Verified: iso });
+          await audit({ agent: "scout", event: "backlog_reprice_dead", status: "confirmed_success", recordId: l.id, ms: 0, inputSummary: { url: l.verificationUrl ?? null }, outputSummary: { still_active: false }, decision: "marked_dead_delisted" });
+          return { recordId: l.id, address: l.address, zip: l.zip, action: "marked_dead" };
+        } catch (err) {
+          return { recordId: l.id, address: l.address, action: "dead_write_failed", error: String(err).slice(0, 160) };
+        }
+      }
 
-    const pricedW = priceOpenerWithSeed({
-      listPrice: l.listPrice ?? null,
-      storedArv: l.realArvMedian ?? null,
-      storedArvConfidence: l.arvConfidence ?? null,
-      estRehabMid: l.estRehabMid ?? null,
-      estRehab: l.estRehab ?? null,
-      sqft: l.buildingSqFt ?? null,
-      arvPctMax: market?.buyer_params?.arv_pct_max ?? null,
-      wholesaleFee: l.wholesaleFeeTarget ?? null,
-      anchorPct,
-      seed,
-    });
-    const priced = pricedW.result;
-
-    if (priced.opener == null) {
-      // No list price (and no usable ARV) → can't compute an opener. Re-confirm
-      // live but leave it unpriced + in Review for manual handling.
-      try { await updateListingRecord(l.id, { Live_Status: "Active", Last_Verified: iso }); } catch { /* best-effort */ }
-      results.push({ recordId: l.id, address: l.address, zip: l.zip, action: "live_no_opener", basis: priced.basis, credits: fc.creditsUsed });
-      continue;
-    }
-
-    const fields: Record<string, unknown> = {
-      Rough_Opener_Amount: priced.opener,
-      Opener_Basis: pricedW.basisLabel,
-      Live_Status: "Active",
-      Last_Verified: iso,
-      // Outreach_Status intentionally UNTOUCHED — stays Review (no auto-promote).
-    };
-    if (priced.flagReseed) fields["Opener_Reseed_Flag"] = true;
-    try {
-      await updateListingRecord(l.id, fields);
-      results.push({
-        recordId: l.id, address: l.address, zip: l.zip, action: "priced",
-        opener: priced.opener, basis: pricedW.basisLabel, arv_source: pricedW.arvSource,
-        opener_vs_list_pct: l.listPrice ? Math.round((100 * priced.opener) / l.listPrice) : null,
-        reseed_flagged: priced.flagReseed, credits: fc.creditsUsed,
+      // (2b) Live → price off the seed table.
+      const market = getMarketForListing({ state: l.state, zip: l.zip });
+      const anchorPct = anchorCache.get(market?.id ?? "") ?? null;
+      const seed = l.zip ? seedCache.get((l.zip ?? "").trim()) ?? null : null;
+      const pricedW = priceOpenerWithSeed({
+        listPrice: l.listPrice ?? null,
+        storedArv: l.realArvMedian ?? null,
+        storedArvConfidence: l.arvConfidence ?? null,
+        estRehabMid: l.estRehabMid ?? null,
+        estRehab: l.estRehab ?? null,
+        sqft: l.buildingSqFt ?? null,
+        arvPctMax: market?.buyer_params?.arv_pct_max ?? null,
+        wholesaleFee: l.wholesaleFeeTarget ?? null,
+        anchorPct,
+        seed,
       });
-      await audit({
-        agent: "crier", event: "backlog_reprice_priced", status: "confirmed_success", recordId: l.id, ms: 0,
-        inputSummary: { list_price: l.listPrice ?? null, zip: l.zip, arv_source: pricedW.arvSource },
-        outputSummary: { opener: priced.opener, basis: pricedW.basisLabel, credits: fc.creditsUsed },
-        decision: "opener_written_status_review",
-      });
-    } catch (err) {
-      results.push({ recordId: l.id, address: l.address, action: "price_write_failed", error: String(err).slice(0, 160) });
-    }
-  }
+      const priced = pricedW.result;
 
-  // Persist this run's spend into the rolling-hour breaker bucket.
-  await recordFirecrawlSpend(creditsUsed);
+      if (priced.opener == null) {
+        try { await updateListingRecord(l.id, { Live_Status: "Active", Last_Verified: iso }); } catch { /* best-effort */ }
+        return { recordId: l.id, address: l.address, zip: l.zip, action: "live_no_opener", basis: priced.basis };
+      }
+
+      // ── ROUTING: opener >75% of list OR list >$250k → Manual Review;
+      // otherwise stays Review (the sendable set). No auto-promote.
+      const verdict = routeBacklogStatus({ opener: priced.opener, listPrice: l.listPrice ?? null });
+      const fields: Record<string, unknown> = {
+        Rough_Opener_Amount: priced.opener,
+        Opener_Basis: pricedW.basisLabel,
+        Live_Status: "Active",
+        Last_Verified: iso,
+      };
+      if (priced.flagReseed) fields["Opener_Reseed_Flag"] = true;
+      if (verdict.manualReview) fields["Outreach_Status"] = "Manual Review"; // else left at Review
+      try {
+        await updateListingRecord(l.id, fields);
+        await audit({ agent: "crier", event: "backlog_reprice_priced", status: "confirmed_success", recordId: l.id, ms: 0, inputSummary: { list_price: l.listPrice ?? null, zip: l.zip, arv_source: pricedW.arvSource }, outputSummary: { opener: priced.opener, basis: pricedW.basisLabel, route: verdict.route }, decision: verdict.manualReview ? "opener_written_manual_review" : "opener_written_review" });
+        return {
+          recordId: l.id, address: l.address, zip: l.zip, action: "priced", route: verdict.route,
+          opener: priced.opener, basis: pricedW.basisLabel, arv_source: pricedW.arvSource,
+          list_price: l.listPrice ?? null,
+          opener_vs_list_pct: l.listPrice ? Math.round((100 * priced.opener) / l.listPrice) : null,
+          reseed_flagged: priced.flagReseed, route_reasons: verdict.reasons,
+        };
+      } catch (err) {
+        return { recordId: l.id, address: l.address, action: "price_write_failed", error: String(err).slice(0, 160) };
+      }
+    },
+  });
+
+  const results = pool.results.map((r) => r.value);
+  const budgetHit = pool.skipped.length > 0;
+
+  // ── Credits: the balance DELTA is the truth (the per-call API field reads
+  // ~0 on URL re-scrapes). Record the ACTUAL spend into the breaker bucket. ──
   let postBalance: number | null = preBalance;
   try { postBalance = (await probeFirecrawlBalance()).remaining; } catch { /* keep pre */ }
+  const creditsActual = preBalance != null && postBalance != null ? Math.max(0, preBalance - postBalance) : creditsReported;
+  await recordFirecrawlSpend(creditsActual);
 
+  const pricedRows = results.filter((r) => r.action === "priced");
+  const markedDead = results.filter((r) => r.action === "marked_dead").length;
   const summary = {
     attempted: results.length,
-    priced: results.filter((r) => r.action === "priced").length,
-    marked_dead: results.filter((r) => r.action === "marked_dead").length,
+    priced: pricedRows.length,
+    routed_review: pricedRows.filter((r) => r.route === "review").length,
+    routed_manual_review: pricedRows.filter((r) => r.route === "manual_review").length,
+    marked_dead: markedDead,
     live_no_opener: results.filter((r) => r.action === "live_no_opener").length,
     unresolved: results.filter((r) => r.action === "unresolved").length,
     errors: results.filter((r) => String(r.action).includes("error") || String(r.action).includes("failed")).length,
-    credits_used: creditsUsed,
+    credits_used: creditsActual, // balance-delta truth
+    credits_reported_api: creditsReported, // unreliable per-call field, for contrast
     payment_required: paymentRequired,
-    budget_hit: budgetHit,
+    budget_hit: budgetHit, // true → more remain; loop until false
+    budget_skipped: pool.skipped.length,
+    // Records that dropped OUT of scope this call (priced or dead). The loop
+    // ends when budget_hit is false.
+    dropped_from_scope: pricedRows.length + markedDead,
     pre_balance: preBalance,
     post_balance: postBalance,
+    concurrency: CONCURRENCY,
   };
 
   await audit({
     agent: "scout", event: "backlog_reprice_run", status: "confirmed_success",
-    inputSummary: { auth_kind: authKind, scope, batch_size: batch.length },
+    inputSummary: { auth_kind: authKind, scope, batch_size: batch.length, concurrency: CONCURRENCY },
     outputSummary: summary,
   });
 
@@ -296,7 +316,7 @@ export async function GET(req: Request) {
     scope,
     in_scope_total: inScope.length,
     summary,
-    results: results.slice(0, 60),
+    results: results.slice(0, 80),
     duration_ms: Date.now() - t0,
   });
 }
