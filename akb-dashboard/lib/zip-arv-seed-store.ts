@@ -33,7 +33,13 @@ const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
 /** ≥ this many clean comps in the seed → STRONG; fewer → THIN. */
 export const SEED_STRONG_MIN_COMPS = 5;
 
-export type SeedConfidence = "STRONG" | "THIN";
+// STRONG/THIN price off the seed; DONT_PRICE is a SENTINEL (Maverick
+// 2026-06-15 seed-quality gate): the ZIP was evaluated but its comps were too
+// few or too dispersed to trust, so it is cached as "do not price off this"
+// and the pricer falls to the flat 65%-of-list rail — NOT back to the
+// contaminated stored ARV. Caching it (rather than leaving the ZIP unseeded)
+// also stops the auto-seed loop re-pulling a known-noisy ZIP every run.
+export type SeedConfidence = "STRONG" | "THIN" | "DONT_PRICE";
 export type SeedSource = "rentcast_avm" | "attom_salescomparables";
 const ALLOWED_SOURCES: ReadonlySet<string> = new Set(["rentcast_avm", "attom_salescomparables"]);
 
@@ -43,6 +49,9 @@ export interface ZipArvSeed {
   arvLowPerSqft: number | null;
   compCount: number;
   confidence: SeedConfidence;
+  /** True when confidence === "DONT_PRICE" — the pricer must ignore this
+   *  seed's $/sqft and fall to the 65%-of-list rail (never to stored ARV). */
+  dontPrice: boolean;
   source: SeedSource;
   market: string | null;
   state: string | null;
@@ -53,7 +62,8 @@ export interface ZipArvSeed {
 
 export interface ZipArvSeedWrite {
   zip: string;
-  renovatedPerSqft: number;
+  /** Required for a priceable seed; 0/omitted only for a DONT_PRICE sentinel. */
+  renovatedPerSqft?: number;
   arvLowPerSqft?: number | null;
   compCount: number;
   source: SeedSource;
@@ -61,10 +71,12 @@ export interface ZipArvSeedWrite {
   state?: string | null;
   fetchedAt?: string | null;
   receiptsJson?: string | null;
+  /** Mark this ZIP do-not-price (seed-quality gate failed). */
+  dontPrice?: boolean;
 }
 
 export type SeedWriteValidation =
-  | { ok: true; data: ZipArvSeedWrite & { confidence: SeedConfidence; key: string } }
+  | { ok: true; data: ZipArvSeedWrite & { renovatedPerSqft: number; confidence: SeedConfidence; key: string } }
   | { ok: false; error: string };
 
 /** Pure: one row per ZIP. */
@@ -87,9 +99,16 @@ export function validateSeedWrite(raw: ZipArvSeedWrite): SeedWriteValidation {
     return { ok: false, error: `source_invalid: only rentcast_avm / attom_salescomparables accepted (got "${raw.source}")` };
   }
 
-  const psf = Number(raw.renovatedPerSqft);
-  if (!Number.isFinite(psf) || psf <= 0) return { ok: false, error: "renovated_per_sqft_invalid: a positive $/sqft is required" };
-  if (psf > 5_000) return { ok: false, error: "renovated_per_sqft_out_of_range: exceeds sanity bound ($5,000/sqft)" };
+  // DONT_PRICE sentinel: the seed-quality gate failed, so no $/sqft is trusted.
+  // Store 0 and skip the positive-$/sqft requirement; the pricer reads the
+  // DONT_PRICE confidence and falls to the 65%-of-list rail.
+  const dontPrice = raw.dontPrice === true;
+  let psf = 0;
+  if (!dontPrice) {
+    psf = Number(raw.renovatedPerSqft);
+    if (!Number.isFinite(psf) || psf <= 0) return { ok: false, error: "renovated_per_sqft_invalid: a positive $/sqft is required" };
+    if (psf > 5_000) return { ok: false, error: "renovated_per_sqft_out_of_range: exceeds sanity bound ($5,000/sqft)" };
+  }
 
   let arvLowPerSqft: number | null = null;
   if (raw.arvLowPerSqft != null) {
@@ -120,7 +139,8 @@ export function validateSeedWrite(raw: ZipArvSeedWrite): SeedWriteValidation {
       state: raw.state ?? null,
       fetchedAt,
       receiptsJson: raw.receiptsJson ?? null,
-      confidence: seedConfidence(compCount),
+      dontPrice,
+      confidence: dontPrice ? "DONT_PRICE" : seedConfidence(compCount),
       key: zipArvSeedKey(zip),
     },
   };
@@ -166,6 +186,8 @@ export function seedFromArvIntelligence(
  *  end of the comp band (conservative), STRONG seeds use the renovated
  *  $/sqft. Null when sqft is missing/invalid. */
 export function arvForSubjectFromSeed(seed: ZipArvSeed, sqft: number | null | undefined): number | null {
+  // DONT_PRICE sentinel → no ARV (pricer falls to 65%-of-list, never stored).
+  if (seed.dontPrice || seed.confidence === "DONT_PRICE") return null;
   if (sqft == null || !Number.isFinite(sqft) || sqft <= 0) return null;
   const psf = seed.confidence === "THIN" && seed.arvLowPerSqft != null ? seed.arvLowPerSqft : seed.renovatedPerSqft;
   return Math.round(psf * sqft);
@@ -185,15 +207,19 @@ function rowToSeed(rec: AirtableRow): ZipArvSeed | null {
   const zip = typeof f["ZIP"] === "string" ? (f["ZIP"] as string) : null;
   const psf = typeof f["Renovated_PerSqft"] === "number" ? (f["Renovated_PerSqft"] as number) : null;
   const source = typeof f["Source"] === "string" ? (f["Source"] as string) : null;
-  if (!zip || psf == null || psf <= 0 || !ALLOWED_SOURCES.has(source ?? "")) return null;
-  const compCount = typeof f["Comp_Count"] === "number" ? (f["Comp_Count"] as number) : 0;
   const confRaw = typeof f["Confidence"] === "string" ? (f["Confidence"] as string) : null;
+  const isDontPrice = confRaw === "DONT_PRICE";
+  // A DONT_PRICE sentinel row is valid with psf=0; a priceable row needs psf>0.
+  if (!zip || !ALLOWED_SOURCES.has(source ?? "")) return null;
+  if (!isDontPrice && (psf == null || psf <= 0)) return null;
+  const compCount = typeof f["Comp_Count"] === "number" ? (f["Comp_Count"] as number) : 0;
   return {
     zip,
-    renovatedPerSqft: psf,
+    renovatedPerSqft: psf ?? 0,
     arvLowPerSqft: typeof f["Arv_Low_PerSqft"] === "number" ? (f["Arv_Low_PerSqft"] as number) : null,
     compCount,
-    confidence: confRaw === "STRONG" || confRaw === "THIN" ? confRaw : seedConfidence(compCount),
+    confidence: confRaw === "STRONG" || confRaw === "THIN" || confRaw === "DONT_PRICE" ? confRaw : seedConfidence(compCount),
+    dontPrice: isDontPrice,
     source: source as SeedSource,
     market: typeof f["Market"] === "string" ? (f["Market"] as string) : null,
     state: typeof f["State"] === "string" ? (f["State"] as string) : null,
@@ -238,7 +264,11 @@ export async function listArvSeededZips(): Promise<Set<string>> {
     for (const rec of body.records ?? []) {
       const zip = typeof rec.fields["ZIP"] === "string" ? (rec.fields["ZIP"] as string).trim() : "";
       const psf = typeof rec.fields["Renovated_PerSqft"] === "number" ? (rec.fields["Renovated_PerSqft"] as number) : 0;
-      if (/^\d{5}$/.test(zip) && psf > 0) zips.add(zip);
+      const dontPrice = rec.fields["Confidence"] === "DONT_PRICE";
+      // A DONT_PRICE sentinel counts as seeded too — the ZIP was evaluated and
+      // must not be re-pulled every run (that was the budget-churn the gate
+      // is meant to prevent).
+      if (/^\d{5}$/.test(zip) && (psf > 0 || dontPrice)) zips.add(zip);
     }
     offset = body.offset;
   } while (offset);

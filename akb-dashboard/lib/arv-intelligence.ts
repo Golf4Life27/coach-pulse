@@ -166,11 +166,26 @@ function compToUsed(
   };
 }
 
+type CompFilters = typeof arvFilter.comp_filters;
+type DistressedProxy = typeof arvFilter.distressed_proxy;
+
+/** Per-call relaxation of the comp filters (national-crawler ZIP seed pulls
+ *  in thin markets). Omitted → the global arv_filter.json defaults, so every
+ *  existing caller is unchanged. */
+export interface ArvFilterOverride {
+  comp_filters?: Partial<CompFilters>;
+  distressed_proxy?: Partial<DistressedProxy>;
+}
+
+export interface ArvIntelligenceOptions {
+  filterOverride?: ArvFilterOverride;
+}
+
 function applyBasicFilters(
   raw: RentCastSaleComp[],
   subject: ArvSubject,
+  cfg: CompFilters,
 ): FilterStage[] {
-  const cfg = arvFilter.comp_filters;
   const cutoffMs = Date.now() - cfg.max_age_days * 24 * 60 * 60_000;
 
   return raw.map<FilterStage>((c) => {
@@ -204,8 +219,7 @@ function applyBasicFilters(
   });
 }
 
-function applyDistressedProxy(stages: FilterStage[]): FilterStage[] {
-  const cfg = arvFilter.distressed_proxy;
+function applyDistressedProxy(stages: FilterStage[], cfg: DistressedProxy): FilterStage[] {
   const surviving = stages.filter((s) => !s.excluded_reason);
   const persqft = surviving
     .map((s) => safePerSqft(s.comp))
@@ -318,8 +332,7 @@ function resolveConditionTarget(t: string | null | undefined): "renovated" | "as
   return "as_is";
 }
 
-function gradeConfidence(usedCount: number): { confidence: ArvConfidence; score: number } {
-  const cfg = arvFilter.comp_filters;
+function gradeConfidence(usedCount: number, cfg: CompFilters): { confidence: ArvConfidence; score: number } {
   if (usedCount >= cfg.min_comps_for_high_confidence) {
     return { confidence: "HIGH", score: 85 };
   }
@@ -352,23 +365,31 @@ function emptyBand(method: ArvBandMethod): ArvBand {
 export function computeArvIntelligence(
   raw: RentCastSaleComp[],
   subject: ArvSubject,
+  opts?: ArvIntelligenceOptions,
 ): ArvIntelligenceResult {
   const notes: string[] = [];
   const condition_target_resolved = resolveConditionTarget(subject.condition_target);
   const uplift = arvUpliftForZip(subject.zip);
   const bimodalGap = bimodalGapThresholdForZip(subject.zip);
 
+  // Resolve the effective filters: global arv_filter.json defaults, optionally
+  // relaxed per-call (the seed path widens recency/radius/similarity to gather
+  // enough comps in thin markets). No override → identical to prior behavior.
+  const cf: CompFilters = { ...arvFilter.comp_filters, ...(opts?.filterOverride?.comp_filters ?? {}) };
+  const dp: DistressedProxy = { ...arvFilter.distressed_proxy, ...(opts?.filterOverride?.distressed_proxy ?? {}) };
+  const widened = !!opts?.filterOverride;
+
   notes.push(
-    `Filter config: window=${arvFilter.comp_filters.max_age_days}d, distance<${arvFilter.comp_filters.max_distance_miles}mi, sqft ratio ${arvFilter.comp_filters.sqft_ratio_min}-${arvFilter.comp_filters.sqft_ratio_max}, beds_exact=${arvFilter.comp_filters.beds_exact_match_required}.`,
+    `Filter config${widened ? " (WIDENED seed pull)" : ""}: window=${cf.max_age_days}d, distance<${cf.max_distance_miles}mi, sqft ratio ${cf.sqft_ratio_min}-${cf.sqft_ratio_max}, beds_exact=${cf.beds_exact_match_required}.`,
   );
   notes.push(
-    `Distressed/cash proxy: drop comps with $/sqft <${(arvFilter.distressed_proxy.drop_below_fraction_of_zip_median * 100).toFixed(0)}% or >${(arvFilter.distressed_proxy.drop_above_fraction_of_zip_median * 100).toFixed(0)}% of ZIP median (unimodal-only).`,
+    `Distressed/cash proxy: drop comps with $/sqft <${(dp.drop_below_fraction_of_zip_median * 100).toFixed(0)}% or >${(dp.drop_above_fraction_of_zip_median * 100).toFixed(0)}% of ZIP median (unimodal-only, applies at ≥${dp.apply_only_if_zip_has_at_least_comps} comps).`,
   );
   notes.push(
     `Market ${uplift.market}: data_state_default=${uplift.data_state_default}, uplift multiplier ${uplift.multiplier}×. condition_target=${condition_target_resolved}.`,
   );
 
-  const stage1 = applyBasicFilters(raw, subject);
+  const stage1 = applyBasicFilters(raw, subject, cf);
 
   // Bimodal detection runs BEFORE the distressed_proxy ceiling — if the
   // upper cluster is what we want (renovated retail) we don't want the
@@ -391,7 +412,7 @@ export function computeArvIntelligence(
     stagesUsedForRenovatedCluster = bimodal.upper;
   } else {
     // Unimodal — run distressed_proxy outlier trim on the whole set.
-    const stage2 = applyDistressedProxy(stage1);
+    const stage2 = applyDistressedProxy(stage1, dp);
     stagesUsedForAsIs = stage2.filter((s) => !s.excluded_reason);
     notes.push("Unimodal $/sqft distribution — distressed/cash outlier trim applied.");
   }
@@ -525,7 +546,7 @@ export function computeArvIntelligence(
     ? (stagesUsedForRenovatedCluster ?? stagesUsedForAsIs)
     : stagesUsedForAsIs;
   const usedCount = headlineStages.length;
-  let { confidence, score } = gradeConfidence(usedCount);
+  let { confidence, score } = gradeConfidence(usedCount, cf);
   if (disagreement_fired) {
     const before = confidence;
     confidence = downgradeConfidence(confidence);
@@ -545,7 +566,7 @@ export function computeArvIntelligence(
 
   // Transparency: comps_used = headline cluster; comps_excluded = everything else
   const headlineSet = new Set(headlineStages.map((s) => s.comp));
-  const allStages = bimodal ? [...bimodal.lower, ...bimodal.upper] : applyDistressedProxy(stage1);
+  const allStages = bimodal ? [...bimodal.lower, ...bimodal.upper] : applyDistressedProxy(stage1, dp);
   // For bimodal, we need to construct the same flat "all stages" list — both
   // clusters are non-excluded, but the comps NOT in the headline cluster
   // should be surfaced as "excluded" with cluster label so Alex can see.

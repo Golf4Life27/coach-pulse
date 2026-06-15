@@ -63,10 +63,16 @@ export function priceOpenerWithSeed(input: OpenerWithSeedInput): OpenerWithSeedR
   let arvConfidence: "STRONG" | "THIN" | null = null;
 
   const seedArv = input.seed ? arvForSubjectFromSeed(input.seed, input.sqft ?? null) : null;
+  const seedDontPrice = !!input.seed && (input.seed.dontPrice || input.seed.confidence === "DONT_PRICE");
   if (pos(seedArv)) {
     arvForPricer = seedArv;
     arvSource = "seed_renovated";
     arvConfidence = input.seed!.confidence === "STRONG" ? "STRONG" : "THIN";
+  } else if (seedDontPrice) {
+    // The ZIP was evaluated and explicitly marked do-not-price (comps too few
+    // / too noisy). Do NOT fall back to the contaminated stored ARV — go
+    // straight to the flat 65%-of-list rail (arvForPricer stays null).
+    arvSource = "none";
   } else if (pos(input.storedArv)) {
     arvForPricer = input.storedArv;
     arvSource = "stored";
