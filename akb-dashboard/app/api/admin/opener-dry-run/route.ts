@@ -115,7 +115,13 @@ export async function GET(req: Request) {
     would_send_aggressive: 0, // eligible AND has an opener
     by_arv_source: { seed_renovated: 0, stored: 0, none: 0 } as Record<string, number>,
     seed_dont_price: 0,
+    // reseed_flagged = "seed is BAD, re-pull could fix it" (low-confidence ARV
+    // that tripped a guard). capped / arv_below_list = "guard fired" telemetry
+    // (a STRONG seed correctly handling a deep-discount or over-ARV listing) —
+    // NOT a re-seed signal. Kept distinct so the metric means what it says.
     reseed_flagged: 0,
+    capped: 0,
+    arv_below_list: 0,
     opener_sum: 0,
     opener_n: 0,
   };
@@ -168,6 +174,8 @@ export async function GET(req: Request) {
     agg.by_tier[lowball.tier] = (agg.by_tier[lowball.tier] ?? 0) + 1;
     agg.by_arv_source[pricedW.arvSource] = (agg.by_arv_source[pricedW.arvSource] ?? 0) + 1;
     if (priced.flagReseed) agg.reseed_flagged++;
+    if (priced.cappedToList) agg.capped++;
+    if (priced.arvDistrusted) agg.arv_below_list++;
     if (priced.opener != null) {
       agg.priced++;
       agg.opener_sum += priced.opener;

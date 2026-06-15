@@ -126,8 +126,12 @@ export interface PricerResult {
   /** ARV-SANITY GATE (Hole C): stored ARV was below list → distrusted as
    *  wrong-basis (as-is) value and dropped; the opener used the 65% rail. */
   arvDistrusted: boolean;
-  /** This record's stored ARV proved untrustworthy (below list, OR so high
-   *  the opener hit the over-list cap) — flag it for auto-seed re-pricing. */
+  /** This record's ARV is BAD and a re-seed could fix it — a low-confidence
+   *  (THIN/STORED/unlabeled) ARV that tripped a guard (below list, or so high
+   *  the opener hit the over-list cap). A STRONG renovated seed that trips a
+   *  guard is NOT flagged: the seed is trusted, the listing is just deep-
+   *  discount (ARV≫list) or over-ARV (ARV<list). "seed is bad", not "guard
+   *  fired" — the guard-fired signals are cappedToList / arvDistrusted. */
   flagReseed: boolean;
   /** LOW-OPENER FLOOR (Hole B): a buy-box opener fell below the floor and
    *  was routed to the 65% rail rather than sending a micro-number. */
@@ -179,14 +183,21 @@ export function priceOpener(input: PricerInput): PricerResult {
   const trustedArv = arvDistrusted ? null : rawArv;
 
   if (arvDistrusted && list != null) {
+    // A STRONG renovated seed below list is a trustworthy ARV on an over-ARV
+    // (likely overpriced) listing — re-seeding won't change it. Only flag
+    // re-seed when the ARV is low-confidence (THIN/STORED/unlabeled).
+    const reseedWorthy = input.arvConfidence !== "STRONG";
+    const dropped = `dropped to flat ${Math.round(FALLBACK_OPENER_PCT_OF_LIST * 100)}% of list = $${Math.round(list * FALLBACK_OPENER_PCT_OF_LIST).toLocaleString()}`;
     const r = fallbackResult(
       list,
       "list_fraction_no_arv",
-      `stored ARV $${rawArv!.toLocaleString()} < list $${list.toLocaleString()} — distrusted as wrong-basis (as-is) value; ` +
-        `dropped to flat ${Math.round(FALLBACK_OPENER_PCT_OF_LIST * 100)}% of list = $${Math.round(list * FALLBACK_OPENER_PCT_OF_LIST).toLocaleString()}, flagged for re-seed`,
+      `renovated ARV $${rawArv!.toLocaleString()} < list $${list.toLocaleString()} — distrusted as wrong-basis (as-is) value; ${dropped}` +
+        (reseedWorthy
+          ? `, flagged for re-seed`
+          : ` (seed STRONG — listing looks over-ARV, not a bad seed; not re-seeded)`),
     );
     r.arvDistrusted = true;
-    r.flagReseed = true;
+    r.flagReseed = reseedWorthy;
     return applyOverListCap(r, list);
   }
 
@@ -289,11 +300,19 @@ function applyOverListCap(r: PricerResult, list: number | null): PricerResult {
   if (list == null || r.opener == null) return r;
   const cap = Math.round(list * NEVER_OVER_LIST_PCT);
   if (r.opener <= cap) return r;
+  // A STRONG renovated seed whose buy-box opener exceeds list is a trustworthy
+  // ARV on a deep-discount listing (ARV ≫ list) — re-seeding won't change it,
+  // so the cap firing is "guard fired" (cappedToList), NOT "seed is bad". Only
+  // a low-confidence ARV that overshoots is a genuine re-seed candidate.
+  const reseedWorthy = r.confidence !== "STRONG";
   return {
     ...r,
     opener: cap,
     cappedToList: true,
-    flagReseed: true,
-    detail: `${r.detail} | CAPPED to ${Math.round(NEVER_OVER_LIST_PCT * 100)}% of list = $${cap.toLocaleString()} (opener exceeded the cap — stored ARV implausibly high, flagged for re-seed)`,
+    flagReseed: reseedWorthy,
+    detail: `${r.detail} | CAPPED to ${Math.round(NEVER_OVER_LIST_PCT * 100)}% of list = $${cap.toLocaleString()} (opener exceeded the cap — ` +
+      (reseedWorthy
+        ? `ARV implausibly high, flagged for re-seed)`
+        : `deep-discount listing: renovated ARV ≫ list, seed trusted (STRONG) — capped, not re-seeded)`),
   };
 }
