@@ -59,7 +59,7 @@ import { selectDueZips, type ZipDueResult } from "@/lib/crawler/zip-rotation";
 import { fetchExternalRentCastState } from "@/lib/maverick/sources/external-rentcast";
 import { fetchVercelKvAuditState } from "@/lib/maverick/sources/vercel-kv-audit";
 import { verifyListing, classifyVerifiedListing, probeFirecrawlBalance, FIRECRAWL_RATE_LIMIT_PER_MINUTE } from "@/lib/crawler/sources/firecrawl";
-import { checkFirecrawlBreaker, recordFirecrawlSpend } from "@/lib/crawler/firecrawl-circuit-breaker";
+import { checkFirecrawlBreaker, recordFirecrawlSpend, shouldHaltVerify } from "@/lib/crawler/firecrawl-circuit-breaker";
 import { runAsyncPool, makeRateGate } from "@/lib/crawler/async-pool";
 import { getActiveIntakeRows, updateZipStats } from "@/lib/zip-registry";
 import { getVerifiedThisCycle, markVerifiedThisCycle } from "@/lib/crawler/verify-cache";
@@ -512,6 +512,9 @@ export async function GET(req: Request) {
       hourly_cap: 0,
       spent_recent_hour: 0,
       breaker_tripped: false,
+      // Verify phase skipped because the real wallet balance was ≤0 (probed
+      // before dispatch). Stops the failed-verify retry-loop burn at any cadence.
+      balance_halted: false,
     },
     // Priceable-gate provenance (operator 2026-06-10): which seeded-ZIP
     // allowlist the run used + where it came from. fallback = the store
@@ -802,30 +805,60 @@ export async function GET(req: Request) {
   summary.firecrawl.hourly_cap = breaker.cap;
   summary.firecrawl.spent_recent_hour = breaker.spentRecent;
   summary.firecrawl.breaker_tripped = false;
-  if (breaker.tripped && dispatchable.length > 0) {
-    summary.firecrawl.breaker_tripped = true;
+
+  // ── BALANCE GATE (structural fix, 2026-06-15) ── probe the REAL wallet
+  // BEFORE dispatching. A drained balance (≤0) means every verify will
+  // 402/error, and a failed verify leaves its ZIP "due" → re-scraped next tick
+  // → loop-burn. So skip the verify phase entirely when the wallet is empty
+  // (just like a tripped spend breaker): the ZIPs stay DUE and retry once the
+  // wallet is funded — no attempt-and-fail burn at ANY cron cadence. Probe
+  // only when there is work to dispatch (no balance call on no-op ticks).
+  let preBalance: number | null = null;
+  if (dispatchable.length > 0) {
+    try {
+      preBalance = (await probeFirecrawlBalance()).remaining;
+    } catch {
+      preBalance = null; // probe failed → don't block on an unknown balance
+    }
+    summary.firecrawl.balance_remaining = preBalance;
+  }
+  // Either a tripped spend breaker OR a drained wallet halts the verify phase
+  // (no dispatch, zero spend) — pure decision, unit-tested.
+  const haltVerdict = shouldHaltVerify({ breakerTripped: breaker.tripped, balanceRemaining: preBalance });
+  const balanceUnhealthy = haltVerdict.balanceUnhealthy;
+  const verifyHalted = haltVerdict.halt;
+
+  if (verifyHalted && dispatchable.length > 0) {
+    summary.firecrawl.breaker_tripped = breaker.tripped;
+    summary.firecrawl.balance_halted = balanceUnhealthy;
     for (const it of toVerify) zipVerifyBlocked.add(it.zip); // not done → cursor retries next window
-    bump("firecrawl_breaker_halted", dispatchable.length);
+    const haltReason = balanceUnhealthy ? "balance_nonpositive" : "spend_cap";
+    bump(balanceUnhealthy ? "firecrawl_balance_halted" : "firecrawl_breaker_halted", dispatchable.length);
     await audit({
       agent: "scout",
-      event: "firecrawl_circuit_breaker",
+      event: "firecrawl_verify_halted",
       status: "confirmed_failure",
-      inputSummary: { spent_recent_hour: breaker.spentRecent, hourly_cap: breaker.cap, would_dispatch: dispatchable.length },
+      inputSummary: { reason: haltReason, balance_remaining: preBalance, spent_recent_hour: breaker.spentRecent, hourly_cap: breaker.cap, would_dispatch: dispatchable.length },
       outputSummary: { halted: true },
-      decision: "verify_phase_halted_on_spend_cap",
+      decision: `verify_phase_halted_on_${haltReason}`,
     });
     try {
       await writeState({
         event_type: "decision",
         attribution_agent: "scout",
-        title: `🛑 Firecrawl spend circuit-breaker TRIPPED — intake verify HALTED (${breaker.spentRecent}/${breaker.cap} credits/hr)`,
-        description:
-          `listings-intake halted the Firecrawl verify phase: ~${breaker.spentRecent} credits spent in the last hour ≥ cap ${breaker.cap}. ` +
-          `${dispatchable.length} candidate(s) left unverified; their ZIPs stay DUE for the next window. ` +
-          `Investigate the burn before raising FIRECRAWL_HOURLY_CREDIT_CAP. No further Firecrawl spend this run.`,
+        title: balanceUnhealthy
+          ? `🛑 Firecrawl wallet EMPTY (balance ${preBalance}) — intake verify HALTED before dispatch`
+          : `🛑 Firecrawl spend circuit-breaker TRIPPED — intake verify HALTED (${breaker.spentRecent}/${breaker.cap} credits/hr)`,
+        description: balanceUnhealthy
+          ? `listings-intake skipped the Firecrawl verify phase: real balance ${preBalance} ≤ 0. ` +
+            `${dispatchable.length} candidate(s) left unverified; their ZIPs stay DUE and retry once the wallet is funded. ` +
+            `Zero Firecrawl spend this run — this is the structural guard against the failed-verify retry-loop burn. Top up Firecrawl to resume verification.`
+          : `listings-intake halted the Firecrawl verify phase: ~${breaker.spentRecent} credits spent in the last hour ≥ cap ${breaker.cap}. ` +
+            `${dispatchable.length} candidate(s) left unverified; their ZIPs stay DUE for the next window. ` +
+            `Investigate the burn before raising FIRECRAWL_HOURLY_CREDIT_CAP. No further Firecrawl spend this run.`,
       });
     } catch (err) {
-      console.error("[listings-intake] breaker Spine write failed:", err);
+      console.error("[listings-intake] verify-halt Spine write failed:", err);
     }
   }
 
@@ -834,7 +867,7 @@ export async function GET(req: Request) {
   // on stop; undispatched land in pool.skipped.
   const rateGate = makeRateGate(FIRECRAWL_RATE_LIMIT_PER_MINUTE);
   let creditsThisRun = 0; // exact in-run tally for the spend cap
-  const pool = breaker.tripped
+  const pool = verifyHalted
     ? { results: [] as Array<{ item: { candidate: IntakeCandidate; zip: string }; value: Awaited<ReturnType<typeof verifyListing>> }>, skipped: [] as Array<{ candidate: IntakeCandidate; zip: string }> }
     : await runAsyncPool({
         items: dispatchable,
@@ -853,7 +886,7 @@ export async function GET(req: Request) {
       });
   // Persist this run's spend into the rolling-hour bucket for the next tick.
   await recordFirecrawlSpend(creditsThisRun);
-  if (!breaker.tripped && breaker.spentRecent + creditsThisRun >= breaker.cap && pool.skipped.length > 0) {
+  if (!verifyHalted && breaker.spentRecent + creditsThisRun >= breaker.cap && pool.skipped.length > 0) {
     summary.firecrawl.breaker_tripped = true; // tripped mid-run
     for (const it of pool.skipped) zipVerifyBlocked.add(it.zip);
   }
@@ -865,14 +898,16 @@ export async function GET(req: Request) {
     for (const it of pool.skipped) zipVerifyBlocked.add(it.zip);
   }
 
-  // Real account balance — probe once when this run actually did (or tried)
-  // verify work. Ground truth vs the internal credits_used counter.
-  if (dispatchable.length > 0) {
+  // Real account balance — re-probe after we ACTUALLY ran verify (refreshes
+  // the pre-dispatch reading with the post-spend balance). Skipped when the
+  // verify phase was halted — preBalance already holds the ground truth and a
+  // second probe would be wasted. Ground truth vs the internal credits counter.
+  if (!verifyHalted && dispatchable.length > 0) {
     try {
       const bal = await probeFirecrawlBalance();
       summary.firecrawl.balance_remaining = bal.remaining;
     } catch {
-      /* best-effort; balance stays null */
+      /* best-effort; balance stays at the pre-dispatch reading */
     }
   }
   // Surface spend + balance + breaker every run so the burn is observable in
@@ -881,7 +916,7 @@ export async function GET(req: Request) {
     `[listings-intake][firecrawl] balance=${summary.firecrawl.balance_remaining ?? "?"} ` +
     `credits_this_run=${creditsThisRun} spent_recent_hour=${summary.firecrawl.spent_recent_hour} ` +
     `cap=${summary.firecrawl.hourly_cap} breaker_tripped=${summary.firecrawl.breaker_tripped} ` +
-    `dispatched=${dispatchable.length}`,
+    `balance_halted=${summary.firecrawl.balance_halted} dispatched=${verifyHalted ? 0 : dispatchable.length}`,
   );
 
   // ── Phase 3: classify completed results (sequential — accurate count
