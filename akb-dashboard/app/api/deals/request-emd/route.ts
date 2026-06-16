@@ -29,6 +29,8 @@ import {
   readAuthHeaders,
 } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
+import { evaluatePreEmdGate, emdAdvanceDecision } from "@/lib/orchestrator/pre-emd-gate";
+import { assemblePreEmdGateInputForDeal } from "@/lib/orchestrator/pre-emd-gate-live";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -64,6 +66,37 @@ async function handle(req: Request) {
   const deals = await getDeals().catch(() => []);
   const deal = deals.find((d) => d.id === dealId) ?? null;
   if (!deal) return NextResponse.json({ error: "deal_not_found", dealId }, { status: 404 });
+
+  // ── INV-023 HARD GATE (live) — the structural answer to 23 Fields Ave. ──
+  // The EMD advance is physically refused unless the Pre-EMD due-diligence
+  // gate returns ADVANCE_UNLOCKED. Fail-closed: the assembler maps any
+  // missing data to a BLOCKING input, so absence → BLOCKED. This is the
+  // mandatory entry the EMD path must pass through; it runs BEFORE (and in
+  // addition to) the persisted-verdict read below.
+  const gate = evaluatePreEmdGate(await assemblePreEmdGateInputForDeal(deal));
+  const gateDecision = emdAdvanceDecision(gate);
+  if (!gateDecision.allowed) {
+    await audit({
+      agent: "orchestrator",
+      event: "emd_request_refused",
+      status: "confirmed_failure",
+      recordId: dealId,
+      inputSummary: { auth_kind: authKind, pre_emd_gate_verdict: gate.verdict },
+      outputSummary: { reason: gateDecision.reason, blocked: gate.blocked },
+    });
+    return NextResponse.json(
+      {
+        ok: false,
+        refused: true,
+        reason: gateDecision.reason,
+        pre_emd_gate_verdict: gate.verdict,
+        blocked_checks: gateDecision.blocked_checks,
+        detail:
+          "INV-023 Pre-EMD gate is BLOCKED — EMD never fires until every due-diligence check is green. Each blocked check names the input it needs. Populate the missing inputs and re-run /api/orchestrator/pre-emd-evaluate.",
+      },
+      { status: gateDecision.httpStatus },
+    );
+  }
 
   const verdict = (deal.preEmdVerdict ?? "not_yet_evaluated").toLowerCase();
   const refuse = async (reason: string, status: number) => {
