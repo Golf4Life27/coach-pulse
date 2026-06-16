@@ -1,0 +1,27 @@
+{
+  "_meta": {
+    "source": "Airtable ZIP_ARV_Seed (appp8inLAGTg4qpEZ / tblduJzD1gShaGDQQ), read-only via Airtable MCP on 2026-06-16",
+    "note": "renovatedPerSqft = field Renovated_PerSqft (fldiylhhxi06oj20L, confirmed by name-resolve); arvLowPerSqft = Arv_Low_PerSqft (fldNTp2KFNDi0Us0A). STRONG seeds price off renovatedPerSqft x sqft; DONT_PRICE -> pricer falls to 65% rail (never stored ARV).",
+    "count": 18
+  },
+  "seeds": [
+    {"zip":"48212","renovatedPerSqft":70,"arvLowPerSqft":39.9,"compCount":21,"confidence":"STRONG"},
+    {"zip":"48227","renovatedPerSqft":71,"arvLowPerSqft":41.18,"compCount":20,"confidence":"STRONG"},
+    {"zip":"48215","renovatedPerSqft":147,"arvLowPerSqft":84.6,"compCount":23,"confidence":"STRONG"},
+    {"zip":"48206","renovatedPerSqft":0,"arvLowPerSqft":28.67,"compCount":20,"confidence":"DONT_PRICE"},
+    {"zip":"48207","renovatedPerSqft":46,"arvLowPerSqft":26.41,"compCount":21,"confidence":"STRONG"},
+    {"zip":"48216","renovatedPerSqft":165,"arvLowPerSqft":95.24,"compCount":21,"confidence":"STRONG"},
+    {"zip":"48201","renovatedPerSqft":308,"arvLowPerSqft":200.49,"compCount":5,"confidence":"DONT_PRICE"},
+    {"zip":"48208","renovatedPerSqft":67,"arvLowPerSqft":36.85,"compCount":22,"confidence":"STRONG"},
+    {"zip":"48205","renovatedPerSqft":68,"arvLowPerSqft":30.01,"compCount":21,"confidence":"STRONG"},
+    {"zip":"48214","renovatedPerSqft":127,"arvLowPerSqft":66.94,"compCount":21,"confidence":"STRONG"},
+    {"zip":"48219","renovatedPerSqft":108,"arvLowPerSqft":71.6,"compCount":22,"confidence":"STRONG"},
+    {"zip":"48204","renovatedPerSqft":0,"arvLowPerSqft":56.91,"compCount":6,"confidence":"DONT_PRICE"},
+    {"zip":"48224","renovatedPerSqft":112,"arvLowPerSqft":60.4,"compCount":22,"confidence":"STRONG"},
+    {"zip":"48203","renovatedPerSqft":86,"arvLowPerSqft":57.87,"compCount":16,"confidence":"STRONG"},
+    {"zip":"48210","renovatedPerSqft":98,"arvLowPerSqft":64.48,"compCount":21,"confidence":"STRONG"},
+    {"zip":"48211","renovatedPerSqft":140,"arvLowPerSqft":84.79,"compCount":19,"confidence":"STRONG"},
+    {"zip":"48202","renovatedPerSqft":102,"arvLowPerSqft":48.36,"compCount":19,"confidence":"STRONG"},
+    {"zip":"48209","renovatedPerSqft":140,"arvLowPerSqft":105.77,"compCount":19,"confidence":"STRONG"}
+  ]
+}
