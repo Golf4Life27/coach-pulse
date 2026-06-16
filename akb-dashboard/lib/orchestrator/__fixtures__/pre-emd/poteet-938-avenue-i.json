@@ -6,10 +6,15 @@
   },
   "input": {
     "recordId": "fixture:poteet-938-avenue-i",
-    "arvValue": 162500,
-    "arvValidatedFromComps": false,
-    "arvValidatedAt": null,
-    "arvCompCount": null,
+    "arvEngine": {
+      "recordId": "fixture:poteet-938-avenue-i", "zip": "78065", "decision": "BLOCKED",
+      "reason": "No renovated-comp seed for ZIP 78065 — cannot validate ARV. (The broker-stated $150k-$175k ARV is words, not comps; never used.)",
+      "engineArv": null, "arvLowPerSqft": null, "renovatedPerSqft": null, "sqft": 1300,
+      "compCount": null, "seedTier": "NONE",
+      "freshness": { "fetchedAt": null, "ageDays": null, "stale": false },
+      "confidence": null, "source": "none",
+      "arvBasis": "renovated_comp_low_end_per_sqft", "classMatch": null, "issues": []
+    },
     "estRehab": null,
     "estRehabHigh": null,
     "rehabEstimatedAt": null,

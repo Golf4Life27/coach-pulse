@@ -6,10 +6,15 @@
   },
   "input": {
     "recordId": "fixture:23-fields-ave",
-    "arvValue": 65000,
-    "arvValidatedFromComps": true,
-    "arvValidatedAt": "2026-06-15T12:00:00.000Z",
-    "arvCompCount": 6,
+    "arvEngine": {
+      "recordId": "fixture:23-fields-ave", "zip": "48227", "decision": "VALIDATED",
+      "reason": "VALIDATED — STRONG seed, 6 comps; conservative low-end ARV.",
+      "engineArv": 65000, "arvLowPerSqft": 50, "renovatedPerSqft": 71, "sqft": 1300,
+      "compCount": 6, "seedTier": "STRONG",
+      "freshness": { "fetchedAt": "2026-06-15T12:00:00.000Z", "ageDays": 1, "stale": false },
+      "confidence": "high", "source": "seed_renovated_low",
+      "arvBasis": "renovated_comp_low_end_per_sqft", "classMatch": true, "issues": []
+    },
     "estRehab": 15000,
     "rehabConfidence": "HIGH",
     "rehabEstimatedAt": "2026-06-15T12:00:00.000Z",

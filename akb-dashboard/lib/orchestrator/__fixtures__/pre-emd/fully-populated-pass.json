@@ -6,10 +6,15 @@
   },
   "input": {
     "recordId": "fixture:fully-populated-pass",
-    "arvValue": 95000,
-    "arvValidatedFromComps": true,
-    "arvValidatedAt": "2026-06-15T12:00:00.000Z",
-    "arvCompCount": 8,
+    "arvEngine": {
+      "recordId": "fixture:fully-populated-pass", "zip": "48227", "decision": "VALIDATED",
+      "reason": "VALIDATED — STRONG seed, 8 comps; conservative low-end ARV.",
+      "engineArv": 95000, "arvLowPerSqft": 71, "renovatedPerSqft": 108, "sqft": 1338,
+      "compCount": 8, "seedTier": "STRONG",
+      "freshness": { "fetchedAt": "2026-06-15T12:00:00.000Z", "ageDays": 1, "stale": false },
+      "confidence": "high", "source": "seed_renovated_low",
+      "arvBasis": "renovated_comp_low_end_per_sqft", "classMatch": true, "issues": []
+    },
     "estRehab": 20000,
     "rehabConfidence": "HIGH",
     "rehabEstimatedAt": "2026-06-15T12:00:00.000Z",

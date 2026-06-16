@@ -27,8 +27,9 @@ const deal = (over: Partial<Deal> = {}): Deal =>
 describe("INV-023 live wiring — a BLOCKED record cannot advance", () => {
   it("a deal with no DD attestations + no joinable listing → BLOCKED → advance refused (423)", async () => {
     const input = await assemblePreEmdGateInputForDeal(deal());
-    // fail-closed mapping: attestations false, listing fields null.
-    expect(input.arvValidatedFromComps).toBe(false);
+    // fail-closed mapping: attestations false, listing fields null, and in
+    // watched mode (ARV engine default-OFF) DD-1's engine input is null.
+    expect(input.arvEngine ?? null).toBeNull();
     expect(input.operatorSignoff).toBe(false);
     expect(input.buyerMedian).toBeNull();
 

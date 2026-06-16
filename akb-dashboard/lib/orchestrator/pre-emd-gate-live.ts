@@ -9,6 +9,8 @@
 import { getListings } from "@/lib/airtable";
 import { findPropertyIntelRecordByListing } from "@/lib/federation/property-intel-store";
 import { normalizeAddressKey } from "@/lib/crawler/intake-filter";
+import { getZipArvSeed } from "@/lib/zip-arv-seed-store";
+import { evaluateArvFromSeed, isArvEngineAutocompleteLive } from "./arv-comp-engine";
 import type { Deal } from "@/lib/types";
 import type { PreEmdGateInput } from "./pre-emd-gate";
 
@@ -53,15 +55,27 @@ export async function assemblePreEmdGateInputForDeal(deal: Deal): Promise<PreEmd
 
   const st = (listing?.state ?? "").trim().toUpperCase();
 
+  // DD-1: the ARV Comp Engine validates ARV from the ZIP's renovated seed —
+  // no operator tick, never a RentCast AVM, never the contaminated stored
+  // field. DEFAULT-OFF (watched mode): the engine result is NOT used to
+  // auto-tick in production until ARV_ENGINE_AUTOCOMPLETE_LIVE=true, so DD-1
+  // stays BLOCKED while the operator reviews the watched run. Fail-closed.
+  let arvEngine: PreEmdGateInput["arvEngine"] = null;
+  try {
+    if (isArvEngineAutocompleteLive() && listing?.zip) {
+      const seed = await getZipArvSeed(listing.zip);
+      arvEngine = evaluateArvFromSeed(
+        { recordId: listing.id, zip: listing.zip, sqft: listing.buildingSqFt ?? null, propertyType: listing.propertyType ?? null },
+        seed,
+      );
+    }
+  } catch {
+    arvEngine = null; // fail-closed — engine error → DD-1 BLOCKED, never a pass
+  }
+
   return {
     recordId: listing?.id ?? deal.id,
-    // DD-1: a real validated ARV requires the operator's comps-validation
-    // attestations (Pre_EMD_ARV_Confirmed AND Pre_EMD_CMA_Validated) — a bare
-    // stored/AVM ARV does not count.
-    arvValue: listing?.realArvMedian ?? null,
-    arvValidatedFromComps: deal.preEmdArvConfirmed === true && deal.preEmdCmaValidated === true,
-    arvValidatedAt: listing?.arvValidatedAt ?? null,
-    arvCompCount: listing?.arvCompCount ?? null,
+    arvEngine,
     // DD-2:
     estRehab: listing?.estRehab ?? listing?.estRehabMid ?? null,
     estRehabHigh: listing?.estRehabHigh ?? null,

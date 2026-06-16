@@ -23,6 +23,7 @@
 
 import { evaluatePreContractMath, DEFAULT_WHOLESALE_FEE } from "@/lib/pre-contract-math";
 import { EXCLUDED_STATES } from "@/lib/crawler/intake-filter";
+import type { ArvEngineResult } from "./arv-comp-engine";
 
 export type CheckOutcome = "pass" | "BLOCKED";
 export type Verdict = "ADVANCE_UNLOCKED" | "BLOCKED";
@@ -52,11 +53,11 @@ export interface PreEmdGateResult {
  *  Property_Intel onto this; a fixture supplies it directly. */
 export interface PreEmdGateInput {
   recordId: string;
-  // DD-1 ARV validated from renovated sold comps (conservative).
-  arvValue?: number | null;
-  arvValidatedFromComps?: boolean; // operator-confirmed comps validation (NOT an AVM/broker/stored figure)
-  arvValidatedAt?: string | null;
-  arvCompCount?: number | null;
+  // DD-1 ARV validated from renovated comps — AUTO-COMPLETED by the ARV Comp
+  // Engine (Milestone 3). The operator no longer ticks this; DD-1 reads the
+  // engine's decision (VALIDATED ⇒ pass; ESCALATE/BLOCKED ⇒ blocked). Null ⇒
+  // engine not run / errored ⇒ BLOCKED (fail-closed).
+  arvEngine?: ArvEngineResult | null;
   // DD-2 Rehab (pessimistic-bound). Low confidence ⇒ use the high end.
   estRehab?: number | null;
   estRehabHigh?: number | null;
@@ -84,10 +85,7 @@ export interface PreEmdGateInput {
   now?: Date;
 }
 
-const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
-const ARV_MIN_COMPS = 3;
-const ARV_STALENESS_DAYS = 7; // matches PE-01 / DEFAULT_CMA_STALENESS_DAYS
 const AVAILABILITY_STALENESS_HOURS = 72; // matches PO-02 freshness
 
 const posNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v > 0;
@@ -113,27 +111,26 @@ export function evaluatePreEmdGate(input: PreEmdGateInput): PreEmdGateResult {
   const pass = (id: string, label: string, reason: string, examined: Record<string, unknown> = {}) =>
     checks.push({ id, label, status: "pass", reason, neededInput: null, examined });
 
-  // ── DD-1 ARV validated from renovated comps ──────────────────────────
+  // ── DD-1 ARV validated from renovated comps (ENGINE auto-completed) ──
+  // Milestone 3: the ARV Comp Engine validates DD-1 — no operator tick. It
+  // reads the engine's decision, NOT the contaminated stored ARV and NEVER a
+  // RentCast AVM. VALIDATED ⇒ pass; ESCALATE ⇒ BLOCKED + routed to operator
+  // (Manual Review); BLOCKED/absent ⇒ BLOCKED (fail-closed).
   {
     const L = "ARV validated from comps";
-    if (!posNum(input.arvValue)) {
-      block("DD-1", L, "No ARV on record — a real renovated-comp ARV is absent.", "Real ARV from renovated sold comps", { arv_value: input.arvValue ?? null });
-    } else if (input.arvValidatedFromComps !== true) {
-      block("DD-1", L, `ARV $${input.arvValue.toLocaleString()} is NOT validated from renovated comps — a stored/contaminated field, a RentCast AVM (AS-IS, not ARV), or a broker-stated ARV does not count. Operator must confirm comps-validated ARV.`, "Comps-validated ARV confirmation", { arv_value: input.arvValue, validated_from_comps: false });
-    } else if (!input.arvValidatedAt) {
-      block("DD-1", L, "ARV has no validation timestamp — provenance/freshness unknown.", "arvValidatedAt", { arv_value: input.arvValue });
-    } else {
-      const t = Date.parse(input.arvValidatedAt);
-      const ageDays = Number.isNaN(t) ? NaN : (now.getTime() - t) / DAY_MS;
-      if (Number.isNaN(ageDays)) {
-        block("DD-1", L, `ARV validation timestamp unparseable: "${input.arvValidatedAt}".`, "valid arvValidatedAt", { arv_validated_at: input.arvValidatedAt });
-      } else if (ageDays > ARV_STALENESS_DAYS) {
-        block("DD-1", L, `ARV stale — validated ${ageDays.toFixed(1)}d ago (>${ARV_STALENESS_DAYS}d). Re-run comps before EMD.`, "fresh ARV (≤7d)", { age_days: Number(ageDays.toFixed(1)) });
-      } else if (!posNum(input.arvCompCount) || (input.arvCompCount as number) < ARV_MIN_COMPS) {
-        block("DD-1", L, `Only ${input.arvCompCount ?? 0} comps backing the ARV (<${ARV_MIN_COMPS}) — too thin to validate.`, `≥${ARV_MIN_COMPS} renovated comps`, { comp_count: input.arvCompCount ?? 0 });
+    const e = input.arvEngine;
+    if (!e) {
+      block("DD-1", L, "ARV comp engine produced no result — engine not run or errored (fail-closed).", "engine-validated ARV (ARV comp engine)", { arv_engine: null });
+    } else if (e.decision === "VALIDATED") {
+      if (!posNum(e.engineArv)) {
+        block("DD-1", L, "ARV engine returned VALIDATED but no engine_arv — refusing (fail-closed).", "engine_arv", { arv_engine: e.decision });
       } else {
-        pass("DD-1", L, `ARV $${input.arvValue.toLocaleString()} validated from ${input.arvCompCount} renovated comps (${ageDays.toFixed(1)}d ago).`, { arv_value: input.arvValue, comp_count: input.arvCompCount });
+        pass("DD-1", L, `ARV $${e.engineArv.toLocaleString()} engine-validated from ${e.compCount ?? "?"} renovated comps (confidence ${e.confidence ?? "?"}, conservative low-end).`, { engine_arv: e.engineArv, comp_count: e.compCount, confidence: e.confidence, seed_tier: e.seedTier, source: e.source });
       }
+    } else if (e.decision === "ESCALATE") {
+      block("DD-1", L, `ARV escalated to operator (Manual Review) — not auto-validated: ${e.reason}`, "operator review of the escalated ARV (Type 2C)", { arv_engine: "ESCALATE", reason: e.reason, partial_arv: e.engineArv });
+    } else {
+      block("DD-1", L, `ARV blocked — ${e.reason}`, "a STRONG renovated-comp seed for the ZIP", { arv_engine: "BLOCKED", reason: e.reason });
     }
   }
 
@@ -173,7 +170,7 @@ export function evaluatePreEmdGate(input: PreEmdGateInput): PreEmdGateResult {
       buyerMedian: input.buyerMedian ?? null,
       estRehab: pessimisticRehab(input),
       wholesaleFee: fee,
-      cmaValidatedAt: input.arvValidatedAt ?? null,
+      cmaValidatedAt: input.arvEngine?.freshness.fetchedAt ?? null,
       now,
     });
     if (math.mao.status !== "pass") {

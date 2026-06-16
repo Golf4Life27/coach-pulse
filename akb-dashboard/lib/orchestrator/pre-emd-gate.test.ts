@@ -75,8 +75,7 @@ describe("INV-023 Pre-EMD gate (Milestone 2)", () => {
   // ── Table-driven: clearing ANY single required input blocks that check ──
   const PASS = fx("fully-populated-pass.json").input;
   const cases: Array<{ check: string; mutate: Partial<PreEmdGateInput> }> = [
-    { check: "DD-1", mutate: { arvValue: null } },
-    { check: "DD-1", mutate: { arvValidatedFromComps: false } }, // broker/AVM ARV
+    { check: "DD-1", mutate: { arvEngine: null } }, // engine not run/errored → fail-closed
     { check: "DD-2", mutate: { estRehab: null, estRehabHigh: null } },
     { check: "DD-3", mutate: { buyerMedian: null } },
     { check: "DD-4", mutate: { contractPrice: 999999 } }, // contract > Your_MAO
