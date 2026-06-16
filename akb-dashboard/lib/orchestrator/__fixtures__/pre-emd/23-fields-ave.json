@@ -1,0 +1,27 @@
+{
+  "_meta": {
+    "name": "23 Fields Ave — the canonical failure (must BLOCK on DD-4).",
+    "shape": "A $61,750 contract against a ~$45,000 buyer ceiling. Everything else is attested/green so the gate blocks SPECIFICALLY on the contract-vs-Your_MAO check (DD-4) — the check that did not exist when this deal went through. Buyer ceiling $45,000 = Your_MAO = Buyer_Median $65,000 − Est_Rehab $15,000 − Wholesale_Fee $5,000.",
+    "fixture_only": "Test fixture, NOT a Listings_V1 record."
+  },
+  "input": {
+    "recordId": "fixture:23-fields-ave",
+    "arvValue": 65000,
+    "arvValidatedFromComps": true,
+    "arvValidatedAt": "2026-06-15T12:00:00.000Z",
+    "arvCompCount": 6,
+    "estRehab": 15000,
+    "rehabConfidence": "HIGH",
+    "rehabEstimatedAt": "2026-06-15T12:00:00.000Z",
+    "buyerMedian": 65000,
+    "contractPrice": 61750,
+    "assignmentClauseVerified": true,
+    "photosValidated": true,
+    "liveStatus": "Active",
+    "availabilityConfirmedAt": "2026-06-16T06:00:00.000Z",
+    "state": "MI",
+    "marketPaused": false,
+    "operatorSignoff": true
+  },
+  "expect": { "verdict": "BLOCKED", "blockedIncludes": ["DD-4"], "onlyBlocked": ["DD-4"] }
+}

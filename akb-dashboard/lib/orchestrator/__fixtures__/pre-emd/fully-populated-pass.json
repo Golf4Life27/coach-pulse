@@ -1,0 +1,27 @@
+{
+  "_meta": {
+    "name": "Fully-populated, in-bounds — the ONLY shape that unlocks (ADVANCE_UNLOCKED).",
+    "shape": "Every required check has a real, validated value. Your_MAO = Buyer_Median $90,000 − Est_Rehab $20,000 − Wholesale_Fee $5,000 = $65,000; contract $60,000 ≤ $65,000. Used to prove the gate CAN go green — and that even then the advance action is a separate operator click that this milestone does NOT execute.",
+    "fixture_only": "Synthetic test fixture, NOT a Listings_V1 record."
+  },
+  "input": {
+    "recordId": "fixture:fully-populated-pass",
+    "arvValue": 95000,
+    "arvValidatedFromComps": true,
+    "arvValidatedAt": "2026-06-15T12:00:00.000Z",
+    "arvCompCount": 8,
+    "estRehab": 20000,
+    "rehabConfidence": "HIGH",
+    "rehabEstimatedAt": "2026-06-15T12:00:00.000Z",
+    "buyerMedian": 90000,
+    "contractPrice": 60000,
+    "assignmentClauseVerified": true,
+    "photosValidated": true,
+    "liveStatus": "Active",
+    "availabilityConfirmedAt": "2026-06-16T06:00:00.000Z",
+    "state": "MI",
+    "marketPaused": false,
+    "operatorSignoff": true
+  },
+  "expect": { "verdict": "ADVANCE_UNLOCKED", "blocked": [] }
+}
