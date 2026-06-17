@@ -10,7 +10,7 @@
 // the same engine runs unchanged.
 
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -25,6 +25,7 @@ import {
   computeResaleMedian,
   naiveMostRecentMedianAllRows,
   perZipMedianTable,
+  median,
   BUYER_MEDIAN_MIN_N,
 } from "./buyer-median";
 import { mergeTransactions, ingestInvestorBaseCsv } from "./ingest";
@@ -175,5 +176,45 @@ describe("M5 — watched run (per-ZIP median table, zero writes)", () => {
 
     expect(table.find((r) => r.zip === "48205")!.landlord.median).toBe(42500);
     expect(table.find((r) => r.zip === "48999")!.landlord.status).toBe("INSUFFICIENT");
+  });
+});
+
+// ── REAL DATA: the 4 InvestorBase exports (contact-PII stripped). These prove
+//    the engine reproduces the directive's documented numbers on real data. ──
+describe("M5 — REAL InvestorBase exports (4 CSVs, contact-PII stripped)", () => {
+  const REAL = join(HERE, "__fixtures__", "real");
+  function loadReal(): BuyerTransaction[] {
+    let all: BuyerTransaction[] = [];
+    for (const f of readdirSync(REAL).filter((x) => x.endsWith(".csv"))) {
+      all = mergeTransactions(all, parseInvestorBaseCsv(readFileSync(join(REAL, f), "utf8"))).merged;
+    }
+    return all;
+  }
+  const all = loadReal();
+  const acq = (track: "landlord" | "flipper") =>
+    all.filter((t) => t.buyerType === track && t.acquisitionPrice != null).map((t) => t.acquisitionPrice as number);
+
+  it("ingests the 4 exports idempotently (704 raw → 659 unique; re-merge adds 0)", () => {
+    expect(all.length).toBe(659);
+    expect(mergeTransactions(all, all).added).toBe(0);
+  });
+
+  it("AGGREGATE: landlord-acq median = $46,000; naive all-rows blend = $100,000 (NEVER consumed)", () => {
+    expect(median(acq("landlord"))).toBe(46000); // directive: ≈ $46,000
+    expect(naiveMostRecentMedianAllRows(all)).toBe(100000); // directive: ≈ $100,000 — the trap
+    expect(median(acq("landlord"))).not.toBe(naiveMostRecentMedianAllRows(all));
+    // flipper acquisitions (Prior) cluster far below the naive blend ($100k).
+    expect(median(acq("flipper"))!).toBeLessThan(60000);
+  });
+
+  it("PER-ZIP acquisition medians match the documented examples (48205 ≈ $42.5k, 48219 ≈ $62k)", () => {
+    expect(computeBuyerMedian(all, "48205", "landlord").median).toBe(42500);
+    expect(computeBuyerMedian(all, "48219", "landlord").median).toBe(62000);
+  });
+
+  it("min-n fail-closed on a real thin ZIP/track (48224 landlord, n<20 → INSUFFICIENT)", () => {
+    const r = computeBuyerMedian(all, "48224", "landlord");
+    expect(r.status).toBe("INSUFFICIENT");
+    expect(r.n).toBeLessThan(BUYER_MEDIAN_MIN_N);
   });
 });
