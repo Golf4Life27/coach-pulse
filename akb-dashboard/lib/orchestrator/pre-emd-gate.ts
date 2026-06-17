@@ -279,3 +279,21 @@ export function emdAdvanceDecision(result: PreEmdGateResult): {
       .map((c) => ({ id: c.id, reason: c.reason, neededInput: c.neededInput })),
   };
 }
+
+/** The verdict the DASHBOARD surfaces — derived from the SAME gate result the
+ *  EMD/contract actions enforce (Milestone 4: one source of truth). The
+ *  `display` form maps to the legacy pass/block labels the panel expects, so
+ *  the shown verdict can never diverge from the enforced block. This REPLACES
+ *  the deprecated pre-emd-evaluate verdict (which compared the informational-
+ *  only Underwritten_MAO — the 23 Fields root cause). */
+export function preEmdDashboardVerdict(result: PreEmdGateResult): {
+  verdict: Verdict;
+  display: "pass" | "block";
+  blocked: string[];
+} {
+  return {
+    verdict: result.verdict,
+    display: result.verdict === "ADVANCE_UNLOCKED" ? "pass" : "block",
+    blocked: result.blocked,
+  };
+}
