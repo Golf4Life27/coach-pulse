@@ -11,8 +11,8 @@ import { findPropertyIntelRecordByListing } from "@/lib/federation/property-inte
 import { normalizeAddressKey } from "@/lib/crawler/intake-filter";
 import { getZipArvSeed } from "@/lib/zip-arv-seed-store";
 import { evaluateArvFromSeed, isArvEngineAutocompleteLive } from "./arv-comp-engine";
+import { evaluatePreEmdGate, type PreEmdGateInput, type PreEmdGateResult } from "./pre-emd-gate";
 import type { Deal } from "@/lib/types";
-import type { PreEmdGateInput } from "./pre-emd-gate";
 
 /** Map the numeric Rehab_Confidence_Score to the gate's confidence band.
  *  Anything not clearly HIGH is treated as low-confidence → pessimistic. */
@@ -98,4 +98,16 @@ export async function assemblePreEmdGateInputForDeal(deal: Deal): Promise<PreEmd
     marketPaused: st === "TN",
     pauseExceptionApproved: false,
   };
+}
+
+/**
+ * THE SINGLE ENFORCED GATE PATH (Milestone 4). Assemble + evaluate the INV-023
+ * gate for one Deal. Every door that can advance a deal toward EMD / contract
+ * signing calls this — the EMD-fire action (request-emd) AND the contract-sign
+ * action (actions/sign_contract) — and the dashboard panel surfaces the SAME
+ * result, so the displayed verdict and the enforced block can never diverge.
+ * Fail-closed: assembly maps any missing data to a BLOCKING input.
+ */
+export async function runPreEmdGateForDeal(deal: Deal): Promise<PreEmdGateResult> {
+  return evaluatePreEmdGate(await assemblePreEmdGateInputForDeal(deal));
 }

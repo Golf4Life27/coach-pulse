@@ -29,8 +29,8 @@ import {
   readAuthHeaders,
 } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
-import { evaluatePreEmdGate, emdAdvanceDecision } from "@/lib/orchestrator/pre-emd-gate";
-import { assemblePreEmdGateInputForDeal } from "@/lib/orchestrator/pre-emd-gate-live";
+import { emdAdvanceDecision } from "@/lib/orchestrator/pre-emd-gate";
+import { runPreEmdGateForDeal } from "@/lib/orchestrator/pre-emd-gate-live";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -73,7 +73,7 @@ async function handle(req: Request) {
   // missing data to a BLOCKING input, so absence → BLOCKED. This is the
   // mandatory entry the EMD path must pass through; it runs BEFORE (and in
   // addition to) the persisted-verdict read below.
-  const gate = evaluatePreEmdGate(await assemblePreEmdGateInputForDeal(deal));
+  const gate = await runPreEmdGateForDeal(deal);
   const gateDecision = emdAdvanceDecision(gate);
   if (!gateDecision.allowed) {
     await audit({
