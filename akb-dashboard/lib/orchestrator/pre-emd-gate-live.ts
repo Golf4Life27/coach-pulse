@@ -10,7 +10,10 @@ import { getListings } from "@/lib/airtable";
 import { findPropertyIntelRecordByListing } from "@/lib/federation/property-intel-store";
 import { normalizeAddressKey } from "@/lib/crawler/intake-filter";
 import { getZipArvSeed } from "@/lib/zip-arv-seed-store";
+import { getZipBuyerMedian } from "@/lib/buyer-median-store";
+import { defaultBuyerTrack } from "@/lib/buyer-median-input";
 import { evaluateArvFromSeed, isArvEngineAutocompleteLive } from "./arv-comp-engine";
+import { isBuyerMedianLive, BUYER_MEDIAN_MIN_N } from "@/lib/buyer-intel/buyer-median";
 import { evaluatePreEmdGate, type PreEmdGateInput, type PreEmdGateResult } from "./pre-emd-gate";
 import type { Deal } from "@/lib/types";
 
@@ -42,15 +45,34 @@ export async function assemblePreEmdGateInputForDeal(deal: Deal): Promise<PreEmd
     listing = null;
   }
 
+  // DD-3 buyer ceiling. LIVE (BUYER_MEDIAN_LIVE, M5): read the track-aware
+  // Buyer_Median_ZIP store (computed from InvestorBase acquisitions) with the
+  // min-n gate — n<20 → INSUFFICIENT → DD-3 BLOCKED → Manual Review.
+  // WATCHED (default): fall back to the existing Property_Intel value.
+  // Fail-closed: a live read error → INSUFFICIENT, never a fabricated number.
   let buyerMedian: number | null = null;
+  let buyerMedianStatus: "OK" | "INSUFFICIENT" | null = null;
+  let buyerMedianN: number | null = null;
   try {
-    if (listing) {
+    if (isBuyerMedianLive() && listing?.zip) {
+      const track = defaultBuyerTrack({ distressed: typeof listing.distressScore === "number" && listing.distressScore > 0 });
+      const zm = await getZipBuyerMedian(listing.zip, track);
+      if (zm && zm.value > 0 && (zm.compCount ?? 0) >= BUYER_MEDIAN_MIN_N) {
+        buyerMedian = zm.value;
+        buyerMedianStatus = "OK";
+        buyerMedianN = zm.compCount;
+      } else {
+        buyerMedianStatus = "INSUFFICIENT"; // no row / thin → fail-closed
+        buyerMedianN = zm?.compCount ?? 0;
+      }
+    } else if (listing) {
       const pi = await findPropertyIntelRecordByListing(listing.id);
       const bm = pi?.fields?.["Buyer_Median_Value"];
       buyerMedian = typeof bm === "number" ? bm : null;
     }
   } catch {
     buyerMedian = null;
+    buyerMedianStatus = isBuyerMedianLive() ? "INSUFFICIENT" : null;
   }
 
   const st = (listing?.state ?? "").trim().toUpperCase();
@@ -83,6 +105,8 @@ export async function assemblePreEmdGateInputForDeal(deal: Deal): Promise<PreEmd
     rehabEstimatedAt: listing?.rehabEstimatedAt ?? null,
     // DD-3:
     buyerMedian,
+    buyerMedianStatus,
+    buyerMedianN,
     // DD-4:
     contractPrice: deal.contractPrice ?? null,
     // DD-5 / DD-6 / DD-9: deal-level operator attestations.

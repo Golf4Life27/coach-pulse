@@ -63,8 +63,11 @@ export interface PreEmdGateInput {
   estRehabHigh?: number | null;
   rehabConfidence?: "HIGH" | "MED" | "LOW" | string | null;
   rehabEstimatedAt?: string | null;
-  // DD-3 Buyer ceiling.
+  // DD-3 Buyer ceiling. buyerMedianStatus distinguishes a real median (OK)
+  // from the min-n fail-closed signal (INSUFFICIENT → Manual Review, n<20).
   buyerMedian?: number | null;
+  buyerMedianStatus?: "OK" | "INSUFFICIENT" | null;
+  buyerMedianN?: number | null;
   // DD-4 Contract ≤ Your_MAO (composes DD-2 pessimistic rehab + DD-3 + fee).
   contractPrice?: number | null;
   wholesaleFee?: number | null;
@@ -152,10 +155,13 @@ export function evaluatePreEmdGate(input: PreEmdGateInput): PreEmdGateResult {
   // ── DD-3 Buyer ceiling present ───────────────────────────────────────
   {
     const L = "Buyer ceiling present";
-    if (!posNum(input.buyerMedian)) {
+    const nNote = typeof input.buyerMedianN === "number" ? ` (n=${input.buyerMedianN})` : "";
+    if (input.buyerMedianStatus === "INSUFFICIENT") {
+      block("DD-3", L, `buyer-median insufficient for ZIP (n<20), manual review${nNote}.`, "≥20 priced buyer acquisitions for the ZIP/track (Buyer_Median)", { buyer_median_status: "INSUFFICIENT", n: input.buyerMedianN ?? null });
+    } else if (!posNum(input.buyerMedian)) {
       block("DD-3", L, "Buyer_Median absent — no validated buyer ceiling for this market (Property_Intel / Buyer_Median_ZIP not hydrated).", "Buyer_Median", { buyer_median: input.buyerMedian ?? null });
     } else {
-      pass("DD-3", L, `Buyer_Median present: $${input.buyerMedian.toLocaleString()}.`, { buyer_median: input.buyerMedian });
+      pass("DD-3", L, `Buyer_Median present: $${input.buyerMedian.toLocaleString()}${nNote}.`, { buyer_median: input.buyerMedian, n: input.buyerMedianN ?? null });
     }
   }
 
