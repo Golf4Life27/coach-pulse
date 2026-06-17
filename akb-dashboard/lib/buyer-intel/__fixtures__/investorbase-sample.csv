@@ -1,0 +1,9 @@
+Entity Name,First Name,Last Name,Buyer Type,Property Type,Wireless 1,Wireless 2,Landline 1,Address,City,State,Zip,Bedrooms,Bathrooms,Sqft,Status,Most Recent Sale Date,Most Recent Sale Price,Prior Sale Date,Prior Sale Price,Buyer Transaction Count,LinkedDeal count,Beta: Possible Email,Buyer Mailing City,Buyer Mailing State,Buyer Mailing Zip
+SYNTHETIC HOLDINGS LLC,Ada,Holder,Landlord,Single Family,555-0100,,,101 Test St,Detroit,MI,48205,3,1,1100,Sold,2026-05-01,"$42,500",2019-03-01,"$30,000",4,2,buyer1@example.test,Detroit,MI,48205
+SYNTHETIC FLIP CO,Ben,Flipper,Flipper,Single Family,555-0101,,,102 Test St,Detroit,MI,48205,3,1,1200,Sold,2026-05-02,"$120,000",2025-11-01,"$47,000",9,5,buyer2@example.test,Detroit,MI,48205
+SYNTHETIC FLIP CO,Ben,Flipper,Flipper,Single Family,555-0101,,,201 Test Ave,Detroit,MI,48219,3,2,1300,Sold,2026-05-03,"$130,000",2025-12-01,"$48,000",9,5,buyer2@example.test,Detroit,MI,48219
+SYNTHETIC HOLD2 LLC,Cy,Keeper,Landlord,Single Family,555-0102,,,202 Test Ave,Detroit,MI,48219,3,1,1150,Sold,2026-05-04,"$62,000",,,3,1,buyer3@example.test,Detroit,MI,48219
+SYNTHETIC NOPRICE LLC,Di,Blank,Landlord,Single Family,555-0103,,,103 Test St,Detroit,MI,48205,3,1,1000,Sold,2026-05-05,,,,1,0,,Detroit,MI,48205
+SYNTHETIC IBUYER INC,Ex,Other,iBuyer,Single Family,555-0104,,,104 Test St,Detroit,MI,48205,3,1,1050,Sold,2026-05-06,"$80,000",2024-01-01,"$60,000",2,0,,Detroit,MI,48205
+SYNTHETIC HOLD3 LLC,Fi,Owner,Landlord,Single Family,555-0105,,,105 Test St,Detroit,MI,48205,3,1,1080,Sold,2026-05-07,"$44,000",2018-06-01,"$25,000",5,3,buyer4@example.test,Detroit,MI,48205
+SYNTHETIC FLIP2 LLC,Gus,Renner,Flipper,Single Family,555-0106,,,106 Test St,Detroit,MI,48205,3,1,1220,Sold,2026-05-08,"$125,000",2025-10-01,"$46,000",7,4,buyer5@example.test,Detroit,MI,48205
