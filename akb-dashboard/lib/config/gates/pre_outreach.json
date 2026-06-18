@@ -1,10 +1,10 @@
 {
-  "$schema_note": "Pre-Outreach Gate (Gate 1) per AKB_Deal_Flow_Orchestrator_Spec §4. 14 items, mostly Airtable-field reads, no external API calls. Transitions verified → outreach_ready. Edit thresholds here without code changes; check functions in lib/orchestrator/pre-outreach-checks.ts read from this.",
-  "last_updated": "2026-05-13",
+  "$schema_note": "Pre-Outreach Gate (Gate 1) per AKB_Deal_Flow_Orchestrator_Spec §4. 14 items, mostly Airtable-field reads, no external API calls. Transitions priced → outreach_ready. (M7 2026-06-18: stage_from corrected verified→priced. The legal-edge guard requires `priced` as the predecessor of outreach_ready; the prior verified→outreach_ready was an illegal skip the sole-writer engine refused, stranding every verified record. `priced` is now written at the opener event — see lib/pipeline-state/price-transition.ts.) Edit thresholds here without code changes; check functions in lib/orchestrator/pre-outreach-checks.ts read from this.",
+  "last_updated": "2026-06-18",
   "source": "Orchestrator spec §4 Gate 1 + Briefing §3 hardcoded inviolable rules",
-  "version": 1,
+  "version": 2,
   "gate_id": "pre_outreach",
-  "stage_from": "verified",
+  "stage_from": "priced",
   "stage_to": "outreach_ready",
   "config": {
     "mls_status_blocked": ["Off Market", "Sold", "Pending", "Withdrawn", "Expired"],

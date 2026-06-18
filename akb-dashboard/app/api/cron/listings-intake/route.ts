@@ -63,6 +63,7 @@ import { checkFirecrawlBreaker, recordFirecrawlSpend, shouldHaltVerify } from "@
 import { runAsyncPool, makeRateGate } from "@/lib/crawler/async-pool";
 import { getActiveIntakeRows, updateZipStats } from "@/lib/zip-registry";
 import { getVerifiedThisCycle, markVerifiedThisCycle } from "@/lib/crawler/verify-cache";
+import { transitionToPriced } from "@/lib/pipeline-state/price-transition";
 // National crawler (Maverick 2026-06-14) — auto-seed + opener-write, all
 // behind CRAWLER_AUTOSEED_LIVE (default off → these paths never execute).
 import { decideAutoSeed, runAutoSeed } from "@/lib/crawler/auto-seed";
@@ -250,6 +251,21 @@ async function createIntakeListing(
   const body = (await res.json()) as { records?: Array<{ id: string }> };
   const id = body.records?.[0]?.id;
   if (!id) throw new Error("intake create returned no record id");
+  // M7 Part 1 (operator 2026-06-18): the opener-write IS the `priced`
+  // checkpoint. A fresh record that passed Firecrawl verify AND received a
+  // real opener is born at `priced` (null→priced, legal initial assignment)
+  // so it can later flow priced→outreach_ready through Gate 1 once the
+  // operator promotes it. No opener (CRAWLER_AUTOSEED_LIVE OFF) → no stage
+  // write, exactly as before. Routed through the SOLE WRITER engine (audited).
+  // Best-effort: a stage-write hiccup must never fail an already-created
+  // record — it simply stays unstaged for the backfill, never silent-forwarded.
+  if (opener && typeof opener.amount === "number" && Number.isFinite(opener.amount) && opener.amount > 0) {
+    try {
+      await transitionToPriced(id, null, `intake_opener_written:${c.sourceId}`);
+    } catch {
+      // swallowed — the engine audits its own outcome; intake create still succeeds.
+    }
+  }
   return id;
 }
 

@@ -302,12 +302,17 @@ async function fetchSource(
       // optimization: scope the Airtable fetch to active-only.
       return await getBuyers();
     case "pa_document":
-      // Gate 4 PC-01..PC-15 + PC-18..PC-22 depend on this. DocuSign
-      // MCP not yet loaded as deferred tools — throwing surfaces as
-      // data_missing per spec §6 (loud failure for Phase 1, clear
-      // wire-in target for Phase 2).
+      // Gate 4 (Pre-Contract) PC-01..PC-15 + PC-18..PC-22 depend on this.
+      // DocuSign is intentionally unwired for first light (Phase 1, hop 7
+      // is OUT of the front-half scope — contracts are operator-signed).
+      // This rejection is the deliberate FAIL-CLOSED block: it is caught by
+      // the Promise.allSettled fan-out in runGate and surfaces those items as
+      // `data_missing`, so no PA can advance to under_contract until DocuSign
+      // wires in. The message is operator-facing on purpose — a lead at this
+      // boundary is surfaced to the operator for signature via
+      // preContractOperatorHandoff(), NOT presented as a crash.
       throw new Error(
-        "pa_document source requires DocuSign JWT integration (Phase 12.7). lib/docusign.ts JWT client + briefing source landed in Commit G; live calls fire once DOCUSIGN_INTEGRATION_KEY / DOCUSIGN_USER_ID / DOCUSIGN_PRIVATE_KEY env are provisioned. Note: ab943441-29da-4bcb-8d3f-19efc0412d6c is Alex's DocuSign account_id, NOT an MCP server UUID — that conflation came from the 5/13 announcement notes and was corrected 5/18. The actual production path is REST-over-JWT, not MCP. Add per-envelope pa_document fetcher here when env lands.",
+        "PA_DOCUMENT_UNWIRED: awaiting operator signature — DocuSign not wired for first light (Phase 1). Lead surfaces to the operator (Manual Review); never auto-advanced.",
       );
     case "property_intel": {
       // Gate 5 (Pre-EMD, INV-029). Reads the INV-022 federation row for

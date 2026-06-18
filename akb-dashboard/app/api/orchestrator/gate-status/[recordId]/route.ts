@@ -16,12 +16,13 @@ export const runtime = "nodejs";
 export const maxDuration = 30;
 
 // Stage progression — index of stage tells you which gate runs next.
-// (intake → verified is Scenario A/B; verified → outreach_ready is
-// Gate 1; outreach_ready → outreach_sent is Gate 2; etc.)
+// (intake → verified is Scenario A/B; verified → priced is the opener-write
+// pricing checkpoint, NOT a gate; priced → outreach_ready is Gate 1;
+// outreach_ready → outreach_sent is Gate 2; etc.)
 const STAGE_PROGRESSION_GATES: Record<string, string | null> = {
   intake: "verification (scenarioA/B)",
-  verified: "pre_outreach",
-  priced: "pre_outreach", // (or pre_send once Gate 2 lands)
+  verified: "pricing (opener write → priced)",
+  priced: "pre_outreach",
   outreach_ready: "pre_send",
   outreach_sent: "pre_negotiation",
   negotiating: "pre_negotiation",
