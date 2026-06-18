@@ -10,7 +10,7 @@
 > a sub-agent file-sweep and not individually re-read, or `[unknown]` when not
 > verified. Do not upgrade a `[sweep]`/`[unknown]` to fact without reading it.
 >
-> Last updated: 2026-06-18 · prod HEAD context: branch `claude/admiring-shannon-dzfnbm`, local HEAD `7f1caef` (M6 inbound-capture dark scaffold + Buyer_Median go-live/cleanup; builds on `dff69b1`, PR #27 verify-gate `8952d8c` + PR #28 backlog-reprice `7959eaf`). **New 2026-06-18 work in §8.**
+> Last updated: 2026-06-18 · prod HEAD context: branch `claude/admiring-shannon-dzfnbm`, local HEAD `a621b9b` (M7 front-half conveyor wired + capped H2 lift; builds on M6 `7f1caef`, `dff69b1`, PR #27 verify-gate `8952d8c` + PR #28 backlog-reprice `7959eaf`). **New 2026-06-18 work in §8 (M6 §8a-b, M7 §8c).**
 
 ---
 
@@ -91,7 +91,7 @@ Five gates, in live pipeline order (`lib/config/gates/*.json` + `*-checks.ts`):
 
 | # | Gate | stage_from → stage_to | Reads (sources) |
 |---|---|---|---|
-| 1 | `pre_outreach` | verified → outreach_ready | `airtable_listing` only (14 items, PO-01…PO-14) |
+| 1 | `pre_outreach` | **priced** → outreach_ready | `airtable_listing` only (14 items, PO-01…PO-14). **M7:** edge was the illegal `verified→outreach_ready` skip the engine refused (stranding every verified record); now `priced→outreach_ready`. See §8c. |
 | 2 | `pre_send` | outreach_ready → outreach_sent | `airtable_listing` (PS-01 needs `ARV_Validated_At`) |
 | 3 | `pre_negotiation` | outreach_sent → negotiating | listing + `quo_thread` + `gmail_thread` + `live_listing` + `cma` |
 | 4 | `pre_contract` | negotiating → contract | listing + `pa_document` (DocuSign) + `buyer_pipeline` |
@@ -103,8 +103,11 @@ NC, OK, ND}`; SFR-only; beds ≥ 2; sqft ∈ [500, 5000]; list ∈ [3500, 500000
 score < 4; verify freshness ≤ 72h; distress = DOM ≥ 60 OR ≥1 price drop (warn-only).
 
 **`pa_document` (DocuSign) is unwired in production (Phase 1)** — `gate-runner.ts`
-`fetchSource("pa_document")` throws, so Gate-4 items depending on it resolve to
-`data_missing`. `[verified — gate-runner.ts:304-311]`
+`fetchSource("pa_document")` rejects (caught by the fan-out), so Gate-4 items resolve
+to `data_missing` — the deliberate FAIL-CLOSED block (no PA advances to contract).
+**M7 2026-06-18:** the reject message was de-scared and a clean operator hand-off added
+(`pre-contract-handoff.ts`) so a lead at the wall surfaces to the operator (Manual
+Review), never a crash. See §8c. `[verified — gate-runner.ts:304-311]`
 
 ---
 
@@ -139,7 +142,7 @@ pricing decision.**
 
 | Flag (env) | Default | Where read / enforced | Effect |
 |---|---|---|---|
-| **`H2_OUTREACH_HARD_DISABLE`** | unset ⇒ `!== "false"` ⇒ **disabled** | `app/api/cron/h2-outreach/route.ts:171` `[verified]`; `app/api/outreach-fire/route.ts:110` `[sweep]` | **Hard kill on opener SMS** — route returns 503 before send. Added after a 2026-06-05 unauthorized-send incident. The ONLY thing standing between the system and live texts. |
+| **`H2_OUTREACH_HARD_DISABLE`** | unset ⇒ `!== "false"` ⇒ **disabled** | `app/api/cron/h2-outreach/route.ts:171` `[verified]`; `app/api/outreach-fire/route.ts:110` `[sweep]` | **Hard kill on opener SMS** — route returns 503 before send. Added after a 2026-06-05 unauthorized-send incident. The ONLY thing standing between the system and live texts. **M7:** even once lifted, the send-cap meters the lift (next row) — the 109-at-outreach_ready can't fire at once. |
 | `H2_OUTREACH_LIVE` | unset ⇒ dry-run | `h2-outreach/route.ts:190` `[sweep]` | Even with `?dry_run=false`, stays dry unless `=="true"`. |
 | `FOLLOWUP_SEND_ENABLED` | unset ⇒ off | `parked-followup/route.ts:85` `[sweep]` | Parked follow-up SMS never fire. |
 | `CRAWLER_INTAKE_LIVE` | unset ⇒ dry-run | `listings-intake/route.ts:282` `[sweep]` | No Airtable creates from intake. |
@@ -149,6 +152,7 @@ pricing decision.**
 | `EXCLUDED_STATES` (code const) | `{IL,MO,SC,NC,OK,ND}` | `lib/crawler/intake-filter.ts:30` `[verified]` + Pre-Outreach PO-05 `restricted_states` `[verified]` | Excluded-state listings are filtered at intake (the table has **0** NC records) and PO-05 blocks them at the gate. |
 | **`INBOUND_CAPTURE_LIVE`** | unset ⇒ off (watched-first) | `lib/inbound/flag.ts:10` `[verified]`; enforced `gmail-sync/route.ts:45-48` `[verified]` | M6 inbound capture stays DARK: `gmail-sync` returns `{watched:true}` with zero writes; the dark `quo-inbound` webhook + `Unmatched_Replies` catch-all writes are suppressed. Flip AFTER a watched run (see §8a). |
 | `BUYER_MEDIAN_LIVE` | unset ⇒ off | `lib/buyer-intel/buyer-median.ts:27` `[verified]` | DD-3 (`pre-emd-gate-live.ts:48`) + ingest read the live `Buyer_Median_ZIP` store only when `=="true"`; else fall back to the in-code seed list. Store is seeded (15 rows) but read-gated (see §8b). |
+| **`H2_COVERED_ZIPS` / `H2_MAX_SENDS_PER_RUN` / `H2_MAX_SENDS_PER_ZIP`** | unset ⇒ **0 sends** / 5 / 2 | `lib/outreach/send-cap.ts` `[verified]`; enforced in `h2-outreach/route.ts` live dispatch | **M7 the safety meter on the H2 lift.** FAIL-CLOSED: empty `H2_COVERED_ZIPS` ⇒ zero sends. Per-run/per-zip caps clamp to hard code ceilings (25/10). Applies only AFTER the hard-disable is lifted, live only; a dry run previews it in the response `send_cap` block. See §8c. |
 
 > **Manual-review parks:** crawled/un-promoted records sit in `Outreach_Status =
 > Review` / `Parked` (Airtable singleSelect) awaiting operator action; auto-promote is
@@ -200,20 +204,24 @@ If `gate-runner.ts` status logic changes, update `evaluateGateChecks()` to match
 
 ## 7. Known-broken / unverified (honest list)
 
-- **Firecrawl breaker fails-OPEN on a KV/store outage** (both the scope gate and the
-  spend breaker). A *simultaneous* outage could reconstruct the burn, capped only by
-  the per-run ~1000 budget (~6k/hr). Flagged 2026-06-09 (Spine `recTes4PKeI6K96mS`)
-  as "fix next: fail to a narrow `[48227]` allowlist". **Whether the fail-narrow fix
-  shipped is `[unknown]`** — verify before trusting the breaker under outage.
+- **Firecrawl breaker fails-OPEN on a KV/store outage** — `firecrawl-circuit-breaker.ts`
+  `firecrawlSpentRecent` returns 0 when KV is down ⇒ the breaker never trips
+  (`:20-21,80-81`). The dedicated **fail-narrow `[48227]` allowlist fix is NOT shipped
+  in the breaker** `[verified — M7 read 2026-06-18]`. Backstops that DID ship: the
+  per-run scrape budget (~1000) + the intake ZIP-scope (seeded/priceable only,
+  fail-narrow on the ZIP source) + `shouldHaltVerify` on a known ≤0 balance. The H2 SMS
+  path spends no Firecrawl — this risk is on the autoseed/intake path. **Verify KV
+  health before turning up autoseed/intake volume.**
 - **Today's exact Firecrawl balance is `[unknown]`** — no `FIRECRAWL_API_KEY` this
   session and Vercel runtime logs were empty for the window. Most recent production
   evidence: ~26,000 credits, operator-topped-up 2026-06-15 (Spine); last machine
   probe 14,093 on 2026-06-09. The retry-loop that drained it to −821 is killed at
   root (PR #26 widen + PR #27 verify-gate, both in prod). See Step 0 of the session
   report.
-- **`Pipeline_Stage` field mapping** for the fixtures was not confidently resolved
-  from MCP field IDs (the candidate field carries crawl-status-like values); left
-  `null` in fixtures. Affects only the `current_stage` display echo, not gate logic.
+- **`Pipeline_Stage` = `fldJt2pSCHiXqBxwj` (RESOLVED M7)** — clean gate-aligned values
+  (intake/verified/priced/outreach_ready/…); the earlier fixture uncertainty is moot.
+  M7 found + fixed the `priced=0` defect this exposed (the stage was never written and
+  Gate 1 declared an illegal skip) — see §8c.
 - **Cron rows tagged `[sweep]`** in §1a were gathered by a sub-agent and not
   individually re-read; schedules are verified against `vercel.json`, the one-line
   summaries are not.
@@ -264,6 +272,42 @@ Reply-capture is built **app-side** and held DARK behind `INBOUND_CAPTURE_LIVE`
   **15 rows**. The 48227 landlord $55k seed stays but has no comp count ⇒ gated by
   the min-n rule on every read (DD-3 + underwrite). `[verified — Airtable MCP delete
   + re-read]`
+
+### 8c. M7 — front-half conveyor wired + capped H2 lift (built, OFF)
+
+**Live conveyor census (2026-06-18, 4,858 records, `Pipeline_Stage`):** blank 1,226 ·
+intake 738 · verified 209 · **priced 0** · outreach_ready 109 · outreach_sent 64 ·
+negotiating 5 · under_contract 0 (rest ~2,507 dead/responded). Manual queues
+(`Outreach_Status`): Review 1,093 · Parked 319 · Manual Review 47. `[verified — Airtable MCP]`
+
+**The `priced=0` defect — root-caused + fixed.** Lifecycle is
+`intake→verified→priced→outreach_ready` with a strict forward-one-step legal-edge guard,
+but NOTHING wrote `priced`: no gate targeted it, the legacy-derive never emits it, the
+opener-write set `Rough_Opener_Amount` without advancing the stage. So Gate 1 declared
+the **illegal** `verified→outreach_ready` skip the sole-writer engine refuses — every
+`verified` record was stranded (the 109 at outreach_ready got there only via
+unconstrained initial-assignment backfill).
+- **The missing writer:** `lib/pipeline-state/price-transition.ts` — the opener-write IS
+  the `priced` checkpoint; routes through the SOLE WRITER engine (legal-edge + audit
+  intact); legal from null/verified, noop at priced, FAIL-CLOSED on a skip. Wired into
+  `listings-intake.createIntakeListing`, gated by the opener ⇒ `CRAWLER_AUTOSEED_LIVE`. `[verified]`
+- **Gate 1 edge fixed:** `pre_outreach.json` `stage_from: verified→priced`. `[verified]`
+- **Proof:** `lib/pipeline-state/front-half-flow.test.ts` — a synthetic Detroit lead
+  traverses verified→priced→outreach_ready (real engine edges) → Gate 1 PASS (real
+  checks) → operator surface, + a regression guard that the skip stays illegal.
+- **No backlog migration:** the 209/109 stay put; auto-promote stays OFF (operator promotes).
+
+**Hop-7 clean operator hand-off (front-half terminus).** DocuSign stays unwired (hop 7
+OUT of scope). The scary `pa_document` throw is de-scared (fail-closed `data_missing`
+preserved); `lib/orchestrator/pre-contract-handoff.ts` surfaces a lead blocked only by
+the unwired DocuSign to the operator (Manual Review, "awaiting operator signature") vs.
+a real rule failure. The belt reaches the operator cleanly, never crashes.
+
+**Capped H2 lift — BUILT, LEFT OFF (Part 2).** `lib/outreach/send-cap.ts` hard-bounds a
+live H2 run (§4 flags). FAIL-CLOSED (empty `H2_COVERED_ZIPS` ⇒ zero); tight defaults
+5/run, 2/zip, clamped to 25/10. `H2_OUTREACH_HARD_DISABLE` UNTOUCHED. The census's
+109-at-outreach_ready can no longer fire at once on a lift; a dry run previews the cap
+in the response `send_cap` block. `[verified — 193 files / 2631 tests green, tsc clean]`
 
 ---
 
