@@ -45,6 +45,7 @@ import { anchoredOpenerGate } from "@/lib/h2-outreach/your-mao-opener-gate";
 import { computeRoughOpenerCeiling } from "@/lib/rough-opener-ceiling";
 import { getMarketForListing } from "@/lib/markets/registry";
 import { resolveAnchorPct } from "@/lib/markets/anchor";
+import { readSendCapConfig, applySendCap } from "@/lib/outreach/send-cap";
 import { loadUnderwriteContextForListings } from "@/lib/track-aware-underwrite";
 import {
   authenticate,
@@ -422,6 +423,27 @@ async function handle(req: Request): Promise<Response> {
   const plans = planQueue(queue, priorIndex);
   const byId = new Map(queue.map((l) => [l.id, l] as const));
 
+  // ── M7 Part 2 send cap (operator 2026-06-18) — the safety meter on the H2
+  // lift. The live census shows 109 records already at outreach_ready; lifting
+  // H2_OUTREACH_HARD_DISABLE without a cap would fire ALL of them at once. Bound
+  // a LIVE run to a handful of sends, covered ZIPs only (FAIL-CLOSED: empty
+  // H2_COVERED_ZIPS → zero). The cap is ALWAYS computed so a watched dry-run
+  // previews exactly what would fire live; it only FILTERS dispatch when live.
+  // The hard-disable above stays the master kill — this runs only once lifted.
+  const sendCap = applySendCap(plans, (p) => byId.get(p.recordId)?.zip ?? null, readSendCapConfig());
+  const dispatchPlans = dryRun ? plans : sendCap.allowed;
+  const sendCapSummary = {
+    enforced: !dryRun, // live dispatch is filtered; a dry run previews all + this projection
+    allowed: sendCap.allowed.length,
+    capped: sendCap.capped.length,
+    capped_by_reason: {
+      zip_not_covered: sendCap.capped.filter((c) => c.reason === "zip_not_covered").length,
+      per_zip_cap: sendCap.capped.filter((c) => c.reason === "per_zip_cap").length,
+      per_run_cap: sendCap.capped.filter((c) => c.reason === "per_run_cap").length,
+    },
+    config: sendCap.config,
+  };
+
   const startedAt = new Date(t0).toISOString();
   const processed: ProcessedRow[] = [];
   const summary: {
@@ -468,7 +490,7 @@ async function handle(req: Request): Promise<Response> {
     }
   }
 
-  for (const p of plans) {
+  for (const p of dispatchPlans) {
     const row: ProcessedRow = {
       record_id: p.recordId,
       address: p.address,
@@ -672,7 +694,7 @@ async function handle(req: Request): Promise<Response> {
     event: dryRun ? "h2_outreach_dry_run" : "h2_outreach_live",
     status: summary.errors > 0 ? "uncertain" : "confirmed_success",
     inputSummary: { auth_kind: authKind, dry_run: dryRun, limit, record_id: recordId, live_env: liveEnv },
-    outputSummary: { eligible_count: eligibleCount, processed: processed.length, ...summary },
+    outputSummary: { eligible_count: eligibleCount, processed: processed.length, ...summary, send_cap: sendCapSummary },
     ms: Date.now() - t0,
   });
 
@@ -721,6 +743,7 @@ async function handle(req: Request): Promise<Response> {
     eligible_count: eligibleCount,
     processed,
     summary,
+    send_cap: sendCapSummary,
     opener_guarded: openerGuarded,
     hold_proposals: holdProposals,
     supply_floor: supplyFloor,
