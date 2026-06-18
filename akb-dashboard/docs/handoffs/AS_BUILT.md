@@ -10,7 +10,7 @@
 > a sub-agent file-sweep and not individually re-read, or `[unknown]` when not
 > verified. Do not upgrade a `[sweep]`/`[unknown]` to fact without reading it.
 >
-> Last updated: 2026-06-16 · prod HEAD context: branch `claude/admiring-shannon-dzfnbm`, local HEAD `dff69b1` (builds on PR #27 verify-gate `8952d8c` + PR #28 backlog-reprice `7959eaf`).
+> Last updated: 2026-06-18 · prod HEAD context: branch `claude/admiring-shannon-dzfnbm`, local HEAD `7f1caef` (M6 inbound-capture dark scaffold + Buyer_Median go-live/cleanup; builds on `dff69b1`, PR #27 verify-gate `8952d8c` + PR #28 backlog-reprice `7959eaf`). **New 2026-06-18 work in §8.**
 
 ---
 
@@ -51,6 +51,7 @@
 | `*/5 * * * *` | `/api/admin/url-backfill?apply=1&limit=10` | Backfill `Verification_URL` via Firecrawl (1–2 cr/rec) | Minor Firecrawl spend `[sweep]` |
 | `*/5 * * * *` | `/api/admin/appraiser-backfill?...rehab_ready&limit=3` | Route Rehab_Ready records through vision + ARV + underwrite | `[sweep]` |
 | `20 * * * *` | `/api/cron/quo-sync?limit=40&hours_back=24` | Append inbound Quo messages to `Verification_Notes` | `[sweep]` |
+| `40 * * * *` | `/api/cron/gmail-sync?limit=40&hours_back=48` | Append inbound Gmail replies to matched listing + (dark) catch-all | **GATED DARK** by `INBOUND_CAPTURE_LIVE` — returns `{watched:true}`, zero writes, until flipped; staggered off quo-sync's `:20` `[verified — route:45-48]` |
 | `0 9 * * *` | `/api/cron/propose-actions` | Template proposals for silent listings (no Claude calls) | `[sweep]` |
 | `0 11 * * *` | `/api/scan-replies` | scan-comms alias | `[sweep]` |
 | `0 8 * * *` | `/api/admin/recompute-agent-prior-counts` | Recompute `Agent_Prior_Outreach_Count` | `[sweep]` |
@@ -146,6 +147,8 @@ pricing decision.**
 | `CRAWLER_AUTOSEED_LIVE` | unset ⇒ skip | `listings-intake/route.ts:294` `[sweep]` | No renovated-comp seed pulls / opener writes ⇒ **`Rough_Opener_Amount` stays blank cohort-wide** (confirmed: none of the records sampled this session had a stored opener). |
 | `MAVERICK_CRON_ENABLED` | unset ⇒ 503 on cron-auth | multiple crons `[sweep]` | Cron auth gate. |
 | `EXCLUDED_STATES` (code const) | `{IL,MO,SC,NC,OK,ND}` | `lib/crawler/intake-filter.ts:30` `[verified]` + Pre-Outreach PO-05 `restricted_states` `[verified]` | Excluded-state listings are filtered at intake (the table has **0** NC records) and PO-05 blocks them at the gate. |
+| **`INBOUND_CAPTURE_LIVE`** | unset ⇒ off (watched-first) | `lib/inbound/flag.ts:10` `[verified]`; enforced `gmail-sync/route.ts:45-48` `[verified]` | M6 inbound capture stays DARK: `gmail-sync` returns `{watched:true}` with zero writes; the dark `quo-inbound` webhook + `Unmatched_Replies` catch-all writes are suppressed. Flip AFTER a watched run (see §8a). |
+| `BUYER_MEDIAN_LIVE` | unset ⇒ off | `lib/buyer-intel/buyer-median.ts:27` `[verified]` | DD-3 (`pre-emd-gate-live.ts:48`) + ingest read the live `Buyer_Median_ZIP` store only when `=="true"`; else fall back to the in-code seed list. Store is seeded (15 rows) but read-gated (see §8b). |
 
 > **Manual-review parks:** crawled/un-promoted records sit in `Outreach_Status =
 > Review` / `Parked` (Airtable singleSelect) awaiting operator action; auto-promote is
@@ -159,6 +162,8 @@ pricing decision.**
 |---|---|---|
 | Listings / deals / buyers | **Airtable** base `appp8inLAGTg4qpEZ` | Listings_V1 `tbldMjKBgPiq45Jjs` `[verified]`; Deals, Buyers via `getDeals`/`getBuyers` `[verified]`; field→prop map `lib/airtable.ts:152 LISTING_NAME_MAP` `[verified]` |
 | Operator decision log / build events | **Airtable Spine** `tblbp91DB5szxsJpT` | narrative + `event_type` audit `[verified — MCP this session]` |
+| Buyer median by ZIP+track | **Airtable** base `appp8inLAGTg4qpEZ` | `Buyer_Median_ZIP` `tbleoqYRBmnJq5V0Z` — **15 rows** (9 flipper `investorbase_auto` + 6 landlord `investorbase_manual`); read via `getZipBuyerMedian`, min-n gate (`compCount≥20`) on every read `[verified — MCP + track-aware-underwrite.ts]` |
+| Inbound replies w/ NO matched listing | **Airtable** base `appp8inLAGTg4qpEZ` | `Unmatched_Replies` `tblh4m0hG7KoZ7dN5` — fail-closed catch-all; written by the dark `quo-inbound` webhook when `INBOUND_CAPTURE_LIVE` is on `[verified — operator + lib/inbound/store.ts]` |
 | Firecrawl rolling-hour spend | **Vercel KV** | prefix `fc:spend:h:{hourIndex}`, 2h TTL, cap 800/hr `[verified — firecrawl-circuit-breaker.ts:34]` |
 | Per-market anchor | **Vercel KV** | `market:anchor:{marketId}` (Detroit 0.90 launch) `[sweep]` |
 | H2 run lock / dispatch claim | **Vercel KV** | `h2:run:lock`, `h2:dispatch:{recordId}` `[sweep]` |
@@ -220,7 +225,49 @@ If `gate-runner.ts` status logic changes, update `evaluateGateChecks()` to match
 
 ---
 
-## 8. Pointers
+## 8. NEW 2026-06-18 — M6 inbound capture (DARK) + Buyer_Median go-live & cleanup
+
+### 8a. M6 inbound capture — app-side, gated dark (Option 1 topology)
+
+Reply-capture is built **app-side** and held DARK behind `INBOUND_CAPTURE_LIVE`
+(watched-first). **Live Make L3 is untouched** — no re-point until the operator says so.
+
+- **Flag:** `lib/inbound/flag.ts:10` (`INBOUND_CAPTURE_LIVE === "true"`). `[verified]`
+- **Gmail leg (live cron, dark writes):** `/api/cron/gmail-sync` (`40 * * * *`,
+  `?limit=40&hours_back=48`) appends inbound Gmail replies to the matched listing;
+  flag off ⇒ returns `{watched:true}`, writes nothing. `[verified — route:45-48]`
+- **Catch-all:** `Unmatched_Replies` (Airtable `tblh4m0hG7KoZ7dN5`) — fail-closed
+  surface for inbound with **no matched listing** (an unknown phone can't be matched
+  by the per-known-phone poll path, so it would otherwise vanish). Written via
+  `lib/inbound/store.ts`. `[verified — operator + store.ts]`
+- **SMS leg (dark scaffold):** `/api/webhooks/quo-inbound/route.ts` parses a Quo
+  inbound webhook → match → capture-or-catch-all. Goes live ONLY when the operator
+  (1) re-points Quo's webhook here AND (2) sets `INBOUND_CAPTURE_LIVE=true`.
+  `[verified — route:6]`
+- **Lib + proof:** `lib/inbound/{types,match,catch-all,capture,webhook-parse,
+  gmail-capture,store,flag}.ts`; `lib/inbound/inbound.test.ts` proves
+  unmatched→catch-all with **no live Quo**. `[verified]`
+
+### 8b. Buyer_Median go-live + cleanup
+
+- **Store live-read** gated by `BUYER_MEDIAN_LIVE` (default OFF; `buyer-median.ts:27`).
+  DD-3 (`pre-emd-gate-live.ts:48`) reads the track-aware median when on, else the
+  in-code seed list. `[verified]`
+- **Min-n read gate (fail-closed), 2026-06-18:**
+  `track-aware-underwrite.loadUnderwriteContextForListings` now enforces the SAME
+  `compCount >= BUYER_MEDIAN_MIN_N (20)` gate DD-3 uses — a sub-threshold or
+  comp-count-less stored median is surfaced as an `errors` entry, **never silently
+  used as a buyer ceiling**. Closes the previously-ungated read path. `[verified —
+  track-aware-underwrite.ts]`
+- **48227 flipper $150k row DELETED** (2026-06-18): resale-trap, no acquisition data
+  to re-base ⇒ INSUFFICIENT/manual review beats a known-wrong ceiling. Store now
+  **15 rows**. The 48227 landlord $55k seed stays but has no comp count ⇒ gated by
+  the min-n rule on every read (DD-3 + underwrite). `[verified — Airtable MCP delete
+  + re-read]`
+
+---
+
+## 9. Pointers
 
 - Hard rules / invariants: **[`docs/INVARIANTS.md`](../INVARIANTS.md)** — load every session.
 - Operator narrative + charter: `docs/handoffs/SYSTEM_HANDOFF.md`.
