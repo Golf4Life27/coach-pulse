@@ -35,7 +35,7 @@ export const BUYER_MEDIAN_ZIP_TABLE = "tbleoqYRBmnJq5V0Z";
  *  2026-06-11 seeds (junk-floor-excluded, larger-n) — NOT overwritten, since
  *  the 4-export pipeline medians are thinner and junk-contaminated there. */
 export const FALLBACK_SEEDED_ZIPS: ReadonlySet<string> = new Set([
-  "48227", // 2026-06-09 seed — landlord $55k / flipper $150k (flipper still resale-basis; not in the 4 M5 exports)
+  "48227", // landlord $55k (curated, no comp count → gated by the min-n read gate). Flipper row CLEARED 2026-06-18 (was $150k resale-trap, no acquisition data → INSUFFICIENT/manual review).
   "48224", // landlord $64,750 (n=38, curated) / flipper $46,500 (n=60, M5 acq — was $119,000 resale)
   "48219", // landlord $77,500 (n=60, curated) / flipper $54,000 (n=45, M5 acq — was $177,000 resale)
   "48204", // landlord $42,000 (n=55, curated) / flipper $30,000 (n=25, M5 acq — was $142,750 resale)
