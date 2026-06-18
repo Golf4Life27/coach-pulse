@@ -1,0 +1,11 @@
+{
+  "milestone": "M6",
+  "title": "Inbound reply capture (dark) — app-side, Option-1 topology",
+  "date": "2026-06-18",
+  "branch": "claude/admiring-shannon-dzfnbm",
+  "commits": ["ab379bd", "1b2728e"],
+  "merged_to_main": false,
+  "summary": "App-side reply capture held dark behind INBOUND_CAPTURE_LIVE: gmail-sync cron (40 * * * *), Unmatched_Replies fail-closed catch-all (tblh4m0hG7KoZ7dN5), and a dark quo-inbound webhook scaffold. Live Make L3 untouched; goes live only when the operator re-points Quo + flips the flag.",
+  "spine_build_event": "recOKl2ZimmQms6es",
+  "verification": "tests green, tsc clean"
+}
