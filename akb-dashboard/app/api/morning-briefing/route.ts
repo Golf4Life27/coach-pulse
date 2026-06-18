@@ -1,5 +1,6 @@
 import { getListings, getDeals } from "@/lib/airtable";
 import { parseConversation } from "@/lib/notes";
+import { listUnmatchedReplies } from "@/lib/inbound/store";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -21,12 +22,28 @@ interface BriefingItem {
   lastActivity: string;
 }
 
+/** M6 — a reply the system received but could NOT place on a deal. The
+ *  operator must still see it (fail-closed catch-all). */
+interface UnmatchedReplyItem {
+  recordId: string;
+  channel: string;
+  sender: string;
+  classification: string;
+  escalate: boolean;
+  amounts: string;
+  body: string;
+  receivedAt: string;
+  reasoning: string;
+}
+
 interface MorningBriefing {
   signNow: BriefingItem[];
   respondToday: BriefingItem[];
   counterDecisions: BriefingItem[];
   followUp: BriefingItem[];
   stale: BriefingItem[];
+  /** Inbound replies that matched no live record — never silently dropped. */
+  unmatchedReplies: UnmatchedReplyItem[];
   stats: {
     totalActive: number;
     negotiating: number;
@@ -34,6 +51,7 @@ interface MorningBriefing {
     offerAccepted: number;
     texted: number;
     dead: number;
+    unmatchedReplies: number;
   };
 }
 
@@ -219,6 +237,28 @@ export async function GET(req: Request) {
     followUp.sort(sortByStalest);
     stale.sort(sortByStalest);
 
+    // M6 catch-all: surface inbound replies that matched no live record so a
+    // reply the system couldn't place is still seen. FAIL-CLOSED on the read
+    // itself — a store error must never blank the whole briefing, so we fall
+    // back to an empty list (the audit log still has the write-side trail).
+    let unmatchedReplies: UnmatchedReplyItem[] = [];
+    try {
+      const rows = await listUnmatchedReplies({ status: "New", max: 50 });
+      unmatchedReplies = rows.map((r) => ({
+        recordId: r.recordId,
+        channel: r.channel,
+        sender: r.sender,
+        classification: r.classification,
+        escalate: r.escalate,
+        amounts: r.amounts,
+        body: r.body.slice(0, 200),
+        receivedAt: r.receivedAt,
+        reasoning: r.reasoning,
+      }));
+    } catch (err) {
+      console.error("[morning-briefing] unmatched_replies read failed:", err);
+    }
+
     const stats = {
       totalActive: active.length,
       negotiating: active.filter((l) => l.outreachStatus === "Negotiating").length,
@@ -226,6 +266,7 @@ export async function GET(req: Request) {
       offerAccepted: active.filter((l) => l.outreachStatus === "Offer Accepted").length,
       texted: active.filter((l) => l.outreachStatus === "Texted").length,
       dead: listings.filter((l) => DEAD_STATUSES.has(l.outreachStatus ?? "")).length,
+      unmatchedReplies: unmatchedReplies.length,
     };
 
     return Response.json({
@@ -234,6 +275,7 @@ export async function GET(req: Request) {
       counterDecisions,
       followUp,
       stale,
+      unmatchedReplies,
       stats,
     } as MorningBriefing);
   } catch (err) {
