@@ -8,6 +8,7 @@ import { isSelfEchoOrAutoreply } from "@/lib/conversation-check";
 import { triageSellerReply } from "@/lib/reply-triage";
 import { sendReplyAlert, type ReplyAlertInput } from "@/lib/reply-alert";
 import { sendAutoClose } from "@/lib/auto-close";
+import { detectOptOut, applyOptOut } from "@/lib/outreach/opt-out";
 import { resolveAlertNumbers } from "@/lib/outreach-economics";
 
 export const runtime = "nodejs";
@@ -215,6 +216,10 @@ export async function GET(req: Request) {
     // Tier 0 auto-close outcomes (sent / skipped + reason), surfaced in the
     // response so the daily digest + audit trail have the full picture.
     const autoCloseResults: Array<{ recordId: string; sent: boolean; reason: string | null }> = [];
+    // M8 / Gate 3 — STOP/opt-out (operator 2026-06-18).
+    let optOutDetected = 0;
+    let optOutFlipped = 0;
+    const optOutApplied: Array<{ phone: string; matched: string; records: number; flipped: string[] }> = [];
     // 2026-06-08: was string[]. Now carries the INBOUND's actual createdAt,
     // not wall-clock now — the prior shape stamped Last_Inbound_At with
     // "right now" on every cron tick (line 278 used new Date()), so the
@@ -246,6 +251,27 @@ export async function GET(req: Request) {
 
         // Match to all listings with this phone
         const matchedListings = phoneToListings.get(phone) ?? [];
+
+        // ── M8 / Gate 3 (operator 2026-06-18): STOP / opt-out. A TCPA opt-out
+        // is NOT a deal rejection — never send the tier-0 "best of luck" close,
+        // and flip Do_Not_Text on EVERY record sharing this phone (number-level).
+        // SUPPRESSION of the close/proposal is unconditional (fail-closed safety);
+        // the Do_Not_Text WRITE is gated by STOP_OPT_OUT_LIVE (watched-first). H2
+        // cannot fire until that flag is live (h2-outreach hard-disable coupling).
+        const optOut = detectOptOut(inbound.body);
+        if (optOut.optOut) {
+          optOutDetected++;
+          let flipped: string[] = [];
+          if (process.env.STOP_OPT_OUT_LIVE === "true" && matchedListings.length > 0) {
+            const res = await applyOptOut(matchedListings, optOut.matched ?? "stop", { updateListing: updateListingRecord });
+            flipped = res.flipped;
+            optOutFlipped += res.flipped.length;
+            if (res.failed.length > 0) errors.push(`opt_out_write_failed: ${res.failed.map((f) => f.id).join(",")}`);
+          }
+          optOutApplied.push({ phone, matched: optOut.matched ?? "stop", records: matchedListings.length, flipped });
+          continue; // SUPPRESS the close + proposals for an opt-out; move to next phone.
+        }
+
         for (const listing of matchedListings) {
           matched++;
 
@@ -382,6 +408,10 @@ export async function GET(req: Request) {
       autoCloseAttempted: autoCloseResults.length,
       autoCloseSent: autoCloseResults.filter((r) => r.sent).length,
       autoCloseResults: autoCloseResults.length > 0 ? autoCloseResults : undefined,
+      optOutDetected,
+      optOutFlipped,
+      optOutEnforced: process.env.STOP_OPT_OUT_LIVE === "true",
+      optOutApplied: optOutApplied.length > 0 ? optOutApplied : undefined,
       errors: errors.length > 0 ? errors : undefined,
       timestamp: new Date().toISOString(),
     });

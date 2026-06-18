@@ -190,7 +190,13 @@ async function handle(req: Request): Promise<Response> {
   // ── Params + the dry-run / live gate ─────────────────────────────
   const liveEnv = process.env.H2_OUTREACH_LIVE === "true";
   const dryRunParam = url.searchParams.get("dry_run") === "false" ? false : true;
-  const dryRun = !liveEnv || dryRunParam; // a send needs liveEnv AND ?dry_run=false
+  // M8 Gate 3 coupling (operator 2026-06-18): a LIVE send additionally requires
+  // STOP/opt-out enforcement to be active — the LAST compliance gate. H2 cannot
+  // fire a single text unless STOP_OPT_OUT_LIVE is live, so an opted-out number
+  // is always honored first. Forces dry (the preview still runs), never 503, so
+  // telemetry is unaffected; fail-closed on the actual send.
+  const optOutEnforcementLive = process.env.STOP_OPT_OUT_LIVE === "true";
+  const dryRun = !liveEnv || dryRunParam || !optOutEnforcementLive; // send needs liveEnv AND ?dry_run=false AND opt-out enforcement live
 
   const limitRaw = Number(url.searchParams.get("limit"));
   const limit = Number.isFinite(limitRaw) && limitRaw > 0
@@ -744,6 +750,7 @@ async function handle(req: Request): Promise<Response> {
     processed,
     summary,
     send_cap: sendCapSummary,
+    opt_out_enforcement_live: optOutEnforcementLive,
     opener_guarded: openerGuarded,
     hold_proposals: holdProposals,
     supply_floor: supplyFloor,

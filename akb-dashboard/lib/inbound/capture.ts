@@ -12,6 +12,7 @@
 import { isSelfEchoOrAutoreply } from "@/lib/conversation-check";
 import { triageSellerReply, type SellerReplyTriage } from "@/lib/reply-triage";
 import { detectL3DollarAmounts, type L3AmountDetection } from "@/lib/outreach/l3-amount-detector";
+import { detectOptOut, type OptOutDetection } from "@/lib/outreach/opt-out";
 import { matchInboundToListing } from "./match";
 import { buildUnmatchedReplyFields, type UnmatchedReplyFields } from "./catch-all";
 import type { InboundMessage, MatchableListing } from "./types";
@@ -27,12 +28,15 @@ export type CapturePlan =
       newStatus: string | null;
       escalate: boolean;
       amounts: L3AmountDetection;
+      /** M8 Gate 3 — opt-out signal; the executor flips Do_Not_Text number-level. */
+      optOut: OptOutDetection;
     }
   | {
       kind: "unmatched";
       fields: UnmatchedReplyFields;
       triage: SellerReplyTriage;
       escalate: boolean;
+      optOut: OptOutDetection;
     };
 
 /** Pure: decide what to do with one inbound reply.
@@ -47,6 +51,7 @@ export function planInboundCapture(
   if (isSelfEchoOrAutoreply(msg.body)) return { kind: "ignored", reason: "self_echo_or_autoreply" };
 
   const amounts = detectL3DollarAmounts(msg.body);
+  const optOut = detectOptOut(msg.body);
   const listing = matchInboundToListing(msg, listings);
   const triage = triageSellerReply(msg.body, listing?.outreachStatus ?? null);
 
@@ -56,6 +61,7 @@ export function planInboundCapture(
       fields: buildUnmatchedReplyFields(msg, triage, amounts),
       triage,
       escalate: amounts.shouldEscalate,
+      optOut,
     };
   }
   return {
@@ -66,5 +72,6 @@ export function planInboundCapture(
     newStatus: triage.queueStatus,
     escalate: amounts.shouldEscalate,
     amounts,
+    optOut,
   };
 }
