@@ -26,14 +26,25 @@ export const BUYER_MEDIAN_ZIP_TABLE = "tbleoqYRBmnJq5V0Z";
  *  ZIPs we know are seeded — never widen it on a store-read failure.
  *  2026-06-11 expansion (spine recN7rIJ7m2gmlxKs): five Detroit ZIPs seeded
  *  from InvestorBase exports, both tracks each, read back through
- *  resolveOpenerCeiling (source=buyer_zip_store_live confirmed). */
+ *  resolveOpenerCeiling (source=buyer_zip_store_live confirmed).
+ *  2026-06-18 M5 Buyer_Median go-live: the FLIPPER rows were re-based from
+ *  renovated-resale (the M5 trap — exit price, not acquisition) to flipper
+ *  ACQUISITION (Prior Sale Price) via the M5 ingest of the 4 exports
+ *  (source=investorbase_auto), and flipper coverage extended to
+ *  48089/48206/48234/48240. LANDLORD rows kept as the operator's curated
+ *  2026-06-11 seeds (junk-floor-excluded, larger-n) — NOT overwritten, since
+ *  the 4-export pipeline medians are thinner and junk-contaminated there. */
 export const FALLBACK_SEEDED_ZIPS: ReadonlySet<string> = new Set([
-  "48227", // 2026-06-09 seed — landlord $55k / flipper $150k
-  "48224", // 2026-06-11 — landlord $64,750 (n=38) / flipper $119,000 (n=160)
-  "48219", // 2026-06-11 — landlord $77,500 (n=60) / flipper $177,000 (n=119)
-  "48204", // 2026-06-11 — landlord $42,000 (n=55) / flipper $142,750 (n=82)
-  "48205", // 2026-06-11 — landlord $45,000 (n=59) / flipper $103,750 (n=148)
-  "48213", // 2026-06-11 — landlord $39,000 (n=43) / flipper $108,000 (n=125)
+  "48227", // 2026-06-09 seed — landlord $55k / flipper $150k (flipper still resale-basis; not in the 4 M5 exports)
+  "48224", // landlord $64,750 (n=38, curated) / flipper $46,500 (n=60, M5 acq — was $119,000 resale)
+  "48219", // landlord $77,500 (n=60, curated) / flipper $54,000 (n=45, M5 acq — was $177,000 resale)
+  "48204", // landlord $42,000 (n=55, curated) / flipper $30,000 (n=25, M5 acq — was $142,750 resale)
+  "48205", // landlord $45,000 (n=59, curated) / flipper $35,250 (n=72, M5 acq — was $103,750 resale)
+  "48213", // landlord $39,000 (n=43, curated) / flipper $31,000 (n=28, M5 acq — was $108,000 resale)
+  "48089", // 2026-06-18 M5 — flipper $57,600 (n=33, acq); landlord INSUFFICIENT → manual review
+  "48206", // 2026-06-18 M5 — flipper $64,000 (n=52, acq); landlord INSUFFICIENT → manual review
+  "48234", // 2026-06-18 M5 — flipper $35,000 (n=31, acq); landlord INSUFFICIENT → manual review
+  "48240", // 2026-06-18 M5 — flipper $88,375 (n=48, acq); landlord INSUFFICIENT → manual review
 ]);
 
 const AIRTABLE_PAT = process.env.AIRTABLE_PAT;
