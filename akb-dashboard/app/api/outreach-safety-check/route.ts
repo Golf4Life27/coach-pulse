@@ -187,21 +187,27 @@ export async function POST(req: Request) {
   // `arvValidatedAt` AND `rehabEstimatedAt`. The 6 unauthorized sends were
   // all first-outreach records with NEITHER hydrated — this is the
   // regression this check is designed to catch.
-  const hydration = checkFirstOutreachHydration({
-    lastOutreachDate: listing.lastOutreachDate,
-    arvValidatedAt: listing.arvValidatedAt,
-    rehabEstimatedAt: listing.rehabEstimatedAt,
-  });
-  if (!hydration.ok) {
-    const result: SafetyCheckResult = {
-      passed: false,
-      reason: "cooldown",
-      warnings: [
-        `First outreach on ${listing.address} is missing hydrated pricing inputs — ${hydration.blockedBecause}. Run ARV + rehab pipelines before contacting.`,
-      ],
-      agentContext: ac,
-    };
-    return NextResponse.json(result, { status: 200 });
+  // OPT-IN behind H2_REQUIRE_OFFER_HYDRATION (operator 2026-06-19) — matches
+  // the H2 cron. Default OFF: the 65%-of-list door-opener fires without
+  // ARV/rehab (those gate the CONTRACT, not the text). Check 7 (>85%-of-list)
+  // below is INDEPENDENT and always enforced.
+  if (process.env.H2_REQUIRE_OFFER_HYDRATION === "true") {
+    const hydration = checkFirstOutreachHydration({
+      lastOutreachDate: listing.lastOutreachDate,
+      arvValidatedAt: listing.arvValidatedAt,
+      rehabEstimatedAt: listing.rehabEstimatedAt,
+    });
+    if (!hydration.ok) {
+      const result: SafetyCheckResult = {
+        passed: false,
+        reason: "cooldown",
+        warnings: [
+          `First outreach on ${listing.address} is missing hydrated pricing inputs — ${hydration.blockedBecause}. Run ARV + rehab pipelines before contacting.`,
+        ],
+        agentContext: ac,
+      };
+      return NextResponse.json(result, { status: 200 });
+    }
   }
 
   // Check 7 — >85%-of-list block. CORRECTED 2026-06-05: previously gated

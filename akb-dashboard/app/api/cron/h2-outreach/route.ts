@@ -43,6 +43,11 @@ import { audit } from "@/lib/audit-log";
 import { checkFirstOutreachHydration, checkOfferOverList, resolveOpenerCeiling } from "@/lib/outreach-economics";
 import { anchoredOpenerGate } from "@/lib/h2-outreach/your-mao-opener-gate";
 import { computeRoughOpenerCeiling } from "@/lib/rough-opener-ceiling";
+import { computeOpenerFloor } from "@/lib/h2-outreach/opener-floor";
+import { getZipBuyerMedian } from "@/lib/buyer-median-store";
+import { defaultBuyerTrack } from "@/lib/buyer-median-input";
+import { BUYER_MEDIAN_MIN_N } from "@/lib/buyer-intel/buyer-median";
+import { DEFAULT_WHOLESALE_FEE } from "@/lib/pre-contract-math";
 import { getMarketForListing } from "@/lib/markets/registry";
 import { resolveAnchorPct } from "@/lib/markets/anchor";
 import { readSendCapConfig, applySendCap } from "@/lib/outreach/send-cap";
@@ -310,6 +315,15 @@ async function handle(req: Request): Promise<Response> {
   // One anchor read per market per tick — cached so a 100-record cohort
   // doesn't hit KV per record.
   const anchorCache = new Map<string, number>();
+  // ── Cheap per-ZIP opener floor (basis A, operator 2026-06-19) ──────────
+  // Cap the door-opener at Buyer_Median(track) − Wholesale_Fee, read from the
+  // seeded Buyer_Median_ZIP store ($0/property; one cached read per zip+track).
+  // ALWAYS computed (telemetry/dry-run preview); only APPLIED to l.mao when
+  // H2_OPENER_FLOOR_LIVE — mirrors the send-cap "compute always, apply when
+  // live" posture so a dark run previews exactly what flipping it would do.
+  const FLOOR_LIVE = process.env.H2_OPENER_FLOOR_LIVE === "true";
+  const medianCache = new Map<string, Awaited<ReturnType<typeof getZipBuyerMedian>>>();
+  const openerFloor: Array<{ recordId: string; address: string | null; zip: string | null; track: string; list_price: number | null; base_opener: number; buyer_median: number | null; median_n: number | null; wholesale_fee: number; floor_proxy: number | null; floored_opener: number; floor_bit: boolean; applied: boolean }> = [];
   const filteredQueue: typeof queue = [];
   for (const l of queue) {
     const ceiling = resolveOpenerCeiling(l, uwCtxCron);
@@ -353,9 +367,34 @@ async function handle(req: Request): Promise<Response> {
       });
       continue;
     }
-    // SUCCESS — overwrite l.mao with the Your_MAO × anchor opener so all
-    // downstream rails (send composer, idempotency, audit) read one value.
-    l.mao = gate.opener;
+    // SUCCESS. Door-opener = gate.opener (round(anchor × rough list-fraction
+    // ceiling), the ~65%-of-list number). Cap it at the per-ZIP MAO proxy
+    // (basis A): Buyer_Median(track) − Wholesale_Fee, track = defaultBuyerTrack
+    // (distressed cohort → landlord, whose as-is median IS a purchase price, so
+    // no rehab term). Fail-open: a missing/thin median → no cap. The composer/
+    // idempotency/audit read l.mao, so we set it to the floored number only
+    // when the floor is live; otherwise the door-opener is unchanged.
+    const baseOpener = gate.opener as number;
+    const track = defaultBuyerTrack({ distressed: typeof l.distressScore === "number" && l.distressScore > 0 });
+    const fee = typeof l.wholesaleFeeTarget === "number" && l.wholesaleFeeTarget >= 0 ? l.wholesaleFeeTarget : DEFAULT_WHOLESALE_FEE;
+    const floorKey = `${l.zip ?? ""}:${track}`;
+    if (!medianCache.has(floorKey)) {
+      medianCache.set(floorKey, await getZipBuyerMedian(l.zip ?? null, track).catch(() => null));
+    }
+    const zm = medianCache.get(floorKey) ?? null;
+    const floor = computeOpenerFloor({
+      baseOpener,
+      buyerMedian: zm?.value ?? null,
+      medianN: zm?.compCount ?? null,
+      wholesaleFee: fee,
+      minN: BUYER_MEDIAN_MIN_N,
+    });
+    openerFloor.push({
+      recordId: l.id, address: l.address ?? null, zip: l.zip ?? null, track, list_price: l.listPrice ?? null,
+      base_opener: baseOpener, buyer_median: zm?.value ?? null, median_n: zm?.compCount ?? null, wholesale_fee: fee,
+      floor_proxy: floor.floorProxy, floored_opener: floor.flooredOpener, floor_bit: floor.floorBit, applied: FLOOR_LIVE,
+    });
+    l.mao = FLOOR_LIVE ? floor.flooredOpener : baseOpener;
     filteredQueue.push(l);
   }
   queue = filteredQueue;
@@ -598,23 +637,31 @@ async function handle(req: Request): Promise<Response> {
           // listing fields the checks read (the planning load may not
           // have populated hydration timestamps).
           const fresh = await getListing(p.recordId);
-          const hydration = checkFirstOutreachHydration({
-            lastOutreachDate: fresh?.lastOutreachDate ?? null,
-            arvValidatedAt: fresh?.arvValidatedAt ?? null,
-            rehabEstimatedAt: fresh?.rehabEstimatedAt ?? null,
-          });
-          if (!hydration.ok) {
-            row.error = `hydration_block: ${hydration.blockedBecause}`;
-            summary.errors++;
-            await audit({
-              agent: "crier",
-              event: "h2_outreach_hydration_blocked",
-              status: "confirmed_failure",
-              recordId: p.recordId,
-              inputSummary: { missing: hydration.missing },
-              outputSummary: { reason: hydration.blockedBecause },
+          // First-outreach hydration prerequisite — now OPT-IN behind
+          // H2_REQUIRE_OFFER_HYDRATION (operator 2026-06-19). The locked model
+          // fires the 65%-of-list door-opener WITHOUT ARV/rehab — those hard
+          // gates the CONTRACT (INV-023 pre-EMD), not the text. Default OFF =
+          // opener fires unhydrated; set "true" to restore the 2026-06-05 block.
+          // The >85%-of-list economics rail below is INDEPENDENT and always on.
+          if (process.env.H2_REQUIRE_OFFER_HYDRATION === "true") {
+            const hydration = checkFirstOutreachHydration({
+              lastOutreachDate: fresh?.lastOutreachDate ?? null,
+              arvValidatedAt: fresh?.arvValidatedAt ?? null,
+              rehabEstimatedAt: fresh?.rehabEstimatedAt ?? null,
             });
-            continue;
+            if (!hydration.ok) {
+              row.error = `hydration_block: ${hydration.blockedBecause}`;
+              summary.errors++;
+              await audit({
+                agent: "crier",
+                event: "h2_outreach_hydration_blocked",
+                status: "confirmed_failure",
+                recordId: p.recordId,
+                inputSummary: { missing: hydration.missing },
+                outputSummary: { reason: hydration.blockedBecause },
+              });
+              continue;
+            }
           }
           const economics = checkOfferOverList(p.message!, fresh?.listPrice ?? null);
           if (!economics.ok) {
@@ -752,6 +799,7 @@ async function handle(req: Request): Promise<Response> {
     send_cap: sendCapSummary,
     opt_out_enforcement_live: optOutEnforcementLive,
     opener_guarded: openerGuarded,
+    opener_floor: { live: FLOOR_LIVE, rows: openerFloor },
     hold_proposals: holdProposals,
     supply_floor: supplyFloor,
     auth_kind: authKind,
