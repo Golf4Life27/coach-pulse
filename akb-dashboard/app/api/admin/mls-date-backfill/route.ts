@@ -86,7 +86,7 @@ export async function GET(req: Request) {
   const rows = cohort.map((l) => {
     const key = normalizeAddressKey((l.address ?? "").split(",")[0]);
     const listedDate = (key && dateByAddr.has(key)) ? (dateByAddr.get(key) ?? null) : null;
-    const mao = l.underwrittenMao ?? l.roughOpenerAmount ?? null;
+    const mao = l.mao ?? null; // the operative opener (Airtable fldWtbkObtIBRQCf0 / flduPNI7iLK8Yj07E)
     const hasAgentPhone = !!(l.agentPhone && String(l.agentPhone).trim());
     const proj = projectMlsRouting({
       listedDate,
