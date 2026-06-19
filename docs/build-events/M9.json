@@ -3,9 +3,9 @@
   "title": "Verified-queue pricing pass + reusable system-health preamble",
   "date": "2026-06-19",
   "branch": "claude/admiring-shannon-dzfnbm",
-  "commits": [],
+  "commits": ["ed6dacb"],
   "merged_to_main": false,
   "summary": "The missing belt segment: existing records at Pipeline_Stage=verified had no path to priced (M7 wired the priced writer into fresh-intake only). New GET /api/admin/verified-queue-price: a reusable system-health preamble (lib/health/system-health.ts — kvConfigured + KV ping + Firecrawl breaker + balance probe; fail-closed, halts if KV down or breaker tripped), then prices the verified queue off the BUYER-MEDIAN store (track-aware underwrite, min-n gated, no ARV multipliers; HOLD on no qualifying median) and transitions verified->priced through the sole-writer engine. Dry-run default; ?apply=1 live via a budget-bounded pool. STOPS at priced — never advances Gate 1, never sends (outreach_sent untouched). Shipped with .github/workflows/verified-queue-price.yml (CRON_SECRET) for watched self-drive.",
-  "spine_build_event": null,
+  "spine_build_event": "rechYVtpbr8E02cLD",
   "verification": "2650 tests green, tsc clean"
 }
