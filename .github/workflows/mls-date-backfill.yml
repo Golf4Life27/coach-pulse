@@ -1,0 +1,87 @@
+# MLS-date backfill — operator-watched trigger.
+#
+# Invokes /api/admin/mls-date-backfill on prod with CRON_SECRET (held in the
+# GitHub secret, never in chat). DRY-RUN by default: re-fetches listedDate from
+# RentCast for the existing priced Detroit cohort, projects DOM/distress/routing,
+# and reports how many would clear to Auto Proceed. ZERO writes, ZERO sends.
+# apply=1 (the write) is left for a separate explicit operator go.
+#
+# Required GitHub secret: CRON_SECRET (mirror of the Vercel env).
+
+name: MLS-date backfill (dry-run)
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "1 = LIVE write MLS_Date_Raw. Default 0 = DRY-RUN (project + report, zero writes)."
+        required: false
+        default: "0"
+        type: string
+      zips:
+        description: "Cohort ZIPs (default the Detroit priced cohort)."
+        required: false
+        default: "48204,48213,48219"
+        type: string
+      base_url:
+        description: "Production base URL (override only for staging tests)."
+        required: false
+        default: "https://coach-pulse-ten.vercel.app"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      APPLY: ${{ inputs.apply }}
+      ZIPS: ${{ inputs.zips }}
+      BASE_URL: ${{ inputs.base_url }}
+    steps:
+      - name: Refuse to run when CRON_SECRET is missing
+        run: |
+          if [ -z "${{ secrets.CRON_SECRET }}" ]; then
+            echo "::error::CRON_SECRET is not configured as a GitHub Actions secret."
+            exit 1
+          fi
+          echo "CRON_SECRET present; proceeding."
+
+      - name: Invoke /api/admin/mls-date-backfill
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          URL="${BASE_URL}/api/admin/mls-date-backfill?apply=${APPLY}&zips=${ZIPS}"
+          echo "GET ${URL}"
+          HTTP_CODE=$(curl -sS -o /tmp/mls.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "x-vercel-cron: 1" \
+            "${URL}")
+          echo "HTTP ${HTTP_CODE}"
+          echo "--- response body ---"
+          jq . /tmp/mls.json 2>/dev/null || cat /tmp/mls.json
+          if [ "${HTTP_CODE}" -ge 400 ]; then
+            echo "::error::mls-date-backfill returned HTTP ${HTTP_CODE}"
+            exit 1
+          fi
+
+      - name: Surface the headline numbers
+        if: success()
+        run: |
+          set -euo pipefail
+          MODE=$(jq -r '.mode // "?"' /tmp/mls.json)
+          COHORT=$(jq -r '.summary.cohort // "?"' /tmp/mls.json)
+          PHONE=$(jq -r '.summary.with_agent_phone // "?"' /tmp/mls.json)
+          FOUND=$(jq -r '.summary.listed_date_found // "?"' /tmp/mls.json)
+          AP=$(jq -r '.summary.auto_proceed_sendable // "?"' /tmp/mls.json)
+          {
+            echo "## MLS-date backfill (${MODE})"
+            echo ""
+            echo "- cohort (priced + MI): ${COHORT}"
+            echo "- with agent phone: ${PHONE}"
+            echo "- listedDate re-fetched: ${FOUND}"
+            echo "- **projected Auto-Proceed sendable: ${AP}**"
+          } >> "$GITHUB_STEP_SUMMARY"
