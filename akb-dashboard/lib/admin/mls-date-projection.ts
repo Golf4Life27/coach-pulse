@@ -78,7 +78,10 @@ export function projectMlsRouting(i: MlsProjectionInput): MlsProjection {
   const priceFloorOk = i.listPrice != null && i.listPrice >= 10000;
   const sizeOk = i.sizeOk ?? true;
   const sfrOk = i.sfrOk ?? true;
-  const retail = i.mao == null; // fldER5IGrBnHeYcTA: retail-reject only when MAO absent
+  // The live retail term fldER5IGrBnHeYcTA = IF(MAO, 0, BLANK) is never === 1,
+  // so the "Retail or Liquidity" branch only ever fires on the liquidity
+  // ceiling. A missing MAO is NOT a retail reject — it falls through to the
+  // offer-math gate below.
   const liquidityOver = i.liquidityOver ?? false;
   const mathOk = i.mao != null && i.mao > 0;
 
@@ -87,7 +90,7 @@ export function projectMlsRouting(i: MlsProjectionInput): MlsProjection {
   else if (!priceFloorOk) stageCalc = "Rejected: Price Floor";
   else if (!sizeOk) stageCalc = "Rejected: Too Small";
   else if (!sfrOk) stageCalc = "Rejected: Not SFR";
-  else if (retail || liquidityOver) stageCalc = "Rejected: Retail or Liquidity";
+  else if (liquidityOver) stageCalc = "Rejected: Retail or Liquidity";
   else if (!distressPass) stageCalc = "Rejected: No Distress";
   else if (!mathOk) stageCalc = "Rejected: Offer Math";
   else stageCalc = "Passed: Ready for Offer";

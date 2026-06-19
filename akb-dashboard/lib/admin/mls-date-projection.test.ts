@@ -30,6 +30,20 @@ describe("projectMlsRouting", () => {
     expect(p.autoProceedSendable).toBe(true);
   });
 
+  it("missing MAO falls through to Offer Math, NOT 'Retail or Liquidity'", () => {
+    // Regression guard for the 2026-06-19 projection fix. The live retail term
+    // fldER5IGrBnHeYcTA = IF(MAO, 0, BLANK) is never === 1, so a null opener is
+    // NOT a retail reject. An aged record that clears distress but has no opener
+    // must land on the offer-math gate (gate 7) — reaching it at all proves the
+    // "Retail or Liquidity" gate (gate 5, above distress) did not spuriously fire.
+    const listed = new Date(NOW.getTime() - 70 * 86_400_000).toISOString();
+    const p = projectMlsRouting({ ...base, listedDate: listed, mao: null, priceDrops: 2 });
+    expect(p.distressPass).toBe(true); // distress cleared -> we got past gate 6
+    expect(p.stageCalc).toBe("Rejected: Offer Math");
+    expect(p.stageCalc).not.toBe("Rejected: Retail or Liquidity");
+    expect(p.routing).toBe("Reject");
+  });
+
   it("fresh listing (low DOM, not distressed) -> Rejected: No Distress -> Reject", () => {
     const listed = new Date(NOW.getTime() - 20 * 86_400_000).toISOString();
     const p = projectMlsRouting({ ...base, listedDate: listed });
