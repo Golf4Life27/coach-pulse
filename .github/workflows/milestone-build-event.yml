@@ -1,0 +1,50 @@
+# Milestone ↔ build-event pairing guard.
+#
+# Enforces the rule in docs/build-events/README.md: any commit whose subject
+# starts with `M<n>` must ship docs/build-events/M<n>.json. This closes the gap
+# that let M5–M7 ship without the Spine ever learning they existed. The committed
+# JSON is the durable record; maverick_write_state mirrors it to the Spine in the
+# same cycle.
+
+name: Milestone build-event pairing
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so the commit range can be diffed
+
+      - name: Resolve the commit range
+        id: range
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "base=origin/${{ github.base_ref }}" >> "$GITHUB_OUTPUT"
+            echo "head=HEAD" >> "$GITHUB_OUTPUT"
+          else
+            BEFORE="${{ github.event.before }}"
+            # All-zeros sentinel (new branch) → just inspect the tip commit.
+            if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              echo "base=HEAD~1" >> "$GITHUB_OUTPUT"
+            else
+              echo "base=$BEFORE" >> "$GITHUB_OUTPUT"
+            fi
+            echo "head=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Enforce milestone ↔ build-event pairing
+        env:
+          BUILD_EVENTS_BASE: ${{ steps.range.outputs.base }}
+          BUILD_EVENTS_HEAD: ${{ steps.range.outputs.head }}
+        run: node scripts/check-build-events.mjs

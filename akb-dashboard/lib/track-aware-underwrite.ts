@@ -17,6 +17,7 @@
 import type { Listing } from "@/lib/types";
 import { defaultBuyerTrack, computeTrackAwareMao, type BuyerTrack } from "@/lib/buyer-median-input";
 import { getZipBuyerMedian, type ZipBuyerMedian } from "@/lib/buyer-median-store";
+import { BUYER_MEDIAN_MIN_N } from "@/lib/buyer-intel/buyer-median";
 
 export interface UnderwriteContext {
   /** Pre-loaded ZIP+track medians, keyed by `${zip}:${track}`. The admin
@@ -128,7 +129,17 @@ export async function loadUnderwriteContextForListings(listings: Listing[]): Pro
     const [zip, trackRaw] = key.split(":");
     try {
       const m = await getZipBuyerMedian(zip, trackRaw as BuyerTrack);
-      if (m) zipMedians.set(key, m);
+      // FAIL-CLOSED min-n gate — the SAME compCount>=BUYER_MEDIAN_MIN_N gate
+      // DD-3 applies (pre-emd-gate-live). A stored median below the floor, or a
+      // stale hand seed with no comp count, is treated as INSUFFICIENT and
+      // surfaced as an error — NEVER silently used. This closes the path that
+      // let an ungated read consume a sub-threshold / stale median (e.g. a
+      // resale-basis seed) as a buyer ceiling.
+      if (m && (m.compCount ?? 0) >= BUYER_MEDIAN_MIN_N) {
+        zipMedians.set(key, m);
+      } else if (m) {
+        errors.set(key, `insufficient_n: comp_count ${m.compCount ?? 0} < ${BUYER_MEDIAN_MIN_N} — INSUFFICIENT (manual review)`);
+      }
     } catch (e) {
       errors.set(key, e instanceof Error ? e.message : String(e));
     }

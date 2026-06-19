@@ -1,0 +1,11 @@
+{
+  "milestone": "M7",
+  "title": "Front-half conveyor wired (priced writer + Gate 1 edge) + capped H2 lift",
+  "date": "2026-06-18",
+  "branch": "claude/admiring-shannon-dzfnbm",
+  "commits": ["94bc9c4", "a621b9b", "0e69c92"],
+  "merged_to_main": false,
+  "summary": "Resolved the priced=0 defect: added the missing `priced` writer (lib/pipeline-state/price-transition.ts, routed through the sole-writer engine, fail-closed), fixed Gate 1's declared edge from the illegal verified->outreach_ready skip to priced->outreach_ready, added the hop-7 operator hand-off (pre-contract-handoff.ts), and built the capped H2 lift (lib/outreach/send-cap.ts, fail-closed, left OFF). Proven by a synthetic Detroit lead traversing verified->priced->outreach_ready->gate->operator.",
+  "spine_build_event": "receCTON1gqpYxvEk",
+  "verification": "2631 tests green, tsc clean"
+}

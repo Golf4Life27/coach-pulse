@@ -61,6 +61,10 @@
       "schedule": "20 * * * *"
     },
     {
+      "path": "/api/cron/gmail-sync?limit=40&hours_back=48",
+      "schedule": "40 * * * *"
+    },
+    {
       "path": "/api/cron/underwrite-v21-fresh?apply=1&limit=12",
       "schedule": "0 5 * * *"
     },

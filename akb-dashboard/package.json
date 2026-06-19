@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start",
     "test": "vitest run",
+    "dry-run-trace": "vitest run lib/orchestrator/dry-run-trace.test.ts --disable-console-intercept",
     "gen:test-count": "node scripts/gen-test-count.mjs"
   },
   "dependencies": {

@@ -1,0 +1,33 @@
+{
+  "_meta": {
+    "name": "Poteet 938 Avenue I — looks great, not yet proven (must BLOCK on many).",
+    "shape": "Contract $56,000; broker-stated ARV $150k-$175k (UN-validated — broker words, not comps); rehab not yet estimated; no Buyer_Median for the market; assignment unconfirmed. The gate must refuse a deal that looks great but whose due diligence has not been done.",
+    "fixture_only": "OFF-MARKET. Test fixture only — must NOT be inserted into Listings_V1."
+  },
+  "input": {
+    "recordId": "fixture:poteet-938-avenue-i",
+    "arvEngine": {
+      "recordId": "fixture:poteet-938-avenue-i", "zip": "78065", "decision": "BLOCKED",
+      "reason": "No renovated-comp seed for ZIP 78065 — cannot validate ARV. (The broker-stated $150k-$175k ARV is words, not comps; never used.)",
+      "engineArv": null, "arvLowPerSqft": null, "renovatedPerSqft": null, "sqft": 1300,
+      "compCount": null, "seedTier": "NONE",
+      "freshness": { "fetchedAt": null, "ageDays": null, "stale": false },
+      "confidence": null, "source": "none",
+      "arvBasis": "renovated_comp_low_end_per_sqft", "classMatch": null, "issues": []
+    },
+    "estRehab": null,
+    "estRehabHigh": null,
+    "rehabEstimatedAt": null,
+    "buyerMedian": null,
+    "contractPrice": 56000,
+    "assignmentClauseVerified": false,
+    "doubleCloseCapitalConfirmed": false,
+    "photosValidated": false,
+    "liveStatus": null,
+    "availabilityConfirmedAt": null,
+    "state": "TX",
+    "marketPaused": false,
+    "operatorSignoff": false
+  },
+  "expect": { "verdict": "BLOCKED", "blockedIncludes": ["DD-1", "DD-2", "DD-3", "DD-4", "DD-5", "DD-6", "DD-7", "DD-9"], "passIncludes": ["DD-8"] }
+}

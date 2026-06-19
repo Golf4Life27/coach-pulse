@@ -1,3 +1,11 @@
+// DEPRECATED (Milestone 4, 2026-06-16). This route's math gate compares the
+// INFORMATIONAL-ONLY Underwritten_MAO — the 23 Fields root cause — so its
+// persisted Pre_EMD_Verdict can diverge from the ENFORCED gate. The single
+// source of truth is now lib/orchestrator/pre-emd-gate-live.runPreEmdGateForDeal
+// (enforced by request-emd + actions/sign_contract; displayed by
+// /api/deals/pre-emd-state). Do NOT add new readers of this route's verdict —
+// it is retained only for back-compat + audit and is superseded by the gate.
+//
 // INV-023 Pre-EMD gate EVALUATOR (2026-06-10). @agent: orchestrator
 //
 // GET|POST /api/orchestrator/pre-emd-evaluate?recordId=<listing recId>
@@ -45,7 +53,13 @@ export const maxDuration = 60;
 export type MathGate = "green" | "red" | "not_yet_evaluated";
 export type PreEmdVerdict = "pass" | "hold" | "block" | "not_yet_evaluated";
 
-/** Pure: the evaluator-owned math gate. Both inputs must be positive
+/** @deprecated Milestone 4 — compares the informational-only Underwritten_MAO
+ *  (the 23 Fields root cause). The enforced money check is the Pre-EMD gate's
+ *  DD-4 (Contract ≤ Your_MAO = Buyer_Median − Est_Rehab − Wholesale_Fee), via
+ *  runPreEmdGateForDeal. Retained only for the existing unit test; not the
+ *  source of truth.
+ *
+ *  Pure: the evaluator-owned math gate. Both inputs must be positive
  *  numbers to compute; anything else is not_yet_evaluated (never guessed). */
 export function computeMathGate(
   underwrittenMao: number | null | undefined,
@@ -168,6 +182,9 @@ async function handle(req: Request) {
 
   return NextResponse.json({
     ok: writeError == null,
+    deprecated: true,
+    superseded_by:
+      "Enforced INV-023 gate (runPreEmdGateForDeal) — displayed by /api/deals/pre-emd-state, enforced by /api/deals/request-emd and /api/actions/sign_contract. This route's Underwritten_MAO math is the 23 Fields root cause; do not rely on its verdict.",
     recordId,
     deal_record_id: deal.id,
     verdict,

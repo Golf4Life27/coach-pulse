@@ -15,6 +15,8 @@ import { NextResponse } from "next/server";
 import { getListing, getDeals, updateDealRecord } from "@/lib/airtable";
 import { normalizeAddressKey } from "@/lib/crawler/intake-filter";
 import { audit } from "@/lib/audit-log";
+import { runPreEmdGateForDeal } from "@/lib/orchestrator/pre-emd-gate-live";
+import { preEmdDashboardVerdict, emdAdvanceDecision } from "@/lib/orchestrator/pre-emd-gate";
 import {
   authenticate,
   hasDashboardSession,
@@ -66,8 +68,23 @@ export async function GET(req: Request) {
 
   const { listing, deal } = await findDealForListing(recordId);
   if (!deal) return NextResponse.json({ found: false, deal: null });
+
+  // Milestone 4 — ONE SOURCE OF TRUTH: the panel verdict comes from the SAME
+  // enforced gate that request-emd / sign_contract block on, NOT the deprecated
+  // pre-emd-evaluate output (which compared the informational-only
+  // Underwritten_MAO — the 23 Fields root cause). Fail-closed.
+  const gateResult = await runPreEmdGateForDeal(deal);
+  const dash = preEmdDashboardVerdict(gateResult);
+
   return NextResponse.json({
     found: true,
+    // The authoritative verdict — identical to what is enforced at advance.
+    enforced_gate: {
+      verdict: gateResult.verdict, // ADVANCE_UNLOCKED | BLOCKED
+      display: dash.display, // pass | block
+      blocked: gateResult.blocked,
+      blocked_checks: emdAdvanceDecision(gateResult).blocked_checks,
+    },
     deal: {
       id: deal.id,
       propertyAddress: deal.propertyAddress,
@@ -79,7 +96,11 @@ export async function GET(req: Request) {
       preEmdAssignmentClauseVerified: deal.preEmdAssignmentClauseVerified === true,
       preEmdOperatorSignoff: deal.preEmdOperatorSignoff === true,
       preEmdMathGate: deal.preEmdMathGate ?? "not_yet_evaluated",
-      preEmdVerdict: deal.preEmdVerdict ?? "not_yet_evaluated",
+      // The panel verdict now mirrors the ENFORCED gate.
+      preEmdVerdict: dash.display,
+      // DEPRECATED — the old pre-emd-evaluate output; retained for reference
+      // only. May diverge from the enforced gate; do NOT display as authority.
+      preEmdVerdict_persisted_deprecated: deal.preEmdVerdict ?? "not_yet_evaluated",
       preEmdLastEvaluatedAt: deal.preEmdLastEvaluatedAt ?? null,
       preEmdHoldReasons: deal.preEmdHoldReasons ?? null,
     },
