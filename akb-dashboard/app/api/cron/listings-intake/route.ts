@@ -184,6 +184,13 @@ async function createIntakeListing(
   if (c.propertyType) fields["Property_Type"] = c.propertyType;
   if (c.beds != null) fields["Bedrooms"] = c.beds;
   if (c.listPrice != null) fields["List_Price"] = c.listPrice;
+  // MLS list date (operator 2026-06-19): write the RentCast-parsed listedDate to
+  // MLS_Date_Raw so the downstream Airtable formulas can compute — MLS_Date_Clean
+  // (= LEFT(MLS_Date_Raw,10)) → DOM_Calc_V2 → Distress_Score, plus the Stage_Calc
+  // "Has_MLS_Date" data-quality gate. It was parsed into IntakeCandidate.listedDate
+  // but never written, so every crawler record short-circuited to "Data Issue:
+  // Missing MLS Date" → Manual Review. Only set when present; never synthesized.
+  if (c.listedDate) fields["MLS_Date_Raw"] = c.listedDate;
   // Station 2 ENRICH (intake-time, zero new API calls) — persist the
   // structural facts the vendor response already carried. Skipped silently
   // when null so the record is still creatable for vendors that omit the
