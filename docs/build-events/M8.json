@@ -4,7 +4,7 @@
   "date": "2026-06-18",
   "branch": "claude/admiring-shannon-dzfnbm",
   "commits": ["39c9bb0"],
-  "merged_to_main": false,
+  "merged_to_main": true,
   "summary": "Inbound STOP/unsubscribe/'do not text'/'remove number' now flips Do_Not_Text=true number-level (every record sharing the agent phone, via scan-comms' phoneToListings group), suppresses the tier-0 auto-close, gated by STOP_OPT_OUT_LIVE (default OFF, watched-first). H2 cannot fire a live text unless opt-out enforcement is live (h2-outreach forces dry otherwise). Wired to the existing reply-triage detection + the M6 capture path. Closes the last compliance blocker before live H2 (Gates 1 + 2 already passed).",
   "spine_build_event": "rectD1fg4EQPg82Mu",
   "verification": "2640 tests green, tsc clean"

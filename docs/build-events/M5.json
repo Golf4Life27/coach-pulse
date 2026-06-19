@@ -4,7 +4,7 @@
   "date": "2026-06-18",
   "branch": "claude/admiring-shannon-dzfnbm",
   "commits": ["7f1caef"],
-  "merged_to_main": false,
+  "merged_to_main": true,
   "summary": "Buyer_Median_ZIP store go-live behind BUYER_MEDIAN_LIVE. Added the compCount>=20 min-n read gate to track-aware-underwrite (the same gate DD-3 uses) so no path can read a sub-threshold or stale median as a buyer ceiling. Deleted the stale 48227 flipper $150k resale-trap row (store 16->15).",
   "spine_build_event": "recsL0SHuuoopatTT",
   "verification": "2609 tests green, tsc clean"

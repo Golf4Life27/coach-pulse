@@ -1,0 +1,93 @@
+# Verified-queue pricing pass — operator-watched trigger.
+#
+# Invokes /api/admin/verified-queue-price on prod with CRON_SECRET (held in the
+# GitHub secret, never in chat). DRY-RUN by default. A 503 means the health
+# preamble halted (KV down or Firecrawl breaker tripped) — the job fails red.
+#
+# Scope: this pass + its health preamble. It prices the verified backlog off the
+# buyer-median store and stops at Pipeline_Stage=priced — never advances Gate 1,
+# never sends. Required GitHub secret: CRON_SECRET (mirror of the Vercel env).
+
+name: Verified-queue pricing pass
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "1 = LIVE (write MAO + transition verified->priced). Default 0 = DRY-RUN (report only)."
+        required: false
+        default: "0"
+        type: string
+      limit:
+        description: "Records this invocation (default 10 — the watched first slice; hard max 300)."
+        required: false
+        default: "10"
+        type: string
+      base_url:
+        description: "Production base URL (override only for staging tests)."
+        required: false
+        default: "https://coach-pulse-ten.vercel.app"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      APPLY: ${{ inputs.apply }}
+      LIMIT: ${{ inputs.limit }}
+      BASE_URL: ${{ inputs.base_url }}
+    steps:
+      - name: Refuse to run when CRON_SECRET is missing
+        run: |
+          if [ -z "${{ secrets.CRON_SECRET }}" ]; then
+            echo "::error::CRON_SECRET is not configured as a GitHub Actions secret."
+            echo "Add it at Settings -> Secrets and variables -> Actions (same value as the Vercel CRON_SECRET)."
+            exit 1
+          fi
+          echo "CRON_SECRET present; proceeding."
+
+      - name: Invoke /api/admin/verified-queue-price
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          URL="${BASE_URL}/api/admin/verified-queue-price?apply=${APPLY}&limit=${LIMIT}"
+          echo "GET ${URL}"
+          HTTP_CODE=$(curl -sS -o /tmp/vqp.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "x-vercel-cron: 1" \
+            "${URL}")
+          echo "HTTP ${HTTP_CODE}"
+          echo "--- response body ---"
+          jq . /tmp/vqp.json 2>/dev/null || cat /tmp/vqp.json
+          # 503 = health preamble halt (KV down / breaker tripped) — fail red.
+          if [ "${HTTP_CODE}" -ge 400 ]; then
+            echo "::error::verified-queue-price returned HTTP ${HTTP_CODE} (halt or error — see body)"
+            exit 1
+          fi
+
+      - name: Surface the headline numbers
+        if: success()
+        run: |
+          set -euo pipefail
+          MODE=$(jq -r '.mode // "?"' /tmp/vqp.json)
+          TOTAL=$(jq -r '.total_verified // "?"' /tmp/vqp.json)
+          PRICEABLE=$(jq -r '.summary.priceable // .priceable // "?"' /tmp/vqp.json)
+          HELD=$(jq -r '.summary.held // .held // "?"' /tmp/vqp.json)
+          TRANS=$(jq -r '.transitioned // "n/a (dry-run)"' /tmp/vqp.json)
+          KVOK=$(jq -r '.health.kv.reachable // "?"' /tmp/vqp.json)
+          BREAKER=$(jq -r '.health.firecrawl.breakerTripped // "?"' /tmp/vqp.json)
+          BAL=$(jq -r '.health.firecrawl.balanceRemaining // "?"' /tmp/vqp.json)
+          {
+            echo "## Verified-queue pricing pass (${MODE})"
+            echo ""
+            echo "- health: KV reachable=${KVOK}, breaker tripped=${BREAKER}, Firecrawl balance=${BAL}"
+            echo "- total at verified: ${TOTAL}"
+            echo "- priceable (buyer-median): ${PRICEABLE}"
+            echo "- held (no qualifying median): ${HELD}"
+            echo "- transitioned verified->priced: ${TRANS}"
+          } >> "$GITHUB_STEP_SUMMARY"
