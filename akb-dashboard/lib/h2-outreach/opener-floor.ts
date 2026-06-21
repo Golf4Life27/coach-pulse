@@ -34,6 +34,13 @@ export interface OpenerFloorInput {
   wholesaleFee: number;
   /** Minimum comp count to trust a median as a floor (mirrors DD-3). */
   minN: number;
+  /** List price, for the deep-lowball safety net. Null → guard inert. */
+  listPrice?: number | null;
+  /** Floor offers below this fraction of list are flagged for HOLD
+   *  (operator 2026-06-19; mirrors LOWBALL_FLOOR_PCT_OF_LIST = 0.35). A ZIP
+   *  median can mis-cap an above-median property to a deep lowball; those
+   *  route to Manual Review rather than send. */
+  lowballFloorPct?: number;
 }
 
 export interface OpenerFloorResult {
@@ -47,6 +54,10 @@ export interface OpenerFloorResult {
   /** True when the floor caps the opener below the door-opener (the "floor
    *  bit"). */
   floorBit: boolean;
+  /** True when the floored offer is below lowballFloorPct × listPrice — a
+   *  deep lowball the ZIP median mis-produced on an above-median house. The
+   *  caller routes these to Manual Review instead of sending. */
+  belowLowballFloor: boolean;
 }
 
 const positive = (v: number | null | undefined): v is number =>
@@ -59,5 +70,7 @@ export function computeOpenerFloor(i: OpenerFloorInput): OpenerFloorResult {
   const floorProxy = usable ? Math.max(0, Math.round((i.buyerMedian as number) - i.wholesaleFee)) : null;
   const floorBit = floorProxy != null && floorProxy > 0 && floorProxy < i.baseOpener;
   const flooredOpener = floorBit ? (floorProxy as number) : i.baseOpener;
-  return { floorProxy, flooredOpener, floorBit };
+  const pct = i.lowballFloorPct ?? 0.35;
+  const belowLowballFloor = positive(i.listPrice) && flooredOpener < pct * (i.listPrice as number);
+  return { floorProxy, flooredOpener, floorBit, belowLowballFloor };
 }

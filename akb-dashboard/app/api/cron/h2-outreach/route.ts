@@ -40,7 +40,7 @@ import { NextResponse } from "next/server";
 import { getListings, getListing, updateListingRecord } from "@/lib/airtable";
 import { sendMessageWithId, getMessageStatus } from "@/lib/quo";
 import { audit } from "@/lib/audit-log";
-import { checkFirstOutreachHydration, checkOfferOverList, resolveOpenerCeiling } from "@/lib/outreach-economics";
+import { checkFirstOutreachHydration, checkOfferOverList, resolveOpenerCeiling, LOWBALL_FLOOR_PCT_OF_LIST } from "@/lib/outreach-economics";
 import { anchoredOpenerGate } from "@/lib/h2-outreach/your-mao-opener-gate";
 import { computeRoughOpenerCeiling } from "@/lib/rough-opener-ceiling";
 import { computeOpenerFloor } from "@/lib/h2-outreach/opener-floor";
@@ -323,7 +323,12 @@ async function handle(req: Request): Promise<Response> {
   // live" posture so a dark run previews exactly what flipping it would do.
   const FLOOR_LIVE = process.env.H2_OPENER_FLOOR_LIVE === "true";
   const medianCache = new Map<string, Awaited<ReturnType<typeof getZipBuyerMedian>>>();
-  const openerFloor: Array<{ recordId: string; address: string | null; zip: string | null; track: string; list_price: number | null; base_opener: number; buyer_median: number | null; median_n: number | null; wholesale_fee: number; floor_proxy: number | null; floored_opener: number; floor_bit: boolean; applied: boolean }> = [];
+  const openerFloor: Array<{ recordId: string; address: string | null; zip: string | null; track: string; list_price: number | null; base_opener: number; buyer_median: number | null; median_n: number | null; wholesale_fee: number; floor_proxy: number | null; floored_opener: number; floor_bit: boolean; below_lowball_floor: boolean; applied: boolean }> = [];
+  // Deep-lowball HOLD (operator 2026-06-19): a ZIP median can mis-cap an
+  // above-median house to < 35% of list. Those route to Manual Review (excluded
+  // from the send plan) instead of firing a deep-lowball text. Only enforced
+  // when the floor is live; previewed always.
+  const openerFloorHold: Array<{ recordId: string; address: string | null; zip: string | null; list_price: number | null; floored_opener: number; pct_of_list: number | null }> = [];
   const filteredQueue: typeof queue = [];
   for (const l of queue) {
     const ceiling = resolveOpenerCeiling(l, uwCtxCron);
@@ -388,12 +393,27 @@ async function handle(req: Request): Promise<Response> {
       medianN: zm?.compCount ?? null,
       wholesaleFee: fee,
       minN: BUYER_MEDIAN_MIN_N,
+      listPrice: l.listPrice ?? null,
+      lowballFloorPct: LOWBALL_FLOOR_PCT_OF_LIST,
     });
     openerFloor.push({
       recordId: l.id, address: l.address ?? null, zip: l.zip ?? null, track, list_price: l.listPrice ?? null,
       base_opener: baseOpener, buyer_median: zm?.value ?? null, median_n: zm?.compCount ?? null, wholesale_fee: fee,
-      floor_proxy: floor.floorProxy, floored_opener: floor.flooredOpener, floor_bit: floor.floorBit, applied: FLOOR_LIVE,
+      floor_proxy: floor.floorProxy, floored_opener: floor.flooredOpener, floor_bit: floor.floorBit,
+      below_lowball_floor: floor.belowLowballFloor, applied: FLOOR_LIVE,
     });
+    // Deep-lowball HOLD (safety net) — when the floor is live and it mis-caps an
+    // above-median house below 35% of list, route to Manual Review (exclude from
+    // the send plan) rather than fire a deep lowball. The ZIP median can't price
+    // a specific above-median property (keystone 2026-06-12).
+    if (FLOOR_LIVE && floor.belowLowballFloor) {
+      openerFloorHold.push({
+        recordId: l.id, address: l.address ?? null, zip: l.zip ?? null, list_price: l.listPrice ?? null,
+        floored_opener: floor.flooredOpener,
+        pct_of_list: l.listPrice && l.listPrice > 0 ? Math.round((floor.flooredOpener / l.listPrice) * 1000) / 10 : null,
+      });
+      continue;
+    }
     l.mao = FLOOR_LIVE ? floor.flooredOpener : baseOpener;
     filteredQueue.push(l);
   }
@@ -799,7 +819,7 @@ async function handle(req: Request): Promise<Response> {
     send_cap: sendCapSummary,
     opt_out_enforcement_live: optOutEnforcementLive,
     opener_guarded: openerGuarded,
-    opener_floor: { live: FLOOR_LIVE, rows: openerFloor },
+    opener_floor: { live: FLOOR_LIVE, rows: openerFloor, lowball_holds: openerFloorHold },
     hold_proposals: holdProposals,
     supply_floor: supplyFloor,
     auth_kind: authKind,
