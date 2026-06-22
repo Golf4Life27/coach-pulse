@@ -1,0 +1,88 @@
+# Intake single-run — controlled, on-demand test-pool generator (operator 2026-06-22).
+#
+# The 6-hour listings-intake cron was removed from vercel.json to stop the
+# RentCast burn. This workflow_dispatch is the deliberate, one-shot replacement:
+# run intake ONCE with the distress filter ON (default) to produce a real
+# aged/price-dropped Detroit cohort to test on.
+#
+# DRY by default (preview, zero writes). mode=live creates the records via the
+# force_live override (beats CRAWLER_INTAKE_LIVE=off). Never sends — intake
+# writes Review/empty Outreach_Status and H2 stays hard-disabled.
+#
+# Required GitHub secret: CRON_SECRET (mirror of the Vercel env).
+
+name: Intake single-run (controlled)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "live = create records (force_live). Default dry = preview only, zero writes."
+        required: false
+        default: "dry"
+        type: choice
+        options: ["dry", "live"]
+      base_url:
+        description: "Production base URL (override only for staging tests)."
+        required: false
+        default: "https://coach-pulse-ten.vercel.app"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      MODE: ${{ inputs.mode }}
+      BASE_URL: ${{ inputs.base_url }}
+    steps:
+      - name: Refuse to run when CRON_SECRET is missing
+        run: |
+          if [ -z "${{ secrets.CRON_SECRET }}" ]; then
+            echo "::error::CRON_SECRET is not configured as a GitHub Actions secret."
+            exit 1
+          fi
+          echo "CRON_SECRET present; proceeding."
+
+      - name: Invoke /api/cron/listings-intake
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ "${MODE}" = "live" ]; then
+            Q="force_live=1"
+          else
+            Q="dry_run=1"
+          fi
+          URL="${BASE_URL}/api/cron/listings-intake?${Q}"
+          echo "GET ${URL}  (mode=${MODE})"
+          HTTP_CODE=$(curl -sS -o /tmp/intake.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "x-vercel-cron: 1" \
+            "${URL}")
+          echo "HTTP ${HTTP_CODE}"
+          echo "--- response body ---"
+          jq . /tmp/intake.json 2>/dev/null || cat /tmp/intake.json
+          if [ "${HTTP_CODE}" -ge 400 ]; then
+            echo "::error::listings-intake returned HTTP ${HTTP_CODE}"
+            exit 1
+          fi
+
+      - name: Surface the headline numbers
+        if: success()
+        run: |
+          set -euo pipefail
+          {
+            echo "## Intake single-run (${MODE})"
+            echo ""
+            jq -r '
+              "- dry_run: \(.dry_run // "?")",
+              "- candidates fetched: \(.summary.fetched // .fetched // "?")",
+              "- accepted: \(.summary.accepted // "?")",
+              "- created/would-create: \(.summary.created // (.summary.would_write | length) // "?")",
+              "- rejected (no distress): \(.summary.reject_reason_counts.no_distress_signal // "?")"
+            ' /tmp/intake.json 2>/dev/null || echo "- (see raw response above)"
+          } >> "$GITHUB_STEP_SUMMARY"

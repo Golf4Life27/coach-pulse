@@ -52,6 +52,12 @@ export function buildIntakeListingFields(c: IntakeCandidate, opts: IntakeFieldsO
   if (c.listPrice != null) fields["List_Price"] = c.listPrice;
   // MLS list date — the field that regressed. Only set when present.
   if (c.listedDate) fields["MLS_Date_Raw"] = c.listedDate;
+  // Price-drop signal (operator 2026-06-22): persist the detected reduction to
+  // Price_Drop_Count so Distress_Score credits it (the drops×2 term). RentCast's
+  // detector is boolean, so a detected reduction writes a count of 1 — enough
+  // that a price-cut listing the distress-sourcing filter accepts is not then
+  // re-rejected by the distress score as "fresh." Only set when reduced.
+  if (c.priceReduced) fields["Price_Drop_Count"] = 1;
   if (c.bathrooms != null) fields["Bathrooms"] = c.bathrooms;
   if (c.squareFootage != null) fields["Building_SqFt"] = c.squareFootage;
   if (c.yearBuilt != null) fields["Year_Built"] = c.yearBuilt;

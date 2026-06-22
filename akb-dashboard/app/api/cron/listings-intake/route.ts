@@ -226,7 +226,14 @@ export async function GET(req: Request) {
 
   const liveEnv = process.env.CRAWLER_INTAKE_LIVE === "true";
   const forcedDry = url.searchParams.get("dry_run") === "1";
-  const dryRun = !liveEnv || forcedDry;
+  // Controlled single-run override (operator 2026-06-22): an AUTHED caller can
+  // force ONE live intake pull even with CRAWLER_INTAKE_LIVE off — the 6-hour
+  // cron is removed (vercel.json), so this is the on-demand test-pool generator
+  // (distress filter is default-ON, so it sources only aged/price-cut leads).
+  // An explicit dry_run=1 still wins (fail-safe to dry); creates records, never
+  // sends (intake writes Review/empty Outreach_Status; H2 stays hard-disabled).
+  const forcedLive = url.searchParams.get("force_live") === "1";
+  const dryRun = forcedDry || (!liveEnv && !forcedLive);
 
   // National-crawler auto-seed + opener-write gate (Maverick 2026-06-14).
   // Default OFF — when unset, every block below guarded by this is skipped,

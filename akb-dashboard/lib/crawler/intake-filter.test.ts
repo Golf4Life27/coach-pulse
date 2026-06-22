@@ -6,6 +6,7 @@ import {
   filterIntakeCandidates,
   isSingleFamily,
   normalizeAddressKey,
+  distressSourcingReasons,
   EXCLUDED_STATES,
   type IntakeCandidate,
 } from "./intake-filter";
@@ -25,6 +26,10 @@ function cand(over: Partial<IntakeCandidate> = {}): IntakeCandidate {
     beds: 3,
     listPrice: 150000,
     listedDate: recent,
+    // Distress-passing default (operator 2026-06-22: distress sourcing is now
+    // ON by default). Base-rule tests use this so they exercise SFR/beds/price/
+    // state, not the distress gate; the distress/DOM tests override it.
+    daysOnMarket: 120,
     agentName: null,
     agentPhone: null,
     agentEmail: null,
@@ -32,6 +37,28 @@ function cand(over: Partial<IntakeCandidate> = {}): IntakeCandidate {
     ...over,
   };
 }
+
+describe("distressSourcingReasons (Phase-1 distress sourcing, operator 2026-06-22)", () => {
+  const ON = { requireDistress: true, domMark: 90, domFloor: null };
+  it("rejects a fresh, full-price listing — no distress signal", () => {
+    expect(distressSourcingReasons({ daysOnMarket: 10, priceReduced: false }, ON, NOW)).toContain("no_distress_signal");
+  });
+  it("sources an aged listing (DOM ≥ mark) on aging alone", () => {
+    expect(distressSourcingReasons({ daysOnMarket: 110, priceReduced: false }, ON, NOW)).toEqual([]);
+  });
+  it("sources a price-cut listing even when fresh", () => {
+    expect(distressSourcingReasons({ daysOnMarket: 5, priceReduced: true }, ON, NOW)).toEqual([]);
+  });
+  it("DOM just below the 90 mark is NOT sourced (aligns with A1's ≥90 distress)", () => {
+    expect(distressSourcingReasons({ daysOnMarket: 86, priceReduced: false }, ON, NOW)).toContain("no_distress_signal");
+  });
+  it("requireDistress off → sources everything (legacy fire-on-all)", () => {
+    expect(distressSourcingReasons({ daysOnMarket: 1, priceReduced: false }, { requireDistress: false, domMark: 90, domFloor: null }, NOW)).toEqual([]);
+  });
+  it("falls back to listedDate when daysOnMarket is absent", () => {
+    expect(distressSourcingReasons({ listedDate: old, priceReduced: false }, ON, NOW)).toEqual([]); // ~144d ago
+  });
+});
 
 describe("isSingleFamily", () => {
   it("accepts SFR variants", () => {
@@ -76,35 +103,26 @@ describe("evaluateIntakeCandidate", () => {
   it("flags missing list price (the ATTOM snapshot blocker)", () => {
     expect(evaluateIntakeCandidate(cand({ listPrice: null }), NOW).reasons).toContain("list_price_missing");
   });
-  // No DOM lower floor (removed 2026-05-26): fire on EVERY active band
-  // listing regardless of age — a fresh-but-distress listing is exactly the
-  // first-low-offer target. NOW = 2026-05-25.
-  it("accepts a very-new listing (DOM 3d → no lower floor)", () => {
-    const threeDays = new Date("2026-05-22T00:00:00Z").toISOString();
-    const r = evaluateIntakeCandidate(cand({ listedDate: threeDays }), NOW);
-    expect(r.reasons).not.toContain("listed_date_too_new");
-    expect(r.accept).toBe(true);
+  // Phase-1 distress sourcing is ON by default (operator 2026-06-22): source
+  // distress, not market-rate active listings. Fresh + full-price is rejected;
+  // aged (DOM ≥ 90) or price-cut is sourced. NOW = 2026-05-25.
+  it("rejects a fresh, full-price listing — no distress signal (default-on)", () => {
+    const r = evaluateIntakeCandidate(cand({ daysOnMarket: 3 }), NOW);
+    expect(r.reasons).toContain("no_distress_signal");
+    expect(r.accept).toBe(false);
   });
-  it("accepts a 5d listing (no lower floor)", () => {
-    const fiveDays = new Date("2026-05-20T00:00:00Z").toISOString();
-    expect(evaluateIntakeCandidate(cand({ listedDate: fiveDays }), NOW).accept).toBe(true);
+  it("rejects an aged-but-sub-90 listing (86d) — aligns with A1's ≥90", () => {
+    expect(evaluateIntakeCandidate(cand({ daysOnMarket: 86 }), NOW).reasons).toContain("no_distress_signal");
   });
-  it("passes a long-DOM listing (30d)", () => {
-    const thirtyDays = new Date("2026-04-25T00:00:00Z").toISOString();
-    expect(evaluateIntakeCandidate(cand({ listedDate: thirtyDays }), NOW).accept).toBe(true);
+  it("sources an aged listing (DOM ≥ 90)", () => {
+    expect(evaluateIntakeCandidate(cand({ daysOnMarket: 120 }), NOW).accept).toBe(true);
   });
-  it("passes a very old listing when no DISTRESS_DOM_CAP set (144d)", () => {
-    expect(evaluateIntakeCandidate(cand({ listedDate: old }), NOW).accept).toBe(true);
+  it("sources a price-cut listing even when fresh", () => {
+    expect(evaluateIntakeCandidate(cand({ daysOnMarket: 5, priceReduced: true }), NOW).accept).toBe(true);
   });
-  it("accepts a missing listed date when no DISTRESS_DOM_CAP set", () => {
-    const r = evaluateIntakeCandidate(cand({ listedDate: null }), NOW);
-    expect(r.reasons).not.toContain("listed_date_missing");
-    expect(r.accept).toBe(true);
-  });
-  it("accepts a band listing with NO distress signal (distress gate removed)", () => {
-    // First-contact fires on every active band listing — the 65% script is
-    // the door-opener; price-reduction is a downstream re-engagement trigger.
-    expect(evaluateIntakeCandidate(cand(), NOW).accept).toBe(true);
+  it("rejects a missing-DOM, full-price listing — no distress signal", () => {
+    const r = evaluateIntakeCandidate(cand({ daysOnMarket: null, listedDate: null }), NOW);
+    expect(r.reasons).toContain("no_distress_signal");
   });
   it("rejects excluded states", () => {
     for (const s of ["IL", "MO", "SC", "NC", "OK", "ND"]) {

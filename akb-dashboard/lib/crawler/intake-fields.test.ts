@@ -48,6 +48,16 @@ describe("buildIntakeListingFields — MLS_Date_Raw regression guard", () => {
     expect(f["Agent_Phone"]).toBe("3135550100");
   });
 
+  it("writes Price_Drop_Count=1 when a reduction was detected (distress-score coherence)", () => {
+    const f = buildIntakeListingFields(candidate({ priceReduced: true }), OPTS);
+    expect(f["Price_Drop_Count"]).toBe(1);
+  });
+
+  it("OMITS Price_Drop_Count when no reduction (never synthesized)", () => {
+    expect("Price_Drop_Count" in buildIntakeListingFields(candidate({ priceReduced: false }), OPTS)).toBe(false);
+    expect("Price_Drop_Count" in buildIntakeListingFields(candidate({ priceReduced: undefined }), OPTS)).toBe(false);
+  });
+
   it("promote=true → H2-ready (Outreach_Status empty + Auto Proceed + Active)", () => {
     const f = buildIntakeListingFields(candidate(), { ...OPTS, promote: true });
     expect(f["Outreach_Status"]).toBe("");
