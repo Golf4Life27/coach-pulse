@@ -17,6 +17,8 @@
 //
 // PURE. No I/O.
 
+import { computeDistressScore } from "@/lib/distress-score";
+
 export type DistressBucket = "Low" | "Moderate" | "High" | "Extreme";
 export type Routing = "Auto Proceed" | "Manual Review" | "Reject";
 
@@ -30,6 +32,9 @@ export interface MlsProjectionInput {
   /** Price_Drop_Count. */
   priceDrops: number | null;
   hasAgentPhone: boolean;
+  /** A1 (operator 2026-06-21): drop the (List − MAO) spread term from distress.
+   *  Driven by the env flag DISTRESS_DROP_SPREAD_TERM in the route. */
+  dropSpreadTerm?: boolean;
   /** Non-date gates — defaulted from the inputs / the cohort's verified-passing
    *  state, but parameterized so the helper is faithful for any record. */
   sizeOk?: boolean; // sqft >= 600 (cohort: all true)
@@ -61,19 +66,18 @@ export function projectMlsRouting(i: MlsProjectionInput): MlsProjection {
     if (Number.isFinite(t)) dom = Math.floor((i.now.getTime() - t) / DAY_MS);
   }
 
-  const drops = i.priceDrops ?? 0;
-  const spread = i.listPrice != null && i.mao != null ? i.listPrice - i.mao : 0;
-  let distressScore: number | null = null;
-  if (dom != null && drops >= 0) {
-    distressScore = Math.round((dom / 30 + drops * 2 + Math.max(0, spread) / 10000) * 100) / 100;
-  }
-  const distressBucket: DistressBucket | null =
-    distressScore == null ? null
-      : distressScore < 3 ? "Low"
-        : distressScore < 6 ? "Moderate"
-          : distressScore < 9 ? "High"
-            : "Extreme";
-  const distressPass = distressBucket === "Moderate" || distressBucket === "High" || distressBucket === "Extreme";
+  // Distress via the shared replica (lib/distress-score). A1 drops the
+  // (List − MAO) spread term when dropSpreadTerm is set.
+  const dist = computeDistressScore({
+    dom,
+    priceDrops: i.priceDrops,
+    listPrice: i.listPrice,
+    mao: i.mao,
+    dropSpreadTerm: i.dropSpreadTerm,
+  });
+  const distressScore = dist.score;
+  const distressBucket = dist.bucket;
+  const distressPass = dist.pass;
 
   const priceFloorOk = i.listPrice != null && i.listPrice >= 10000;
   const sizeOk = i.sizeOk ?? true;
