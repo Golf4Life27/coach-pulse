@@ -5,6 +5,7 @@ import { getBuyerV2, updateBuyerV2, BUYER_V2_FIELDS } from "@/lib/buyers-v2";
 import { sendMessage } from "@/lib/quo";
 import { sendEmail } from "@/lib/gmail";
 import type { BuyerBlastResult, BuyerDraft } from "@/types/jarvis";
+import { evaluateAssignmentSpread } from "@/lib/pricing/assignment-spread";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -12,6 +13,9 @@ export const maxDuration = 120;
 interface FireBody {
   drafts: Array<BuyerDraft & { send: boolean }>;
   assignmentPrice: number;
+  /** Operator override for a deliberately thin/known spread. Default false:
+   *  the dispo gate BLOCKS an assignment that doesn't clear contract + fee. */
+  allowThinSpread?: boolean;
 }
 
 function cleanPhone(phone: string): string {
@@ -50,6 +54,23 @@ export async function POST(
   const listing = await getListing(recordId);
   if (!listing) {
     return NextResponse.json({ error: "Listing not found", recordId }, { status: 404 });
+  }
+
+  // ── Dispo math gate (protect-my-side). The assignment must clear contract +
+  // fee or it's a money-loser ("5 contracts too tight to dispo"). BLOCK by
+  // default; the operator overrides a known-thin spread with allowThinSpread.
+  // A missing contract price HOLDS (we never obstruct an operator-known number
+  // on a data gap — the gate only refuses a DECISIVE loss).
+  const L = listing as unknown as Record<string, unknown>;
+  const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  const contractPrice =
+    num(L.contractPrice) ?? num(L.contractOfferPrice) ?? num(L.underwrittenMao) ?? num(L.yourMao);
+  const spread = evaluateAssignmentSpread({ assignmentPrice: body.assignmentPrice, contractPrice });
+  if (spread.status === "block" && body.allowThinSpread !== true) {
+    return NextResponse.json(
+      { error: "assignment_spread_too_tight", recordId, gate: spread },
+      { status: 422 },
+    );
   }
 
   const toSend = (body.drafts ?? []).filter((d) => d.send);
@@ -115,5 +136,5 @@ export async function POST(
   }
 
   const result: BuyerBlastResult = { recordId, sent, failed, results };
-  return NextResponse.json(result);
+  return NextResponse.json({ ...result, assignmentSpread: spread });
 }
