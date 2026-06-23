@@ -1,0 +1,118 @@
+# Freshness re-verify — controlled, on-demand re-confirmation of aged inventory.
+#
+# Turns the stale backlog into a CONFIRMED-LIVE, outreach-fresh cohort. The
+# outreach selector (h2-outreach) only ever sends to records re-confirmed
+# Active within the freshness window (default 48h); this pass is how a stale
+# aged lead becomes sendable. It also PRUNES dead inventory (a listing that's
+# gone is stamped Off Market), which directly answers "who knows what's live
+# in my Airtable anymore."
+#
+# DRY by default (lists what's due, ZERO Firecrawl credits). mode=live applies
+# the 1-credit-per-record known-URL re-scrape (NO 2-credit discovery), bounded
+# by `limit` (route max 50), and stamps Last_Verified + Live_Status.
+#
+# NEVER sends. Re-verify only touches freshness / live status; H2 stays
+# hard-disabled and the send path is untouched.
+#
+# COST: a live run spends AT MOST `limit` Firecrawl credits (1 per record).
+# Default 25. This is the cost-controlled belt: re-verify a bounded batch,
+# outreach fires on the fresh ones, repeat — RentCast stays off entirely.
+#
+# Required GitHub secret: CRON_SECRET (mirror of the Vercel env).
+
+name: Freshness re-verify (controlled)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "live = re-scrape + stamp (spends <= limit credits). Default dry = preview only, zero credits."
+        required: false
+        default: "dry"
+        type: choice
+        options: ["dry", "live"]
+      limit:
+        description: "Max records to re-verify this run (1 credit each; route caps at 50)."
+        required: false
+        default: "25"
+        type: string
+      scope:
+        description: "Optional market scope: a state (e.g. MI) OR comma ZIPs (e.g. 48227,48219). Empty = whole actionable cohort."
+        required: false
+        default: ""
+        type: string
+      base_url:
+        description: "Production base URL (override only for staging tests)."
+        required: false
+        default: "https://coach-pulse-ten.vercel.app"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      MODE: ${{ inputs.mode }}
+      LIMIT: ${{ inputs.limit }}
+      SCOPE: ${{ inputs.scope }}
+      BASE_URL: ${{ inputs.base_url }}
+    steps:
+      - name: Refuse to run when CRON_SECRET is missing
+        run: |
+          if [ -z "${{ secrets.CRON_SECRET }}" ]; then
+            echo "::error::CRON_SECRET is not configured as a GitHub Actions secret."
+            exit 1
+          fi
+          echo "CRON_SECRET present; proceeding."
+
+      - name: Invoke /api/admin/freshness-reverify
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          # Build the query string. apply=1 only in live mode; scope is a state
+          # (letters) or a ZIP list (digits/commas), routed to the right param.
+          Q="limit=${LIMIT}"
+          if [ "${MODE}" = "live" ]; then Q="apply=1&${Q}"; fi
+          if [ -n "${SCOPE}" ]; then
+            if echo "${SCOPE}" | grep -qE '^[0-9,]+$'; then Q="${Q}&zips=${SCOPE}"; else Q="${Q}&state=${SCOPE}"; fi
+          fi
+          URL="${BASE_URL}/api/admin/freshness-reverify?${Q}"
+          echo "GET ${URL}  (mode=${MODE})"
+          HTTP_CODE=$(curl -sS -o /tmp/reverify.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "x-vercel-cron: 1" \
+            "${URL}")
+          echo "HTTP ${HTTP_CODE}"
+          echo "--- response body ---"
+          jq . /tmp/reverify.json 2>/dev/null || cat /tmp/reverify.json
+          if [ "${HTTP_CODE}" -ge 400 ]; then
+            echo "::error::freshness-reverify returned HTTP ${HTTP_CODE}"
+            exit 1
+          fi
+
+      - name: Surface the headline numbers
+        if: success()
+        run: |
+          set -euo pipefail
+          {
+            echo "## Freshness re-verify (${MODE})"
+            echo ""
+            jq -r '
+              if .mode == "dry_run" then
+                "- due (stale + re-verifiable): \(.due_total // "?")",
+                "- active pool: \(.active_total // "?")",
+                "- skipped non-priceable: \(.skipped_non_priceable // "?")",
+                "- batch this run: \(.batch | length)"
+              else
+                "- attempted: \(.summary.attempted // "?")",
+                "- reconfirmed Active: \(.summary.reconfirmed_active // "?")",
+                "- marked Off Market (pruned): \(.summary.marked_off_market // "?")",
+                "- unresolved (infra miss, left as-is): \(.summary.unresolved // "?")",
+                "- Firecrawl credits used: \(.summary.credits_used // "?")"
+              end
+            ' /tmp/reverify.json 2>/dev/null || echo "- (see raw response above)"
+          } >> "$GITHUB_STEP_SUMMARY"
