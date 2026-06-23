@@ -55,14 +55,19 @@ const INTAKE_DOM_FLOOR =
   process.env.INTAKE_DOM_FLOOR && /^\d+$/.test(process.env.INTAKE_DOM_FLOOR)
     ? Number(process.env.INTAKE_DOM_FLOOR)
     : null;
-// INTAKE_REQUIRE_DISTRESS="true": reject a candidate carrying NO distress
-//   signal (no price reduction AND DOM below the distress-DOM mark). Unset/
-//   anything-else → off.
-const INTAKE_REQUIRE_DISTRESS = process.env.INTAKE_REQUIRE_DISTRESS === "true";
+// INTAKE_REQUIRE_DISTRESS: reject a candidate carrying NO distress signal (no
+//   price reduction AND DOM below the distress-DOM mark). DEFAULT ON (operator
+//   2026-06-22) — the funnel sources distress, not market-rate active listings;
+//   the 17→2 census proved the spread term was masking that. Set ="false" to
+//   restore the old fire-on-everything behavior.
+const INTAKE_REQUIRE_DISTRESS = process.env.INTAKE_REQUIRE_DISTRESS !== "false";
+// INTAKE_DISTRESS_DOM_MARK: the aged-DOM bar. DEFAULT 90 (operator 2026-06-22)
+//   to align with A1's distress threshold (DOM/30 ≥ 3 ⇒ DOM ≥ 90) so intake
+//   doesn't source aged-but-sub-90 listings the distress score then rejects.
 const INTAKE_DISTRESS_DOM_MARK =
   process.env.INTAKE_DISTRESS_DOM_MARK && /^\d+$/.test(process.env.INTAKE_DISTRESS_DOM_MARK)
     ? Number(process.env.INTAKE_DISTRESS_DOM_MARK)
-    : 60;
+    : 90;
 
 export interface IntakeCandidate {
   /** Vendor-stable id for trace/dedup (e.g. ATTOM attomId). */
@@ -158,6 +163,43 @@ export function isSingleFamily(propertyType: string | null): boolean {
   return /sfr|single\s*family|single-family|residential \(nec\)|detached/.test(t);
 }
 
+export interface DistressSourcingConfig {
+  /** Require a distress signal (aged DOM OR price cut) to source. */
+  requireDistress: boolean;
+  /** The aged-DOM bar (DOM ≥ domMark counts as distressed). */
+  domMark: number;
+  /** Optional hard DOM floor (reject DOM < domFloor). */
+  domFloor: number | null;
+}
+
+/** The module-default distress-sourcing config (operator 2026-06-22: ON, ≥90,
+ *  no separate floor). Overridable per-call so the rule is unit-testable
+ *  without env-stubbing. */
+export const DEFAULT_DISTRESS_SOURCING: DistressSourcingConfig = {
+  requireDistress: INTAKE_REQUIRE_DISTRESS,
+  domMark: INTAKE_DISTRESS_DOM_MARK,
+  domFloor: INTAKE_DOM_FLOOR,
+};
+
+/** Pure: the Phase-1 distress-sourcing reasons. A candidate is sourced only on
+ *  a price cut OR an aged DOM (≥ domMark). DOM resolves from the explicit
+ *  daysOnMarket, falling back to the listedDate derivation. */
+export function distressSourcingReasons(
+  c: { daysOnMarket?: number | null; listedDate?: string | null; priceReduced?: boolean },
+  cfg: DistressSourcingConfig = DEFAULT_DISTRESS_SOURCING,
+  now: Date = new Date(),
+): IntakeRejectReason[] {
+  const reasons: IntakeRejectReason[] = [];
+  const dom = c.daysOnMarket ?? daysOnMarketFrom(c.listedDate ?? null, now);
+  if (cfg.domFloor != null && dom != null && dom < cfg.domFloor) reasons.push("dom_below_floor");
+  if (cfg.requireDistress) {
+    const hasPriceCut = c.priceReduced === true;
+    const hasAgedDom = dom != null && dom >= cfg.domMark;
+    if (!hasPriceCut && !hasAgedDom) reasons.push("no_distress_signal");
+  }
+  return reasons;
+}
+
 /** Pure: evaluate one candidate against all intake rules. Collects ALL
  *  failing reasons (not short-circuit) so rejections are fully itemized. */
 export function evaluateIntakeCandidate(
@@ -208,18 +250,11 @@ export function evaluateIntakeCandidate(
     if (!verdict.actionable) reasons.push("market_not_priceable");
   }
 
-  // ── Conversion-era pre-filters (default OFF; cut scrape volume) ──
-  // DOM resolves from the explicit daysOnMarket, falling back to the
-  // listedDate derivation (the same source the cron uses).
-  const dom = c.daysOnMarket ?? daysOnMarketFrom(c.listedDate, now);
-  if (INTAKE_DOM_FLOOR != null && dom != null && dom < INTAKE_DOM_FLOOR) {
-    reasons.push("dom_below_floor");
-  }
-  if (INTAKE_REQUIRE_DISTRESS) {
-    const hasPriceCut = c.priceReduced === true;
-    const hasAgedDom = dom != null && dom >= INTAKE_DISTRESS_DOM_MARK;
-    if (!hasPriceCut && !hasAgedDom) reasons.push("no_distress_signal");
-  }
+  // ── Phase-1 distress sourcing (operator 2026-06-22; default ON, DOM ≥ 90) ──
+  // Source distress, not market-rate active listings: accept only a price cut
+  // OR an aged DOM. Pure + config-injectable for tests; the live path uses the
+  // module defaults.
+  reasons.push(...distressSourcingReasons(c, DEFAULT_DISTRESS_SOURCING, now));
 
   return { accept: reasons.length === 0, reasons };
 }

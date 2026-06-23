@@ -53,7 +53,7 @@ import {
 } from "@/lib/crawler/intake-filter";
 import { shouldAutoPromote, type AutoPromoteBlockReason } from "@/lib/crawler/auto-promote";
 import { type BuyerTrack } from "@/lib/buyer-median-input";
-import { SOURCE_VERSION_FIELD_NAME, SOURCE_VERSION_V2 } from "@/lib/source-version";
+import { buildIntakeListingFields } from "@/lib/crawler/intake-fields";
 import { rentcastQuotaAllows, computeBurnRate } from "@/lib/maverick/rentcast-burn-rate";
 import { selectDueZips, type ZipDueResult } from "@/lib/crawler/zip-rotation";
 import { fetchExternalRentCastState } from "@/lib/maverick/sources/external-rentcast";
@@ -158,97 +158,19 @@ async function createIntakeListing(
   const iso = new Date().toISOString();
   // promote → written H2-ready (Outreach_Status empty + Auto Proceed + Active).
   // !promote → Review queue for operator/Maverick triage (today's behavior).
-  const fields: Record<string, unknown> = {
-    Address: c.address ?? "",
-    City: c.city ?? "",
-    State: c.state ?? "",
-    Zip: c.zip ?? "",
-    // Every crawler-written record is v2 (INV-LEGACY-BACKSTOP) — promoted,
-    // review-queued, all of them. Marks the active working surface.
-    [SOURCE_VERSION_FIELD_NAME]: SOURCE_VERSION_V2,
-  };
-  // URL-at-intake (2026-06-05): the Firecrawl verify step already
-  // resolved the subject's portal-detail URL (fc.url) to read renovation
-  // language — but the intake create was DISCARDING it, so every new
-  // record landed with an empty Verification_URL and the downstream
-  // rehab vision had nothing to scrape. Persist it now so new records
-  // carry a URL from the start (the whole point of URL discovery living
-  // at the front of intake→verify). Verification_Source + Last_Verified
-  // mirror the verify-listing write convention. Only set when the
-  // resolver actually returned a URL — never synthesize.
-  if (firecrawlUrl) {
-    fields["Verification_URL"] = firecrawlUrl;
-    fields["Verification_Source"] = "firecrawl_intake";
-    fields["Last_Verified"] = iso;
-  }
-  if (c.propertyType) fields["Property_Type"] = c.propertyType;
-  if (c.beds != null) fields["Bedrooms"] = c.beds;
-  if (c.listPrice != null) fields["List_Price"] = c.listPrice;
-  // MLS list date (operator 2026-06-19): write the RentCast-parsed listedDate to
-  // MLS_Date_Raw so the downstream Airtable formulas can compute — MLS_Date_Clean
-  // (= LEFT(MLS_Date_Raw,10)) → DOM_Calc_V2 → Distress_Score, plus the Stage_Calc
-  // "Has_MLS_Date" data-quality gate. It was parsed into IntakeCandidate.listedDate
-  // but never written, so every crawler record short-circuited to "Data Issue:
-  // Missing MLS Date" → Manual Review. Only set when present; never synthesized.
-  if (c.listedDate) fields["MLS_Date_Raw"] = c.listedDate;
-  // Station 2 ENRICH (intake-time, zero new API calls) — persist the
-  // structural facts the vendor response already carried. Skipped silently
-  // when null so the record is still creatable for vendors that omit the
-  // field. The structural-facts provenance rides the audit entry below
-  // (ENRICHMENT_SOURCE), keyed to whichever vendor the intake run used.
-  if (c.bathrooms != null) fields["Bathrooms"] = c.bathrooms;
-  if (c.squareFootage != null) fields["Building_SqFt"] = c.squareFootage;
-  if (c.yearBuilt != null) fields["Year_Built"] = c.yearBuilt;
-  // Agent contact (INV-CRAWLER-AGENT-ENRICHMENT) — written as-is; H2 normalizes
-  // phone format. Set only when present; never synthesize.
-  if (c.agentName) fields["Agent_Name"] = c.agentName;
-  if (c.agentPhone) fields["Agent_Phone"] = c.agentPhone;
-  if (c.agentEmail) fields["Agent_Email"] = c.agentEmail;
-  if (promote) {
-    fields["Outreach_Status"] = ""; // empty → H2 eligibility filter picks it up
-    fields["Execution_Path"] = "Auto Proceed";
-    fields["Live_Status"] = "Active";
-    fields["Do_Not_Text"] = false;
-    // NOTE: Stage_Calc (fldA8B9zOCneF0rjp) is a FORMULA field — writing it 422s
-    // the create. H2 eligibility never reads it (only Outreach_Status +
-    // Live_Status + Execution_Path + Do_Not_Text + Agent_Phone), so the promote
-    // state is fully expressed by the four writable fields above.
-    fields["Verification_Notes"] =
-      `[${iso}] RentCast auto-intake (${c.sourceId}) — auto-promoted to Auto Proceed (clean agent phone + math gate passed).`;
-  } else {
-    fields["Outreach_Status"] = "Review";
-    fields["Verification_Notes"] =
-      `[${iso}] RentCast auto-intake (${c.sourceId}) — queued for Review.`;
-  }
-  // Portfolio/investor-seller signal (operator 2026-06-08). DOWN-RANK
-  // only — never a veto, never alters Outreach_Status. Lands as a
-  // checkbox so H2 cadence can deprioritize within the eligible band.
-  // Distress override is enforced upstream in evaluateListingContent.
-  if (portfolioDetected) {
-    fields["Portfolio_Detected"] = true;
-    fields["Verification_Notes"] =
-      `${fields["Verification_Notes"] ?? ""}\n[${iso}] PORTFOLIO_DETECTED: ${matchedPortfolioKeywords.slice(0, 6).join(", ")}.`;
-  }
-  // Persist the underwritten MAO ceiling computed at promote time so the
-  // outreach guard can read it without re-deriving (and so a future
-  // appraiser run doesn't overwrite a clean track-aware number with
-  // an ARV-less HOLD). Underwritten_MAO is the operative-ceiling field
-  // per Phase 20.2 v1.3 (operator 2026-06-09).
-  if (typeof underwrittenMao === "number" && Number.isFinite(underwrittenMao) && underwrittenMao > 0) {
-    fields["Underwritten_MAO"] = underwrittenMao;
-  }
-  if (underwrittenMaoTrack === "landlord" || underwrittenMaoTrack === "flipper") {
-    fields["Underwritten_MAO_Track"] = underwrittenMaoTrack;
-  }
-  // Guarded rough opener (national crawler). Opener-only — never a contract
-  // number. Written off the renovated-comp seed when available (source-swap).
-  if (opener) {
-    if (typeof opener.amount === "number" && Number.isFinite(opener.amount) && opener.amount > 0) {
-      fields["Rough_Opener_Amount"] = opener.amount;
-    }
-    fields["Opener_Basis"] = opener.basis;
-    if (opener.reseed) fields["Opener_Reseed_Flag"] = true;
-  }
+  // Field assembly extracted to lib/crawler/intake-fields (pure, unit-tested) so
+  // the candidate→fields mapping — notably the MLS_Date_Raw write that silently
+  // regressed once — can't drop again without a red test.
+  const fields = buildIntakeListingFields(c, {
+    iso,
+    promote,
+    firecrawlUrl,
+    portfolioDetected,
+    matchedPortfolioKeywords,
+    underwrittenMao,
+    underwrittenMaoTrack,
+    opener,
+  });
   const res = await fetch(url, {
     method: "POST",
     headers: { Authorization: `Bearer ${AIRTABLE_PAT}`, "Content-Type": "application/json" },
@@ -304,7 +226,14 @@ export async function GET(req: Request) {
 
   const liveEnv = process.env.CRAWLER_INTAKE_LIVE === "true";
   const forcedDry = url.searchParams.get("dry_run") === "1";
-  const dryRun = !liveEnv || forcedDry;
+  // Controlled single-run override (operator 2026-06-22): an AUTHED caller can
+  // force ONE live intake pull even with CRAWLER_INTAKE_LIVE off — the 6-hour
+  // cron is removed (vercel.json), so this is the on-demand test-pool generator
+  // (distress filter is default-ON, so it sources only aged/price-cut leads).
+  // An explicit dry_run=1 still wins (fail-safe to dry); creates records, never
+  // sends (intake writes Review/empty Outreach_Status; H2 stays hard-disabled).
+  const forcedLive = url.searchParams.get("force_live") === "1";
+  const dryRun = forcedDry || (!liveEnv && !forcedLive);
 
   // National-crawler auto-seed + opener-write gate (Maverick 2026-06-14).
   // Default OFF — when unset, every block below guarded by this is skipped,
