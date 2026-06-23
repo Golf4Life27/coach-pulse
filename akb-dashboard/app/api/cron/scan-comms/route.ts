@@ -8,6 +8,7 @@ import { isSelfEchoOrAutoreply } from "@/lib/conversation-check";
 import { triageSellerReply } from "@/lib/reply-triage";
 import { sendReplyAlert, type ReplyAlertInput } from "@/lib/reply-alert";
 import { sendAutoClose } from "@/lib/auto-close";
+import { sendAutoAck } from "@/lib/auto-ack";
 import { detectOptOut, applyOptOut } from "@/lib/outreach/opt-out";
 import { resolveAlertNumbers } from "@/lib/outreach-economics";
 
@@ -216,6 +217,7 @@ export async function GET(req: Request) {
     // Tier 0 auto-close outcomes (sent / skipped + reason), surfaced in the
     // response so the daily digest + audit trail have the full picture.
     const autoCloseResults: Array<{ recordId: string; sent: boolean; reason: string | null }> = [];
+    const autoAckResults: Array<{ recordId: string; sent: boolean; reason: string | null }> = [];
     // M8 / Gate 3 — STOP/opt-out (operator 2026-06-18).
     let optOutDetected = 0;
     let optOutFlipped = 0;
@@ -301,6 +303,24 @@ export async function GET(req: Request) {
             });
             autoCloseResults.push({ recordId: listing.id, sent: ac.sent, reason: ac.reason });
             continue;
+          }
+
+          // ── TIER 1 (interest only): one-time, number-free warm-hold ack. ──
+          // Keeps a "yes, send me the offer / proof of funds" lead warm while
+          // it waits in the operator's queue. Default OFF (REPLY_AUTO_ACK_LIVE),
+          // interest-only, never negotiates (no numbers). Does NOT continue —
+          // the needs-decision proposal + alert below STILL fire, so the
+          // operator owns the actual engagement.
+          if (triage.classification === "interest") {
+            const ak = await sendAutoAck({
+              recordId: listing.id,
+              toE164: phone,
+              state: listing.state ?? null,
+              doNotText: listing.doNotText === true,
+              classification: triage.classification,
+              address: listing.address ?? null,
+            });
+            autoAckResults.push({ recordId: listing.id, sent: ak.sent, reason: ak.reason });
           }
 
           // ── TIER 1 / 2: needs-decision proposal + decision-first alert. ──
@@ -408,6 +428,9 @@ export async function GET(req: Request) {
       autoCloseAttempted: autoCloseResults.length,
       autoCloseSent: autoCloseResults.filter((r) => r.sent).length,
       autoCloseResults: autoCloseResults.length > 0 ? autoCloseResults : undefined,
+      autoAckAttempted: autoAckResults.length,
+      autoAckSent: autoAckResults.filter((r) => r.sent).length,
+      autoAckResults: autoAckResults.length > 0 ? autoAckResults : undefined,
       optOutDetected,
       optOutFlipped,
       optOutEnforced: process.env.STOP_OPT_OUT_LIVE === "true",
