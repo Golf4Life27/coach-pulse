@@ -1,0 +1,99 @@
+# H2 outreach — controlled, on-demand send trigger (operator 2026-06-23).
+#
+# Fires the H2 opener batch ON DEMAND, without enabling the global
+# MAVERICK_CRON_ENABLED switch — so the RentCast burn-crons (appraiser-backfill
+# every 5 min, underwrite, data-federation, etc.) stay gated OFF. This is the
+# "send on demand, nothing expensive on a clock" path from the V1 operating
+# model. Uses ?force_run=1 (bypasses ONLY the global cron gate).
+#
+# DRY by default — previews the EXACT rendered offers + which records would
+# fire, ZERO sends. mode=live sends, but ONLY if the operator has also set, in
+# Vercel: H2_OUTREACH_HARD_DISABLE=false, H2_OUTREACH_LIVE=true,
+# STOP_OPT_OUT_LIVE=true, H2_COVERED_ZIPS, (+ H2_OPENER_FLOOR_LIVE=true for the
+# dispo-safe floor). Without those, live mode still no-ops (forced dry) — the
+# route's own send-safety flags are never bypassed by this workflow.
+#
+# Send-cap (fail-closed): empty H2_COVERED_ZIPS => 0 sends; defaults 5/run, 2/zip.
+#
+# Required GitHub secret: CRON_SECRET (mirror of the Vercel env).
+
+name: H2 outreach send (controlled)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "live = send (needs the Vercel send flags set). Default dry = preview exact offers, zero sends."
+        required: false
+        default: "dry"
+        type: choice
+        options: ["dry", "live"]
+      limit:
+        description: "Max records to consider this run (send-cap still clamps to 5/run, 2/zip)."
+        required: false
+        default: "10"
+        type: string
+      base_url:
+        description: "Production base URL (override only for staging tests)."
+        required: false
+        default: "https://coach-pulse-ten.vercel.app"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      MODE: ${{ inputs.mode }}
+      LIMIT: ${{ inputs.limit }}
+      BASE_URL: ${{ inputs.base_url }}
+    steps:
+      - name: Refuse to run when CRON_SECRET is missing
+        run: |
+          if [ -z "${{ secrets.CRON_SECRET }}" ]; then
+            echo "::error::CRON_SECRET is not configured as a GitHub Actions secret."
+            exit 1
+          fi
+          echo "CRON_SECRET present; proceeding."
+
+      - name: Invoke /api/cron/h2-outreach
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          # force_run=1 bypasses ONLY the global cron gate. dry_run=false is
+          # added in live mode; the route still requires the send-safety env
+          # flags to be set or it forces dry regardless.
+          Q="force_run=1&limit=${LIMIT}"
+          if [ "${MODE}" = "live" ]; then Q="${Q}&dry_run=false"; fi
+          URL="${BASE_URL}/api/cron/h2-outreach?${Q}"
+          echo "GET ${URL}  (mode=${MODE})"
+          HTTP_CODE=$(curl -sS -o /tmp/h2.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "x-vercel-cron: 1" \
+            "${URL}")
+          echo "HTTP ${HTTP_CODE}"
+          echo "--- response body ---"
+          jq . /tmp/h2.json 2>/dev/null || cat /tmp/h2.json
+          if [ "${HTTP_CODE}" -ge 400 ]; then
+            echo "::error::h2-outreach returned HTTP ${HTTP_CODE}"
+            exit 1
+          fi
+
+      - name: Surface the headline numbers
+        if: success()
+        run: |
+          set -euo pipefail
+          {
+            echo "## H2 outreach (${MODE})"
+            echo ""
+            jq -r '
+              "- dry_run: \(.dry_run // "?")",
+              "- planned: \(.planned // (.plans | length) // "?")",
+              "- sent: \(.sent // .sent_count // "?")",
+              "- send_cap: \(.send_cap // "n/a")"
+            ' /tmp/h2.json 2>/dev/null || echo "- (see raw response above)"
+          } >> "$GITHUB_STEP_SUMMARY"

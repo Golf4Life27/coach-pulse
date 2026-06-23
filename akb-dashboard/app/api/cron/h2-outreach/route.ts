@@ -158,7 +158,15 @@ async function handle(req: Request): Promise<Response> {
       authKind = auth.kind;
     }
   }
-  if (authKind === "cron" && process.env.MAVERICK_CRON_ENABLED !== "true") {
+  // On-demand override (operator 2026-06-23): a workflow_dispatch that
+  // authenticates as "cron" (CRON_SECRET) may run this route via ?force_run=1
+  // WITHOUT enabling the global MAVERICK_CRON_ENABLED switch — so an H2 batch can
+  // be fired on demand while the RentCast burn-crons (appraiser-backfill et al.)
+  // stay gated off. Bypasses ONLY this global cron gate; EVERY send-safety flag
+  // below (hard-disable, H2_OUTREACH_LIVE, STOP_OPT_OUT_LIVE, H2_COVERED_ZIPS,
+  // dry_run) is still enforced — it can never send unless the operator set them.
+  const forceRun = url.searchParams.get("force_run") === "1";
+  if (authKind === "cron" && process.env.MAVERICK_CRON_ENABLED !== "true" && !forceRun) {
     return NextResponse.json({ error: "cron_disabled" }, { status: 503 });
   }
 
