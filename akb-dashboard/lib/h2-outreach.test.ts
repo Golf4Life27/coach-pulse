@@ -159,6 +159,52 @@ describe("planQueue — prior_contact_stall", () => {
   });
 });
 
+describe("planQueue — prior-contact is CONTACTED-only (operator 2026-06-24)", () => {
+  // The dedup index must count an agent as "prior contact" ONLY when a sibling
+  // listing was actually touched — NOT merely sourced into Review/Parked/Dead.
+  // The old "any non-empty status" rule stalled never-texted agents (the three
+  // fresh Detroit leads were held behind Review/Parked siblings, throttling
+  // volume). Do_Not_Text still enforces opt-outs independently of this index.
+  const uncontacted = ["Review", "Parked", "Manual Review", "Multi-Listing Queued", "Dead"];
+  for (const status of uncontacted) {
+    it(`does NOT stall a first-touch behind a '${status}' (never-texted) sibling`, () => {
+      const trigger = listing({ id: "new", agentPhone: "(210) 555-1234" });
+      const sibling = listing({ id: "old", agentPhone: "210-555-1234", outreachStatus: status });
+      const [p] = plan([trigger], [trigger, sibling]);
+      expect(p.route).toBe("first_touch");
+    });
+  }
+
+  const contacted = [
+    "Texted",
+    "Texted (Portfolio)",
+    "Emailed",
+    "Response Received",
+    "Negotiating",
+    "Offer Accepted",
+    "Inbound Lead",
+  ];
+  for (const status of contacted) {
+    it(`DOES stall a first-touch behind a '${status}' (real touch) sibling`, () => {
+      const trigger = listing({ id: "new", agentPhone: "(210) 555-1234" });
+      const sibling = listing({ id: "old", agentPhone: "210-555-1234", outreachStatus: status });
+      const [p] = plan([trigger], [trigger, sibling]);
+      expect(p.route).toBe("prior_contact_stall");
+      expect(p.prior?.status).toBe(status);
+    });
+  }
+
+  it("buildPriorContactIndex keys only contacted siblings", () => {
+    const idx = buildPriorContactIndex([
+      listing({ id: "t", agentPhone: "(210) 555-0001", outreachStatus: "Texted" }),
+      listing({ id: "r", agentPhone: "(210) 555-0002", outreachStatus: "Review" }),
+      listing({ id: "p", agentPhone: "(210) 555-0003", outreachStatus: "Parked" }),
+    ]);
+    expect(idx.size).toBe(1);
+    expect([...idx.values()][0].recordId).toBe("t");
+  });
+});
+
 describe("planQueue — skipped (MAO guard)", () => {
   it("skips null MAO rather than texting $0", () => {
     const [p] = plan([listing({ mao: null })]);

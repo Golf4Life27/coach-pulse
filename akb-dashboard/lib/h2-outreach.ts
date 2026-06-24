@@ -14,10 +14,13 @@
 // Per eligible record, in order, exactly one of four routes:
 //   1. bad_phone_quarantine — Agent_Phone can't normalize to a US E.164
 //      number. Write Outreach_Status="Dead", do NOT text.
-//   2. prior_contact_stall — another listing already carries a non-empty
-//      Outreach_Status for the same agent phone (or this run already
-//      first-touched that phone). Write Outreach_Status="Manual Review",
-//      do NOT text — a human decides whether to multi-touch.
+//   2. prior_contact_stall — another listing already carries a CONTACTED
+//      Outreach_Status (Texted/Emailed/Response Received/Negotiating/Offer
+//      Accepted/Inbound Lead) for the same agent phone, or this run already
+//      first-touched that phone. Write Outreach_Status="Manual Review", do
+//      NOT text — a human decides whether to multi-touch. Sourced-but-
+//      uncontacted siblings (Review/Parked/Dead/Manual Review/...) are NOT
+//      contact and do NOT stall a first touch (operator 2026-06-24).
 //   3. skipped — MAO_V1 is null/zero; we will not text "cash offer at $0".
 //      No write.
 //   4. first_touch — the only path that sends SMS. On send success the
@@ -42,6 +45,33 @@ export const LIVE_ACTIVE = "Active";
 
 // See deviation note above. Toggle only to restore Make's raw-match parity.
 const MATCH_NORMALIZED = true;
+
+/** Outreach_Status values that represent an ACTUAL agent touch — an outbound
+ *  we sent (Texted / Texted (Portfolio) / Emailed) or a live two-way thread
+ *  (Response Received / Negotiating / Offer Accepted / Inbound Lead). These —
+ *  and ONLY these — count as "prior contact" for the agent-dedup stall.
+ *
+ *  Sourced-but-uncontacted dispositions (Review, Parked, Manual Review,
+ *  Multi-Listing Queued, Dead, Not Contacted) are NOT contact: the agent was
+ *  never texted, so the first eligible listing for that agent must be free to
+ *  first-touch. The earlier "any non-empty status" rule stalled never-texted
+ *  agents and throttled volume (operator 2026-06-24). Opt-outs are enforced
+ *  separately and unconditionally by the Do_Not_Text gate, not by this index. */
+export const CONTACTED_OUTREACH_STATUSES: ReadonlySet<string> = new Set([
+  "Texted",
+  "Texted (Portfolio)",
+  "Emailed",
+  "Response Received",
+  "Negotiating",
+  "Offer Accepted",
+  "Inbound Lead",
+]);
+
+/** True when this listing represents a real prior touch of its agent — the
+ *  only records that seed the prior-contact dedup index. */
+export function hasContactedStatus(l: Listing): boolean {
+  return CONTACTED_OUTREACH_STATUSES.has((l.outreachStatus ?? "").trim());
+}
 
 export type H2Route =
   | "first_touch"
@@ -145,18 +175,20 @@ function phoneKey(raw: string | null | undefined): string | null {
 }
 
 /**
- * Pure: build the prior-contact index from the FULL listing set — the set
- * of agent-phone keys that already carry a non-empty Outreach_Status, each
- * mapped to one representative record (for the stall note). A record only
- * counts as prior contact for OTHER records, so the candidate excludes
- * itself by id at lookup time.
+ * Pure: build the prior-contact index from the FULL listing set — the set of
+ * agent-phone keys that already carry a CONTACTED Outreach_Status (see
+ * CONTACTED_OUTREACH_STATUSES — an actual outbound touch or live thread, NOT
+ * a sourced-but-uncontacted Review/Parked/Dead sibling), each mapped to one
+ * representative record (for the stall note). A record only counts as prior
+ * contact for OTHER records, so the candidate excludes itself by id at lookup
+ * time.
  */
 export function buildPriorContactIndex(
   listings: Listing[],
 ): Map<string, { recordId: string; address: string; status: string }> {
   const index = new Map<string, { recordId: string; address: string; status: string }>();
   for (const l of listings) {
-    if (outreachStatusEmpty(l)) continue;
+    if (!hasContactedStatus(l)) continue;
     const key = phoneKey(l.agentPhone);
     if (!key) continue;
     if (!index.has(key)) {
