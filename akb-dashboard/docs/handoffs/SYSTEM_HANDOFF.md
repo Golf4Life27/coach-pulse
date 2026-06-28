@@ -168,7 +168,10 @@ turnkey rental, fabricated single numbers on records nobody walked. Stop pretend
 ### Two gates this method puts on offer-readiness
 
 - **No autonomous send on a record with zero DD answers parsed.** The first agent text
-  is the door-opener (65% of list, conversational). A *committed* offer requires the
+  is the door-opener — a conversational opener that is **VALUE-anchored** (ARV `$/sqft`
+  × sqft × buy-box − rehab − fee) **or it HOLDS** for review; it is **never** a fraction
+  of the seller's list price (the 65%-of-list rule was retired 2026-06-28 after the
+  Blackmoor $84.5k over-offer — see INVARIANTS §2). A *committed* offer requires the
   DD-rehab loop has been at least begun — text 2 sent, an answer parsed.
 - **No contract-stage offer (above the door-opener) without a rehab band narrowed by
   DD or a walkthrough.** The vision number alone does not authorize a contract price.

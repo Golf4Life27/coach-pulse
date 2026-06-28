@@ -191,9 +191,9 @@ These do not change without a Bible amendment.
 | **Wholesale fee — current floor (on-market)** | **$5K/deal** (operationally locked 2026-06-03, Spine `rec937cFJthvCZzBM` / reconciliation `rec6e6hYLuOpaLANf`; `DEFAULT_WHOLESALE_FEE` in `lib/pre-contract-math.ts`) |
 | Wholesale fee — efficiency target | **$10K+** as build efficiency grows (operational lift, not a Bible change) |
 | Wholesale fee — off-market / tax-delinquent / land | **materially higher** than the on-market default (deal-type-specific; quantify when those crawler sources land live) |
-| MAO discipline | 65% ARV − rehab − wholesale fee (V2.1) |
+| Contract MAO discipline | Two lanes, both → `Your_MAO_V21`. **Flipper:** 70% rule — `ARV×0.70 − rehab − closing(1.5%) − fee` (`lib/pricing/mao-flip.ts`, no list-price input). **Landlord:** cap-rate V2.1 — `(rent − taxes) ÷ cap`. (Was "65% ARV − rehab − fee"; corrected 2026-06-28.) |
 | Buyer cap rates | TX 8% / TN 10% / MI 9% / Default 9% (env-overridable) |
-| Cadence | door-opener at 65% of list; price-drop = re-engagement (not first contact) — INV-030 |
+| Cadence | door-opener is **value-anchored** (`ARV $/sqft × sqft × buy-box − rehab − fee`) **or HOLDS for review** — never a fraction of list (65%-of-list retired 2026-06-28 after the Blackmoor $84.5k over-offer; INVARIANTS §2). Price-drop = re-engagement (not first contact) — INV-030 |
 | Crawler 2.0 unlock | $40K/mo net × 3 consecutive months (Bible §1.2) |
 | Dream Phase unlock | operator hours < 15h/wk |
 
