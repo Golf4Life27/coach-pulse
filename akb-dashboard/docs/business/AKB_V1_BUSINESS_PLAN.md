@@ -26,14 +26,21 @@
   price* (a $84.5k text on a ~$40k house). That is fixed — offers are now
   value-anchored or the record HOLDs. (PR #46, awaiting merge.)
 - **What it can make (Detroit-Michigan, sourced):**
-  - **Retire-a-second-income milestone (~1 deal/month):** ~$60K–$120K/yr —
-    *reachable in the first 12–18 months of going live.*
-  - **Solo at full close-capacity (4–8 deals/mo):** ~$250K–$700K/yr.
-  - **Scaled (team + off-market volume + compliant multi-channel):** $1M+/yr —
-    real, but a *team* business, not solo.
+  - **Operator's stated milestone — $30K/month** (~2–6 deals/mo by fee mix):
+    replaces both incomes + the stress. *Gated by going live + the first deals,
+    NOT by the operator's capacity.*
+  - **Structural ceiling with the automation as the team** (the right benchmark —
+    a *teamed* op, not a manual solo): **~15–30 deals/mo**, well past $30K/mo,
+    once per-deal human time is minimized. Binding variable = the operator's
+    irreducible minutes per deal (unmeasured until the first close — §7b).
+  - **"Unlimited" (the end goal):** large and expandable (more markets + scaled
+    compliant outreach + fully-removed per-deal touch). Real ceilings exist
+    (market size, compliance, irreducible decisions) but are high enough that a
+    fixed target is, as the operator put it, beside the point.
 - **The two hard truths** (Section 7): outreach is legally and technically
-  capped (TCPA + carrier 10DLC rules), and a solo can only *close* so many
-  deals/month. Both are manageable; neither is optional to plan for.
+  capped (TCPA + carrier 10DLC rules), and the operator's per-deal time sets a
+  **climbing** throughput ceiling (§7b — *not* the manual-solo 4–8; the
+  automation is the team). Both are manageable; neither is optional to plan for.
 - **The single biggest revenue lever** (Section 8): **off-market / public-records
   acquisition.** It roughly *doubles the fee per deal* ($5–10K → $15–20K) and
   runs on **free county data** the existing engine can ingest.
@@ -133,11 +140,10 @@ not lead volume.**
 
 | Tier | Deals | Fee assumption | Gross/yr | What it assumes |
 |---|---|---|---|---|
-| **Year 1 — go-live + ramp** | 3–6 total | $5–10K | **$20K–$50K** | live mid-year; 10DLC trust-score ramps caps up over time; seeding coverage grows; learning to close. Matches the industry "executing beginner" band. |
-| **Retire-income milestone** | ~1/mo (~12/yr) | $5–10K (off-market lifts it) | **$60K–$120K** | system live + funnel feeding + operator closing steadily. *Low end* of an established solo — very achievable. |
-| **Base — solo, automated funnel** | 2–4/mo (24–48/yr) | $5–15K blend | **$150K–$350K** | the system keeps the close-pipeline permanently full; operator closes steadily; some off-market mix. |
-| **Upside — solo at close-capacity** | 5–8/mo (60–96/yr) | $5–15K blend | **$400K–$800K** | off-market volume feeding; operator at personal close-capacity, possibly one dispo helper. The solo ceiling. |
-| **Scaled — team business** | 10+/mo | $10–20K (off-market) | **$1M+** | delegated acquisition/close, off-market at volume, vetted multi-brand 10DLC to clear carrier caps. Not solo. |
+| **Year 1 — go-live + ramp** | 3–6 total (yr) | $5–10K | **$20K–$50K** | live mid-year; per-deal human time is HIGH at first (low trust in gates + dispo/contract still manual); learning to close. Matches the industry "executing beginner" band. |
+| **$30K/mo — stress-gone (operator target)** | 2–6/mo | $5–15K blend | **~$360K** | system live + funnel feeding + first deals proven. **Gated by go-live, not by capacity** — below the structural ceiling. |
+| **Structural ceiling — automation as the team** | 15–30/mo | $10–20K (off-market) | **$1.8M–$5M+** | the *destination*: per-deal human touch minimized (dispo + contract + advanced-nego automated), compliant outreach scaled (vetted 10DLC), trust built. NOT a year-1–2 projection — what the system is *built toward*. Arithmetic of the operator's own "automation = team" model; gated by finishing the de-bottleneck builds (§7b). |
+| **"Unlimited" (end goal)** | + new markets | — | higher | extend by adding markets + scaling compliant outreach. Real ceilings (market size, compliance, irreducible decisions/signatures) exist but are high enough that a fixed target is beside the point. |
 
 **Net, not gross:** subtract ~$2–3K/deal acquisition + ~$12–18K/yr fixed tools.
 Net per deal ≈ **$3–7K**. Retire-income tier ≈ **$50K–$90K net**; upside solo ≈
@@ -209,14 +215,36 @@ Good news: at *solo* deal volume (~3.6K contacts/mo) you are **far under** the
 carrier cap — compliance is about *consent and registration*, not raw throughput,
 until you scale to a team.
 
-### 7b. The operator's close-capacity is the near-term ceiling
+### 7b. The operator's close-capacity — a climbing dial, not a fixed ceiling
 
-The operator chose to keep negotiation/signature/money manual. So solo
-throughput caps at **~4–8 deals/month** (negotiate + DD + dispo each). The
-automated funnel can *over-supply* qualified deals; the limit is how many the
-operator can personally close. **Past that ceiling = delegate the close (an
-acquisitions/dispo helper) or automate more of the negotiation.** This is the
-fork between the "$250–700K solo" tier and the "$1M+ team" tier.
+**CORRECTION (operator, 2026-06-28):** an earlier draft capped solo throughput
+at 4–8 deals/month. That is a *manual* solo wholesaler's plateau — they
+personally do acquisition + negotiation + diligence + disposition for every
+deal. It does **not** apply here: **the automation IS the team** (acquisition,
+pricing, outreach, triage, underwriting, and — once built — disposition). The
+right benchmark is a *teamed* operation: **10–30+ deals/month.**
+
+The real ceiling is set by the operator's **irreducible time per deal** — the
+by-design-human parts: a go/no-go decision, the hard negotiation moments
+auto-replies can't handle, signing the contract + assignment, releasing money.
+A clean deal ≈ 30–45 min; a complex (creative/contested) one ≈ a few hours. At
+~1–2 hr/deal and 20–30 focused hr/week that is **~15–30 deals/month**, not 4–8.
+
+**CRITICAL UNKNOWN:** the operator has not closed a deal yet, so real per-deal
+time is unmeasured — the first deals measure it. Expect it **HIGH at first**
+(low trust in the gates + dispo/contract automation incomplete → month one may
+genuinely feel like 4–8) and **falling** as (a) the automation removes the
+operator's per-deal touch and (b) trust in the now-correct math grows. The
+ceiling is a **dial that turns up as the system earns trust** — which is exactly
+the 99%-autonomous goal, expressed as throughput.
+
+**Therefore the highest-leverage builds are the ones that cut the operator's
+per-deal minutes:** disposition automation (auto-match each contract to the
+buyer list + blast — removes the biggest time-sink), contract auto-generation +
+e-sign (signing = one tap), and advanced auto-negotiation (operator touches only
+the moments that need a human). These directly raise the ceiling toward the
+operator's "unlimited" goal. Delegating to humans is a *later* option, not the
+only path past 4–8 — the automation is the team.
 
 ### 7c. Other real risks (named, not hidden)
 - **Regulatory drift:** several states restrict/license wholesaling; **verify
@@ -273,20 +301,31 @@ population first. Each new source compounds because it feeds the same engine.
 
 ---
 
-## 9. The ask / next steps (in order)
+## 9. The ask / next steps
+
+**Bootstrap reality ($0 starting budget):** zero budget makes **free public
+records the launch lane** — cheapest acquisition *and* highest fee. Not literally
+$0: budget **~$100–300/mo** (cheapest data/skip tier + metered SMS + API calls);
+the first assignment ($5–15K) funds the climb. *Action: verify current Firecrawl
+/ RentCast / ATTOM balances before turning up intake volume.*
 
 1. **Merge PR #46** (correct math live). *Operator action.*
-2. **Stand up 10DLC + consent/multi-channel** (the compliance prerequisite).
-   *Needs operator: EIN, business registration, channel choice.*
+2. **Stand up 10DLC** (EIN in hand ✓) + a consent/multi-channel first touch — the
+   compliance prerequisite to any live texting (§7a).
 3. **Flip intake + autoseed live; run the HOLD instrument on fresh data** →
-   replace every guessed number in this plan with real ones.
-4. **First metered live send** (5/run) → first replies → first deal.
-5. **Build off-market adapter #1** (absentee + high-equity) → fee uplift.
-6. **Add county adapters** (Wayne/Oakland/Macomb) → volume.
-7. **Decide the fork** (Section 7b): stay solo at the $250–700K ceiling, or add a
-   closer/dispo helper toward $1M+.
+   replace every guessed number here with real ones.
+4. **Off-market adapter #1 — absentee + high-equity, then free county records**
+   (Wayne/Oakland/Macomb): the zero-budget, highest-fee launch lane.
+5. **First metered live send** (5/run) → first replies → **first deal** →
+   *measure the operator's real per-deal time* (the number that sets the whole
+   ceiling, §7b).
+6. **The de-bottleneck builds — the path to $30K/mo and past it** (each removes
+   operator minutes per deal): **disposition automation** (auto-match each
+   contract to the buyer list + blast), **contract auto-gen + e-sign**,
+   **advanced auto-negotiation**. The automation is the team; these *are* the
+   team being built.
 
-**Inputs that would sharpen this plan** (give me these and I'll tighten the
-ranges): the second income you want to replace ($), your weekly hours available
-to *close*, your monthly marketing budget, and your business-entity/EIN status
-for 10DLC.
+**Inputs captured (2026-06-28):** EIN ✓ · target **$30K/mo** (both incomes + the
+stress) · **$0** starting budget · per-deal hours **TBD** (no deal closed yet —
+the first deals measure it). End goal explicitly **unlimited**; $30K is a
+milestone, not a cap.
