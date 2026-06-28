@@ -24,6 +24,7 @@ import { getListings } from "@/lib/airtable";
 import { audit } from "@/lib/audit-log";
 import { priceOpenerWithSeed } from "@/lib/opener-pricing";
 import { evaluateLowballEligibility } from "@/lib/lowball-eligibility";
+import { classifyHold } from "@/lib/pricing/hold-reason";
 import { resolveCumulativeDom } from "@/lib/attom/cumulative-dom";
 import { getMarketForListing } from "@/lib/markets/registry";
 import { resolveAnchorPct } from "@/lib/markets/anchor";
@@ -124,6 +125,15 @@ export async function GET(req: Request) {
     arv_below_list: 0,
     opener_sum: 0,
     opener_n: 0,
+    // ── HOLD-reason instrument (operator volume-worry, 2026-06-28) ──
+    // Of the records that HOLD, WHY and WHO owns the next step. The headline
+    // (held_* below) answers "how much of the hold pile ever reaches my desk?"
+    by_hold_reason: { needs_seed: 0, no_market_buybox: 0, seed_dont_price: 0, cash_no_pencil: 0, operator_review: 0 } as Record<string, number>,
+    by_hold_owner: { auto_seed: 0, configure_market: 0, data_limited: 0, creative_lane: 0, operator: 0 } as Record<string, number>,
+    // System-owned = auto-seed / cached-skip (no human reaches the desk).
+    held_system_owned: 0,
+    // Needs attention = creative-lane pipeline / one-time market config / operator.
+    held_needs_attention: 0,
   };
   const rows: Array<Record<string, unknown>> = [];
   const anchorCache = new Map<string, number>();
@@ -188,6 +198,23 @@ export async function GET(req: Request) {
     const wouldSend = lowball.eligible && priced.opener != null;
     if (wouldSend) agg.would_send_aggressive++;
 
+    // HOLD-reason classification — only for actual holds (opener null).
+    const hold = classifyHold({
+      opener: priced.opener,
+      arvDistrusted: priced.arvDistrusted,
+      flooredToFallback: priced.flooredToFallback,
+      flagReseed: priced.flagReseed,
+      arvSource: pricedW.arvSource,
+      seedDontPrice: !!seed?.dontPrice,
+      marketHasBuybox: market?.buyer_params?.arv_pct_max != null,
+    });
+    if (hold.category !== "value_send") {
+      agg.by_hold_reason[hold.category] = (agg.by_hold_reason[hold.category] ?? 0) + 1;
+      agg.by_hold_owner[hold.owner] = (agg.by_hold_owner[hold.owner] ?? 0) + 1;
+      if (hold.automatable) agg.held_system_owned++;
+      else agg.held_needs_attention++;
+    }
+
     if (eligibleOnly && !lowball.eligible) continue;
     if (rows.length < sampleCap) {
       rows.push({
@@ -213,6 +240,9 @@ export async function GET(req: Request) {
         lowball_eligible: lowball.eligible,
         lowball_tier: lowball.tier,
         would_send_aggressive: wouldSend,
+        hold_reason: hold.category === "value_send" ? null : hold.category,
+        hold_owner: hold.category === "value_send" ? null : hold.owner,
+        hold_detail: hold.category === "value_send" ? null : hold.detail,
         pricer_detail: priced.detail,
         lowball_detail: lowball.detail,
       });
@@ -220,6 +250,20 @@ export async function GET(req: Request) {
   }
 
   const avgOpener = agg.opener_n > 0 ? Math.round(agg.opener_sum / agg.opener_n) : null;
+
+  // ── HOLD headline — "how much of the hold pile ever reaches my desk?" ──
+  const heldTotal = agg.held_system_owned + agg.held_needs_attention;
+  const holdHeadline = {
+    sent: agg.priced,
+    held_total: heldTotal,
+    // No human reaches the desk: the crawler seeds it (→ becomes a send) or it's a cached skip.
+    system_owned: agg.held_system_owned,
+    pct_holds_system_owned: heldTotal > 0 ? Math.round((100 * agg.held_system_owned) / heldTotal) : null,
+    // Owned elsewhere: creative/subject-to pipeline, a one-time market config, or genuine operator review.
+    needs_attention: agg.held_needs_attention,
+    by_owner: agg.by_hold_owner,
+    by_reason: agg.by_hold_reason,
+  };
 
   await audit({
     agent: "crier",
@@ -230,6 +274,7 @@ export async function GET(req: Request) {
       priced: agg.priced,
       would_send_aggressive: agg.would_send_aggressive,
       by_basis: agg.by_basis,
+      hold_headline: holdHeadline,
       avg_opener: avgOpener,
       duration_ms: Date.now() - t0,
     },
@@ -244,6 +289,7 @@ export async function GET(req: Request) {
       "crawler computes them fresh from Firecrawl + vision); DOM is exact (mls_dom_v2, relist-aware).",
     auth_kind: authKind,
     duration_ms: Date.now() - t0,
+    hold_headline: holdHeadline,
     aggregates: { ...agg, avg_opener: avgOpener },
     sample_rows: rows,
   });
