@@ -15,6 +15,39 @@
 
 ---
 
+## ⚠️ COURSE CORRECTIONS (2026-06-28) — read these; they supersede the sections below
+
+Operator steers + a build, captured here so the body's first-draft framing doesn't
+mislead. Full detail in the Maverick spine (`recFNOieWmB7WnZED`, `recmKypJSxmsvBTlr`,
+`recHWvQU450AAbK6U`).
+
+1. **NATIONAL, not Detroit.** The goal is a national sweep of all wholesale-friendly
+   markets; Detroit was only the first one configured. The body's "Detroit-Michigan"
+   unit economics are *one market's* numbers — national fees skew higher (NC/GA-type
+   metros $20k+). **Shipped:** a national opener buy-box now prices **~34 disclosure
+   states day-one** (`openerArvPctMax`, default 0.70).
+2. **Non-disclosure states are the real wall.** ~10 states (TX, UT, ID, KS, LA, MS, MT,
+   NM, WY, AK) don't make sale prices public, so sold-comp data (→ ARV → the offer)
+   can't be confirmed real. They **HOLD** until a verified per-state comp source is
+   proven. **Texas** is the painful one (big market) — candidate source PropStream/MLS;
+   spot-check before integrating. The precise contract lane stays disciplined nationwide.
+3. **On-market (listing agents) FIRST.** Prove the math + that we can dispo a deal on
+   active listings before diverting to off-market. Off-market is the parallel fee-upgrade,
+   not the launch lane.
+4. **The agent channel is LOW spam-risk.** Texting *listing agents about their own active
+   listings* is a B2B inquiry to people who publish their number to be contacted — not
+   cold-consumer blasting. The heavy TCPA-consent exposure in §7a applies to **cold
+   homeowner** texting (the off-market lane), **not** this channel. What still applies to
+   on-market: **10DLC carrier registration** (a throughput/registration requirement),
+   not a consent landmine. This is the operator's low-risk, high-volume launch lane.
+5. **Close-capacity is a climbing dial, not 4–8/mo** (see §7b, already corrected): the
+   automation IS the team; throughput is bounded by the operator's irreducible per-deal
+   time (unmeasured until the first close), falling as the de-bottleneck builds land.
+   **Operator target: $30K/month** (~2–6 deals; gated by go-live, not capacity), end
+   goal explicitly *unlimited*.
+
+---
+
 ## 1. Executive summary
 
 - **Build status:** the end-to-end pipeline (find → verify → price → qualify →
