@@ -70,7 +70,7 @@ import { decideAutoSeed, runAutoSeed } from "@/lib/crawler/auto-seed";
 import { listArvSeededZips, getZipArvSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import { resolveSeedBudget } from "@/lib/spend/daily-budget";
 import { priceOpenerWithSeed } from "@/lib/opener-pricing";
-import { getMarketForListing } from "@/lib/markets/registry";
+import { getMarketForListing, openerArvPctMax } from "@/lib/markets/registry";
 import { resolveAnchorPct } from "@/lib/markets/anchor";
 
 export const runtime = "nodejs";
@@ -1081,7 +1081,7 @@ export async function GET(req: Request) {
             storedArv: null,
             estRehabMid: null,
             sqft: c.squareFootage ?? null,
-            arvPctMax: market?.buyer_params?.arv_pct_max ?? null,
+            arvPctMax: openerArvPctMax(market, c.state),
             anchorPct,
             seed: zipSeedMap.get(zip) ?? null,
           });

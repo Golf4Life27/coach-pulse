@@ -26,7 +26,7 @@ import { priceOpenerWithSeed } from "@/lib/opener-pricing";
 import { evaluateLowballEligibility } from "@/lib/lowball-eligibility";
 import { classifyHold } from "@/lib/pricing/hold-reason";
 import { resolveCumulativeDom } from "@/lib/attom/cumulative-dom";
-import { getMarketForListing } from "@/lib/markets/registry";
+import { getMarketForListing, openerArvPctMax } from "@/lib/markets/registry";
 import { resolveAnchorPct } from "@/lib/markets/anchor";
 import { getZipArvSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import {
@@ -163,7 +163,7 @@ export async function GET(req: Request) {
       estRehabMid: l.estRehabMid ?? null,
       estRehab: l.estRehab ?? null,
       sqft: l.buildingSqFt ?? null,
-      arvPctMax: market?.buyer_params?.arv_pct_max ?? null,
+      arvPctMax: openerArvPctMax(market, l.state),
       wholesaleFee: l.wholesaleFeeTarget ?? null,
       anchorPct,
       seed,
@@ -206,7 +206,7 @@ export async function GET(req: Request) {
       flagReseed: priced.flagReseed,
       arvSource: pricedW.arvSource,
       seedDontPrice: !!seed?.dontPrice,
-      marketHasBuybox: market?.buyer_params?.arv_pct_max != null,
+      marketHasBuybox: openerArvPctMax(market, l.state) != null,
     });
     if (hold.category !== "value_send") {
       agg.by_hold_reason[hold.category] = (agg.by_hold_reason[hold.category] ?? 0) + 1;

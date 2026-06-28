@@ -41,7 +41,7 @@ import { verifyListing, verifyListingByUrl, probeFirecrawlBalance } from "@/lib/
 import { checkFirecrawlBreaker, recordFirecrawlSpend, shouldHaltVerify } from "@/lib/crawler/firecrawl-circuit-breaker";
 import { runAsyncPool } from "@/lib/crawler/async-pool";
 import { priceOpenerWithSeed } from "@/lib/opener-pricing";
-import { getMarketForListing } from "@/lib/markets/registry";
+import { getMarketForListing, openerArvPctMax } from "@/lib/markets/registry";
 import { resolveAnchorPct } from "@/lib/markets/anchor";
 import { getZipArvSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import {
@@ -230,7 +230,7 @@ export async function GET(req: Request) {
         estRehabMid: l.estRehabMid ?? null,
         estRehab: l.estRehab ?? null,
         sqft: l.buildingSqFt ?? null,
-        arvPctMax: market?.buyer_params?.arv_pct_max ?? null,
+        arvPctMax: openerArvPctMax(market, l.state),
         wholesaleFee: l.wholesaleFeeTarget ?? null,
         anchorPct,
         seed,
