@@ -116,25 +116,38 @@ Review), never a crash. See §8c. `[verified — gate-runner.ts:304-311]`
 One code path for both the live intake loop and the read-only eyeball:
 `priceOpenerWithSeed` → `priceOpener` → `computeRoughOpenerCeiling`.
 
-- **ARV buy-box path:** `opener = anchor × (ARV × arv_pct_max − rehab − fee)`.
-- **Fallback:** flat **65% of list** (`FALLBACK_OPENER_PCT_OF_LIST=0.65`),
-  anchor-independent, whenever ARV is thin/absent/distrusted.
-- **Guards:** ARV-sanity (ARV < list ⇒ distrust as as-is value, drop to 65%);
-  low-opener floor (`max(30%×list, $10,000)` ⇒ route to 65%); never-over-list cap
-  (`0.90 × list`). `fee` default `DEFAULT_WHOLESALE_FEE = $5,000`.
+- **ARV buy-box path (the ONLY send basis):** `opener = anchor × (ARV × arv_pct_max
+  − rehab − fee)`. `ARV` = ZIP renovated `$/sqft` (`ZIP_ARV_Seed`) × subject sqft —
+  it prices THE house.
+- **Fallback: HOLD (operator 2026-06-28).** The flat **65%-of-list** rail is
+  **RETIRED** — it produced the 18681 Blackmoor catastrophe ($84.5k text = 0.65 ×
+  $130k list on a ~$40k house). With no trusted ARV value basis the pricer now
+  returns a **null opener** and the record routes to operator review. We never text
+  a number anchored to the seller's list price. (`computeRoughOpenerCeiling` →
+  `ceiling: null, source: "hold_no_value_basis"`; `priceOpener` →
+  `opener: null, basis: "hold_no_value_basis"`.)
+- **Guards (now HOLD, not 65%):** ARV-sanity (ARV < list ⇒ distrust as as-is value ⇒
+  HOLD, flag re-seed); low-opener floor (`max(30%×list, $10,000)` ⇒ HOLD micro-opener
+  for review); never-over-list cap (`0.90 × list` — the one place a fraction of list
+  is used, and only to *clamp down* a value-anchored opener when ARV ≫ list, never to
+  fabricate one). `fee` default `DEFAULT_WHOLESALE_FEE = $5,000`.
 - **Market config** (`markets.json`, matched by ZIP prefix then state): `detroit_mi`
   `arv_pct_max 0.6461` (zip `48`); `memphis_tn 0.7175` (zip `38`, **paused** per
-  operator — pause-enforcement location `[unknown]`); `dallas_tx 0.5883`;
-  `san_antonio_tx`/`houston_tx` have **no `arv_pct_max`** (→ always 65% fallback).
+  operator); `dallas_tx 0.5883`; `san_antonio_tx`/`houston_tx` have **no `arv_pct_max`**
+  (→ **HOLD**, no autonomous opener until a buy-box is configured).
 - **ARV seed** comes from Airtable `ZIP_ARV_Seed`; the dry-run harness mocks it
   `null`. Seeded ZIPs (Spine 6/15): `48202/48203/48205` STRONG, `48201/48204/48206`
   DONT_PRICE.
 
-**What the cohort prices to (from the 3 dry-run fixtures):** all three land at ~65%
-of list via *different* routes — no-ARV (rec00), ARV<list distrusted (rec02), buy-box
-ceiling below floor (rec07). The buy-box path rarely beats 65% here because
-`rehab + fee` eats most of `ARV × 0.6461`. **This is the evidence for the Milestone-2
-pricing decision.**
+**What the cohort prices to (new doctrine):** the 3 dry-run fixtures all **HOLD**
+via *different* routes — no-ARV (rec00), ARV<list distrusted (rec02), buy-box ceiling
+below floor (rec07) — instead of the old ~65%-of-list over-offer. Over the 81 real
+with-ARV records: **33 produce a value-anchored SEND, 48 HOLD** (they were being
+list-anchored before). Many of the 48 carry a stored ARV *below* list (contaminated
+as-is values, Hole C); the live `ZIP_ARV_Seed` path supplies clean renovated `$/sqft`
+and should lift the send rate as ZIPs seed. **Volume-recovery dials (operator's call,
+not yet built):** lower the low-opener floor to send real cheap-market numbers; add a
+market-median `$/sqft` fallback to value-anchor un-seedable ZIPs instead of holding.
 
 ---
 

@@ -6,8 +6,9 @@
 // renovated-ARV < list on a fifth of the cohort. This helper prefers the
 // renovated-comp $/sqft from ZIP_ARV_Seed (auto-seeded once per ZIP) over
 // the contaminated field, then runs the guarded per-market pricer. Stored
-// ARV is the fallback only when no seed exists yet; flat 65%-of-list is the
-// final fallback.
+// ARV is the fallback only when no seed exists yet; with NO trusted ARV the
+// pricer HOLDS for operator review (the flat 65%-of-list fallback was retired
+// 2026-06-28 — see per-market-pricer header for the Blackmoor catastrophe).
 //
 // ONE code path for both the live intake loop (opener-writes) and the
 // read-only dry-run eyeball — no parallel pricing.
@@ -70,8 +71,9 @@ export function priceOpenerWithSeed(input: OpenerWithSeedInput): OpenerWithSeedR
     arvConfidence = input.seed!.confidence === "STRONG" ? "STRONG" : "THIN";
   } else if (seedDontPrice) {
     // The ZIP was evaluated and explicitly marked do-not-price (comps too few
-    // / too noisy). Do NOT fall back to the contaminated stored ARV — go
-    // straight to the flat 65%-of-list rail (arvForPricer stays null).
+    // / too noisy). Do NOT fall back to the contaminated stored ARV — with no
+    // trusted ARV the pricer HOLDS for review (arvForPricer stays null; the
+    // old list-fraction rail is retired).
     arvSource = "none";
   } else if (pos(input.storedArv)) {
     arvForPricer = input.storedArv;
@@ -93,8 +95,7 @@ export function priceOpenerWithSeed(input: OpenerWithSeedInput): OpenerWithSeedR
   // Compact label for the Opener_Basis receipt.
   const basisLabel =
     result.cappedToList ? "capped_to_list"
-    : result.basis === "hold_no_inputs" ? "hold"
-    : result.basis === "list_fraction_65" ? "list_fraction_65"
+    : result.basis === "hold_no_value_basis" ? "hold"
     : arvSource === "seed_renovated" ? "arv_buybox_seed"
     : "arv_buybox_stored";
 

@@ -94,8 +94,10 @@ describe("dry-run-trace harness (CONVEYOR Milestone 1)", () => {
         }
       }
 
-      // ── Opener computed ──────────────────────────────────────────────
-      expect(typeof trace.opener.recomputed.opener).toBe("number");
+      // ── Opener decision computed (a number to send, OR a HOLD for review:
+      // a value-less record now HOLDS rather than list-anchoring). ──────────
+      const op = trace.opener.recomputed.opener;
+      expect(op === null || typeof op === "number").toBe(true);
       expect(trace.opener.recomputed.basisLabel.length).toBeGreaterThan(0);
       expect(trace.opener.inputs.seed).toContain("MOCKED");
 
@@ -116,24 +118,25 @@ describe("dry-run-trace harness (CONVEYOR Milestone 1)", () => {
     ) as Record<string, DryRunTrace>;
 
     // rec00 — San Antonio TX, missing Live_Status/MLS_Status. Pre-Outreach
-    // blocks on PO-01 (MLS_Status unset). No ARV → flat 65% of list.
+    // blocks on PO-01 (MLS_Status unset). No ARV → HOLD (the list-anchor is
+    // retired; OLD sent 0.65 × 179,000 = $116,350 on the seller's fantasy).
     const r00 = byId["rec00IPPd92pEKnbl"];
     expect(r00.gates[0].overall_status).toBe("fail");
     expect(r00.gates[0].stopped_by?.item_id).toBe("PO-01");
-    expect(r00.opener.recomputed.basisLabel).toBe("list_fraction_65");
-    expect(r00.opener.recomputed.opener).toBe(Math.round(179000 * 0.65)); // 116350
+    expect(r00.opener.recomputed.basisLabel).toBe("hold");
+    expect(r00.opener.recomputed.opener).toBeNull(); // was 116,350
 
-    // rec02 — Detroit, Real_ARV_Median 83,975 < list 99,900 → ARV-sanity
-    // gate distrusts it and drops to flat 65%.
+    // rec02 — Detroit, Real_ARV_Median 83,975 < list 99,900 → ARV-sanity gate
+    // distrusts it and HOLDS (OLD dropped to 0.65 × 99,900 = $64,935).
     const r02 = byId["rec02SiPx4WVUOrgW"];
     expect(r02.opener.recomputed.arvDistrusted).toBe(true);
-    expect(r02.opener.recomputed.basisLabel).toBe("list_fraction_65");
-    expect(r02.opener.recomputed.opener).toBe(Math.round(99900 * 0.65)); // 64935
+    expect(r02.opener.recomputed.basisLabel).toBe("hold");
+    expect(r02.opener.recomputed.opener).toBeNull(); // was 64,935
 
     // rec07 — Detroit, fresh verify + MLS ACTIVE → clears Pre-Outreach and
     // reaches Pre-Send, where it stops on PS-01 (ARV_Validated_At unset).
     // ARV 99,672 > list 79,000 is sane, but the buy-box ceiling pencils below
-    // the low-opener floor → routed to flat 65% ($51,350).
+    // the low-opener floor → HOLD for review (OLD routed to 0.65 × list).
     const r07 = byId["rec07YAC9KOwr6iZv"];
     expect(r07.gates[0].overall_status).toBe("pass");
     expect(r07.gates[1].gate_id).toBe("pre_send");
@@ -141,6 +144,6 @@ describe("dry-run-trace harness (CONVEYOR Milestone 1)", () => {
     expect(r07.gates[1].overall_status).toBe("fail");
     expect(r07.gates[1].stopped_by?.item_id).toBe("PS-01");
     expect(r07.opener.recomputed.flooredToFallback).toBe(true);
-    expect(r07.opener.recomputed.opener).toBe(Math.round(79000 * 0.65)); // 51350
+    expect(r07.opener.recomputed.opener).toBeNull(); // was 51,350
   });
 });

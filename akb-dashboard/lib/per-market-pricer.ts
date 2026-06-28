@@ -1,33 +1,32 @@
-// Per-market rough-opener pricer (Maverick 2026-06-14, national-crawler
-// build — HALF 1). @agent: appraiser/crier
+// Per-market rough-opener pricer (Maverick 2026-06-14; LIST-ANCHOR REMOVED
+// 2026-06-28, operator ruling). @agent: appraiser/crier
 //
-// THE COMPOSITION POINT. Produces a conservative opener number for ANY
-// market, at crawl volume, by routing through the rails already ruled on —
-// no parallel pricing engine:
+// THE COMPOSITION POINT. Produces a conservative, VALUE-ANCHORED opener for
+// any market at crawl volume, by routing through the rough ceiling:
 //
 //   computeRoughOpenerCeiling (lib/rough-opener-ceiling)
-//     → buy-box ARV path:  anchor × (ARV×buybox − rehab − fee)
-//     → thin/no-ARV path:   FLAT 65%-of-list (anchor-INDEPENDENT)
+//     → buy-box ARV path:  anchor × (ARV×buybox − rehab − fee)   [SEND]
+//     → no trusted ARV basis:  NULL ceiling                       [HOLD]
 //
-// RULING #3 (Maverick 2026-06-14): in the thin-data / no-ARV case the SENT
-// opener — the number the seller sees — must land at ≈65% of list. The old
-// path multiplied a 0.72 list-fraction ceiling by the 0.90 anchor (≈0.65),
-// which only holds while the anchor is 0.90; a calibrated-down market would
-// drift to 57%. So the fallback here is a FLAT 65% of list, applied AFTER
-// (independent of) the anchor. The anchor governs only the ARV buy-box
-// opener, where it is a fraction of the penciling ceiling.
+// ── THE LIST-FRACTION FALLBACK IS GONE (operator 2026-06-28) ──────────────
+// The 2026-06-14 ruling #3 ("the thin/no-ARV opener lands at flat 65% of
+// list") is RETIRED. It produced the 18681 Blackmoor catastrophe — a $84.5k
+// text = 0.65 × $130k list on a house worth ~$40k. A sight-unseen list
+// fraction is anchored to the seller's asking fantasy and routinely over-
+// offers 2–3× on distressed/overpriced stock. So when the pricer has no
+// trusted ARV value basis, it HOLDS (opener: null) and the record routes to
+// operator review. We never text a list-anchored number again. The opener
+// is the value-anchored number or it is nothing.
 //
-// NATIONAL DOCTRINE (decoupled from the old seeded-median "priceable"
-// gate): the fallback opener requires only a list price — a brand-new,
-// un-seeded market produces its conservative opener on day one. The SEND
-// decision (auto-promote vs Review, per-market) lives downstream, NOT here.
-// The ARV buy-box path needs only a sourced arv_pct_max + an ARV (stored or
-// auto-seeded) — it does NOT need a buyer median. This pricer never HOLDs as
-// long as a list price exists; "never hold — always produce a number."
+// ARV is the ZIP renovated $/sqft (ZIP_ARV_Seed) × the SUBJECT's sqft — it
+// prices THE house. A ZIP gets seeded once (one paid comp pull, budget-
+// governed); after that every listing in the ZIP prices for free. An un-
+// seedable ZIP (no/too-few/too-noisy comps → DONT_PRICE) HOLDS rather than
+// guess off list.
 //
-// COST: this is napkin math over already-stored / ZIP-seeded comp data — no
-// paid call in the hot path. Driveway-rigor (precise contract MAO) lives in
-// the reply-triggered re-price, never here.
+// COST: napkin math over already-stored / ZIP-seeded comp data — no paid
+// call in the hot path. Driveway-rigor (precise contract MAO) lives in the
+// reply-triggered re-price, never here.
 //
 // Pure. No I/O.
 
@@ -37,31 +36,27 @@ import {
 } from "@/lib/rough-opener-ceiling";
 import { anchoredOpenerGate } from "@/lib/h2-outreach/your-mao-opener-gate";
 
-/** The flat list fraction the SENT opener lands on when comps are thin or
- *  absent (Maverick ruling #3 — the seller-facing number ≈65% of list).
- *  Anchor-independent. Env-tunable; clamped to a sane (0,1]. */
-export const FALLBACK_OPENER_PCT_OF_LIST = (() => {
-  const raw = Number(process.env.FALLBACK_OPENER_PCT_OF_LIST);
-  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.65;
-})();
-
 // ── GUARDS (Maverick 2026-06-14, full-437 dry-run outlier review) ──
-// The full-437 dry-run exposed three holes the old door-opener guarded and
-// the new pricer had dropped. These restore them, all pure:
+// The full-437 dry-run exposed holes the old door-opener guarded. These
+// remain, all pure — but their fall-through is now a HOLD, never a list
+// fraction:
 //
 //   HOLE A — over-list: a garbage-high stored ARV produced an opener ABOVE
-//     asking ($87,891 on a $47,900 list). NEVER-OVER-LIST CAP fixes it.
-//   HOLE B — micro-openers: a tiny-but-positive buy-box ceiling produced
-//     insulting numbers ($115 on a $35k house). LOW-OPENER FLOOR routes
-//     sub-floor buy-box openers to the clean 65% rail instead of sending a
-//     broken-looking number.
+//     asking. NEVER-OVER-LIST CAP clamps the value-anchored opener down to a
+//     fraction of list (only ever bites when ARV ≫ list — a deep-discount
+//     listing, so the clamp is safe). Flags re-seed on low-confidence ARVs.
+//   HOLE B — micro-openers: a tiny-but-positive buy-box ceiling produced an
+//     insulting/broken-looking number. LOW-OPENER FLOOR routes sub-floor
+//     buy-box openers to a HOLD (operator review), not a list-anchored rail.
 //   HOLE C — contaminated stored ARV: Real_ARV_Median often holds AS-IS
-//     value (wrong basis), so renovated-ARV < list. ARV-SANITY GATE
-//     distrusts any ARV below list, drops to the 65% fallback, and flags the
-//     record for re-seed (auto-seed replaces it with renovated-comp $/sqft).
+//     value (wrong basis), so renovated-ARV < list. ARV-SANITY GATE distrusts
+//     any ARV below list and HOLDS (flags re-seed) instead of list-anchoring.
 
 /** Low-opener floor: a buy-box opener below `max(PCT×list, USD)` is treated
- *  as broken-looking and routed to the flat 65% rail. Env-tunable. */
+ *  as broken-looking and HELD for operator review. Env-tunable.
+ *  (NOTE: this now HOLDS rather than routing to a 65%-of-list rail. If cheap-
+ *  market volume suffers, lower this to let real low value-anchored openers
+ *  send — an operator dial, not a silent default change.) */
 export const LOW_OPENER_FLOOR_PCT_OF_LIST = (() => {
   const raw = Number(process.env.LOW_OPENER_FLOOR_PCT_OF_LIST);
   return Number.isFinite(raw) && raw > 0 && raw < 1 ? raw : 0.30;
@@ -80,16 +75,15 @@ export const NEVER_OVER_LIST_PCT = (() => {
 })();
 
 export type OpenerBasis =
-  | "arv_buybox"        // anchor × (ARV × buy-box − rehab − fee)
-  | "list_fraction_65"  // flat 65%-of-list fallback (thin/no ARV)
-  | "hold_no_inputs";   // no ARV and no list — genuinely nothing
+  | "arv_buybox"          // anchor × (ARV × buy-box − rehab − fee) — the only SEND basis
+  | "hold_no_value_basis"; // no trusted ARV basis (or a guard tripped) → HOLD, never list-anchor
 
 /** ARV input confidence, carried for the receipt + the Review-tiering.
  *  STRONG/THIN come from the comp count upstream (≥5 clean comps = STRONG;
  *  <5 = THIN, and the upstream ARV should already be biased to the low end
  *  of the comp range, not the median). STORED = a pre-computed Real_ARV from
- *  the appraiser station (confidence not re-derived here). */
-export type OpenerConfidence = "STRONG" | "THIN" | "STORED" | "FALLBACK" | "NONE";
+ *  the appraiser station (confidence not re-derived here). NONE = held. */
+export type OpenerConfidence = "STRONG" | "THIN" | "STORED" | "NONE";
 
 export interface PricerInput {
   listPrice?: number | null;
@@ -99,7 +93,7 @@ export interface PricerInput {
   realArvMedian?: number | null;
   estRehabMid?: number | null;
   estRehab?: number | null;
-  /** Sourced market buy-box (markets.json arv_pct_max). Absent → fallback. */
+  /** Sourced market buy-box (markets.json arv_pct_max). Absent → HOLD. */
   arvPctMax?: number | null;
   wholesaleFee?: number | null;
   /** Effective per-market anchor (lib/markets/anchor.resolveAnchorPct).
@@ -111,95 +105,88 @@ export interface PricerInput {
 }
 
 export interface PricerResult {
-  /** The SENT opener — the number the seller would see. Null only when there
-   *  is no ARV AND no list price (genuinely nothing to price). */
+  /** The SENT opener — the number the seller would see. Null whenever there
+   *  is no trusted ARV value basis (→ the record HOLDS for review). */
   opener: number | null;
   basis: OpenerBasis;
   confidence: OpenerConfidence;
-  /** The rough ceiling receipt (buy-box path) — null/echoed for fallback. */
+  /** The rough ceiling receipt (buy-box path) — null on a hold. */
   ceiling: number | null;
   ceilingSource: RoughCeilingResult["source"];
   arvUsed: number | null;
   rehabUsed: number | null;
-  /** Anchor actually applied (buy-box path only; null on the flat fallback). */
+  /** Anchor actually applied (buy-box path only; null on a hold). */
   anchorPct: number | null;
   /** ARV-SANITY GATE (Hole C): stored ARV was below list → distrusted as
-   *  wrong-basis (as-is) value and dropped; the opener used the 65% rail. */
+   *  wrong-basis (as-is) value and dropped; the record HELD (no list anchor). */
   arvDistrusted: boolean;
   /** This record's ARV is BAD and a re-seed could fix it — a low-confidence
    *  (THIN/STORED/unlabeled) ARV that tripped a guard (below list, or so high
    *  the opener hit the over-list cap). A STRONG renovated seed that trips a
    *  guard is NOT flagged: the seed is trusted, the listing is just deep-
-   *  discount (ARV≫list) or over-ARV (ARV<list). "seed is bad", not "guard
-   *  fired" — the guard-fired signals are cappedToList / arvDistrusted. */
+   *  discount (ARV≫list) or over-ARV (ARV<list). */
   flagReseed: boolean;
-  /** LOW-OPENER FLOOR (Hole B): a buy-box opener fell below the floor and
-   *  was routed to the 65% rail rather than sending a micro-number. */
+  /** LOW-OPENER FLOOR (Hole B): a buy-box opener fell below the floor and was
+   *  HELD for operator review rather than sending a micro-number. */
   flooredToFallback: boolean;
-  /** NEVER-OVER-LIST CAP (Hole A): the opener exceeded list and was clamped
-   *  down to the list price. */
+  /** NEVER-OVER-LIST CAP (Hole A): the value-anchored opener exceeded list and
+   *  was clamped down to a fraction of list (safe — only bites when ARV≫list). */
   cappedToList: boolean;
   detail: string;
 }
 
 const pos = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v > 0;
 
-/** Flat 65%-of-list fallback result (anchor-independent). Shared by the
- *  thin/no-ARV path AND the floor/sanity fall-throughs. */
-function fallbackResult(
-  list: number,
+/** HOLD result — no trusted value basis (or a guard tripped), so NO autonomous
+ *  opener. The opener is null and the record routes to operator review. This
+ *  REPLACES the retired flat-65%-of-list fallback (operator 2026-06-28): we
+ *  never text a number anchored to the seller's list price. */
+function holdResult(
   ceilingSource: RoughCeilingResult["source"],
   detail: string,
+  extra?: Partial<Pick<PricerResult, "arvDistrusted" | "flagReseed" | "flooredToFallback">>,
 ): PricerResult {
   return {
-    opener: Math.round(list * FALLBACK_OPENER_PCT_OF_LIST),
-    basis: "list_fraction_65",
-    confidence: "FALLBACK",
+    opener: null,
+    basis: "hold_no_value_basis",
+    confidence: "NONE",
     ceiling: null,
     ceilingSource,
     arvUsed: null,
     rehabUsed: null,
     anchorPct: null,
-    arvDistrusted: false,
-    flagReseed: false,
-    flooredToFallback: false,
+    arvDistrusted: extra?.arvDistrusted ?? false,
+    flagReseed: extra?.flagReseed ?? false,
+    flooredToFallback: extra?.flooredToFallback ?? false,
     cappedToList: false,
     detail,
   };
 }
 
-/** Pure: produce a conservative, GUARDED opener for a single listing.
- *  Guard order: ARV-sanity gate → base price → low-opener floor → over-list
- *  cap. A broken-looking number (over list, or a sub-floor micro-opener)
- *  never leaves this function. */
+/** Pure: produce a conservative, GUARDED, VALUE-ANCHORED opener for a single
+ *  listing — or a HOLD. Guard order: ARV-sanity gate → base price → low-opener
+ *  floor → over-list cap. A broken-looking number (over list, a sub-floor
+ *  micro-opener, or a no-value-basis record) never sends — it HOLDS. */
 export function priceOpener(input: PricerInput): PricerResult {
   const list = pos(input.listPrice) ? input.listPrice : null;
   const rawArv = pos(input.realArvMedian) ? input.realArvMedian : null;
 
   // ── GUARD: ARV-SANITY GATE (Hole C) ── a renovated ARV below the asking
-  // price is implausible — it's as-is (wrong-basis) value. Distrust it:
-  // treat the record as no-ARV (→ 65% rail) and flag it for re-seed.
+  // price is implausible — it's as-is (wrong-basis) value. Distrust it and
+  // HOLD (we will NOT anchor to the list price). Flag re-seed when the ARV is
+  // low-confidence (a re-pull could fix it).
   const arvDistrusted = rawArv != null && list != null && rawArv < list;
-  const trustedArv = arvDistrusted ? null : rawArv;
-
   if (arvDistrusted && list != null) {
-    // A STRONG renovated seed below list is a trustworthy ARV on an over-ARV
-    // (likely overpriced) listing — re-seeding won't change it. Only flag
-    // re-seed when the ARV is low-confidence (THIN/STORED/unlabeled).
     const reseedWorthy = input.arvConfidence !== "STRONG";
-    const dropped = `dropped to flat ${Math.round(FALLBACK_OPENER_PCT_OF_LIST * 100)}% of list = $${Math.round(list * FALLBACK_OPENER_PCT_OF_LIST).toLocaleString()}`;
-    const r = fallbackResult(
-      list,
-      "list_fraction_no_arv",
-      `renovated ARV $${rawArv!.toLocaleString()} < list $${list.toLocaleString()} — distrusted as wrong-basis (as-is) value; ${dropped}` +
-        (reseedWorthy
-          ? `, flagged for re-seed`
-          : ` (seed STRONG — listing looks over-ARV, not a bad seed; not re-seeded)`),
+    return holdResult(
+      "hold_no_value_basis",
+      `renovated ARV $${rawArv!.toLocaleString()} < list $${list.toLocaleString()} — distrusted as wrong-basis (as-is) value; ` +
+        `HELD for operator review (never list-anchored)` +
+        (reseedWorthy ? `, flagged for re-seed` : ` (seed STRONG — listing looks over-ARV, not a bad seed; not re-seeded)`),
+      { arvDistrusted: true, flagReseed: reseedWorthy },
     );
-    r.arvDistrusted = true;
-    r.flagReseed = reseedWorthy;
-    return applyOverListCap(r, list);
   }
+  const trustedArv = arvDistrusted ? null : rawArv;
 
   const rough = computeRoughOpenerCeiling({
     realArvMedian: trustedArv,
@@ -210,7 +197,8 @@ export function priceOpener(input: PricerInput): PricerResult {
     wholesaleFee: input.wholesaleFee ?? null,
   });
 
-  // ── BUY-BOX ARV PATH ── ceiling from a trusted ARV + sourced buy-box.
+  // ── BUY-BOX ARV PATH ── the ONLY path that produces a sent opener. Ceiling
+  // from a trusted ARV + sourced buy-box.
   if (rough.source === "rough_buybox_arv" || rough.source === "rough_buybox_arv_placeholder_rehab") {
     const gate = anchoredOpenerGate({ ceiling: rough.ceiling, anchorPct: input.anchorPct ?? null, priceable: true });
     const confidence: OpenerConfidence =
@@ -220,20 +208,19 @@ export function priceOpener(input: PricerInput): PricerResult {
 
     if (gate.ok && gate.opener != null) {
       // ── GUARD: LOW-OPENER FLOOR (Hole B) ── a tiny-but-positive ceiling
-      // yields a broken-looking micro-opener. Below max(PCT×list, USD) →
-      // route to the clean 65% rail instead of sending it.
+      // yields a broken-looking micro-opener. Below max(PCT×list, USD) → HOLD
+      // for operator review instead of sending it (and instead of the retired
+      // list-fraction rail).
       if (list != null) {
         const floor = Math.max(LOW_OPENER_FLOOR_PCT_OF_LIST * list, LOW_OPENER_FLOOR_USD);
         if (gate.opener < floor) {
-          const r = fallbackResult(
-            list,
+          return holdResult(
             rough.source,
             `buy-box opener $${gate.opener.toLocaleString()} below floor $${Math.round(floor).toLocaleString()} ` +
               `(max ${Math.round(LOW_OPENER_FLOOR_PCT_OF_LIST * 100)}%×list, $${LOW_OPENER_FLOOR_USD.toLocaleString()}) — ` +
-              `micro-opener suppressed, routed to flat ${Math.round(FALLBACK_OPENER_PCT_OF_LIST * 100)}% of list`,
+              `micro-opener suppressed, HELD for operator review`,
+            { flooredToFallback: true },
           );
-          r.flooredToFallback = true;
-          return applyOverListCap(r, list);
         }
       }
       return applyOverListCap(
@@ -255,62 +242,41 @@ export function priceOpener(input: PricerInput): PricerResult {
         list,
       );
     }
-    // Buy-box ceiling didn't pencil (≤0) — fall to the 65% rail, never hold
-    // while a list exists.
-    if (list != null) {
-      const r = fallbackResult(
-        list,
-        rough.source,
-        `buy-box ceiling did not pencil (${gate.reason}) — fell back to flat ${Math.round(FALLBACK_OPENER_PCT_OF_LIST * 100)}% of list`,
-      );
-      return applyOverListCap(r, list);
-    }
-    return {
-      opener: null, basis: "hold_no_inputs", confidence: "NONE",
-      ceiling: rough.ceiling, ceilingSource: rough.source, arvUsed: rough.arvUsed, rehabUsed: rough.rehabUsed,
-      anchorPct: null, arvDistrusted: false, flagReseed: false, flooredToFallback: false, cappedToList: false,
-      detail: `buy-box ceiling did not pencil (${gate.reason}) and no list price — opener holds`,
-    };
-  }
-
-  // ── FLAT 65%-OF-LIST FALLBACK ── thin/no (trusted) ARV.
-  if (list != null) {
-    return fallbackResult(
-      list,
+    // Buy-box ceiling did not pencil (≤0 — rehab ate the value) → HOLD. A non-
+    // deal correctly holds; we never paper over it with a list fraction.
+    return holdResult(
       rough.source,
-      `flat ${Math.round(FALLBACK_OPENER_PCT_OF_LIST * 100)}% of list $${list.toLocaleString()} ` +
-        `= $${Math.round(list * FALLBACK_OPENER_PCT_OF_LIST).toLocaleString()} (thin/no ARV — conservative, anchor-independent)`,
+      `buy-box ceiling did not pencil (${gate.reason}) — HELD for operator review (rehab eats the buy-box; never list-anchored)`,
     );
   }
 
-  // No ARV and no list — the rare genuine hold.
-  return {
-    opener: null, basis: "hold_no_inputs", confidence: "NONE",
-    ceiling: null, ceilingSource: rough.source, arvUsed: null, rehabUsed: null,
-    anchorPct: null, arvDistrusted: false, flagReseed: false, flooredToFallback: false, cappedToList: false,
-    detail: "no ARV and no list price — opener cannot be computed",
-  };
+  // ── NO TRUSTED ARV VALUE BASIS ── HOLD. The retired path here was the flat
+  // 65%-of-list fallback; it is gone (operator 2026-06-28). Without a value
+  // anchor we do not text the seller a number — the record routes to review.
+  return holdResult(
+    rough.source,
+    `no trusted ARV value basis (no ZIP $/sqft seed × sqft, no sourced buy-box) — ` +
+      `HELD for operator review (the list-fraction fallback is retired; never list-anchored)`,
+  );
 }
 
-/** GUARD: NEVER-OVER-LIST CAP (Hole A). The opener can never exceed
- *  NEVER_OVER_LIST_PCT × list (0.90 — leaves negotiating room on strong
- *  deals). When the cap bites, the stored ARV was implausibly high → flag
- *  re-seed. */
+/** GUARD: NEVER-OVER-LIST CAP (Hole A). The value-anchored opener can never
+ *  exceed NEVER_OVER_LIST_PCT × list (0.90 — leaves negotiating room). The cap
+ *  only bites when the buy-box opener exceeds list, i.e. ARV ≫ list (a deep-
+ *  discount listing), so clamping to a fraction of list is safe here — it is
+ *  NOT the retired list-anchored fallback (that fired with NO value basis).
+ *  When the cap bites on a low-confidence ARV, flag re-seed. */
 function applyOverListCap(r: PricerResult, list: number | null): PricerResult {
   if (list == null || r.opener == null) return r;
   const cap = Math.round(list * NEVER_OVER_LIST_PCT);
   if (r.opener <= cap) return r;
-  // A STRONG renovated seed whose buy-box opener exceeds list is a trustworthy
-  // ARV on a deep-discount listing (ARV ≫ list) — re-seeding won't change it,
-  // so the cap firing is "guard fired" (cappedToList), NOT "seed is bad". Only
-  // a low-confidence ARV that overshoots is a genuine re-seed candidate.
   const reseedWorthy = r.confidence !== "STRONG";
   return {
     ...r,
     opener: cap,
     cappedToList: true,
     flagReseed: reseedWorthy,
-    detail: `${r.detail} | CAPPED to ${Math.round(NEVER_OVER_LIST_PCT * 100)}% of list = $${cap.toLocaleString()} (opener exceeded the cap — ` +
+    detail: `${r.detail} | CAPPED to ${Math.round(NEVER_OVER_LIST_PCT * 100)}% of list = $${cap.toLocaleString()} (value-anchored opener exceeded the cap — ` +
       (reseedWorthy
         ? `ARV implausibly high, flagged for re-seed)`
         : `deep-discount listing: renovated ARV ≫ list, seed trusted (STRONG) — capped, not re-seeded)`),
