@@ -48,6 +48,35 @@ describe("computeRoughOpenerCeiling — no-ARV fallback", () => {
   });
 });
 
+describe("computeRoughOpenerCeiling — no-ARV → buyer-median anchor (the catastrophe fix)", () => {
+  it("BLACKMOOR: no ARV, 48234 buyer-median $35k → $30k opener, NOT the $84k list-anchored bug", () => {
+    // The live failure: 18681 Blackmoor texted ≈0.65 × $130k list = ~$84.5k.
+    // With the ZIP buyer-median ($35k) as the anchor it caps at $30k.
+    const r = computeRoughOpenerCeiling({ listPrice: 130_000, buyerMedian: 35_000, arvPctMax: DETROIT });
+    expect(r.source).toBe("buyer_median_no_arv");
+    expect(r.ceiling).toBe(30_000); // 35k − 5k fee
+    // …and structurally far below what the old list-fraction would have produced.
+    expect(r.ceiling!).toBeLessThan(Math.round(130_000 * ROUGH_NOARV_CEILING_PCT)); // 93,600
+  });
+  it("buyer-median takes precedence over list — never anchors to list when a median exists", () => {
+    const r = computeRoughOpenerCeiling({ listPrice: 200_000, buyerMedian: 50_000 });
+    expect(r.source).toBe("buyer_median_no_arv");
+    expect(r.ceiling).toBe(45_000); // 50k − 5k fee, NOT 200k × 0.72
+  });
+  it("ARV still wins over buyer-median (best value data first)", () => {
+    const r = computeRoughOpenerCeiling({ realArvMedian: 100_000, buyerMedian: 35_000, arvPctMax: DETROIT });
+    expect(r.source).toBe("rough_buybox_arv_placeholder_rehab"); // ARV path, not the median
+  });
+  it("falls through to list-fraction ONLY when there is no buyer-median", () => {
+    const r = computeRoughOpenerCeiling({ listPrice: 100_000, buyerMedian: null });
+    expect(r.source).toBe("list_fraction_no_arv");
+  });
+  it("honors the fee in the median anchor and clamps to 0", () => {
+    expect(computeRoughOpenerCeiling({ buyerMedian: 50_000, wholesaleFee: 15_000 }).ceiling).toBe(35_000);
+    expect(computeRoughOpenerCeiling({ buyerMedian: 3_000, wholesaleFee: 5_000 }).ceiling).toBe(0);
+  });
+});
+
 describe("computeRoughOpenerCeiling — HOLD only when truly nothing", () => {
   it("no ARV and no list → null ceiling, hold", () => {
     const r = computeRoughOpenerCeiling({ arvPctMax: DETROIT });

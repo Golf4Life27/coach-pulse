@@ -45,16 +45,22 @@ export const ROUGH_NOARV_CEILING_PCT = (() => {
 export type RoughCeilingSource =
   | "rough_buybox_arv"             // ARV + vision rehab + market buy-box
   | "rough_buybox_arv_placeholder_rehab" // ARV present, no vision rehab → placeholder
-  | "list_fraction_no_arv"         // no ARV → conservative list fraction
-  | "hold_no_inputs";              // no ARV and no list → genuinely nothing
+  | "buyer_median_no_arv"          // no ARV → free ZIP buyer-median anchor (VALUE, not list)
+  | "list_fraction_no_arv"         // no ARV AND no buyer-median → last-resort list fraction
+  | "hold_no_inputs";              // no inputs at all → genuinely nothing
 
 export interface RoughCeilingInput {
   realArvMedian?: number | null;
   estRehabMid?: number | null;
   estRehab?: number | null;
   listPrice?: number | null;
+  /** Free per-ZIP acquisition median (Buyer_Median_ZIP, track-aware). When ARV
+   *  is absent, the opener anchors to THIS (value) − fee — NEVER the seller's
+   *  list price. Null → fall back to the conservative list fraction. This is
+   *  the fix for the list-anchored catastrophe (operator 2026-06-26). */
+  buyerMedian?: number | null;
   /** Market buy-box ARV%Max (e.g. Detroit 0.6461). Required for the
-   *  buy-box path; absent → the list-fraction fallback. */
+   *  buy-box path; absent → the buyer-median / list-fraction fallback. */
   arvPctMax?: number | null;
   wholesaleFee?: number | null;
 }
@@ -97,13 +103,32 @@ export function computeRoughOpenerCeiling(input: RoughCeilingInput): RoughCeilin
     };
   }
 
-  // No ARV → conservative list fraction (the conversation-starter cap).
+  // No ARV, but a FREE per-ZIP buyer-median exists → anchor to VALUE, not the
+  // seller's list. buyerMedian is the ZIP's acquisition median (what cash
+  // buyers actually pay); the opener caps at that − our fee. THE FIX for the
+  // list-anchored catastrophe: 18681 Blackmoor texted $84k (0.65 × $130k list)
+  // when 48234's buyer-median was $35k → this caps it at ~$30k. Costs $0 (the
+  // median is a cached read) and the opener can never wildly exceed value.
+  if (pos(input.buyerMedian)) {
+    const ceiling = Math.max(0, Math.round(input.buyerMedian - fee));
+    return {
+      ceiling,
+      source: "buyer_median_no_arv",
+      detail: `rough ceiling $${ceiling.toLocaleString()} = ZIP buyer-median $${input.buyerMedian.toLocaleString()} − fee $${fee.toLocaleString()} (no ARV — VALUE anchor, not list)`,
+      arvUsed: null,
+      rehabUsed: null,
+    };
+  }
+
+  // No ARV AND no buyer-median → last-resort conservative list fraction. This
+  // is the ONLY path that still touches the list price, and only when there is
+  // no value signal at all for the ZIP (un-seeded market).
   if (pos(input.listPrice)) {
     const ceiling = Math.round(input.listPrice * ROUGH_NOARV_CEILING_PCT);
     return {
       ceiling,
       source: "list_fraction_no_arv",
-      detail: `rough ceiling $${ceiling.toLocaleString()} = list $${input.listPrice.toLocaleString()} × ${ROUGH_NOARV_CEILING_PCT} (no ARV — sight-unseen conservative cap)`,
+      detail: `rough ceiling $${ceiling.toLocaleString()} = list $${input.listPrice.toLocaleString()} × ${ROUGH_NOARV_CEILING_PCT} (no ARV, no ZIP median — sight-unseen last-resort cap)`,
       arvUsed: null,
       rehabUsed: null,
     };
