@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "d=\"$(git rev-parse --show-toplevel 2>/dev/null)\"; bash \"${d:-$CLAUDE_PROJECT_DIR}/.claude/hooks/maverick-continuity-check.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}
