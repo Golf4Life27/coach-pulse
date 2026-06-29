@@ -1,6 +1,10 @@
 {
   "crons": [
     {
+      "path": "/api/cron/listings-intake?zips=48234,48205",
+      "schedule": "0 13 * * *"
+    },
+    {
       "path": "/api/cron/propose-actions",
       "schedule": "0 9 * * *"
     },
