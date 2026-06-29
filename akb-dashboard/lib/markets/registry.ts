@@ -158,3 +158,84 @@ export function isMarketLive(m: Market | null | undefined): MarketLivenessVerdic
   }
   return { live: reasons.length === 0, reasons };
 }
+
+// ── NATIONAL OPENER BUY-BOX (2026-06-28, operator: "sweep the nation") ─────
+// The ROUGH OPENER (lib/per-market-pricer) prices nationally off a default
+// buy-box; the PRECISE CONTRACT lane (deal-math, isMarketLive) is UNTOUCHED and
+// still demands a fully-verified market. Two-number doctrine: the opener is a
+// rough, operator-manual-close-protected first text; the contract number is not.
+//
+// SAFE NATIONAL ROLLOUT — gates in order:
+//   1. restricted states (IL/MO/SC/NC/OK/ND) → HOLD (never auto-offer).
+//   2. a CONFIGURED market → price ONLY if its ARV source is operator-verified
+//      (arv_source_verified). A configured-but-dormant market (e.g. the
+//      non-disclosure Dallas/Memphis rows) HOLDs — no AVM-masquerading-as-ARV.
+//   3. an UNCONFIGURED state:
+//        - NON-DISCLOSURE (sold prices not public → comps unprovable) → HOLD.
+//        - DISCLOSURE + non-restricted → the NATIONAL DEFAULT buy-box. Real
+//          per-ZIP comps still gate it downstream: the auto-seed pulls real
+//          recorded sales or writes DONT_PRICE → that ZIP HOLDs. The disclosure
+//          distinction is the STATE-level ARV-source proof; the per-ZIP seed is
+//          the fine-grained one.
+//
+// Non-disclosure states have no public sale-price record, so sold-comp data
+// (the entire basis for ARV → the offer) can't be confirmed real. They stay
+// dark until an operator-verified comp source is proven per-state.
+
+/** The 12 non-disclosure states (sale prices not public record → ARV source
+ *  unprovable). The opener HOLDs there until a source is verified per-state.
+ *  (MO/ND also sit in restricted_states; harmless — restricted is checked
+ *  first.) */
+export const NON_DISCLOSURE_STATES: ReadonlySet<string> = new Set([
+  "AK", "ID", "KS", "LA", "MS", "MO", "MT", "ND", "NM", "TX", "UT", "WY",
+]);
+
+export function isNonDisclosureState(state: string | null | undefined): boolean {
+  return NON_DISCLOSURE_STATES.has((state ?? "").trim().toUpperCase());
+}
+
+/** National default OPENER buy-box for disclosure + non-restricted states with
+ *  no configured market. ~0.70 (the proven blanket flip rule); per-market
+ *  config refines it. Env-tunable; clamped to (0,1]. */
+export const NATIONAL_OPENER_ARV_PCT_MAX = (() => {
+  const raw = Number(process.env.NATIONAL_OPENER_ARV_PCT_MAX);
+  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.70;
+})();
+
+export type OpenerArvPctMaxSource =
+  | "configured_verified"            // a configured market with a verified ARV source
+  | "national_default_disclosure"    // unconfigured disclosure + non-restricted state
+  | "hold_restricted"                // restricted state
+  | "hold_configured_unverified"     // configured but ARV source not verified (dormant)
+  | "hold_non_disclosure"            // non-disclosure state, ARV unprovable
+  | "hold_no_state";                 // no state on the listing
+
+export interface OpenerArvPctMaxResult {
+  /** Null = HOLD (the opener cannot price). */
+  arvPctMax: number | null;
+  source: OpenerArvPctMaxSource;
+}
+
+/** Pure: the ROUGH OPENER's effective ARV%Max for a listing — encodes the
+ *  national buy-box policy above. OPENER ONLY: the precise contract lane uses
+ *  isMarketLive (all three flags), NEVER this. */
+export function resolveOpenerArvPctMax(
+  market: Market | null,
+  state: string | null | undefined,
+): OpenerArvPctMaxResult {
+  const st = (state ?? "").trim().toUpperCase();
+  if (!st) return { arvPctMax: null, source: "hold_no_state" };
+  if (getRestrictedStates().has(st)) return { arvPctMax: null, source: "hold_restricted" };
+  if (market && market.buyer_params) {
+    return market.arv_source_verified && market.sourcing_allowed
+      ? { arvPctMax: market.buyer_params.arv_pct_max, source: "configured_verified" }
+      : { arvPctMax: null, source: "hold_configured_unverified" };
+  }
+  if (NON_DISCLOSURE_STATES.has(st)) return { arvPctMax: null, source: "hold_non_disclosure" };
+  return { arvPctMax: NATIONAL_OPENER_ARV_PCT_MAX, source: "national_default_disclosure" };
+}
+
+/** Convenience: just the number (null = HOLD). */
+export function openerArvPctMax(market: Market | null, state: string | null | undefined): number | null {
+  return resolveOpenerArvPctMax(market, state).arvPctMax;
+}

@@ -43,7 +43,7 @@ import { audit } from "@/lib/audit-log";
 import { checkFirstOutreachHydration, checkOfferOverList, resolveOpenerCeiling } from "@/lib/outreach-economics";
 import { anchoredOpenerGate } from "@/lib/h2-outreach/your-mao-opener-gate";
 import { computeRoughOpenerCeiling } from "@/lib/rough-opener-ceiling";
-import { getMarketForListing } from "@/lib/markets/registry";
+import { getMarketForListing, openerArvPctMax } from "@/lib/markets/registry";
 import { resolveAnchorPct } from "@/lib/markets/anchor";
 import { readSendCapConfig, applySendCap } from "@/lib/outreach/send-cap";
 import { loadUnderwriteContextForListings } from "@/lib/track-aware-underwrite";
@@ -338,7 +338,7 @@ async function handle(req: Request): Promise<Response> {
       estRehabMid: l.estRehabMid ?? null,
       estRehab: l.estRehab ?? null,
       listPrice: l.listPrice ?? null,
-      arvPctMax: getMarketForListing({ state: l.state, zip: l.zip })?.buyer_params?.arv_pct_max ?? null,
+      arvPctMax: openerArvPctMax(getMarketForListing({ state: l.state, zip: l.zip }), l.state),
       wholesaleFee: l.wholesaleFeeTarget ?? null,
     });
     const gate = anchoredOpenerGate({

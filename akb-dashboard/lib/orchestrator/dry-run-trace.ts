@@ -63,7 +63,7 @@ import {
 } from "./pre-contract-checks";
 import { PRE_EMD_GATE, PRE_EMD_CHECKS, PRE_EMD_CONFIG } from "./pre-emd-checks";
 import { priceOpenerWithSeed } from "@/lib/opener-pricing";
-import { getMarketForListing } from "@/lib/markets/registry";
+import { getMarketForListing, openerArvPctMax } from "@/lib/markets/registry";
 
 // ── Gate sequence (live pipeline order, AKB_Deal_Flow_Orchestrator_Spec) ──
 interface GateSpec {
@@ -284,7 +284,7 @@ export const DRY_RUN_ANCHOR_PCT = 0.9;
 
 export function traceOpener(listing: Listing): OpenerTrace {
   const market = getMarketForListing({ state: listing.state, zip: listing.zip });
-  const arvPctMax = market?.buyer_params?.arv_pct_max ?? null;
+  const arvPctMax = openerArvPctMax(market, listing.state ?? null);
   const inputs = {
     listPrice: listing.listPrice ?? null,
     storedArv: listing.realArvMedian ?? null,
