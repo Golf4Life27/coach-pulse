@@ -107,7 +107,7 @@ export async function GET(req: Request) {
     scanned: 0,
     priced: 0,
     held_no_inputs: 0,
-    by_basis: { arv_buybox: 0, list_fraction_65: 0, hold_no_inputs: 0 } as Record<string, number>,
+    by_basis: { arv_buybox: 0, hold_no_value_basis: 0 } as Record<string, number>,
     by_confidence: {} as Record<string, number>,
     lowball_eligible: 0,
     lowball_not_eligible: 0,

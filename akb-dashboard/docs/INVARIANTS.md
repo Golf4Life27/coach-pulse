@@ -36,14 +36,22 @@ underwrite against.
 
 - `[enforced]` `lib/markets/pessimistic-mao.ts` — `computePessimisticMao` (conservative
   ARV + `rehabHigh`), `classifyRehabTier`, verdict `robust|marginal|fails_floor|hold`.
-- `[enforced]` Pricer guards distrust an ARV below list and floor sub-floor openers to
-  65% of list (`lib/per-market-pricer.ts`).
+- `[enforced]` **The autonomous opener is VALUE-anchored or it HOLDS — it is NEVER
+  anchored to the seller's list price** (operator 2026-06-28, after the Blackmoor
+  $84.5k catastrophe: 0.65 × $130k list on a ~$40k house). The flat 65%-of-list
+  fallback is retired. The opener is `anchor × (ARV × buybox − rehab − fee)` where ARV
+  is the ZIP renovated `$/sqft` × subject sqft; with no trusted ARV basis the pricer
+  returns `opener: null` and the record routes to operator review. Pricer guards
+  (ARV-below-list distrust, sub-floor micro-opener, non-penciling buy-box) **HOLD**,
+  they do not fall to a list fraction. The only place a fraction of list survives is
+  the never-over-list *clamp* (`0.90 × list`), which only ever lowers an already
+  value-anchored opener. (`lib/per-market-pricer.ts`, `lib/rough-opener-ceiling.ts`).
 
 ## 3. Sticky offers
 
-The seller-facing number does not drift. `Outreach_Offer_Price` (the 65%-of-list
-opener) is captured once at outreach time and is **never recomputed, never
-overwritten**. `Contract_Offer_Price` is sticky during negotiation (DD may move it,
+The seller-facing number does not drift. `Outreach_Offer_Price` (the value-anchored
+opener — see §2; never a list fraction) is captured once at outreach time and is
+**never recomputed, never overwritten**. `Contract_Offer_Price` is sticky during negotiation (DD may move it,
 but it has a hard V2.1 floor and is not silently recomputed).
 
 - `[enforced]` `lib/types.ts:75-84` (field contracts); `lib/airtable.ts:126-135`.

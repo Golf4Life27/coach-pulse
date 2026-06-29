@@ -14,7 +14,7 @@ function seed(over: Partial<ZipArvSeed> = {}): ZipArvSeed {
 
 describe("priceOpenerWithSeed — source-swap", () => {
   it("prefers the renovated-comp seed ARV over a contaminated stored ARV", () => {
-    // Stored ARV 50k < list 100k would be DISTRUSTED → 65% fallback. The seed
+    // Stored ARV 50k < list 100k would be DISTRUSTED → HOLD. The seed
     // (150/sqft × 1000 = 150k renovated) repairs it → real buy-box opener.
     const r = priceOpenerWithSeed({
       listPrice: 100_000,
@@ -54,22 +54,25 @@ describe("priceOpenerWithSeed — source-swap", () => {
     expect(r.basisLabel).toBe("arv_buybox_stored");
   });
 
-  it("flat 65% fallback when neither seed nor stored ARV is usable", () => {
+  it("HOLDS when neither seed nor stored ARV is usable (never list-anchors)", () => {
     const r = priceOpenerWithSeed({ listPrice: 80_000, seed: null });
     expect(r.arvSource).toBe("none");
-    expect(r.result.opener).toBe(52_000);
-    expect(r.basisLabel).toBe("list_fraction_65");
+    expect(r.result.opener).toBeNull();          // was 0.65 × 80k = 52,000
+    expect(r.result.basis).toBe("hold_no_value_basis");
+    expect(r.basisLabel).toBe("hold");
   });
 
-  it("a seed with no subject sqft cannot produce an ARV → stored/fallback", () => {
+  it("a seed with no subject sqft cannot produce an ARV → HOLD (never list-anchors)", () => {
     const r = priceOpenerWithSeed({ listPrice: 80_000, sqft: null, seed: seed() });
     expect(r.arvSource).toBe("none"); // no sqft → seed unusable, no stored ARV
-    expect(r.result.basis).toBe("list_fraction_65");
+    expect(r.result.basis).toBe("hold_no_value_basis");
+    expect(r.result.opener).toBeNull();
   });
 
-  it("a DONT_PRICE seed routes to 65%-of-list and NEVER to the stored ARV", () => {
+  it("a DONT_PRICE seed HOLDS and NEVER falls back to the stored ARV", () => {
     // The seed-quality gate marked this ZIP do-not-price. Even though a stored
-    // ARV exists, the pricer must NOT use it — it goes to the flat 65% rail.
+    // ARV exists, the pricer must NOT use it — with no trusted ARV it HOLDS for
+    // review (the flat 65%-of-list rail is retired, 2026-06-28).
     const r = priceOpenerWithSeed({
       listPrice: 80_000,
       storedArv: 120_000, storedArvConfidence: "HIGH",
@@ -79,7 +82,7 @@ describe("priceOpenerWithSeed — source-swap", () => {
     });
     expect(r.arvSource).toBe("none"); // NOT "stored"
     expect(r.arvUsed).toBeNull();
-    expect(r.result.basis).toBe("list_fraction_65");
-    expect(r.result.opener).toBe(52_000); // 0.65 × 80k
+    expect(r.result.basis).toBe("hold_no_value_basis");
+    expect(r.result.opener).toBeNull();          // was 0.65 × 80k = 52,000
   });
 });

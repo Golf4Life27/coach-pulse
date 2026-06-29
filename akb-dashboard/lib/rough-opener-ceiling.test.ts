@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { computeRoughOpenerCeiling, ROUGH_REHAB_PCT_OF_ARV, ROUGH_NOARV_CEILING_PCT } from "./rough-opener-ceiling";
+import { computeRoughOpenerCeiling, ROUGH_REHAB_PCT_OF_ARV } from "./rough-opener-ceiling";
 
 const DETROIT = 0.6461;
 
-describe("computeRoughOpenerCeiling — buy-box path (ARV + vision rehab)", () => {
+describe("computeRoughOpenerCeiling — value-anchored buy-box path (ARV + vision rehab)", () => {
   it("Rosemary: ARV 89,816 × 0.6461 − rehab 25,769 − fee 5,000 = 27,261", () => {
     const r = computeRoughOpenerCeiling({ realArvMedian: 89_816, estRehabMid: 25_769, arvPctMax: DETROIT });
     expect(r.source).toBe("rough_buybox_arv");
@@ -31,34 +31,40 @@ describe("computeRoughOpenerCeiling — buy-box path (ARV + vision rehab)", () =
   });
 });
 
-describe("computeRoughOpenerCeiling — no-ARV fallback", () => {
-  it("falls back to list × 0.72 when no ARV", () => {
-    const r = computeRoughOpenerCeiling({ listPrice: 100_000, arvPctMax: DETROIT });
-    expect(r.source).toBe("list_fraction_no_arv");
-    expect(r.ceiling).toBe(72_000);
-  });
-  it("no ARV because market not priceable (no arvPctMax) → still list fallback", () => {
-    const r = computeRoughOpenerCeiling({ realArvMedian: 90_000, listPrice: 100_000, arvPctMax: null });
-    expect(r.source).toBe("list_fraction_no_arv");
-  });
-  it("0.90 anchor × list-fraction ceiling ≈ legacy 0.65-of-list opener", () => {
-    const r = computeRoughOpenerCeiling({ listPrice: 100_000, arvPctMax: null });
-    const opener = Math.round(0.90 * r.ceiling!);
-    expect(opener).toBe(64_800); // ≈ 65% of list, the legacy door-opener
-  });
-});
-
-describe("computeRoughOpenerCeiling — HOLD only when truly nothing", () => {
-  it("no ARV and no list → null ceiling, hold", () => {
-    const r = computeRoughOpenerCeiling({ arvPctMax: DETROIT });
+describe("computeRoughOpenerCeiling — HOLD, never list-anchor (the catastrophe fix, 2026-06-28)", () => {
+  it("no ARV → HOLD (ceiling null), NEVER a fraction of list — the 18681 Blackmoor $84.5k bug", () => {
+    // The live failure: 0.65 × $130k list = $84.5k texted on a house worth
+    // ~$40k. With the list-anchor retired, no ARV value basis → HOLD.
+    const r = computeRoughOpenerCeiling({ listPrice: 130_000, arvPctMax: DETROIT });
     expect(r.ceiling).toBeNull();
-    expect(r.source).toBe("hold_no_inputs");
+    expect(r.source).toBe("hold_no_value_basis");
+  });
+  it("ARV present but NO sourced buy-box (arvPctMax null) → HOLD (cannot value-anchor)", () => {
+    const r = computeRoughOpenerCeiling({ realArvMedian: 120_000, listPrice: 100_000, arvPctMax: null });
+    expect(r.ceiling).toBeNull();
+    expect(r.source).toBe("hold_no_value_basis");
+  });
+  it("list price feeds NOTHING in the ceiling math — same HOLD with or without it", () => {
+    const withList = computeRoughOpenerCeiling({ listPrice: 200_000, arvPctMax: DETROIT });
+    const without = computeRoughOpenerCeiling({ arvPctMax: DETROIT });
+    expect(withList.ceiling).toBeNull();
+    expect(without.ceiling).toBeNull();
+    expect(withList.source).toBe(without.source);
+  });
+  it("ARV + buy-box still wins — a real value basis prices the house", () => {
+    const r = computeRoughOpenerCeiling({ realArvMedian: 100_000, listPrice: 130_000, arvPctMax: DETROIT });
+    expect(r.source).toBe("rough_buybox_arv_placeholder_rehab"); // value path, not a hold
+    expect(r.ceiling).toBe(39_610);
+  });
+  it("no inputs at all → HOLD", () => {
+    const r = computeRoughOpenerCeiling({});
+    expect(r.ceiling).toBeNull();
+    expect(r.source).toBe("hold_no_value_basis");
   });
 });
 
 describe("constants", () => {
-  it("defaults: rehab placeholder 0.20, no-arv ceiling 0.72", () => {
+  it("rehab placeholder fraction is 0.20", () => {
     expect(ROUGH_REHAB_PCT_OF_ARV).toBe(0.20);
-    expect(ROUGH_NOARV_CEILING_PCT).toBe(0.72);
   });
 });

@@ -22,7 +22,7 @@ function renderOpener(o: OpenerTrace): string {
   const rc = o.recomputed;
   const flags = [
     rc.arvDistrusted ? "ARV<list distrusted" : null,
-    rc.flooredToFallback ? "floored→65%" : null,
+    rc.flooredToFallback ? "floored→hold" : null,
     rc.cappedToList ? "capped to list" : null,
     rc.flagReseed ? "flag-reseed" : null,
   ].filter(Boolean);

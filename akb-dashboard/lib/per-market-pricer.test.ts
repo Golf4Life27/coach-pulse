@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { priceOpener, FALLBACK_OPENER_PCT_OF_LIST, NEVER_OVER_LIST_PCT } from "./per-market-pricer";
+import { priceOpener, NEVER_OVER_LIST_PCT } from "./per-market-pricer";
 
 const DETROIT_BUYBOX = 0.6461;
 
-describe("priceOpener — buy-box ARV path", () => {
+describe("priceOpener — value-anchored buy-box path (the only SEND basis)", () => {
   it("anchor × (ARV×buybox − rehab − fee) when ARV + buy-box present", () => {
     // ceiling = 200000×0.6461 − 30000 − 5000 = 94220; opener = 0.90×94220 = 84798
     const r = priceOpener({
@@ -32,8 +32,9 @@ describe("priceOpener — buy-box ARV path", () => {
     expect(r.confidence).toBe("STORED");
   });
 
-  it("buy-box that does NOT pencil (rehab eats it) falls back to flat 65% of list — never holds with a list", () => {
-    // ceiling = 50000×0.6461 − 40000 − 5000 = negative → 0 → non-penciling
+  it("buy-box that does NOT pencil (rehab eats it) HOLDS — never falls to a list fraction", () => {
+    // ceiling = 50000×0.6461 − 40000 − 5000 = negative → 0 → non-penciling.
+    // OLD doctrine sent 0.65 × 80000 = $52,000 (list-anchored). NEW: HOLD.
     const r = priceOpener({
       realArvMedian: 50_000,
       estRehabMid: 40_000,
@@ -42,43 +43,41 @@ describe("priceOpener — buy-box ARV path", () => {
       anchorPct: 0.90,
       listPrice: 80_000,
     });
-    expect(r.basis).toBe("list_fraction_65");
-    expect(r.confidence).toBe("FALLBACK");
-    expect(r.opener).toBe(52_000); // 0.65 × 80000
+    expect(r.basis).toBe("hold_no_value_basis");
+    expect(r.confidence).toBe("NONE");
+    expect(r.opener).toBeNull(); // was 52_000
   });
 });
 
-describe("priceOpener — flat 65%-of-list fallback (ruling #3)", () => {
-  it("no ARV → SENT opener is exactly 65% of list", () => {
+describe("priceOpener — no value basis HOLDS (the list-fraction fallback is RETIRED, 2026-06-28)", () => {
+  it("no ARV → HOLD, NOT a fraction of list (the Blackmoor $84.5k bug)", () => {
     const r = priceOpener({ listPrice: 100_000 });
-    expect(r.basis).toBe("list_fraction_65");
-    expect(r.opener).toBe(65_000);
-    expect(r.confidence).toBe("FALLBACK");
+    expect(r.basis).toBe("hold_no_value_basis");
+    expect(r.opener).toBeNull(); // was 0.65 × 100000 = 65,000
+    expect(r.confidence).toBe("NONE");
   });
 
-  it("is ANCHOR-INDEPENDENT — a calibrated-down anchor does not drag the fallback below 65%", () => {
+  it("no ARV regardless of anchor — the list price never produces a number", () => {
     const at90 = priceOpener({ listPrice: 120_000, anchorPct: 0.90 });
     const at80 = priceOpener({ listPrice: 120_000, anchorPct: 0.80 });
-    expect(at90.opener).toBe(78_000); // 0.65 × 120000
-    expect(at80.opener).toBe(78_000); // unchanged — anchor not applied on fallback
-    expect(at80.anchorPct).toBeNull();
+    expect(at90.opener).toBeNull(); // was 78,000
+    expect(at80.opener).toBeNull(); // was 78,000
+    expect(at90.basis).toBe("hold_no_value_basis");
   });
 
-  it("fallback fires when arv_pct_max is absent even if an ARV exists (no sourced buy-box → no buy-box path)", () => {
+  it("HOLDS when arv_pct_max is absent even if an ARV exists (no sourced buy-box → cannot value-anchor)", () => {
     const r = priceOpener({ realArvMedian: 200_000, listPrice: 100_000, arvPctMax: null });
-    expect(r.basis).toBe("list_fraction_65");
-    expect(r.opener).toBe(65_000);
-  });
-
-  it("uses the tunable constant", () => {
-    expect(FALLBACK_OPENER_PCT_OF_LIST).toBe(0.65);
+    expect(r.basis).toBe("hold_no_value_basis");
+    expect(r.opener).toBeNull(); // was 65,000
   });
 });
 
-describe("GUARD A — never-over-list cap (Hole A)", () => {
+describe("GUARD A — never-over-list cap (Hole A) — clamps a VALUE-anchored opener", () => {
   it("clamps an over-list opener down to the list price and flags re-seed", () => {
     // 14299 Kilbourne: garbage-high ARV → opener would be ~$87,882 on a
-    // $47,900 list. Must cap to list, never over asking.
+    // $47,900 list. Must cap to list, never over asking. (The cap only bites
+    // when ARV ≫ list — a deep-discount listing — so it is safe, NOT the
+    // retired list-fraction fallback.)
     const r = priceOpener({
       listPrice: 47_900,
       realArvMedian: 230_120,
@@ -93,8 +92,6 @@ describe("GUARD A — never-over-list cap (Hole A)", () => {
   });
 
   it("a STRONG seed that gets capped is NOT flagged for re-seed (guard fired, seed trusted)", () => {
-    // Deep-discount listing: STRONG renovated seed → ARV ≫ list → opener > cap.
-    // The cap fires (cappedToList) but the seed is good, so flagReseed stays false.
     const r = priceOpener({
       listPrice: 47_900,
       realArvMedian: 230_120,
@@ -125,7 +122,6 @@ describe("GUARD A — never-over-list cap (Hole A)", () => {
 
   it("caps at 90% of list (default), leaving negotiating room — never opens at asking", () => {
     expect(NEVER_OVER_LIST_PCT).toBe(0.90);
-    // Strong deal: renovated ARV far above a low list → buy-box wants > list.
     const r = priceOpener({
       listPrice: 79_000,
       realArvMedian: 212_860,
@@ -140,10 +136,11 @@ describe("GUARD A — never-over-list cap (Hole A)", () => {
   });
 });
 
-describe("GUARD B — low-opener floor (Hole B)", () => {
-  it("routes a sub-floor buy-box micro-opener to the clean 65% rail", () => {
+describe("GUARD B — low-opener floor (Hole B) — HOLDS a micro-opener", () => {
+  it("HOLDS a sub-floor buy-box micro-opener (never routes to a list fraction)", () => {
     // 16093 Liberal: ARV $72,518 (> list, so sanity passes) but $39,950
-    // rehab squeezes the ceiling → ~$1,714 opener. Floor → 65% of list.
+    // rehab squeezes the ceiling → ~$1,714 opener < floor. OLD: 0.65 × 20000 =
+    // $13,000 (list-anchored). NEW: HOLD for operator review.
     const r = priceOpener({
       listPrice: 20_000,
       realArvMedian: 72_518,
@@ -153,8 +150,8 @@ describe("GUARD B — low-opener floor (Hole B)", () => {
       anchorPct: 0.90,
     });
     expect(r.flooredToFallback).toBe(true);
-    expect(r.basis).toBe("list_fraction_65");
-    expect(r.opener).toBe(13_000); // 0.65 × 20000, not the $1,714 micro-number
+    expect(r.basis).toBe("hold_no_value_basis");
+    expect(r.opener).toBeNull(); // was 13_000
   });
 
   it("a healthy buy-box opener above the floor and below list survives unguarded", () => {
@@ -175,9 +172,10 @@ describe("GUARD B — low-opener floor (Hole B)", () => {
   });
 });
 
-describe("GUARD C — ARV-sanity gate (Hole C)", () => {
-  it("distrusts a below-list ARV, drops to 65% rail, flags re-seed", () => {
-    // 15509 Lauder: ARV $93,818 < list $119,000 → as-is/wrong-basis.
+describe("GUARD C — ARV-sanity gate (Hole C) — HOLDS a below-list ARV", () => {
+  it("distrusts a below-list ARV and HOLDS (never list-anchors), flags re-seed", () => {
+    // 15509 Lauder: ARV $93,818 < list $119,000 → as-is/wrong-basis. OLD:
+    // 0.65 × 119000 = $77,350 (list-anchored). NEW: HOLD.
     const r = priceOpener({
       listPrice: 119_000,
       realArvMedian: 93_818,
@@ -187,8 +185,8 @@ describe("GUARD C — ARV-sanity gate (Hole C)", () => {
     });
     expect(r.arvDistrusted).toBe(true);
     expect(r.flagReseed).toBe(true);
-    expect(r.basis).toBe("list_fraction_65");
-    expect(r.opener).toBe(77_350); // 0.65 × 119000
+    expect(r.basis).toBe("hold_no_value_basis");
+    expect(r.opener).toBeNull(); // was 77_350
   });
 
   it("a STRONG seed below list is distrusted for pricing but NOT flagged for re-seed (over-ARV listing, good seed)", () => {
@@ -200,13 +198,13 @@ describe("GUARD C — ARV-sanity gate (Hole C)", () => {
       anchorPct: 0.90,
       arvConfidence: "STRONG",
     });
-    expect(r.arvDistrusted).toBe(true);   // still drops to the 65% rail for pricing
+    expect(r.arvDistrusted).toBe(true);   // still HOLDS (never list-anchors)
     expect(r.flagReseed).toBe(false);     // but the STRONG seed is trusted — listing is just over-ARV
-    expect(r.basis).toBe("list_fraction_65");
-    expect(r.opener).toBe(77_350);
+    expect(r.basis).toBe("hold_no_value_basis");
+    expect(r.opener).toBeNull();
   });
 
-  it("an ARV at/above list is trusted (no distrust)", () => {
+  it("an ARV at/above list is trusted (no distrust) → value-anchored opener", () => {
     const r = priceOpener({
       listPrice: 88_500,
       realArvMedian: 137_456,
@@ -220,10 +218,10 @@ describe("GUARD C — ARV-sanity gate (Hole C)", () => {
 });
 
 describe("priceOpener — genuine hold", () => {
-  it("no ARV and no list → opener null, basis hold_no_inputs", () => {
+  it("no ARV and no list → opener null, basis hold_no_value_basis", () => {
     const r = priceOpener({});
     expect(r.opener).toBeNull();
-    expect(r.basis).toBe("hold_no_inputs");
+    expect(r.basis).toBe("hold_no_value_basis");
     expect(r.confidence).toBe("NONE");
   });
 });

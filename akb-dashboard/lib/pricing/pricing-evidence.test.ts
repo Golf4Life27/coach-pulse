@@ -196,6 +196,7 @@ describe("Pricing Evidence Run — ARV path vs 65% rail (CONVEYOR M1.5)", () => 
 
     const M = rows.length; // all 81 have stored ARV → all "with real ARV data"
     const wonRows = rows.filter((r) => r.mechanism === "buybox_won" || r.mechanism === "buybox_won_capped");
+    const heldRows = rows.filter((r) => r.final === null); // list-fraction rail retired → HOLD
     const materialRows = rows.filter((r) => r.material);
     const rawBeatButSuppressed = rows.filter((r) => r.rawBeatRail && r.mechanism !== "buybox_won" && r.mechanism !== "buybox_won_capped");
     const arvViaSeed = rows.filter((r) => r.arvDataSource === "seed").length;
@@ -213,9 +214,9 @@ describe("Pricing Evidence Run — ARV path vs 65% rail (CONVEYOR M1.5)", () => 
       lines.push(`  ${k.padEnd(20)} ${byMech[k] ?? 0}`);
     }
     lines.push("");
-    lines.push(`HEADLINE: of ${M} records with real ARV data, the ARV/buy-box path produced the FINAL opener (beat the rail) in ${wonRows.length} (${Math.round((100 * wonRows.length) / M)}%).`);
-    lines.push(`          the final opener differed materially (>3%) from the 65% rail in ${materialRows.length} (${Math.round((100 * materialRows.length) / M)}%).`);
-    lines.push(`          in ${rawBeatButSuppressed.length} records the ARV path WOULD have beaten the rail pre-guards, but a guard (distrust/floor) knocked it back to 65%.`);
+    lines.push(`HEADLINE: of ${M} records with real ARV data, the ARV/buy-box path produced a VALUE-ANCHORED opener in ${wonRows.length} (${Math.round((100 * wonRows.length) / M)}%).`);
+    lines.push(`          the other ${heldRows.length} (${Math.round((100 * heldRows.length) / M)}%) HOLD for operator review — the flat 65%-of-list rail is RETIRED (2026-06-28), so a value-less record NEVER list-anchors (the Blackmoor $84.5k bug).`);
+    lines.push(`          (reference only: the final differed >3% from the OLD 65% rail in ${materialRows.length}; ${rawBeatButSuppressed.length} would have beaten that rail pre-guards but a guard now HOLDS them.)`);
     lines.push("");
     if (wonRows.length > 0) {
       lines.push("Records where the ARV path WON (final basis = arv_buybox):");
@@ -232,9 +233,13 @@ describe("Pricing Evidence Run — ARV path vs 65% rail (CONVEYOR M1.5)", () => 
     // eslint-disable-next-line no-console
     console.log(lines.join("\n"));
 
-    // Assertions: the run completed over the whole population with a usable
-    // opener on every record, and the headline counts are self-consistent.
-    expect(rows.every((r) => typeof r.final === "number")).toBe(true);
+    // Assertions (new doctrine, 2026-06-28 — list-fraction rail retired): a
+    // value basis (buy-box) produces a NUMERIC opener; every other record
+    // HOLDS (final null) rather than anchoring to list. The run still
+    // partitions the whole population and the mechanisms sum to M.
+    for (const r of wonRows) expect(typeof r.final).toBe("number"); // value-anchored → a number
+    for (const r of heldRows) expect(r.mechanism === "buybox_won" || r.mechanism === "buybox_won_capped").toBe(false);
+    expect(wonRows.length + heldRows.length).toBe(M); // every record either WON or HELD — nothing list-anchored
     expect(wonRows.length + (byMech["arv_distrusted"] ?? 0) + (byMech["buybox_floored"] ?? 0) + (byMech["seed_dont_price"] ?? 0) + (byMech["no_buybox_market"] ?? 0) + (byMech["fallback_other"] ?? 0)).toBe(M);
   });
 });
