@@ -37,31 +37,52 @@ describe("isActionableMarket", () => {
   });
 });
 
-describe("isPriceableMarket — sourced arv_pct_max AND seeded buyer-median", () => {
-  const seeded = new Set(["48227"]);
+describe("isPriceableMarket — opener-priceable (national buy-box) AND seeded ZIP", () => {
+  const seeded = new Set(["48227", "46218", "78201"]);
 
-  it("Detroit 48227 (sourced 0.6461 + seeded) is PRICEABLE", () => {
+  it("Detroit 48227 (configured+verified + seeded) is PRICEABLE", () => {
     expect(isPriceableMarket({ state: "MI", city: "Detroit", zip: "48227" }, seeded)).toEqual({ actionable: true, reason: null });
   });
 
-  it("Detroit ZIP without a seeded median is NOT priceable", () => {
-    const r = isPriceableMarket({ state: "MI", city: "Detroit", zip: "48228" }, seeded);
-    expect(r.actionable).toBe(false);
-    expect(r.reason).toBe("no_seeded_buyer_median");
+  it("CAST-WIDE: an unconfigured DISCLOSURE metro (Indianapolis IN) that is seeded is PRICEABLE off the national opener default", () => {
+    // No IN market is configured; the opener prices it at the 0.70 national
+    // default (IN is disclosure + non-restricted). Seeded → intake accepts.
+    const r = isPriceableMarket({ state: "IN", city: "Indianapolis", zip: "46218" }, seeded);
+    expect(r).toEqual({ actionable: true, reason: null });
   });
 
-  it("San Antonio TX (no sourced arv_pct_max) is NOT priceable — even though it's actionable", () => {
+  it("an unconfigured disclosure metro that is NOT seeded holds (no per-ZIP comps)", () => {
+    const r = isPriceableMarket({ state: "IN", city: "Indianapolis", zip: "46201" }, seeded);
+    expect(r.actionable).toBe(false);
+    expect(r.reason).toBe("no_seeded_zip");
+  });
+
+  it("Detroit ZIP without a seed is NOT priceable", () => {
+    const r = isPriceableMarket({ state: "MI", city: "Detroit", zip: "48228" }, seeded);
+    expect(r.actionable).toBe(false);
+    expect(r.reason).toBe("no_seeded_zip");
+  });
+
+  it("San Antonio TX (non-disclosure, opener holds) is NOT priceable — even though it's actionable", () => {
     expect(isActionableMarket({ state: "TX", city: "San Antonio", zip: "78201" }).actionable).toBe(true);
     const r = isPriceableMarket({ state: "TX", city: "San Antonio", zip: "78201" }, seeded);
     expect(r.actionable).toBe(false);
-    expect(r.reason).toBe("no_sourced_arv_pct_max");
+    expect(r.reason).toBe("opener_holds_market");
   });
 
-  it("Dallas TX (has arv_pct_max 0.5883 but NO seeded median) is NOT priceable", () => {
-    // Even with a sourced buy-box %, no seeded ZIP median → can't price.
+  it("NON-DISCLOSURE holds even when SEEDED — a seed alone never unlocks TX (78201 is in `seeded`)", () => {
+    // Guards the doctrine: the opener HOLDs non-disclosure regardless of comps,
+    // so intake must too. The opener-lane gate (a) fires before the seed gate (b).
+    const r = isPriceableMarket({ state: "TX", city: "San Antonio", zip: "78201" }, seeded);
+    expect(r.reason).toBe("opener_holds_market");
+  });
+
+  it("Dallas TX (configured but arv_source_verified=false → dormant) holds at the opener gate", () => {
+    // Old gate let Dallas pass on its raw arv_pct_max (0.5883) and only failed on
+    // the seed; the opener-aligned gate holds it correctly as configured-unverified.
     const r = isPriceableMarket({ state: "TX", city: "Dallas", zip: "75201" }, seeded);
     expect(r.actionable).toBe(false);
-    expect(r.reason).toBe("no_seeded_buyer_median");
+    expect(r.reason).toBe("opener_holds_market");
   });
 
   it("a restricted state stays excluded under the priceable gate too", () => {
