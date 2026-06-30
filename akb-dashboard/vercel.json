@@ -1,7 +1,11 @@
 {
   "crons": [
     {
-      "path": "/api/cron/listings-intake?zips=48234,48205",
+      "path": "/api/admin/seed-sweep?apply=1&limit=15",
+      "schedule": "30 12 * * *"
+    },
+    {
+      "path": "/api/cron/listings-intake",
       "schedule": "0 13 * * *"
     },
     {
