@@ -17,7 +17,7 @@
 // freshness re-verify pass AND the outreach selector. NO mass registry
 // edit — the pause lives in code, reversible by editing PAUSED_MARKETS.
 
-import { getMarketForListing } from "./registry";
+import { getMarketForListing, openerArvPctMax } from "./registry";
 
 /** Wholesale-restrictive — never operate. */
 export const HARD_EXCLUDED_STATES: ReadonlySet<string> = new Set([
@@ -69,21 +69,34 @@ export function isActionableMarket(input: MarketInput): MarketVerdict {
   return { actionable: true, reason: null };
 }
 
-/** Pure: is this market PRICEABLE — can we actually make an MAO-checked offer
- *  in it? Stricter than isActionableMarket: in addition to not being excluded
- *  or paused, the market must have (a) a SOURCED arv_pct_max in the buy-box
- *  registry AND (b) a SEEDED ZIP buyer-median (passed in as `seededZips`).
- *  Allowed-but-unpriceable markets — TX (San Antonio / Dallas / Houston),
- *  non-disclosure with no usable ARV source and no seeded median — are
- *  excluded so we never spend Firecrawl on a deal we can't price. The
- *  caller loads `seededZips` once (lib/buyer-median-store.listSeededZips). */
+/** Pure: is this market PRICEABLE — can we actually fire a ROUGH OPENER into it?
+ *  Stricter than isActionableMarket: in addition to not being excluded or paused,
+ *  (a) the OPENER's national buy-box must price the market (openerArvPctMax != null)
+ *  AND (b) the ZIP must be SEEDED (passed in as `seededZips` — the union of the
+ *  buyer-median store and the ARV $/sqft store).
+ *
+ *  Gate (a) is the OPENER lane, NOT the strict contract lane. Intake feeds the
+ *  opener send, and the opener prices any disclosure + non-restricted state off
+ *  the national default (0.70) with NO configured market, while it HOLDs
+ *  non-disclosure (TX etc.), restricted (IL etc.), and configured-but-unverified
+ *  (dormant Dallas/Memphis) markets. Gating intake on the configured-market
+ *  arv_pct_max — the old contract-grade check — blocked every cast-wide frontier
+ *  metro the opener could already price (observed 2026-06-30: Indianapolis /
+ *  Birmingham / Atlanta ARV-seeded and opener-priceable, but intake rejected
+ *  every listing market_not_priceable). Aligning (a) to openerArvPctMax makes
+ *  intake accept exactly what the opener can send — no more, no less.
+ *
+ *  Gate (b) (per-ZIP seed) stays: real comps must exist, or the opener
+ *  self-HOLDs downstream anyway (computeRoughOpenerCeiling). The caller loads
+ *  `seededZips` once (listSeededZips ∪ listArvSeededZips). */
 export function isPriceableMarket(input: MarketInput, seededZips: ReadonlySet<string>): MarketVerdict {
   const base = isActionableMarket(input);
   if (!base.actionable) return base;
   const market = getMarketForListing({ state: input.state, zip: input.zip });
-  const arvPct = market?.buyer_params?.arv_pct_max ?? null;
-  if (arvPct == null) return { actionable: false, reason: "no_sourced_arv_pct_max" };
+  if (openerArvPctMax(market, input.state) == null) {
+    return { actionable: false, reason: "opener_holds_market" };
+  }
   const zip = (input.zip ?? "").trim();
-  if (!zip || !seededZips.has(zip)) return { actionable: false, reason: "no_seeded_buyer_median" };
+  if (!zip || !seededZips.has(zip)) return { actionable: false, reason: "no_seeded_zip" };
   return { actionable: true, reason: null };
 }
