@@ -5,6 +5,17 @@
 // signal, fire an SMS to Alex's personal escalation number so he's
 // reached when he's not at the dashboard.
 //
+// NUMBER ROSTER (operator-confirmed 2026-06-30) — channel separation:
+//   FROM = the Maverick line, +16302505865 / PN id PNMhSUQXFw, via
+//          ALERT_FROM. The send REFUSES rather than fall back to the
+//          815 agent-facing outreach line (PNLosBI6fh).
+//   TO   = Alex's PERSONAL CELL, +16302172539 — NOT a Quo number. This
+//          is the "the system found a deal you must act on ASAP" reach
+//          path. (Prior DEFAULT_TARGET pointed at the Maverick line
+//          itself — Maverick texting its own number — so an urgent
+//          alert never reached Alex's phone unless the env override
+//          happened to be set. Default now corrected to the cell.)
+//
 // Trigger surface (per Phase 9.7 spec):
 //   - Synchronous side effect on every authorized `maverick_load_state`
 //     call (dashboard session + MCP OAuth). NOT cron-fired — same
@@ -29,7 +40,10 @@ import type { SourceName } from "./types";
 
 // ───────────────────── env / constants ─────────────────────
 
-const DEFAULT_TARGET = "+16302505865";
+// Alex's personal cell (operator-confirmed 2026-06-30). NOT a Quo number.
+// The env override MAVERICK_STAGE4_SMS_TARGET still wins when set; this is
+// the safe default so urgent alerts reach his phone even if the env drifts.
+const DEFAULT_TARGET = "+16302172539";
 const DEFAULT_COOLDOWN_MIN = 30;
 const DEFAULT_DAILY_CAP = 5;
 const ROLLING_WINDOW_MS = 24 * 60 * 60 * 1000;

@@ -66,6 +66,16 @@ export const LOW_OPENER_FLOOR_USD = (() => {
   return Number.isFinite(raw) && raw >= 0 ? raw : 10_000;
 })();
 
+/** The minimum DEFENSIBLE cash opener for a listing: max(PCT×list, $USD).
+ *  A buy-box opener below this is a laughable micro-offer (e.g. $1,714 on a
+ *  gutted shell) — HOLD → creative/landlord lane, never text it. Exported so
+ *  the h2 SEND path applies the identical floor the seed pricer already does
+ *  (the relationship-protector the direct send path was missing). Pure given
+ *  the env-read constants above. */
+export function minOfferFloor(list: number): number {
+  return Math.max(LOW_OPENER_FLOOR_PCT_OF_LIST * list, LOW_OPENER_FLOOR_USD);
+}
+
 /** Never-over-list cap: the opener can never exceed this fraction of list.
  *  0.90 (Maverick 2026-06-14) leaves negotiating room on strong deals
  *  instead of opening at asking. Env-tunable; clamped to (0,1]. */
@@ -212,7 +222,7 @@ export function priceOpener(input: PricerInput): PricerResult {
       // for operator review instead of sending it (and instead of the retired
       // list-fraction rail).
       if (list != null) {
-        const floor = Math.max(LOW_OPENER_FLOOR_PCT_OF_LIST * list, LOW_OPENER_FLOOR_USD);
+        const floor = minOfferFloor(list);
         if (gate.opener < floor) {
           return holdResult(
             rough.source,

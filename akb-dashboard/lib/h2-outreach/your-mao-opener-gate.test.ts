@@ -8,11 +8,11 @@ describe("anchoredOpenerGate — Detroit launch shape (anchor 0.90)", () => {
   it("opener = round(anchor × rough ceiling)", () => {
     const r = anchoredOpenerGate({ ceiling: 27_261, anchorPct: 0.90, priceable: true });
     expect(r.ok).toBe(true);
-    expect(r.opener).toBe(24_535); // Rosemary rough ceiling × 0.90
+    expect(r.opener).toBe(24_500); // 27,261 × 0.90 = 24,535 → nearest $250 = 24,500
     expect(r.reason).toBe("ok");
   });
-  it("Frisbee rough ceiling 76,298 × 0.90 = 68,668", () => {
-    expect(anchoredOpenerGate({ ceiling: 76_298, anchorPct: 0.90, priceable: true }).opener).toBe(68_668);
+  it("Frisbee rough ceiling 76,298 × 0.90 = 68,668 → nearest $250 = 68,750", () => {
+    expect(anchoredOpenerGate({ ceiling: 76_298, anchorPct: 0.90, priceable: true }).opener).toBe(68_750);
   });
 });
 

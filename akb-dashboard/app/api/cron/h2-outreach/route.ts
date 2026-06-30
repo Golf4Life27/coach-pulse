@@ -43,6 +43,7 @@ import { audit } from "@/lib/audit-log";
 import { checkFirstOutreachHydration, checkOfferOverList, resolveOpenerCeiling } from "@/lib/outreach-economics";
 import { anchoredOpenerGate } from "@/lib/h2-outreach/your-mao-opener-gate";
 import { computeRoughOpenerCeiling } from "@/lib/rough-opener-ceiling";
+import { minOfferFloor } from "@/lib/per-market-pricer";
 import { getMarketForListing, openerArvPctMax } from "@/lib/markets/registry";
 import { resolveAnchorPct } from "@/lib/markets/anchor";
 import { readSendCapConfig, applySendCap } from "@/lib/outreach/send-cap";
@@ -357,6 +358,32 @@ async function handle(req: Request): Promise<Response> {
         ceilingSource: rough.source,
         anchorPct: gate.anchorPct,
         opener: null,
+        source: ceiling.source,
+      });
+      continue;
+    }
+    // ── MIN-OFFER FLOOR (relationship-protector, operator 2026-06-30) ──
+    // A positive-but-sub-pencil opener below max(PCT×list, $USD) is a
+    // laughable cash number on a near-shell ($1,714 on a $15k gutted house).
+    // HOLD → creative/landlord lane; never autonomously text it. The seed
+    // pricer (per-market-pricer) already floors here; the direct send path
+    // skipped it — closing that gap so volume can flow at scale without
+    // burning agent relationships on garbage offers.
+    if (
+      l.listPrice != null &&
+      gate.opener != null &&
+      gate.opener < minOfferFloor(l.listPrice)
+    ) {
+      openerGuarded.push({
+        recordId: l.id,
+        address: l.address ?? null,
+        listPrice: l.listPrice ?? null,
+        action: "skipped",
+        reason: "below_min_offer_floor",
+        ceiling: rough.ceiling,
+        ceilingSource: rough.source,
+        anchorPct: gate.anchorPct,
+        opener: gate.opener,
         source: ceiling.source,
       });
       continue;
