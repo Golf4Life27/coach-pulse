@@ -40,14 +40,13 @@ import { NextResponse } from "next/server";
 import { getListings, getListing, updateListingRecord } from "@/lib/airtable";
 import { sendMessageWithId, getMessageStatus } from "@/lib/quo";
 import { audit } from "@/lib/audit-log";
-import { checkFirstOutreachHydration, checkOfferOverList, resolveOpenerCeiling } from "@/lib/outreach-economics";
-import { anchoredOpenerGate } from "@/lib/h2-outreach/your-mao-opener-gate";
-import { computeRoughOpenerCeiling } from "@/lib/rough-opener-ceiling";
+import { checkFirstOutreachHydration, checkOfferOverList } from "@/lib/outreach-economics";
+import { priceOpenerWithSeed } from "@/lib/opener-pricing";
+import { getZipArvSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import { minOfferFloor } from "@/lib/per-market-pricer";
 import { getMarketForListing, openerArvPctMax } from "@/lib/markets/registry";
 import { resolveAnchorPct } from "@/lib/markets/anchor";
 import { readSendCapConfig, applySendCap } from "@/lib/outreach/send-cap";
-import { loadUnderwriteContextForListings } from "@/lib/track-aware-underwrite";
 import {
   authenticate,
   hasDashboardSession,
@@ -315,50 +314,59 @@ async function handle(req: Request): Promise<Response> {
   // ceiling (informational lineage) is still computed for the probe's
   // telemetry block so Maverick reviews with full numbers in hand.
   const openerGuarded: Array<{ recordId: string; address: string | null; listPrice: number | null; action: "skipped"; reason: string | null; ceiling: number | null; ceilingSource: string | null; anchorPct: number | null; opener: number | null; source: string | null }> = [];
-  const uwCtxCron = await loadUnderwriteContextForListings(queue);
-  // One anchor read per market per tick — cached so a 100-record cohort
-  // doesn't hit KV per record.
+  // One anchor read per market per tick + one ARV-seed read per ZIP — cached so
+  // a 100-record cohort doesn't hit KV per record.
   const anchorCache = new Map<string, number>();
+  const seedCache = new Map<string, ZipArvSeed | null>();
   const filteredQueue: typeof queue = [];
   for (const l of queue) {
-    const ceiling = resolveOpenerCeiling(l, uwCtxCron);
-    const marketId = ceiling.market ?? "";
+    const market = getMarketForListing({ state: l.state, zip: l.zip });
+    const marketId = market?.id ?? "";
     let anchorPct = anchorCache.get(marketId);
     if (anchorPct == null) {
       anchorPct = await resolveAnchorPct(marketId || null);
       anchorCache.set(marketId, anchorPct);
     }
-    // KEYSTONE 2026-06-13 (spine recmgjlZSwhECn1W0 — Maverick Flag-2):
-    // The opener caps on the cheap ROUGH OPENER CEILING (rough ARV −
-    // rough rehab − fee, list-fraction fallback), NOT Your_MAO_V21.
-    // V21 is the PRECISE CONTRACT number; using it here would re-conflate
-    // the two. The rough ceiling reads only already-stored cheap fields,
-    // so the opener never waits on sourced rent/cap.
-    const rough = computeRoughOpenerCeiling({
-      realArvMedian: l.realArvMedian ?? null,
+    // SEED-AWARE OPENER (operator 2026-06-30): price via the SAME canonical
+    // pricer as the opener-dry-run eyeball + the intake opener-write —
+    // priceOpenerWithSeed prefers the ZIP_ARV_Seed renovated $/sqft over the
+    // contaminated stored Real_ARV_Median, so cast-wide metros (ARV-seeded, no
+    // buyer-median) price IDENTICALLY to the watched preview. The old path
+    // (computeRoughOpenerCeiling off l.realArvMedian + the buyer-median
+    // priceable gate) HELD every ARV-seeded metro market_not_priceable —
+    // l.realArvMedian is null for them — starving autonomous cast-wide sends.
+    // priceOpener applies the anchor, the never-over-list 90% cap, and the $250
+    // rounding; the min-offer floor (below) and all send rails are unchanged.
+    const zip5 = (l.zip ?? "").trim();
+    if (zip5 && !seedCache.has(zip5)) {
+      seedCache.set(zip5, await getZipArvSeed(zip5).catch(() => null));
+    }
+    const seed = zip5 ? seedCache.get(zip5) ?? null : null;
+    const pw = priceOpenerWithSeed({
+      listPrice: l.listPrice ?? null,
+      storedArv: l.realArvMedian ?? null,
+      storedArvConfidence: l.arvConfidence ?? null,
       estRehabMid: l.estRehabMid ?? null,
       estRehab: l.estRehab ?? null,
-      listPrice: l.listPrice ?? null,
-      arvPctMax: openerArvPctMax(getMarketForListing({ state: l.state, zip: l.zip }), l.state),
+      sqft: l.buildingSqFt ?? null,
+      arvPctMax: openerArvPctMax(market, l.state),
       wholesaleFee: l.wholesaleFeeTarget ?? null,
-    });
-    const gate = anchoredOpenerGate({
-      ceiling: rough.ceiling,
       anchorPct,
-      priceable: ceiling.priceable,
+      seed,
     });
-    if (!gate.ok) {
+    const priced = pw.result;
+    if (priced.opener == null) {
       openerGuarded.push({
         recordId: l.id,
         address: l.address ?? null,
         listPrice: l.listPrice ?? null,
         action: "skipped",
-        reason: gate.reason,
-        ceiling: rough.ceiling,
-        ceilingSource: rough.source,
-        anchorPct: gate.anchorPct,
+        reason: priced.basis === "hold_no_value_basis" ? "market_not_priceable" : "opener_hold",
+        ceiling: priced.ceiling,
+        ceilingSource: priced.basis,
+        anchorPct: priced.anchorPct,
         opener: null,
-        source: ceiling.source,
+        source: pw.arvSource,
       });
       continue;
     }
@@ -371,8 +379,8 @@ async function handle(req: Request): Promise<Response> {
     // burning agent relationships on garbage offers.
     if (
       l.listPrice != null &&
-      gate.opener != null &&
-      gate.opener < minOfferFloor(l.listPrice)
+      priced.opener != null &&
+      priced.opener < minOfferFloor(l.listPrice)
     ) {
       openerGuarded.push({
         recordId: l.id,
@@ -380,17 +388,17 @@ async function handle(req: Request): Promise<Response> {
         listPrice: l.listPrice ?? null,
         action: "skipped",
         reason: "below_min_offer_floor",
-        ceiling: rough.ceiling,
-        ceilingSource: rough.source,
-        anchorPct: gate.anchorPct,
-        opener: gate.opener,
-        source: ceiling.source,
+        ceiling: priced.ceiling,
+        ceilingSource: priced.basis,
+        anchorPct: priced.anchorPct,
+        opener: priced.opener,
+        source: pw.arvSource,
       });
       continue;
     }
-    // SUCCESS — overwrite l.mao with the Your_MAO × anchor opener so all
+    // SUCCESS — overwrite l.mao with the seed-aware anchored opener so all
     // downstream rails (send composer, idempotency, audit) read one value.
-    l.mao = gate.opener;
+    l.mao = priced.opener;
     filteredQueue.push(l);
   }
   queue = filteredQueue;
