@@ -58,8 +58,15 @@ export interface VoiceEntry {
 // Future model bumps update only this section.
 
 export const MODEL_SONNET_4_6 = "claude-sonnet-4-6";
-export const MODEL_SONNET_4_5 = "claude-sonnet-4-5-20250929";
-export const MODEL_SONNET_4_LEGACY = "claude-sonnet-4-20250514";
+// 2026-06-29 ROOT-CAUSE FIX: Anthropic retired the dated Sonnet IDs. The legacy
+// `claude-sonnet-4-20250514` 404'd in production (confirmed via Vercel runtime
+// errors), silently killing every agent pinned to it — the morning brief
+// (maverick) AND Crier, the agent that DRAFTS the outbound texts. Both stale
+// aliases now resolve to the current 4.6 ID so nothing points at a dead model.
+// (Appraiser was already on 4.6; if rehab-vision stays dark post-deploy its
+// cause is separate — investigate the photo-scrape / route path.)
+export const MODEL_SONNET_4_5 = MODEL_SONNET_4_6;
+export const MODEL_SONNET_4_LEGACY = MODEL_SONNET_4_6;
 export const MODEL_HAIKU_4_5 = "claude-haiku-4-5-20251001";
 
 // ── Registry ──────────────────────────────────────────────────────────────

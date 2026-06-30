@@ -242,7 +242,7 @@ export async function POST(req: Request) {
   try {
     const client = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
     const message = await client.messages.create({
-      model: "claude-sonnet-4-5-20250929",
+      model: "claude-sonnet-4-6",
       max_tokens: 1024,
       // System prompt is static across requests — cache it. The volatile
       // pieces (command, data summary, property context) live in the user
