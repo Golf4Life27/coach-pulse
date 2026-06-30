@@ -1,7 +1,20 @@
 import { describe, it, expect } from "vitest";
-import { priceOpener, NEVER_OVER_LIST_PCT } from "./per-market-pricer";
+import { priceOpener, NEVER_OVER_LIST_PCT, minOfferFloor } from "./per-market-pricer";
 
 const DETROIT_BUYBOX = 0.6461;
+
+describe("minOfferFloor — relationship-protector (operator 2026-06-30)", () => {
+  it("floor = max(30% × list, $10k)", () => {
+    expect(minOfferFloor(55_000)).toBe(16_500); // 30% of 55k (16,500) > 10k
+    expect(minOfferFloor(14_950)).toBe(10_000); // 30% (4,485) < 10k → the $10k USD leg wins
+  });
+  it("the $1,714 Liberal opener is below the $10k floor → HOLDS (no laughable text)", () => {
+    expect(1_714 < minOfferFloor(14_950)).toBe(true);
+  });
+  it("the $16,500 Tacoma opener clears its $16,500 floor (not below) → sends", () => {
+    expect(16_500 < minOfferFloor(55_000)).toBe(false);
+  });
+});
 
 describe("priceOpener — value-anchored buy-box path (the only SEND basis)", () => {
   it("anchor × (ARV×buybox − rehab − fee) when ARV + buy-box present", () => {
