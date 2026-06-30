@@ -103,19 +103,23 @@ describe("planQueue — first_touch", () => {
     expect(p.toE164).toBe("+12105551234");
     expect(p.message).toContain("Hi Jane, this is Alex with AKB Solutions");
     expect(p.message).not.toContain("Jane Agent"); // first name only — 5/8 rule
-    expect(p.message).toContain("listing at 123 Main St. I would like");
+    expect(p.message).toContain("cash offer of $97,500 on 123 Main St.");
+    expect(p.message).toContain("off their hands and done, we're ready to move fast.");
+    expect(p.message).not.toContain("open to offers in that range"); // killed copy
     expect(p.message).toContain("$97,500");
   });
   it("falls back to 'there' when agent name is blank", () => {
     const [p] = plan([listing({ agentName: "" })]);
     expect(p.message).toContain("Hi there, this is Alex");
   });
-  it("uses the address verbatim — no redundant city clause appended", () => {
-    // Real RentCast addresses already carry city/state/zip; the old code
-    // appended " in {city}" → "…, San Antonio, TX 78201 in San Antonio".
+  it("uses the STREET only — drops the redundant city/state/zip tail", () => {
+    // Real RentCast addresses carry city/state/zip; the locked reframe
+    // (2026-06-30) references the street only ("on 1138 Santa Anna"), never
+    // the full line — so no redundant city clause is even possible.
     const [p] = plan([listing({ address: "1138 Santa Anna, San Antonio, TX 78201", city: "San Antonio" })]);
-    expect(p.message).toContain("listing at 1138 Santa Anna, San Antonio, TX 78201. I would like");
-    expect(p.message).not.toContain("78201 in San Antonio");
+    expect(p.message).toContain("on 1138 Santa Anna. As-is");
+    expect(p.message).not.toContain("San Antonio");
+    expect(p.message).not.toContain("78201");
   });
 });
 
