@@ -211,10 +211,18 @@ export function firstNameOnly(agentName: string | null): string {
 }
 
 /** Pure: compose the first-touch SMS body (spec §Step 3).
- *  Greets on FIRST NAME ONLY per the proven outreach rule (5/8/2026). The
- *  RentCast address already carries city/state/zip ("1138 Santa Anna, San
- *  Antonio, TX 78201"), so it is used verbatim — no city clause is appended
- *  (that produced the "…, San Antonio, TX 78201 in San Antonio" redundancy). */
+ *  Greets on FIRST NAME ONLY per the proven outreach rule (5/8/2026).
+ *
+ *  LOCKED COPY (operator 2026-06-30): the cash offer is framed as RELIEF +
+ *  speed — "as-is, no repairs or cleanout", "close on your timeline", "off
+ *  their hands and done". This SUPERSEDES the prior "Is the seller open to
+ *  offers in that range?" close, which the operator killed for slapping the
+ *  seller in the face with the lowball instead of offering them a way to close
+ *  out the chapter. The offer number is already the defensible, value-anchored,
+ *  $250-rounded, floor/cap-guarded figure (per-market-pricer + the send guards),
+ *  so the copy never has to hedge ("open to offers in that range"). The street
+ *  only is referenced ("on 1736 N Graham Ave") — the full RentCast address
+ *  carries a redundant city/state/zip tail. */
 export function buildH2Message(
   agentName: string | null,
   address: string,
@@ -222,10 +230,12 @@ export function buildH2Message(
 ): string {
   const name = firstNameOnly(agentName);
   const offer = `$${Math.round(mao).toLocaleString("en-US")}`;
+  const street = address.split(",")[0].trim() || address;
   return (
-    `Hi ${name}, this is Alex with AKB Solutions. I am interested in your ` +
-    `listing at ${address}. I would like to make a cash offer at ${offer} ` +
-    `with a quick close. Is the seller open to offers in that range?`
+    `Hi ${name}, this is Alex with AKB Solutions. I'd like to make a cash ` +
+    `offer of ${offer} on ${street}. As-is, no repairs or cleanout, and we ` +
+    `close on your timeline. If the seller just wants this off their hands ` +
+    `and done, we're ready to move fast.`
   );
 }
 
