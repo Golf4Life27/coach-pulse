@@ -30,8 +30,8 @@ describe("priceOpenerWithSeed — source-swap", () => {
     expect(r.result.basis).toBe("arv_buybox");
     expect(r.basisLabel).toBe("arv_buybox_seed");
     expect(r.arvUsed).toBe(150_000);
-    // ceiling = 150000×0.6461 − 20000 − 5000 = 71,915; opener = 0.90× = 64,724
-    expect(r.result.opener).toBe(64_724);
+    // ceiling = 150000×0.6461 − 20000 − 5000 = 71,915; opener = 0.90× = 64,724 → nearest $250 = 64,750
+    expect(r.result.opener).toBe(64_750);
     expect(r.result.arvDistrusted).toBe(false);
   });
 

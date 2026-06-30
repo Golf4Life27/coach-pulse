@@ -10,7 +10,10 @@
 // PRECISE CONTRACT MAO (V21 / future flipper comp-ARV) is a separate
 // number that drives Contract_Offer_Price, never the opener.
 //
-//   opener_dollars = round(anchor_pct × rough_ceiling)
+//   opener_dollars = roundToNearest250(anchor_pct × rough_ceiling)
+//
+// Offers round to the nearest $250 (operator rule, lib/pricing/offer-rounding)
+// so the number reads human ($16,500) not algorithmic ($16,535).
 //
 // HARD GATE (absolute): rough_ceiling null or ≤ 0 → NOT eligible for an
 // autonomous send. Null is rare by design (the rough ceiling has a
@@ -21,6 +24,8 @@
 // Anchor comes from lib/markets/anchor — Detroit 0.90; every market
 // carries its own; the silent calibration job moves it. Market gate
 // (priceable) retained as the registry gate.
+
+import { roundOfferToNearest } from "@/lib/pricing/offer-rounding";
 
 export type OpenerGateReason =
   | "ok"
@@ -85,12 +90,12 @@ export function anchoredOpenerGate(input: AnchoredOpenerGateInput): AnchoredOpen
       ceiling: input.ceiling, anchorPct: input.anchorPct ?? null,
     };
   }
-  const opener = Math.round(input.ceiling * input.anchorPct);
+  const opener = roundOfferToNearest(input.ceiling * input.anchorPct);
   return {
     ok: opener > 0,
     opener: opener > 0 ? opener : null,
     reason: "ok",
-    detail: `opener $${opener.toLocaleString()} = anchor ${input.anchorPct} × rough ceiling $${input.ceiling.toLocaleString()}`,
+    detail: `opener $${opener.toLocaleString()} = anchor ${input.anchorPct} × rough ceiling $${input.ceiling.toLocaleString()}, rounded to nearest $250`,
     ceiling: input.ceiling,
     anchorPct: input.anchorPct,
   };

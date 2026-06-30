@@ -17,7 +17,7 @@ describe("priceOpener — value-anchored buy-box path (the only SEND basis)", ()
     expect(r.basis).toBe("arv_buybox");
     expect(r.confidence).toBe("STRONG");
     expect(r.ceiling).toBe(94_220);
-    expect(r.opener).toBe(84_798);
+    expect(r.opener).toBe(84_750); // 94,220 × 0.90 = 84,798 → nearest $250
     expect(r.anchorPct).toBe(0.90);
   });
 
@@ -168,7 +168,7 @@ describe("GUARD B — low-opener floor (Hole B) — HOLDS a micro-opener", () =>
     expect(r.flooredToFallback).toBe(false);
     expect(r.cappedToList).toBe(false);
     expect(r.arvDistrusted).toBe(false);
-    expect(r.opener).toBe(50_687);
+    expect(r.opener).toBe(50_750); // 56,319 × 0.90 = 50,687 → nearest $250
   });
 });
 
