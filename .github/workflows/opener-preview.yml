@@ -1,0 +1,103 @@
+# Opener preview — the "eyeball the offers" surface (on-demand).
+#
+# Runs /api/admin/opener-dry-run over the STORED cohort and reports, per record,
+# the rough-opener cash number it WOULD send + the lowball-gate verdict — WITHOUT
+# sending, writing, or any paid call. The dedicated way to read what national
+# pricing produces for a metro before widening the send dial (H2_COVERED_ZIPS).
+#
+# Pair with intake-single-run (mode=live, same zips) to first WRITE a freshly-cast
+# metro's listings, then preview their openers here.
+#
+# DRY by construction — opener-dry-run never sends and never writes.
+# Required GitHub secret: CRON_SECRET (mirror of the Vercel env).
+
+name: Opener preview (eyeball offers)
+
+on:
+  workflow_dispatch:
+    inputs:
+      zips:
+        description: "Comma/space ZIPs to scope (e.g. 46218,35211). Empty = whole stored cohort."
+        required: false
+        default: ""
+        type: string
+      sample:
+        description: "Max per-record rows to return (aggregates always cover the full scan)."
+        required: false
+        default: "75"
+        type: string
+      eligible_only:
+        description: "1 = only rows the aggressive-lowball gate passed."
+        required: false
+        default: "0"
+        type: choice
+        options: ["0", "1"]
+      base_url:
+        description: "Production base URL (override only for staging tests)."
+        required: false
+        default: "https://coach-pulse-ten.vercel.app"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ZIPS: ${{ inputs.zips }}
+      SAMPLE: ${{ inputs.sample }}
+      ELIGIBLE: ${{ inputs.eligible_only }}
+      BASE_URL: ${{ inputs.base_url }}
+    steps:
+      - name: Refuse to run when CRON_SECRET is missing
+        run: |
+          if [ -z "${{ secrets.CRON_SECRET }}" ]; then
+            echo "::error::CRON_SECRET is not configured as a GitHub Actions secret."
+            exit 1
+          fi
+          echo "CRON_SECRET present; proceeding."
+
+      - name: Invoke /api/admin/opener-dry-run
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          Q="sample=${SAMPLE:-75}"
+          ZIPS_CLEAN="$(echo "${ZIPS:-}" | tr -d '[:space:]')"
+          if [ -n "${ZIPS_CLEAN}" ]; then Q="${Q}&zips=${ZIPS_CLEAN}"; fi
+          if [ "${ELIGIBLE:-0}" = "1" ]; then Q="${Q}&eligible=1"; fi
+          URL="${BASE_URL}/api/admin/opener-dry-run?${Q}"
+          echo "GET ${URL}"
+          HTTP_CODE=$(curl -sS -o /tmp/opener.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "${URL}")
+          echo "HTTP ${HTTP_CODE}"
+          echo "--- response body ---"
+          jq . /tmp/opener.json 2>/dev/null || cat /tmp/opener.json
+          if [ "${HTTP_CODE}" -ge 400 ]; then
+            echo "::error::opener-dry-run returned HTTP ${HTTP_CODE}"
+            exit 1
+          fi
+
+      - name: Surface the headline + per-record offers
+        if: success()
+        run: |
+          set -euo pipefail
+          {
+            echo "## Opener preview (zips=${ZIPS:-all})"
+            echo ""
+            jq -r '
+              "- scanned: \(.aggregates.scanned // "?")",
+              "- priced (opener computed): \(.aggregates.priced // "?")",
+              "- held (no value basis): \(.aggregates.held_no_inputs // "?")",
+              "- lowball-eligible: \(.aggregates.lowball_eligible // "?")",
+              "- would-send aggressive: \(.aggregates.would_send_aggressive // "?")",
+              "- avg opener: \(.aggregates.avg_opener // "n/a")"
+            ' /tmp/opener.json 2>/dev/null || echo "- (see raw response above)"
+            echo ""
+            echo "| address | zip | list | opener | %list | tier | hold |"
+            echo "|---|---|---|---|---|---|---|"
+            jq -r '.sample_rows[]? | "| \(.address // "?") | \(.zip // "?") | \(.list_price // "?") | \(.opener // "HOLD") | \(.opener_vs_list_pct // "-") | \(.lowball_tier // "-") | \(.hold_reason // "-") |"' /tmp/opener.json 2>/dev/null || echo "(no rows)"
+          } >> "$GITHUB_STEP_SUMMARY"
