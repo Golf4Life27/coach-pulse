@@ -1014,7 +1014,17 @@ export async function GET(req: Request) {
     const underwrittenMaoTrack: BuyerTrack | null = null;
 
     // Intrinsic auto-promote eligibility, then layer the feature flags.
-    const ap = shouldAutoPromote({ accepted, agentPhone: c.agentPhone, state: c.state, listPrice: c.listPrice, underwrittenMao });
+    // OPENER LANE (operator 2026-06-30): a record the national buy-box can price
+    // (openerArvPctMax != null) whose ZIP is seeded promotes WITHOUT a pre-
+    // computed contract MAO — the rough opener self-gates at send. Without this,
+    // every accepted record failed mao_not_underwritten (intake stopped computing
+    // a MAO in the 2026-06-12 keystone rewrite → underwrittenMao is always null
+    // here), so the autonomous send queue starved. Contract-lane markets (non-
+    // disclosure / restricted / configured-unverified → openerArvPctMax null)
+    // still require underwrittenMao.
+    const apMarket = getMarketForListing({ state: c.state, zip });
+    const openerPriceable = openerArvPctMax(apMarket, c.state) != null && seededZips.has(zip);
+    const ap = shouldAutoPromote({ accepted, agentPhone: c.agentPhone, state: c.state, listPrice: c.listPrice, underwrittenMao, openerPriceable });
     if (ap.promote) summary.auto_promote.eligible++;
     if (accepted && !ap.promote && ap.reason) {
       bumpBlocked(ap.reason);

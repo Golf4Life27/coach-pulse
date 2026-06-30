@@ -65,4 +65,26 @@ describe("shouldAutoPromote", () => {
     expect(shouldAutoPromote(input({ agentPhone: "210-555-1234" })).promote).toBe(true);
     expect(shouldAutoPromote(input({ agentPhone: "+12105551234" })).promote).toBe(true);
   });
+
+  // ── OPENER LANE (operator 2026-06-30) ──────────────────────────────────
+  it("OPENER LANE: an opener-priceable record promotes WITHOUT a contract MAO", () => {
+    // The rough opener computes its ceiling + self-gates at SEND time, so a
+    // pre-computed contract MAO is not required to promote. Fix for the starved
+    // autonomous queue: intake stopped writing a MAO in the 2026-06-12 keystone
+    // rewrite, so every accept had been failing mao_not_underwritten.
+    expect(shouldAutoPromote(input({ underwrittenMao: null, openerPriceable: true }))).toEqual({ promote: true, reason: null });
+    expect(shouldAutoPromote(input({ underwrittenMao: 0, openerPriceable: true })).promote).toBe(true);
+  });
+
+  it("OPENER LANE still enforces the non-MAO gates (accept, phone, state, price)", () => {
+    expect(shouldAutoPromote(input({ openerPriceable: true, accepted: false })).reason).toBe("not_accepted");
+    expect(shouldAutoPromote(input({ openerPriceable: true, agentPhone: null })).reason).toBe("no_agent_phone");
+    expect(shouldAutoPromote(input({ openerPriceable: true, state: "IL" })).reason).toBe("wholesale_restricted_state");
+    expect(shouldAutoPromote(input({ openerPriceable: true, listPrice: 0 })).reason).toBe("list_price_missing");
+  });
+
+  it("CONTRACT LANE (openerPriceable false/absent) still requires the underwritten MAO", () => {
+    expect(shouldAutoPromote(input({ underwrittenMao: null, openerPriceable: false })).reason).toBe("mao_not_underwritten");
+    expect(shouldAutoPromote(input({ underwrittenMao: null })).reason).toBe("mao_not_underwritten");
+  });
 });

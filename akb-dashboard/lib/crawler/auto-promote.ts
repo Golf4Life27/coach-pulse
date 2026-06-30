@@ -39,8 +39,17 @@ export interface AutoPromoteInput {
   /** Track-aware Your_MAO underwritten BEFORE promote (operator 2026-06-09).
    *  A lead must NEVER be outreach-eligible without a computed MAO on it —
    *  the new belt order is intake → enrich → verify → underwrite → promote
-   *  → outreach. null/undefined here blocks promote with mao_not_underwritten. */
+   *  → outreach. null/undefined here blocks promote with mao_not_underwritten —
+   *  UNLESS openerPriceable (below) routes it down the opener lane. */
   underwrittenMao?: number | null;
+  /** OPENER LANE (operator 2026-06-30): the record is opener-priceable — the
+   *  national buy-box can price it (openerArvPctMax != null) AND its ZIP is
+   *  seeded, AND the rough opener self-gates at SEND time (h2-outreach holds
+   *  ceiling_non_penciling / below_min_offer_floor / >90%-of-list). When true,
+   *  promote does NOT require a pre-computed CONTRACT MAO: the send-time opener
+   *  IS the computed number, produced at send rather than at promote. When
+   *  false/absent, the 2026-06-09 contract-lane MAO gate applies unchanged. */
+  openerPriceable?: boolean;
 }
 
 export interface AutoPromoteDecision {
@@ -56,7 +65,10 @@ export function shouldAutoPromote(i: AutoPromoteInput): AutoPromoteDecision {
     return { promote: false, reason: "wholesale_restricted_state" };
   if (!normalizePhone(i.agentPhone))
     return { promote: false, reason: "no_agent_phone" };
-  if (i.underwrittenMao == null || !Number.isFinite(i.underwrittenMao) || i.underwrittenMao <= 0)
+  // OPENER LANE bypass: opener-priceable records promote without a pre-computed
+  // contract MAO — the rough opener computes its ceiling and self-gates at SEND
+  // (operator 2026-06-30). The CONTRACT lane still requires the underwritten MAO.
+  if (!i.openerPriceable && (i.underwrittenMao == null || !Number.isFinite(i.underwrittenMao) || i.underwrittenMao <= 0))
     return { promote: false, reason: "mao_not_underwritten" };
   return { promote: true, reason: null };
 }
