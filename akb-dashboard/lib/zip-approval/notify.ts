@@ -8,14 +8,15 @@
 // expansion proposals). Idempotent per ZIP — skips when the row already
 // has the "sms" channel recorded.
 //
-// Operator cell reuses MAVERICK_STAGE4_SMS_TARGET (same number Maverick
-// Tier-3 escalations go to), default +16302505865.
+// Operator cell reuses MAVERICK_STAGE4_SMS_TARGET (same destination Maverick
+// Tier-3 escalations go to) — Alex's personal cell +16302172539
+// (operator-confirmed 2026-06-30), NOT the Maverick Quo line.
 
 import { audit } from "@/lib/audit-log";
 import { sendMessageWithId } from "@/lib/quo";
 import { markApprovalNotified, type ZipRegistryRow } from "@/lib/zip-registry";
 
-const DEFAULT_TARGET = "+16302505865";
+const DEFAULT_TARGET = "+16302172539";
 
 export function readOperatorTarget(): string {
   return process.env.MAVERICK_STAGE4_SMS_TARGET ?? DEFAULT_TARGET;

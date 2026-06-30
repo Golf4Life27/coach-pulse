@@ -90,8 +90,9 @@ this file recording the canonical mapping if it has ever drifted.
 | Service | Identity |
 |---------|----------|
 | Anthropic API key (production) | Vercel env, distinct from Make.com's key (rotated 2026-05-18) |
-| Quo workspace number (Crier) | `+18155569965` (carrier registered) |
-| Quo personal escalation (Maverick) | `+16302505865` (Alex's, A2P 10DLC) |
+| Quo outreach send line (Crier, agent-facing) | `+18155569965` / `PNLosBI6fh` (carrier registered; the 815 number) |
+| Quo Maverick alert line (operator-facing, FROM) | `+16302505865` / `PNMhSUQXFw` — `ALERT_FROM`. Maverick→Alex sends only; never the 815 outreach line (channel separation) |
+| Operator personal cell (urgent escalation, TO) | `+16302172539` — Alex's cell, NOT a Quo number. `MAVERICK_STAGE4_SMS_TARGET` default. The "system found a deal, act ASAP" reach path |
 | RentCast | monthly cap 1,000 calls, resets 1st of month UTC |
 | Firecrawl | Standard tier, 50 concurrent browsers, `FIRECRAWL_MAX_CONCURRENT=20` default |
 | DocuSign | JWT path (Path A); MCP path is Claude-side, unreachable from Vercel |
