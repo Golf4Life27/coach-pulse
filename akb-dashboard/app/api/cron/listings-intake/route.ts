@@ -524,7 +524,21 @@ export async function GET(req: Request) {
   let seededZipsSource: "store" | "fallback" = "store";
   if (requirePriceable) {
     try {
-      seededZips = await listSeededZips();
+      // Opener-priceable = has EITHER a buyer-median seed (precise/contract
+      // lane) OR an ARV $/sqft seed (the ROUGH OPENER prices off this). The
+      // cast-wide frontier seed-sweep fills the ARV store; requiring the
+      // buyer-median ALONE blocked every freshly-onboarded metro even though
+      // the opener could already price it (observed 2026-06-30: seeded
+      // Atlanta/Indy/Birmingham ARV, but intake still rejected all listings
+      // market_not_priceable). The opener self-gates (computeRoughOpenerCeiling
+      // HOLDs a no-ARV market), so the union is safe — it never sends a number
+      // it can't back; it just lets the opener lane onboard a new metro the
+      // moment its ARV is seeded, without waiting on the buyer-median.
+      const [buyerMedianSeeded, arvSeeded] = await Promise.all([
+        listSeededZips(),
+        listArvSeededZips(),
+      ]);
+      seededZips = new Set<string>([...buyerMedianSeeded, ...arvSeeded]);
     } catch (e) {
       seededZips = FALLBACK_SEEDED_ZIPS;
       seededZipsSource = "fallback";
