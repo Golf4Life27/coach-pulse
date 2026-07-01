@@ -13,6 +13,7 @@ import {
   buildSentNote,
   buildStallNote,
   buildQuarantineNote,
+  buildDeliveryQuarantineNote,
   planQueue,
 } from "./h2-outreach";
 import type { Listing } from "@/lib/types";
@@ -231,6 +232,10 @@ describe("note builders", () => {
     ).toBe("[H2 stall 2026-05-26T19:00:00.000Z] Prior contact found at record old (1 A St, status: Texted)");
     expect(buildQuarantineNote(null, NOW, "555-CALL")).toBe(
       "[H2 quarantine 2026-05-26T19:00:00.000Z] Bad phone format: '555-CALL'",
+    );
+    expect(buildDeliveryQuarantineNote(null, NOW, "+12058756959", "undelivered")).toBe(
+      "[H2 quarantine 2026-05-26T19:00:00.000Z] Carrier could not deliver to '+12058756959' " +
+        "(status: undelivered) — number marked Dead, no retry.",
     );
   });
   it("formats MAO with thousands separators and no decimals", () => {
