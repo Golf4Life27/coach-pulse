@@ -64,6 +64,7 @@ import {
   buildSentNote,
   buildStallNote,
   buildQuarantineNote,
+  buildDeliveryQuarantineNote,
   type H2Plan,
 } from "@/lib/h2-outreach";
 import {
@@ -267,7 +268,7 @@ async function handle(req: Request): Promise<Response> {
           error: `ineligible: ${reason}`,
           working_hours_meta: null,
         }],
-        summary: { first_touch_sent: 0, prior_contact_stalled: 0, bad_phone_quarantined: 0, outside_hours: 0, skipped: 1, errors: 0, unconfirmed: 0 },
+        summary: { first_touch_sent: 0, prior_contact_stalled: 0, bad_phone_quarantined: 0, outside_hours: 0, skipped: 1, errors: 0, unconfirmed: 0, delivery_quarantined: 0 },
         auth_kind: authKind,
         duration_ms: Date.now() - t0,
       });
@@ -506,6 +507,10 @@ async function handle(req: Request): Promise<Response> {
     /** Sends that fired but never observed a terminal-success status in the
      *  poll window — Texted NOT stamped; reconcile cron repairs. */
     unconfirmed: number;
+    /** Sends the carrier confirmed it could NOT deliver (terminal
+     *  undelivered/failed) — the number was auto-quarantined (marked Dead,
+     *  no retry). Distinct from bad_phone_quarantined (upfront format reject). */
+    delivery_quarantined: number;
   } = {
     first_touch_sent: 0,
     prior_contact_stalled: 0,
@@ -515,6 +520,7 @@ async function handle(req: Request): Promise<Response> {
     idempotent_skipped: 0,
     errors: 0,
     unconfirmed: 0,
+    delivery_quarantined: 0,
   };
 
   // Run-mutex (live only) — two overlapping invocations both reading the same
@@ -690,6 +696,7 @@ async function handle(req: Request): Promise<Response> {
           //      stamp Texted on an unverified send (the batch path already
           //      enforces this; the cron was missing it).
           let delivered = false;
+          let terminalFailure = false; // Quo confirmed the message will NOT deliver
           let confirmedStatus: string | null = result.status ?? null;
           if (result.id) {
             for (let attempt = 0; attempt < POLL_ATTEMPTS; attempt++) {
@@ -699,6 +706,7 @@ async function handle(req: Request): Promise<Response> {
                 confirmedStatus = st.status;
                 if (st.isTerminal) {
                   delivered = st.isSuccess;
+                  terminalFailure = !st.isSuccess; // undelivered / failed
                   break;
                 }
               } catch (err) {
@@ -710,11 +718,10 @@ async function handle(req: Request): Promise<Response> {
           }
           row.confirmed_status = confirmedStatus;
 
-          // ── 3) WRITE — only mark Texted on a CONFIRMED success ──────
-          // Unconfirmed or failed sends are NOT marked Texted. The
-          // KV dispatch claim stays (avoids retry of an unconfirmed send
-          // that may have actually landed); the reconcile cron repairs
-          // status from Quo as the source of truth.
+          // ── 3) WRITE — Texted on a CONFIRMED success; auto-QUARANTINE on a
+          // CONFIRMED delivery failure; else leave unconfirmed for the reconcile
+          // cron. A merely-unconfirmed send keeps its KV claim (it may have
+          // actually landed — a re-text is worse than a transiently-stale status).
           if (delivered) {
             await updateListingRecord(p.recordId, {
               Outreach_Status: "Texted",
@@ -724,6 +731,30 @@ async function handle(req: Request): Promise<Response> {
             row.delivered = true;
             row.airtable_updated = true;
             summary.first_touch_sent++; // Texted only counted on confirmed delivery
+          } else if (terminalFailure) {
+            // AUTO-QUARANTINE (operator 2026-07-01): Quo confirmed the carrier
+            // could not deliver (undelivered/failed) — a dead/non-SMS number
+            // (landline, disconnected, hard block). Mark the record Dead so the
+            // autonomy never re-fires at it, and release the KV claim (Dead drops
+            // it from the queue, so no double-send risk). Protects sender
+            // reputation + stops burning sends on dud numbers. First live case:
+            // 1505 17th St / Angela James (+12058756959), carrier "undelivered".
+            await updateListingRecord(p.recordId, {
+              Outreach_Status: "Dead",
+              Verification_Notes: buildDeliveryQuarantineNote(existingNotes, iso, p.toE164!, confirmedStatus),
+            });
+            row.airtable_updated = true;
+            summary.delivery_quarantined++;
+            await audit({
+              agent: "crier",
+              event: "h2_outreach_delivery_quarantine",
+              status: "confirmed_failure",
+              recordId: p.recordId,
+              externalId: result.id ?? undefined,
+              inputSummary: { phone: p.toE164, confirmedStatus },
+              outputSummary: { quarantined: true, reason: `carrier ${confirmedStatus ?? "undelivered"}` },
+            });
+            if (claimAcquired) await kvProd.del(claimKey).catch(() => {}); // dead record — free the lock
           } else {
             summary.unconfirmed++; // not stamped Texted; reconcile cron repairs
           }

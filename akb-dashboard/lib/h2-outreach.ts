@@ -273,6 +273,23 @@ export function buildQuarantineNote(
   return append(existing, `[H2 quarantine ${iso}] Bad phone format: '${originalPhone ?? ""}'`);
 }
 
+/** Note for the auto-quarantine of a number the carrier confirmed it could NOT
+ *  deliver to (Quo terminal status undelivered/failed) — a dead/non-SMS number
+ *  (landline, disconnected, hard block). Distinct from the bad-phone-FORMAT
+ *  quarantine above: this one fired a real SMS that the carrier bounced. */
+export function buildDeliveryQuarantineNote(
+  existing: string | null,
+  iso: string,
+  phone: string | null,
+  status: string | null,
+): string {
+  return append(
+    existing,
+    `[H2 quarantine ${iso}] Carrier could not deliver to '${phone ?? ""}' ` +
+      `(status: ${status ?? "unknown"}) — number marked Dead, no retry.`,
+  );
+}
+
 /**
  * Pure: plan the route for an in-order queue of eligible records.
  *
