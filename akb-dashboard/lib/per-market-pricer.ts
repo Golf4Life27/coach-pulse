@@ -77,11 +77,16 @@ export function minOfferFloor(list: number): number {
 }
 
 /** Never-over-list cap: the opener can never exceed this fraction of list.
- *  0.90 (Maverick 2026-06-14) leaves negotiating room on strong deals
- *  instead of opening at asking. Env-tunable; clamped to (0,1]. */
+ *  0.85 (operator 2026-07-01) — auto-offer 85% of list on any deal whose
+ *  value-anchored opener would come in above it, instead of holding. Set EQUAL
+ *  to the >85%-of-list send-safety rail (OFFER_OVER_LIST_BLOCK_PCT in
+ *  lib/outreach-economics): the pricer clamps at 85%, so the opener can never
+ *  trip that rail and strand the record. KEEP THE TWO ≤ EACH OTHER — an opener
+ *  cap above the send rail produces numbers the send path refuses. Env-tunable;
+ *  clamped to (0,1] — but a value above the send rail re-opens that gap. */
 export const NEVER_OVER_LIST_PCT = (() => {
   const raw = Number(process.env.NEVER_OVER_LIST_PCT);
-  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.90;
+  return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.85;
 })();
 
 export type OpenerBasis =
@@ -271,14 +276,16 @@ export function priceOpener(input: PricerInput): PricerResult {
 }
 
 /** GUARD: NEVER-OVER-LIST CAP (Hole A). The value-anchored opener can never
- *  exceed NEVER_OVER_LIST_PCT × list (0.90 — leaves negotiating room). The cap
- *  only bites when the buy-box opener exceeds list, i.e. ARV ≫ list (a deep-
- *  discount listing), so clamping to a fraction of list is safe here — it is
- *  NOT the retired list-anchored fallback (that fired with NO value basis).
- *  When the cap bites on a low-confidence ARV, flag re-seed. */
+ *  exceed NEVER_OVER_LIST_PCT × list (0.85 — auto-offer 85%, operator
+ *  2026-07-01). The cap only bites when the buy-box opener exceeds it, i.e.
+ *  ARV ≫ list (a deep-discount listing), so clamping to a fraction of list is
+ *  safe here — it is NOT the retired list-anchored fallback (that fired with NO
+ *  value basis). FLOOR (not round) the cap: a "never OVER x%" clamp must never
+ *  round UP past x% — that would put the offer above the equal >85% send rail
+ *  and get it refused. When the cap bites on a low-confidence ARV, flag re-seed. */
 function applyOverListCap(r: PricerResult, list: number | null): PricerResult {
   if (list == null || r.opener == null) return r;
-  const cap = Math.round(list * NEVER_OVER_LIST_PCT);
+  const cap = Math.floor(list * NEVER_OVER_LIST_PCT);
   if (r.opener <= cap) return r;
   const reseedWorthy = r.confidence !== "STRONG";
   return {
