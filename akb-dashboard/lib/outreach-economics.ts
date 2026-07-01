@@ -462,17 +462,28 @@ export interface FirstOutreachHydrationCheck {
   blockedBecause: string | null;
 }
 
-/** Pure: a FIRST outreach (no prior Last_Outreach_Date) requires that
- *  the ARV and rehab pipelines have both run, so the offer is grounded.
+/** Pure: a FIRST outreach (no prior Last_Outreach_Date) requires a grounded
+ *  offer. Two lanes:
+ *   - OPENER lane (openerPriceable=true): the seed-based ROUGH OPENER already
+ *     priced this record — real renovated-comp ARV basis + placeholder rehab,
+ *     floored/capped/value-anchored/self-gated by the pricer. That is grounded
+ *     ENOUGH for the FIRST text; the precise rehab (vision) + contract MAO are
+ *     honed AFTER a reply via DD questions (operator decision "A", 2026-07-01).
+ *   - CONTRACT lane (openerPriceable false/absent): require BOTH the ARV and
+ *     rehab pipelines to have stamped (arvValidatedAt + rehabEstimatedAt).
  *  Replaces the phantom `preOfferScreenAt` gate that always read null.
  *  Returns ok:true (no gate) when this isn't a first outreach. */
 export function checkFirstOutreachHydration(input: {
   lastOutreachDate: string | null | undefined;
   arvValidatedAt: string | null | undefined;
   rehabEstimatedAt: string | null | undefined;
+  openerPriceable?: boolean;
 }): FirstOutreachHydrationCheck {
   const isFirstOutreach = !input.lastOutreachDate;
   if (!isFirstOutreach) {
+    return { ok: true, isFirstOutreach, missing: [], blockedBecause: null };
+  }
+  if (input.openerPriceable) {
     return { ok: true, isFirstOutreach, missing: [], blockedBecause: null };
   }
   const missing: string[] = [];

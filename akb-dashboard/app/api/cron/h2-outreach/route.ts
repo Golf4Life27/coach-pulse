@@ -645,6 +645,12 @@ async function handle(req: Request): Promise<Response> {
             lastOutreachDate: fresh?.lastOutreachDate ?? null,
             arvValidatedAt: fresh?.arvValidatedAt ?? null,
             rehabEstimatedAt: fresh?.rehabEstimatedAt ?? null,
+            // OPENER LANE (operator decision "A", 2026-07-01): reaching first_touch
+            // means the seed opener already priced this record (p.mao > 0 — real
+            // renovated-comp ARV + placeholder rehab, floored/capped/self-gated).
+            // That's grounded enough for the ROUGH first text; the precise rehab
+            // (vision) + contract MAO are honed after a reply via DD questions.
+            openerPriceable: typeof p.mao === "number" && p.mao > 0,
           });
           if (!hydration.ok) {
             row.error = `hydration_block: ${hydration.blockedBecause}`;
