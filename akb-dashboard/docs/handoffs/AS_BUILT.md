@@ -128,9 +128,10 @@ One code path for both the live intake loop and the read-only eyeball:
   `opener: null, basis: "hold_no_value_basis"`.)
 - **Guards (now HOLD, not 65%):** ARV-sanity (ARV < list ⇒ distrust as as-is value ⇒
   HOLD, flag re-seed); low-opener floor (`max(30%×list, $10,000)` ⇒ HOLD micro-opener
-  for review); never-over-list cap (`0.90 × list` — the one place a fraction of list
-  is used, and only to *clamp down* a value-anchored opener when ARV ≫ list, never to
-  fabricate one). `fee` default `DEFAULT_WHOLESALE_FEE = $5,000`.
+  for review); never-over-list cap (`0.85 × list`, floored — operator 2026-07-01, set
+  equal to the `>85%` send rail so a capped opener never trips it; the one place a
+  fraction of list is used, and only to *clamp down* a value-anchored opener when
+  ARV ≫ list, never to fabricate one). `fee` default `DEFAULT_WHOLESALE_FEE = $5,000`.
 - **Market config** (`markets.json`, matched by ZIP prefix then state): `detroit_mi`
   `arv_pct_max 0.6461` (zip `48`); `memphis_tn 0.7175` (zip `38`, **paused** per
   operator); `dallas_tx 0.5883`; `san_antonio_tx`/`houston_tx` have **no `arv_pct_max`**

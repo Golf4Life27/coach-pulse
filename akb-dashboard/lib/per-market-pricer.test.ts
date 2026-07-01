@@ -100,7 +100,7 @@ describe("GUARD A — never-over-list cap (Hole A) — clamps a VALUE-anchored o
       anchorPct: 0.90,
     });
     expect(r.cappedToList).toBe(true);
-    expect(r.opener).toBe(43_110); // 0.90 × 47,900 — capped with negotiating room
+    expect(r.opener).toBe(40_715); // 0.85 × 47,900 — auto-offer 85% (operator 2026-07-01)
     expect(r.flagReseed).toBe(true);
   });
 
@@ -116,7 +116,7 @@ describe("GUARD A — never-over-list cap (Hole A) — clamps a VALUE-anchored o
     });
     expect(r.cappedToList).toBe(true);
     expect(r.flagReseed).toBe(false); // STRONG → trusted, not a re-seed candidate
-    expect(r.opener).toBe(43_110);
+    expect(r.opener).toBe(40_715);
   });
 
   it("a THIN/unlabeled ARV that gets capped IS flagged for re-seed", () => {
@@ -133,8 +133,8 @@ describe("GUARD A — never-over-list cap (Hole A) — clamps a VALUE-anchored o
     expect(r.flagReseed).toBe(true); // THIN → re-pull could fix it
   });
 
-  it("caps at 90% of list (default), leaving negotiating room — never opens at asking", () => {
-    expect(NEVER_OVER_LIST_PCT).toBe(0.90);
+  it("caps at 85% of list (default) — auto-offer 85%, aligned with the send rail, never over", () => {
+    expect(NEVER_OVER_LIST_PCT).toBe(0.85);
     const r = priceOpener({
       listPrice: 79_000,
       realArvMedian: 212_860,
@@ -144,8 +144,26 @@ describe("GUARD A — never-over-list cap (Hole A) — clamps a VALUE-anchored o
       anchorPct: 0.90,
     });
     expect(r.cappedToList).toBe(true);
-    expect(r.opener).toBe(71_100); // 0.90 × 79,000, not 79,000
+    expect(r.opener).toBe(67_150); // 0.85 × 79,000, not 79,000
     expect(r.opener).toBeLessThan(79_000);
+  });
+
+  it("FLOOR not round: a capped opener never exceeds 85% of list, so it clears the equal >85% send rail", () => {
+    // list 47,901 → 0.85 × 47,901 = 40,715.85. round → 40,716 (ratio 0.850018,
+    // trips the >85% economics rail → strands the record). floor → 40,715
+    // (ratio 0.849996 ≤ 0.85 → sends). This is exactly the 2026-07-01 poison
+    // the operator's "auto-offer 85%" decision closes.
+    const r = priceOpener({
+      listPrice: 47_901,
+      realArvMedian: 230_120,
+      estRehabMid: 46_024,
+      wholesaleFee: 5_000,
+      arvPctMax: DETROIT_BUYBOX,
+      anchorPct: 0.90,
+    });
+    expect(r.cappedToList).toBe(true);
+    expect(r.opener).toBe(40_715); // floor(47,901 × 0.85), NOT round → 40,716
+    expect(r.opener! / 47_901).toBeLessThanOrEqual(0.85); // clears the send rail
   });
 });
 

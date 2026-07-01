@@ -44,8 +44,11 @@ underwrite against.
   returns `opener: null` and the record routes to operator review. Pricer guards
   (ARV-below-list distrust, sub-floor micro-opener, non-penciling buy-box) **HOLD**,
   they do not fall to a list fraction. The only place a fraction of list survives is
-  the never-over-list *clamp* (`0.90 × list`), which only ever lowers an already
-  value-anchored opener. (`lib/per-market-pricer.ts`, `lib/rough-opener-ceiling.ts`).
+  the never-over-list *clamp* (`0.85 × list`, operator 2026-07-01 — set EQUAL to the
+  `>85%-of-list` send rail `OFFER_OVER_LIST_BLOCK_PCT` and **floored** so a capped
+  opener can never round up past it and get refused), which only ever lowers an already
+  value-anchored opener. Keep the clamp ≤ the send rail. (`lib/per-market-pricer.ts`,
+  `lib/rough-opener-ceiling.ts`).
 
 ## 3. Sticky offers
 
