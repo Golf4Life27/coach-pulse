@@ -109,4 +109,36 @@ describe("checkFirstOutreachHydration — replaces the phantom preOfferScreenAt 
     expect(r.ok).toBe(false);
     expect(r.missing).toEqual(["arvValidatedAt", "rehabEstimatedAt"]);
   });
+
+  // ── OPENER LANE (operator decision "A", 2026-07-01) ──────────────────────
+  it("OPENER LANE: PASSES a first outreach with NEITHER stamp when openerPriceable — the seed opener grounds the rough first text; DD hones the contract number", () => {
+    const r = checkFirstOutreachHydration({
+      lastOutreachDate: null,
+      arvValidatedAt: null,
+      rehabEstimatedAt: null,
+      openerPriceable: true,
+    });
+    expect(r.ok).toBe(true);
+    expect(r.missing).toEqual([]);
+    expect(r.blockedBecause).toBeNull();
+  });
+
+  it("openerPriceable overrides a missing rehab estimate (placeholder rehab is enough for the opener)", () => {
+    const r = checkFirstOutreachHydration({
+      lastOutreachDate: null,
+      arvValidatedAt: HYDRATED,
+      rehabEstimatedAt: null,
+      openerPriceable: true,
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it("CONTRACT LANE unchanged: openerPriceable false/absent still requires BOTH stamps (2026-06-05 rail intact)", () => {
+    expect(
+      checkFirstOutreachHydration({ lastOutreachDate: null, arvValidatedAt: null, rehabEstimatedAt: null, openerPriceable: false }).ok,
+    ).toBe(false);
+    expect(
+      checkFirstOutreachHydration({ lastOutreachDate: null, arvValidatedAt: null, rehabEstimatedAt: null }).ok,
+    ).toBe(false);
+  });
 });
