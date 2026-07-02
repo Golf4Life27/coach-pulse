@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import MaverickTopPriorities from "@/components/MaverickTopPriorities";
 import MorningBriefing from "@/components/MorningBriefing";
 import PipelineBoard from "@/components/PipelineBoard";
 import OutreachPanel from "@/components/OutreachPanel";
@@ -54,6 +55,11 @@ export default function CommandCenter() {
           </button>
         </div>
       </div>
+
+      {/* Maverick Top Priorities — the operator's ranked "what needs YOU now"
+          strip (revenue × urgency × operator-only). Curated via
+          /api/maverick/priorities; expiry-gated against staleness. */}
+      <MaverickTopPriorities />
 
       {/* Jarvis Phase 1 — depth-aware ACT NOW cards */}
       <JarvisGreeting />

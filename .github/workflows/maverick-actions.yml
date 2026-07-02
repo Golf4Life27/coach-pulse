@@ -1,0 +1,70 @@
+# Maverick operator-action queue — controlled push/complete.
+#
+# Manages the dashboard's "what needs YOU now" strip
+# (POST /api/maverick/priorities) from a session or automation, using the
+# CRON_SECRET GitHub secret — same controlled-trigger pattern as h2-send.yml.
+#
+# payload examples:
+#   {"upsert":[{"id":"joyce-offer","title":"…","why":"…","expiresAt":"…","postedAt":"…","postedBy":"maverick"}]}
+#   {"complete":["joyce-offer"]}
+
+name: Maverick operator actions (controlled)
+
+on:
+  workflow_dispatch:
+    inputs:
+      payload:
+        description: 'JSON body for POST /api/maverick/priorities ({"upsert":[…]} and/or {"complete":[…]}).'
+        required: true
+        type: string
+      base_url:
+        description: "Production base URL (override only for staging tests)."
+        required: false
+        default: "https://coach-pulse-ten.vercel.app"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PAYLOAD: ${{ inputs.payload }}
+      BASE_URL: ${{ inputs.base_url }}
+    steps:
+      - name: Refuse to run when CRON_SECRET is missing
+        run: |
+          if [ -z "${{ secrets.CRON_SECRET }}" ]; then
+            echo "::error::CRON_SECRET is not configured as a GitHub Actions secret."
+            exit 1
+          fi
+          echo "CRON_SECRET present; proceeding."
+
+      - name: POST /api/maverick/priorities
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          # Validate the payload parses before sending anything.
+          printf '%s' "${PAYLOAD}" | jq . > /dev/null
+          HTTP_CODE=$(printf '%s' "${PAYLOAD}" | curl -sS -o /tmp/ma.json -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "x-vercel-cron: 1" \
+            -H "Content-Type: application/json" \
+            --data-binary @- \
+            "${BASE_URL}/api/maverick/priorities")
+          echo "HTTP ${HTTP_CODE}"
+          echo "--- response body ---"
+          jq . /tmp/ma.json 2>/dev/null || cat /tmp/ma.json
+          if [ "${HTTP_CODE}" -ge 400 ]; then
+            echo "::error::priorities POST returned HTTP ${HTTP_CODE}"
+            exit 1
+          fi
+
+      - name: Verify via GET
+        run: |
+          set -euo pipefail
+          curl -sS "${BASE_URL}/api/maverick/priorities" | jq '{total_stored, live: (.actions | length), titles: [.actions[].title]}'
