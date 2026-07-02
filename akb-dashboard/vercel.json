@@ -22,7 +22,15 @@
     },
     {
       "path": "/api/cron/h2-outreach?dry_run=false&limit=10",
-      "schedule": "0 16 * * *"
+      "schedule": "0 15 * * *"
+    },
+    {
+      "path": "/api/cron/h2-outreach?dry_run=false&limit=10",
+      "schedule": "30 17 * * *"
+    },
+    {
+      "path": "/api/cron/h2-outreach?dry_run=false&limit=10",
+      "schedule": "45 19 * * *"
     },
     {
       "path": "/api/scan-replies",
