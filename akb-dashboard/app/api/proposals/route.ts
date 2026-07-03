@@ -1,5 +1,11 @@
+import { getListing, updateListingRecord } from "@/lib/airtable";
+import { parseSendSmsPayload, sendApprovedReply } from "@/lib/approve-send";
+
 const AIRTABLE_PAT = process.env.AIRTABLE_PAT!;
 const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
+
+export const runtime = "nodejs";
+export const maxDuration = 60;
 
 function getTableId(): string | null {
   return process.env.AGENT_PROPOSALS_TABLE_ID ?? null;
@@ -80,6 +86,28 @@ export async function GET() {
   }
 }
 
+async function patchProposal(
+  tableId: string,
+  proposalId: string,
+  fields: Record<string, unknown>,
+): Promise<void> {
+  const res = await fetch(
+    `https://api.airtable.com/v0/${BASE_ID}/${tableId}/${proposalId}`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${AIRTABLE_PAT}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ fields, typecast: true }),
+    }
+  );
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Airtable error ${res.status}: ${errText}`);
+  }
+}
+
 export async function PATCH(req: Request) {
   const tableId = getTableId();
   if (!tableId) {
@@ -89,7 +117,17 @@ export async function PATCH(req: Request) {
     );
   }
 
-  let body: { proposalId: string; action: "approve" | "reject" | "snooze"; reason?: string };
+  let body: {
+    proposalId: string;
+    action: "approve" | "reject" | "snooze";
+    reason?: string;
+    /** Wire 2 (phase B): approve AND dispatch the drafted SMS. Only the new
+     *  /queue UI sets this — legacy approves stay status-only, so historical
+     *  pending proposals can never fire a text by accident. */
+    dispatch?: boolean;
+    /** Operator's edit-before-send body; falls back to the stored draft. */
+    editedBody?: string;
+  };
   try {
     const text = await req.text();
     body = JSON.parse(text);
@@ -97,12 +135,107 @@ export async function PATCH(req: Request) {
     return Response.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { proposalId, action, reason } = body;
+  const { proposalId, action, reason, dispatch, editedBody } = body;
   if (!proposalId || !action) {
     return Response.json(
       { error: "Missing proposalId or action" },
       { status: 400 }
     );
+  }
+
+  // ── Wire 2: Approve & Send — dispatch the operator-approved draft ──
+  if (action === "approve" && dispatch === true) {
+    try {
+      // Fresh-fetch the proposal: payload + status are the send inputs, and a
+      // non-Pending proposal must never dispatch (second idempotency belt on
+      // top of the KV claim).
+      const res = await fetch(
+        `https://api.airtable.com/v0/${BASE_ID}/${tableId}/${proposalId}`,
+        { headers: { Authorization: `Bearer ${AIRTABLE_PAT}` }, cache: "no-store" }
+      );
+      if (!res.ok) {
+        return Response.json({ error: `proposal fetch failed (${res.status})` }, { status: 502 });
+      }
+      const rec = await res.json();
+      const f = (rec.fields ?? {}) as Record<string, unknown>;
+      const status = (f.Status as string) ?? "Pending";
+      if (status !== "Pending") {
+        return Response.json(
+          { success: false, skipReason: `proposal is ${status}, not Pending` },
+          { status: 409 }
+        );
+      }
+
+      const payload = parseSendSmsPayload(f.Suggested_Action_Payload as string);
+      if (!payload) {
+        return Response.json(
+          { success: false, skipReason: "not_dispatchable: payload is not a send_sms action" },
+          { status: 422 }
+        );
+      }
+
+      const recordId = (f.Record_ID as string) || payload.recordId || "";
+      const listing = recordId ? await getListing(recordId) : null;
+      const finalBody = (editedBody ?? "").trim() || payload.draftBody;
+
+      const result = await sendApprovedReply({
+        proposalId,
+        recordId: recordId || proposalId,
+        toE164: payload.to,
+        body: finalBody,
+        state: listing?.state ?? null,
+        doNotText: listing?.doNotText === true,
+        address: listing?.address ?? null,
+      });
+
+      if (!result.sent) {
+        // Leave the proposal PENDING — a quiet-hours or claim skip must stay
+        // retryable and must never masquerade as an approved-and-sent reply.
+        return Response.json(
+          { success: false, skipReason: result.reason },
+          { status: 409 }
+        );
+      }
+
+      const iso = new Date().toISOString();
+      await patchProposal(tableId, proposalId, {
+        Status: "Approved",
+        Reviewed_At: iso,
+        Suggested_Action_Payload: JSON.stringify({
+          ...JSON.parse((f.Suggested_Action_Payload as string) ?? "{}"),
+          sentBody: finalBody,
+          quoMessageId: result.quoMessageId,
+          sentAt: iso,
+        }),
+      });
+
+      // Best-effort listing write-back — the SMS is already out, so a failed
+      // note write must not fail the response (reconcile repairs status).
+      if (recordId && listing) {
+        try {
+          const line = `[operator reply sent ${iso}] ${finalBody} [quo ${result.quoMessageId ?? "?"}]`;
+          await updateListingRecord(recordId, {
+            Last_Outbound_At: iso,
+            Verification_Notes: listing.notes ? `${listing.notes}\n\n${line}` : line,
+          });
+        } catch (err) {
+          console.error("[proposals] listing write-back failed:", err);
+        }
+      }
+
+      return Response.json({
+        success: true,
+        action,
+        sent: true,
+        quoMessageId: result.quoMessageId,
+      });
+    } catch (err) {
+      console.error("[proposals] dispatch error:", err);
+      return Response.json(
+        { error: "Dispatch failed", detail: String(err) },
+        { status: 500 }
+      );
+    }
   }
 
   const fields: Record<string, unknown> = {};
@@ -122,23 +255,7 @@ export async function PATCH(req: Request) {
   }
 
   try {
-    const res = await fetch(
-      `https://api.airtable.com/v0/${BASE_ID}/${tableId}/${proposalId}`,
-      {
-        method: "PATCH",
-        headers: {
-          Authorization: `Bearer ${AIRTABLE_PAT}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ fields, typecast: true }),
-      }
-    );
-
-    if (!res.ok) {
-      const errText = await res.text();
-      throw new Error(`Airtable error ${res.status}: ${errText}`);
-    }
-
+    await patchProposal(tableId, proposalId, fields);
     return Response.json({ success: true, action });
   } catch (err) {
     console.error("[proposals] PATCH error:", err);

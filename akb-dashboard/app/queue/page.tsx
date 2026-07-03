@@ -33,10 +33,27 @@ const typeLabels: Record<string, string> = {
   jarvis_reply: "Jarvis Reply",
 };
 
+/** Client-side mirror of lib/approve-send.parseSendSmsPayload — kept local so
+ *  the client bundle never imports the server send module. */
+function parseSendSms(actionPayload: string): { to: string; draftBody: string; inboundBody: string | null } | null {
+  try {
+    const p = JSON.parse(actionPayload) as Record<string, unknown>;
+    if (p.action !== "send_sms") return null;
+    const to = typeof p.to === "string" ? p.to.trim() : "";
+    const draftBody = typeof p.draftBody === "string" ? p.draftBody.trim() : "";
+    if (!to || !draftBody) return null;
+    return { to, draftBody, inboundBody: typeof p.inboundBody === "string" ? p.inboundBody : null };
+  } catch {
+    return null;
+  }
+}
+
 export default function QueuePage() {
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [loading, setLoading] = useState(true);
   const [acting, setActing] = useState<Set<string>>(new Set());
+  /** Operator's edit-before-send text, keyed by proposal id. */
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
 
   const fetchData = useCallback(async () => {
     try {
@@ -57,7 +74,8 @@ export default function QueuePage() {
 
   const handleAction = async (
     proposalId: string,
-    action: "approve" | "reject" | "snooze"
+    action: "approve" | "reject" | "snooze",
+    opts?: { dispatch?: boolean; editedBody?: string }
   ) => {
     if (action === "reject") {
       if (!window.confirm("Reject this proposal?")) return;
@@ -69,16 +87,25 @@ export default function QueuePage() {
       const res = await fetch("/api/proposals", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ proposalId, action }),
+        body: JSON.stringify({
+          proposalId,
+          action,
+          dispatch: opts?.dispatch,
+          editedBody: opts?.editedBody,
+        }),
       });
+      const data = await res.json().catch(() => ({}));
+
       if (!res.ok) {
-        const data = await res.json();
-        showToast(data.error || "Failed");
+        // A dispatch skip (quiet hours, already sent, DNT) keeps the card —
+        // it stayed Pending server-side and is retryable.
+        showToast(data.skipReason || data.error || "Failed");
         return;
       }
 
-      const actionLabel =
-        action === "approve"
+      const actionLabel = opts?.dispatch
+        ? "Reply sent ✓"
+        : action === "approve"
           ? "Approved"
           : action === "reject"
             ? "Rejected"
@@ -152,6 +179,8 @@ export default function QueuePage() {
             const colors = typeColors[p.proposalType] || "border-gray-500 text-gray-400";
             const label = typeLabels[p.proposalType] || p.proposalType;
             const isActing = acting.has(p.id);
+            const sms = p.proposalType === "jarvis_reply" ? parseSendSms(p.actionPayload) : null;
+            const draft = drafts[p.id] ?? sms?.draftBody ?? "";
 
             return (
               <div
@@ -170,18 +199,57 @@ export default function QueuePage() {
                   {p.recordAddress || p.recordId}
                 </h3>
 
-                <p className="text-xs text-gray-400 mb-4 leading-relaxed">
+                <p className="text-xs text-gray-400 mb-3 leading-relaxed">
                   {p.reasoning}
                 </p>
 
+                {sms && (
+                  <div className="mb-3 space-y-2">
+                    {sms.inboundBody && (
+                      <blockquote className="text-[11px] text-gray-500 border-l-2 border-[#30363d] pl-2 leading-relaxed">
+                        “{sms.inboundBody}”
+                      </blockquote>
+                    )}
+                    <div>
+                      <div className="text-[10px] uppercase tracking-wider text-gray-600 mb-1">
+                        Reply to {sms.to} — edit before send
+                      </div>
+                      <textarea
+                        value={draft}
+                        onChange={(e) =>
+                          setDrafts((prev) => ({ ...prev, [p.id]: e.target.value }))
+                        }
+                        rows={4}
+                        maxLength={640}
+                        className="w-full text-xs bg-[#0d1117] border border-[#30363d] rounded p-2 text-gray-200 leading-relaxed focus:outline-none focus:border-purple-500"
+                      />
+                      <div className="text-right text-[10px] text-gray-600">
+                        {draft.length}/640
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex gap-2">
-                  <button
-                    onClick={() => handleAction(p.id, "approve")}
-                    disabled={isActing}
-                    className="flex-1 bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold py-2.5 rounded transition-colors min-h-[44px] disabled:opacity-50"
-                  >
-                    Approve
-                  </button>
+                  {sms ? (
+                    <button
+                      onClick={() =>
+                        handleAction(p.id, "approve", { dispatch: true, editedBody: draft })
+                      }
+                      disabled={isActing || !draft.trim()}
+                      className="flex-1 bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold py-2.5 rounded transition-colors min-h-[44px] disabled:opacity-50"
+                    >
+                      {isActing ? "Sending…" : "Approve & Send"}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => handleAction(p.id, "approve")}
+                      disabled={isActing}
+                      className="flex-1 bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold py-2.5 rounded transition-colors min-h-[44px] disabled:opacity-50"
+                    >
+                      Approve
+                    </button>
+                  )}
                   <button
                     onClick={() => handleAction(p.id, "reject")}
                     disabled={isActing}
