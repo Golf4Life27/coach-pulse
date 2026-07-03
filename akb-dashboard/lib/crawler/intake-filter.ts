@@ -433,6 +433,79 @@ export function evaluatePortfolioSignal(text: string | null | undefined): Portfo
   return { detected: hasPackage, packageMatches, cofactorMatches };
 }
 
+// ── Sqft cross-check (data armor, operator 2026-07-03) ─────────────────
+//
+// THE TIGER FLOWERS DEFECT: RentCast reported 1,966 sqft for a house whose
+// listing page says 983 sqft above grade (finished basement double-counted).
+// The seed ARV priced on the doubled figure and the opener overshot the true
+// pencil by ~$20k — every downstream formula was correct, the INPUT lied.
+// The scraped portal text (already fetched for the condition classifier)
+// carries the true headline sqft; this cross-check compares the two and
+// routes a mismatch to Review. Fail-OPEN when the page states no sqft — the
+// check kills the lying-input class, never starves intake.
+
+/** Building-sqft plausibility band. Outside it a match is noise. */
+const SQFT_MIN = 250;
+const SQFT_MAX = 15_000;
+
+/** How far apart (ratio) source vs scraped sqft may sit before we distrust
+ *  the source figure. 25% tolerates portal rounding + remodel deltas; a
+ *  basement double-count (ratio 2.0) is far outside it. */
+export const SQFT_MISMATCH_TOLERANCE = 0.25;
+
+/** Pure: extract the subject's BUILDING sqft from scraped portal text.
+ *  Takes the first "N sq ft / sqft / square feet" mention that (a) parses
+ *  into the plausibility band and (b) is not a LOT/land size (a nearby
+ *  "lot"/"acre" disqualifies the mention). Returns null when the page
+ *  states nothing usable — callers fail open. */
+export function extractScrapedSqft(text: string | null | undefined): number | null {
+  if (!text) return null;
+  const re = /([\d][\d,]{2,6})\s*(?:sq\.?\s*ft\.?|sqft|square\s+feet)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const n = Number(m[1].replace(/,/g, ""));
+    if (!Number.isFinite(n) || n < SQFT_MIN || n > SQFT_MAX) continue;
+    // LOT-size disqualifiers must be ADJACENT to THIS mention (a wide window
+    // bleeds across separators and poisons the neighboring building figure):
+    //   suffix — "9,017 sq ft lot"      prefix — "Lot: 7,405 sq ft"
+    const after = text.slice(m.index + m[0].length, m.index + m[0].length + 16);
+    const before = text.slice(Math.max(0, m.index - 12), m.index);
+    if (/^\s*(?:lot|acres?)\b/i.test(after)) continue;
+    if (/\b(?:lot|acres?)\s*(?:size)?\s*[:\-]?\s*$/i.test(before)) continue;
+    return n;
+  }
+  return null;
+}
+
+export interface SqftCrossCheck {
+  sourceSqft: number | null;
+  scrapedSqft: number | null;
+  /** source ÷ scraped — 2.0 is the basement-double-count signature. */
+  ratio: number | null;
+  /** True only when BOTH figures exist and disagree beyond tolerance. */
+  mismatch: boolean;
+}
+
+/** Pure: compare the source (RentCast) sqft against the scraped listing
+ *  page's sqft. Both-present + ratio outside [1−tol, 1+tol] → mismatch.
+ *  Either side missing → no mismatch (fail open). */
+export function crossCheckSqft(
+  sourceSqft: number | null | undefined,
+  scrapedSqft: number | null | undefined,
+  tolerance: number = SQFT_MISMATCH_TOLERANCE,
+): SqftCrossCheck {
+  const src =
+    typeof sourceSqft === "number" && Number.isFinite(sourceSqft) && sourceSqft > 0 ? sourceSqft : null;
+  const scr =
+    typeof scrapedSqft === "number" && Number.isFinite(scrapedSqft) && scrapedSqft > 0 ? scrapedSqft : null;
+  if (src == null || scr == null) {
+    return { sourceSqft: src, scrapedSqft: scr, ratio: null, mismatch: false };
+  }
+  const ratio = src / scr;
+  const mismatch = ratio > 1 + tolerance || ratio < 1 - tolerance;
+  return { sourceSqft: src, scrapedSqft: scr, ratio, mismatch };
+}
+
 export interface ListingContentEvaluation {
   wholesalerExcluded: boolean;
   matchedWholesalerKeywords: string[];
