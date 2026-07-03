@@ -206,8 +206,24 @@ export function buildPriorContactIndex(
  *  The Listings table has no first/last split — only one Agent_Name string —
  *  so the first whitespace-delimited token is the first name. Empty/blank
  *  falls back to "there". */
+/** Tokens that mark an Agent_Name as a TEAM/BROKERAGE, not a person — greeting
+ *  with the first token of "The Graham Seeby Group" produced "Hi The," in a
+ *  live send (2026-07-02, 474 Center Hill Ave). Any hit → fall back to the
+ *  neutral "there". Conservative direction: "Hi there" is always acceptable;
+ *  "Hi The" never is. */
+const ORG_NAME_TOKENS = new Set([
+  "the", "team", "group", "realty", "realtors", "real", "estate", "llc",
+  "inc", "co", "company", "properties", "property", "homes", "associates",
+  "partners", "broker", "brokers", "brokerage", "remax", "re/max", "exp",
+  "century", "sothebys",
+]);
+
 export function firstNameOnly(agentName: string | null): string {
-  return (agentName ?? "").trim().split(/\s+/)[0] || "there";
+  const tokens = (agentName ?? "").trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return "there";
+  const norm = tokens.map((t) => t.toLowerCase().replace(/[^a-z0-9/]/g, ""));
+  if (norm.some((t) => ORG_NAME_TOKENS.has(t))) return "there";
+  return tokens[0];
 }
 
 /** Pure: compose the first-touch SMS body (spec §Step 3).

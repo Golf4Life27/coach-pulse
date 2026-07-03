@@ -257,6 +257,16 @@ describe("firstNameOnly — proven 5/8 outreach rule (greet on first name)", () 
     expect(firstNameOnly("")).toBe("there");
     expect(firstNameOnly("   ")).toBe("there");
   });
+  it("team/brokerage names greet 'there', never 'Hi The,' (live 2026-07-02 regression)", () => {
+    expect(firstNameOnly("The Graham Seeby Group")).toBe("there");
+    expect(firstNameOnly("Keller Williams Realty")).toBe("there");
+    expect(firstNameOnly("Atlanta Communities Real Estate")).toBe("there");
+    expect(firstNameOnly("Maria Sanchez Team")).toBe("there");
+  });
+  it("does NOT false-trigger on person names near org words", () => {
+    expect(firstNameOnly("Casey Holmes")).toBe("Casey"); // Holmes ≠ homes
+    expect(firstNameOnly("Don Brooker")).toBe("Don"); // Brooker ≠ broker
+  });
 });
 
 describe("ineligibleReasonForListing", () => {
