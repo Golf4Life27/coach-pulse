@@ -204,3 +204,51 @@ describe("evaluateIntakeCandidate — priceable-market gate (opt-in)", () => {
     expect(r.reasons).toContain("market_not_priceable");
   });
 });
+
+// ── Sqft cross-check (data armor, 2026-07-03 Tiger Flowers regression) ──
+import {
+  extractScrapedSqft,
+  crossCheckSqft,
+  SQFT_MISMATCH_TOLERANCE,
+} from "./intake-filter";
+
+describe("extractScrapedSqft — building sqft from portal text, lot sizes excluded", () => {
+  it("takes the headline building sqft (Tiger Flowers: page said 983)", () => {
+    expect(extractScrapedSqft("2 beds · 1.5 baths · 983 sq ft · Built 1938")).toBe(983);
+    expect(extractScrapedSqft("1,966 Sq. Ft. single family home")).toBe(1_966);
+    expect(extractScrapedSqft("about 1450 sqft of living space")).toBe(1_450);
+  });
+  it("skips LOT/acre mentions and finds the building figure", () => {
+    expect(extractScrapedSqft("9,017 sq ft lot · 983 sq ft")).toBe(983);
+    expect(extractScrapedSqft("Lot: 7,405 sq ft — home is 1,200 square feet")).toBe(1_200);
+  });
+  it("null when the page states nothing usable", () => {
+    expect(extractScrapedSqft(null)).toBeNull();
+    expect(extractScrapedSqft("charming bungalow on a large lot")).toBeNull();
+    expect(extractScrapedSqft("55 sq ft storage shed")).toBeNull(); // below band
+  });
+});
+
+describe("crossCheckSqft — the basement-double-count detector", () => {
+  it("REGRESSION 1989 Tiger Flowers: source 1,966 vs page 983 → mismatch, ratio 2.0", () => {
+    const r = crossCheckSqft(1_966, 983);
+    expect(r.mismatch).toBe(true);
+    expect(r.ratio).toBeCloseTo(2.0, 5);
+  });
+  it("portal rounding within tolerance passes", () => {
+    expect(crossCheckSqft(1_000, 950).mismatch).toBe(false);
+    expect(crossCheckSqft(1_395, 1_400).mismatch).toBe(false);
+  });
+  it("deflated source (source ≪ page) also mismatches — wrong is wrong", () => {
+    expect(crossCheckSqft(700, 1_000).mismatch).toBe(true);
+  });
+  it("fails OPEN when either side is missing/invalid", () => {
+    expect(crossCheckSqft(null, 983).mismatch).toBe(false);
+    expect(crossCheckSqft(1_966, null).mismatch).toBe(false);
+    expect(crossCheckSqft(0, 983).mismatch).toBe(false);
+  });
+  it("tolerance boundary: exactly ±25% passes, beyond flags", () => {
+    expect(crossCheckSqft(1_250, 1_000, SQFT_MISMATCH_TOLERANCE).mismatch).toBe(false);
+    expect(crossCheckSqft(1_260, 1_000, SQFT_MISMATCH_TOLERANCE).mismatch).toBe(true);
+  });
+});

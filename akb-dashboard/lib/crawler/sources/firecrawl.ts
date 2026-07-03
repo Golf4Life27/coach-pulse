@@ -21,7 +21,7 @@
 // ⚠️ FIRECRAWL_API_KEY must be set in prod env (operator action) — the
 // adapter returns credentialed=false when absent.
 
-import { evaluateListingContent } from "@/lib/crawler/intake-filter";
+import { evaluateListingContent, extractScrapedSqft, crossCheckSqft } from "@/lib/crawler/intake-filter";
 import { scopeSubjectText, scopeStatusText } from "@/lib/crawler/sources/listing-text-scope";
 
 const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY;
@@ -205,6 +205,13 @@ export interface FirecrawlVerifyResult {
    *  backfill. */
   portfolioSellerDetected: boolean;
   matchedPortfolioKeywords: string[];
+  /** Building sqft stated on the scraped listing page (lot sizes excluded),
+   *  null when the page states none. Data armor (operator 2026-07-03): the
+   *  classify step cross-checks this against the RentCast candidate's sqft —
+   *  the Tiger Flowers basement-double-count class (source 2× the real GLA
+   *  → inflated seed ARV → overshot opener). Optional so existing result
+   *  literals/tests stay valid; absent ⇒ fail open. */
+  scrapedSqft?: number | null;
   creditsUsed: number;
   /** true when Firecrawl returned 429 even after exhausting retries —
    *  distinct from a generic error (caller → firecrawl_rate_limited). */
@@ -412,6 +419,7 @@ export function buildResolvedResult(
     matchedWholesalerKeywords: content.matchedWholesalerKeywords,
     hasConditionSignal: content.hasConditionSignal,
     matchedDistressKeywords: content.matchedDistressKeywords,
+    scrapedSqft: extractScrapedSqft(subjectText),
     isNewConstruction: newConstruction.isNew,
     matchedNewConstructionSignals: newConstruction.signals,
     matchedInactiveMarkers: inactiveMarkers,
@@ -632,13 +640,21 @@ export interface ListingDistressSignals {
 export type VerifiedOutcome =
   | { outcome: "reject"; reason: string }
   | { outcome: "accept"; outreachStatus: "" }
-  | { outcome: "review"; reason: "condition_signal_missing_flagged"; outreachStatus: "Review" };
+  | {
+      outcome: "review";
+      reason: "condition_signal_missing_flagged" | "sqft_mismatch_flagged";
+      outreachStatus: "Review";
+    };
 
 export function classifyVerifiedListing(
   fc: FirecrawlVerifyResult,
   // Retained on the signature for audit parity and to regression-guard the
   // removed override; deliberately NOT consulted (see precedence note above).
   _signals: ListingDistressSignals = { daysOnMarket: null, priceReduced: false },
+  // Data armor (operator 2026-07-03): the RentCast candidate's sqft, cross-
+  // checked against the scraped page's stated sqft. Optional — absent, or
+  // page states no sqft, behaves exactly as before (fail open).
+  opts: { sourceSqft?: number | null } = {},
 ): VerifiedOutcome {
   if (!fc.credentialed) return { outcome: "reject", reason: "firecrawl_not_configured" };
   if (fc.paymentRequired) return { outcome: "reject", reason: "firecrawl_payment_required" };
@@ -651,6 +667,15 @@ export function classifyVerifiedListing(
   if (fc.isNewConstruction) return { outcome: "reject", reason: "new_construction_excluded" };
   if (fc.wholesalerExcluded) return { outcome: "reject", reason: "wholesaler_excluded" };
   if (fc.hasRenovatedLanguage) return { outcome: "reject", reason: "firecrawl_renovated" };
+  // ── SQFT CROSS-CHECK (data armor, 2026-07-03 Tiger Flowers defect):
+  // source sqft ≥25% off the page's stated sqft ⇒ the value basis is
+  // untrustworthy — Review BEFORE the distress accept (a genuinely
+  // distressed listing with a lying sqft still prices wrong). Review, not
+  // reject: the deal may be real; the DATA needs a human eye first.
+  const sqft = crossCheckSqft(opts.sourceSqft, fc.scrapedSqft);
+  if (sqft.mismatch) {
+    return { outcome: "review", reason: "sqft_mismatch_flagged", outreachStatus: "Review" };
+  }
   // ── Distress accept: a genuine condition/motivation signal in the copy.
   if (fc.hasConditionSignal) return { outcome: "accept", outreachStatus: "" };
   return { outcome: "review", reason: "condition_signal_missing_flagged", outreachStatus: "Review" };

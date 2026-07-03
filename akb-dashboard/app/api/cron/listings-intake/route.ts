@@ -920,7 +920,14 @@ export async function GET(req: Request) {
     // omits daysOnMarket.
     const dom = c.daysOnMarket ?? daysOnMarketFrom(c.listedDate, now);
     const priceReduced = c.priceReduced ?? false;
-    const decision = classifyVerifiedListing(fc);
+    // sourceSqft feeds the data-armor sqft cross-check (2026-07-03): RentCast
+    // sqft vs the scraped page's stated sqft — a ≥25% mismatch routes to
+    // Review before pricing can trust an inflated GLA (Tiger Flowers class).
+    const decision = classifyVerifiedListing(
+      fc,
+      { daysOnMarket: dom ?? null, priceReduced },
+      { sourceSqft: c.squareFootage ?? null },
+    );
     if (debug) {
       debugDecisions.push({
         sourceId: c.sourceId,
@@ -982,7 +989,9 @@ export async function GET(req: Request) {
       summary.accepted++;
       perZipAccepted.set(zip, (perZipAccepted.get(zip) ?? 0) + 1);
     } else {
-      bump("condition_signal_missing_flagged"); // audit tag — still writes
+      // audit tag — still writes (condition_signal_missing_flagged OR
+      // sqft_mismatch_flagged; both land in the Review queue).
+      bump(decision.outcome === "review" ? decision.reason : "condition_signal_missing_flagged");
       summary.flagged_review++;
       perZipReview.set(zip, (perZipReview.get(zip) ?? 0) + 1);
     }
