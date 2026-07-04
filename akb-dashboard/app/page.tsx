@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import MaverickTopPriorities from "@/components/MaverickTopPriorities";
+import MissionControl from "@/components/MissionControl";
 import MorningBriefing from "@/components/MorningBriefing";
 import PipelineBoard from "@/components/PipelineBoard";
 import OutreachPanel from "@/components/OutreachPanel";
@@ -60,6 +61,10 @@ export default function CommandCenter() {
           strip (revenue × urgency × operator-only). Curated via
           /api/maverick/priorities; expiry-gated against staleness. */}
       <MaverickTopPriorities />
+
+      {/* Mission Control — the live daily belt: crawled → accepted → sent →
+          replies, cron heartbeats, event tape (operator spec 2026-07-04). */}
+      <MissionControl />
 
       {/* Jarvis Phase 1 — depth-aware ACT NOW cards */}
       <JarvisGreeting />
