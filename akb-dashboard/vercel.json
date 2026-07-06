@@ -9,6 +9,10 @@
       "schedule": "0 13 * * *"
     },
     {
+      "path": "/api/admin/freshness-reverify?apply=1&limit=25",
+      "schedule": "15 14 * * *"
+    },
+    {
       "path": "/api/cron/propose-actions",
       "schedule": "0 9 * * *"
     },
