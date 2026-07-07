@@ -198,6 +198,13 @@ These do not change without a Bible amendment.
 | Crawler 2.0 unlock | $40K/mo net × 3 consecutive months (Bible §1.2) |
 | Dream Phase unlock | operator hours < 15h/wk |
 
+### Pricing-doctrine enforcement constants (operator-blessed 2026-07-06; ruling `recmy2Vwp1wMA1Vs8`, skill v1.0 `recYoZ85w9mnC0tlE`)
+
+| Constant | Value |
+|----------|-------|
+| **Recompute tolerance** (pricing-doctrine standard 1) | **±$5 absolute.** Recompute-vs-field mismatch beyond this → HOLD + surface. Basis: every pricer rounding site is whole-dollar (`lib/rough-opener-ceiling.ts:95-96` `Math.round`; `lib/per-market-pricer.ts:288` `Math.floor`), bounding arithmetic jitter at ~$2, while the smallest real drift class (seed $/sqft ±$1) moves an opener by $100s. Absolute, not %, so small-market numbers stay tightly guarded. |
+| **Vision-confidence cutline** (pricing-doctrine method 5) | **conf ≥ 60 prices autonomously; conf < 60 → `hold_low_confidence`.** Scoped to vision-dependent lanes (contract-MAO rehab refinement); openers continue on the deterministic tier rehab, and the cure for a hold is the DD walkthrough doctrine already requires. Basis: calibration sample 2026-07-06 (10 of 75 read-bearing records, 14 reads): scores quantize at 42/52/62; every sub-60 read is exterior-only assumption-stacking; the only observed re-read instability (4838 Wisteria: 42↔52 alternating, rehab_mid $27,375↔$40,150 — 47% swing on identical inputs) sits entirely below 60. Revisit when ≥30 scored reads exist above 60. |
+
 **Eventual:** `Wholesale_Fee` should become **deal-type-aware**, not a single
 hardcoded default. Source-of-truth shape will be a per-listing field or a
 lookup keyed on `(deal_source, market_tier, distress_grade)`, with the V1
