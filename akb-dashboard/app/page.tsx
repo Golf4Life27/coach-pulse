@@ -6,10 +6,8 @@ import MissionControl from "@/components/MissionControl";
 import MorningBriefing from "@/components/MorningBriefing";
 import PipelineBoard from "@/components/PipelineBoard";
 import OutreachPanel from "@/components/OutreachPanel";
-import JarvisFeed from "@/components/JarvisFeed";
 import JarvisChat from "@/components/JarvisChat";
 import JarvisGreeting from "@/components/JarvisGreeting";
-import ActionQueue from "@/components/ActionQueue";
 import FactoryFloor from "@/components/factory-floor/FactoryFloor";
 import { showToast } from "@/components/Toast";
 
@@ -66,7 +64,11 @@ export default function CommandCenter() {
           replies, cron heartbeats, event tape (operator spec 2026-07-04). */}
       <MissionControl />
 
-      {/* Jarvis Phase 1 — depth-aware ACT NOW cards */}
+      {/* Jarvis ACT NOW — the ONE decision surface on the landing page
+          (operator 2026-07-08: "action items presented cleanly, orderly, with
+          reasoning"). Fed by /api/jarvis-brief, which now HARD-gates staleness:
+          no card older than JARVIS_DECISION_MAX_AGE_HOURS (default 10 days).
+          Cold threads route to the bump/re-engagement lane in /queue instead. */}
       <JarvisGreeting />
 
       {/* Phase 9.4 — factory-floor agent rooms */}
@@ -78,21 +80,12 @@ export default function CommandCenter() {
       {/* Outreach Controls */}
       <OutreachPanel />
 
-      {/* Jarvis Inbound Feed */}
-      <JarvisFeed />
-
       {/* Pipeline Board — Kanban view */}
       <PipelineBoard />
 
-      {/* Legacy Action Queue — keeping for now as fallback */}
-      <details className="group">
-        <summary className="text-xs text-gray-600 cursor-pointer hover:text-gray-400 select-none">
-          Show legacy Action Queue
-        </summary>
-        <div className="mt-3">
-          <ActionQueue />
-        </div>
-      </details>
+      {/* JarvisFeed + legacy ActionQueue removed 2026-07-08 — both duplicated
+          /queue (the transactional approve-and-send surface) and buried live
+          decisions under noise. One queue, one Act Now, one strip. */}
     </div>
   );
 }
