@@ -1,0 +1,83 @@
+# URL backfill — controlled resolver for URL-less active records.
+#
+# The freshness re-verify cron can only refresh records that carry a cached
+# Verification_URL; records without one age past the 48h window and strand
+# (7/08: 41 records eligible-except-stale, sendable depth 3 < floor 10).
+# This pass resolves a listing URL via Firecrawl address search + STRICT
+# address↔URL confirmation, and stamps Last_Verified in the same write —
+# a confirmed record becomes outreach-fresh immediately.
+#
+# DRY by default (reports candidates, zero credits). mode=live spends ~1
+# Firecrawl credit per record, bounded by limit (route pages ~20-30/run
+# inside its 300s window; use ?after cursor across runs for big sets).
+# NEVER sends; send rails untouched.
+
+name: URL backfill (controlled)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "live = resolve + persist (spends <= limit credits). Default dry = preview only."
+        required: false
+        default: "dry"
+        type: choice
+        options: ["dry", "live"]
+      limit:
+        description: "Max records to resolve this run (1 credit each)."
+        required: false
+        default: "20"
+        type: string
+      after:
+        description: "Optional cursor (record ID) to continue a prior run."
+        required: false
+        default: ""
+        type: string
+      base_url:
+        description: "Production base URL (override only for staging tests)."
+        required: false
+        default: "https://coach-pulse-ten.vercel.app"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      MODE: ${{ inputs.mode }}
+      LIMIT: ${{ inputs.limit }}
+      AFTER: ${{ inputs.after }}
+      BASE_URL: ${{ inputs.base_url }}
+    steps:
+      - name: Refuse to run when CRON_SECRET is missing
+        run: |
+          if [ -z "${{ secrets.CRON_SECRET }}" ]; then
+            echo "::error::CRON_SECRET is not configured as a GitHub Actions secret."
+            exit 1
+          fi
+          echo "CRON_SECRET present; proceeding."
+
+      - name: Invoke /api/admin/url-backfill
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          Q="limit=${LIMIT}"
+          if [ "${MODE}" = "live" ]; then Q="apply=1&${Q}"; fi
+          if [ -n "${AFTER}" ]; then Q="${Q}&after=${AFTER}"; fi
+          URL="${BASE_URL}/api/admin/url-backfill?${Q}"
+          echo "GET ${URL}  (mode=${MODE})"
+          HTTP_CODE=$(curl -sS -o /tmp/backfill.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "x-vercel-cron: 1" \
+            "${URL}")
+          echo "HTTP ${HTTP_CODE}"
+          echo "--- response body ---"
+          jq . /tmp/backfill.json 2>/dev/null || cat /tmp/backfill.json
+          if [ "${HTTP_CODE}" -ge 400 ]; then
+            echo "::error::url-backfill returned HTTP ${HTTP_CODE}"
+            exit 1
+          fi
