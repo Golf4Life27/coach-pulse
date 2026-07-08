@@ -174,6 +174,25 @@ function safeNum(v: unknown, fallback = 0): number {
 // helper — it must run synchronously over an in-memory listing array. The
 // goal is to shrink the candidate pool from N (35+) down to
 // MAX_HYDRATE_CANDIDATES before we do any expensive deal-context work.
+// HARD staleness gate (operator 2026-07-08: "stale and need to disappear...
+// manually sifting through noise kills this automation effort"). A needs-
+// decision card is only a decision while the conversation is warm: no card
+// may be built from an inbound older than this. Cold threads belong to the
+// bump/re-engagement lane (P1 soft-no drafts, /queue), NOT the operator's
+// decision feed — a stale card is worse than no card (anti-staleness
+// doctrine, same rule as the priorities strip's required expiresAt).
+const DECISION_FEED_MAX_AGE_H = (() => {
+  const raw = Number(process.env.JARVIS_DECISION_MAX_AGE_HOURS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 10 * 24; // default 10 days
+})();
+
+export function isDecisionFresh(lastInboundAt: string | null | undefined, nowMs: number): boolean {
+  if (!lastInboundAt) return false; // no inbound = nothing to decide on
+  const t = new Date(lastInboundAt).getTime();
+  if (!Number.isFinite(t)) return false;
+  return nowMs - t <= DECISION_FEED_MAX_AGE_H * 3_600_000;
+}
+
 function computePreliminaryScore(l: Listing): number {
   let score = 0;
 
@@ -330,7 +349,11 @@ export async function GET(req: Request) {
       ...resurrected.map((l) => ({ ...l, outreachStatus: "Response Received" } as Listing)),
     ];
 
+    const nowMs = Date.now();
     const preliminaryRanked = activeWithResurrected
+      // HARD gate first: cold threads never become decision cards, no matter
+      // how they score. They exit to the bump/re-engagement lane instead.
+      .filter((l) => isDecisionFresh(l.lastInboundAt, nowMs))
       .map((l) => {
         let prelim = computePreliminaryScore(l);
         // Resurrected records get +90 — high-leverage missed-opportunity recovery.
