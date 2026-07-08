@@ -20,7 +20,11 @@ const VALID_STATUS = new Set(["open", "in_progress", "resolved", "deferred"]);
 
 export async function GET() {
   if (!AIRTABLE_PAT) return NextResponse.json({ error: "airtable_not_configured" }, { status: 500 });
-  const formula = `OR({Status}='open',{Status}='in_progress')`;
+  // Anti-staleness gate (operator 2026-07-08: six June-era ghosts haunted
+  // /queue for a month — "stale and need to disappear"). An action item
+  // older than 14 days is no longer a decision; it was either handled
+  // out-of-band or the thread went cold and belongs to re-engagement.
+  const formula = `AND(OR({Status}='open',{Status}='in_progress'), IS_AFTER(CREATED_TIME(), DATEADD(NOW(), -14, 'days')))`;
   const url =
     `https://api.airtable.com/v0/${BASE_ID}/${TABLE}` +
     `?filterByFormula=${encodeURIComponent(formula)}&pageSize=100`;

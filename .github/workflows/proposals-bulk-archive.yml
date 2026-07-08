@@ -1,0 +1,69 @@
+# Agent_Proposals bulk archive — controlled queue-hygiene purge.
+#
+# Archives stale Pending housekeeping proposals (FOLLOW UP / KILL DEAD DEAL
+# / …) so /queue shows only what the operator must act on. NEVER touches
+# jarvis_reply proposals; keeps anything younger than keep_hours (default
+# 24h). DRY by default — mode=live applies.
+
+name: Proposals bulk archive (controlled)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "live = archive (Status → Archived). Default dry = counts only."
+        required: false
+        default: "dry"
+        type: choice
+        options: ["dry", "live"]
+      keep_hours:
+        description: "Keep non-jarvis_reply proposals younger than this many hours (default 24)."
+        required: false
+        default: "24"
+        type: string
+      base_url:
+        description: "Production base URL (override only for staging tests)."
+        required: false
+        default: "https://coach-pulse-ten.vercel.app"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      MODE: ${{ inputs.mode }}
+      KEEP_HOURS: ${{ inputs.keep_hours }}
+      BASE_URL: ${{ inputs.base_url }}
+    steps:
+      - name: Refuse to run when CRON_SECRET is missing
+        run: |
+          if [ -z "${{ secrets.CRON_SECRET }}" ]; then
+            echo "::error::CRON_SECRET is not configured as a GitHub Actions secret."
+            exit 1
+          fi
+          echo "CRON_SECRET present; proceeding."
+
+      - name: Invoke /api/admin/proposals-bulk-archive
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          Q="keep_hours=${KEEP_HOURS}"
+          if [ "${MODE}" = "live" ]; then Q="apply=1&${Q}"; fi
+          URL="${BASE_URL}/api/admin/proposals-bulk-archive?${Q}"
+          echo "GET ${URL}  (mode=${MODE})"
+          HTTP_CODE=$(curl -sS -o /tmp/archive.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "x-vercel-cron: 1" \
+            "${URL}")
+          echo "HTTP ${HTTP_CODE}"
+          echo "--- response body ---"
+          jq . /tmp/archive.json 2>/dev/null || cat /tmp/archive.json
+          if [ "${HTTP_CODE}" -ge 400 ]; then
+            echo "::error::proposals-bulk-archive returned HTTP ${HTTP_CODE}"
+            exit 1
+          fi
