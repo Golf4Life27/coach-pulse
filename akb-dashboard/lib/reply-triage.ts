@@ -15,7 +15,13 @@
 //
 // Pure. No I/O. Tested in lib/reply-triage.test.ts.
 
-export type ReplyClassification = "rejection" | "interest" | "counter" | "acceptance" | "unknown";
+export type ReplyClassification =
+  | "rejection"
+  | "soft_no"
+  | "interest"
+  | "counter"
+  | "acceptance"
+  | "unknown";
 
 /** Alert routing tier (operator 2026-06-10). Maverick's SMS channel is
  *  reserved for decisions and urgency; it MUST NOT announce that a text
@@ -44,19 +50,24 @@ const ACCEPTANCE_PATTERNS = [
   /\bwrite\s+(?:it|the\s+offer|the\s+contract)\s+up\b/i,
 ];
 
+/** HARD rejection — the thread must die and STAY dead. Two shapes only:
+ *  (a) compliance opt-outs (STOP/unsubscribe/do-not-contact) — non-negotiable,
+ *  never re-engaged, feeds the opt-out rails; (b) gone-deals (sold, under
+ *  contract, escrow, withdrawn, comparing-offers-in-hand) — there is nothing
+ *  left to re-engage. Route: tier_0 auto-close → Dead.
+ *
+ *  P1 split (2026-07-08, ruling context recmy2Vwp1wMA1Vs8 era): STANCE
+ *  rejections ("not interested", "no go", "too low") moved OUT of this list
+ *  to SOFT_NO_PATTERNS — a seller saying no-at-this-price-today is a
+ *  re-engagement candidate, not a corpse. 2718 Ave I's "No go" died
+ *  UNCLASSIFIED under the old list; that class now routes to the 2A queue
+ *  with an operator-approved re-engagement draft. */
 const REJECTION_PATTERNS = [
-  /\bnot interested\b/i,
-  /\bno thanks?\b/i,
   /\bstop\b/i,
-  /\btoo low\b/i,
-  /\bseller said no\b/i,
-  /\bfirm at\b/i,
   /\bunder contract\b/i,
   /\boff the market\b/i,
   /\bsold\b/i,
   /\bexpired\b/i,
-  /\bpass\b/i,
-  /\bnot for sale\b/i,
   /\bremove\b.*\bnumber\b/i,
   /\bdo not\b.*\b(text|contact|call)\b/i,
   /\bunsubscribe\b/i,
@@ -77,6 +88,38 @@ const REJECTION_PATTERNS = [
   /\bgoing\s+(?:with|to\s+go\s+with)\s+(?:another|a\s+different|a\s+higher|the)\s+(?:offer|buyer)\b/i,
   /\bin\s+escrow\b/i,
 ];
+
+/** SOFT NO — the seller (or agent) declined our number or isn't selling
+ *  TODAY, in plain language. The thread is alive: these route tier_1 with an
+ *  operator-approved re-engagement draft queued as a Type 2A proposal (never
+ *  auto-sent). The two pricing-flavored shapes (too low / firm at / not at
+ *  that price) surface as decisionKind "pricing". Bare "no" and "no go" were
+ *  the P1 anchor cases (2718 Ave I). */
+const SOFT_NO_PATTERNS = [
+  /\bnot interested\b/i,
+  /\bno,?\s+thanks?\b/i,
+  /\bno thank you\b/i,
+  /\bno[\s-]+go\b/i,
+  /\bnope\b/i,
+  /^\s*no[.!]*\s*$/i, // a bare "no" — the shortest rejection there is
+  /\bseller said no\b/i,
+  /\bpass\b/i,
+  /\bnot for sale\b/i,
+  /\bnot selling\b/i,
+  /\bnot\s+(?:looking|planning|trying)\s+to\s+sell\b/i,
+  /\bwe'?re good\b/i,
+  /\ball set\b/i,
+  /\bnot right now\b/i,
+  /\bmaybe\s+(?:later|down the road|in the future)\b/i,
+  // pricing-flavored soft-nos (decisionKind "pricing"):
+  /\btoo low\b/i,
+  /\bfirm at\b/i,
+  /\bnot at (?:that|this) price\b/i,
+];
+
+/** The soft-no subset whose real message is "your NUMBER is wrong", not
+ *  "go away" — routed as a pricing decision. */
+const PRICE_OBJECTION_RE = /\btoo low\b|\bfirm at\b|\bnot at (?:that|this) price\b/i;
 
 const INTEREST_PATTERNS = [
   /\byes\b/i,
@@ -137,6 +180,13 @@ export function classifyReply(body: string): {
     if (pat.test(trimmed)) return { classification: "rejection", matchedPattern: pat.source };
   }
 
+  // Soft-no AFTER hard rejection (a "sold, no thanks" is still gone-deal) and
+  // BEFORE counter/interest ("not at that price" must not read as interest
+  // via its price token).
+  for (const pat of SOFT_NO_PATTERNS) {
+    if (pat.test(trimmed)) return { classification: "soft_no", matchedPattern: pat.source };
+  }
+
   if (COUNTER_PRICE_RE.test(trimmed)) {
     for (const pat of COUNTER_LANGUAGE_PATTERNS) {
       if (pat.test(trimmed)) return { classification: "counter", matchedPattern: pat.source };
@@ -160,6 +210,21 @@ export function determineNewStatus(
   currentStatus: string | null,
 ): string | null {
   if (classification === "rejection") return "Dead";
+  // Soft-no: the thread stays ALIVE in the needs-decision lane. Promote a
+  // first-touch/parked record to Response Received; never downgrade a record
+  // that has already advanced (Negotiating / Counter Received / etc.).
+  if (classification === "soft_no") {
+    if (
+      currentStatus === "Texted" ||
+      currentStatus === "Parked" ||
+      currentStatus === "Response Received" ||
+      currentStatus == null ||
+      currentStatus === ""
+    ) {
+      return currentStatus === "Response Received" ? null : "Response Received";
+    }
+    return null;
+  }
   if (classification === "acceptance") {
     if (currentStatus === "Offer Accepted") return null;
     return "Offer Accepted";
@@ -181,6 +246,31 @@ export function determineNewStatus(
 /** What kind of operator decision a genuine reply demands. */
 export type DecisionKind = "pricing" | "engagement" | "review" | "none";
 
+/** Pure: the doctrine-compliant soft-no re-engagement draft (Type 2A — the
+ *  operator approves before anything sends). STICKY-NUMBER RULE
+ *  (pricing-doctrine method 6, the $71.5k lesson): the draft carries the
+ *  delivery-stamped SENT offer verbatim or it carries NO number at all —
+ *  never a recomputed or field-derived figure. Callers pass sentOfferUsd
+ *  only when it provably backed a delivered outbound. */
+export function buildSoftNoReengagement(opts: {
+  sentOfferUsd?: number | null;
+  street?: string | null;
+}): string {
+  const street = (opts.street ?? "").trim();
+  const at = street ? ` for ${street}` : "";
+  if (typeof opts.sentOfferUsd === "number" && opts.sentOfferUsd > 0) {
+    return (
+      `Totally understand — no pressure at all. If anything changes, my cash ` +
+      `offer of $${Math.round(opts.sentOfferUsd).toLocaleString("en-US")}${at} stays good: ` +
+      `as-is, no repairs or cleanout, and we close on your timeline. Keep my number just in case. – Alex`
+    );
+  }
+  return (
+    `Totally understand — no pressure at all. If anything changes down the road${at ? `${at.replace(" for", " on")}` : ""}, ` +
+    `I buy as-is with cash — no repairs, no cleanout, close on your timeline. Keep my number just in case. – Alex`
+  );
+}
+
 export interface SellerReplyTriage {
   classification: ReplyClassification;
   /** Alert routing tier (operator 2026-06-10): rejection → tier_0_auto_close
@@ -199,13 +289,20 @@ export interface SellerReplyTriage {
   /** Operator-facing: what the seller said + what decision is needed. */
   reasoning: string;
   matchedPattern: string | null;
+  /** Soft-no only: the pre-built 2A re-engagement draft (sticky-number rule
+   *  applied). Null for every other classification — those keep their
+   *  existing draft paths. */
+  suggestedReply: string | null;
 }
 
 /** Pure: turn a genuine inbound reply into a routed, reasoned needs-decision
- *  item. The caller has already stripped self-echo / bot autoreplies. */
+ *  item. The caller has already stripped self-echo / bot autoreplies.
+ *  opts.sentOfferUsd must be the DELIVERY-STAMPED sent offer (or omitted) —
+ *  never a recomputed/field-guessed number. */
 export function triageSellerReply(
   body: string,
   currentStatus: string | null = null,
+  opts: { sentOfferUsd?: number | null; street?: string | null } = {},
 ): SellerReplyTriage {
   const { classification, matchedPattern } = classifyReply(body);
   const queueStatus = determineNewStatus(classification, currentStatus);
@@ -222,7 +319,24 @@ export function triageSellerReply(
         queueStatus,
         reasoning: `Seller ACCEPTED / asked for the contract — ACT NOW: draft contract, operator confirms terms. Reply: "${snippet}"`,
         matchedPattern,
+        suggestedReply: null,
       };
+    case "soft_no": {
+      const isPriceObjection = PRICE_OBJECTION_RE.test((body ?? "").trim());
+      return {
+        classification,
+        tier: "tier_1_decision",
+        needsDecision: true,
+        decisionKind: isPriceObjection ? "pricing" : "engagement",
+        priority: "NORMAL",
+        queueStatus,
+        reasoning: isPriceObjection
+          ? `Seller objected to the PRICE (soft no) — pricing decision: hold the sticky number or walk; re-engagement draft queued for approval. Reply: "${snippet}"`
+          : `Seller declined softly — thread stays alive; approve/edit the no-pressure re-engagement draft (2A) or skip. Reply: "${snippet}"`,
+        matchedPattern,
+        suggestedReply: buildSoftNoReengagement(opts),
+      };
+    }
     case "counter":
       return {
         classification,
@@ -233,6 +347,7 @@ export function triageSellerReply(
         queueStatus,
         reasoning: `Seller countered with a price — operator PRICING decision needed (hold the sticky floor; never auto-revise down). Reply: "${snippet}"`,
         matchedPattern,
+        suggestedReply: null,
       };
     case "interest":
       return {
@@ -244,6 +359,7 @@ export function triageSellerReply(
         queueStatus,
         reasoning: `Seller engaged / asked to proceed — operator decision: advance to offer or DD. Reply: "${snippet}"`,
         matchedPattern,
+        suggestedReply: null,
       };
     case "rejection":
       return {
@@ -255,6 +371,7 @@ export function triageSellerReply(
         queueStatus,
         reasoning: `Seller declined (matched /${matchedPattern}/) — route to Dead; system sends the one-time polite close (no alert). Reply: "${snippet}"`,
         matchedPattern,
+        suggestedReply: null,
       };
     default:
       return {
@@ -266,6 +383,7 @@ export function triageSellerReply(
         queueStatus,
         reasoning: `Genuine reply, intent unclear — operator review. Reply: "${snippet}"`,
         matchedPattern,
+        suggestedReply: null,
       };
   }
 }

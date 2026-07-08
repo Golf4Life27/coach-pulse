@@ -165,7 +165,10 @@ async function handleScan(req: Request) {
 
           // Build note
           const classLabel = classification === "rejection" ? "REJECTION"
+            : classification === "soft_no" ? "SOFT-NO (re-engage queued)"
             : classification === "interest" ? "INTEREST"
+            : classification === "counter" ? "COUNTER"
+            : classification === "acceptance" ? "ACCEPTANCE"
             : "UNCLASSIFIED";
           const noteText = `Inbound from ${listing.agentName ?? "agent"}: "${inbound.body.slice(0, 300)}". Classified: ${classLabel}.${newStatus ? ` Status → ${newStatus}.` : " Status unchanged."}`;
 

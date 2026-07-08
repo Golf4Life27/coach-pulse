@@ -287,7 +287,22 @@ export async function GET(req: Request) {
           // Triage FIRST (cheap, pure) — the tier decides the whole route.
           // Shared with scan-replies via lib/reply-triage.ts (one classifier,
           // no drift).
-          const triage = triageSellerReply(inbound.body, listing.outreachStatus ?? null);
+          // sentOfferUsd: outreachOfferPrice is only trusted as the sticky
+          // number when the record shows a delivered first touch (the h2 lane
+          // stamps it at send). Anything else → the soft-no draft carries NO
+          // number (pricing-doctrine method 6 — fields are history, not
+          // authority).
+          const deliveredFirstTouch =
+            listing.outreachStatus === "Texted" ||
+            listing.outreachStatus === "Response Received" ||
+            listing.outreachStatus === "Parked";
+          const triage = triageSellerReply(inbound.body, listing.outreachStatus ?? null, {
+            sentOfferUsd:
+              deliveredFirstTouch && typeof listing.outreachOfferPrice === "number" && listing.outreachOfferPrice > 0
+                ? listing.outreachOfferPrice
+                : null,
+            street: (listing.address ?? "").split(",")[0].trim() || null,
+          });
 
           // ── TIER 0: high-confidence rejection → system auto-close. ──
           // No proposal, no alert, no Claude draft. The close rides the
@@ -324,10 +339,17 @@ export async function GET(req: Request) {
           }
 
           // ── TIER 1 / 2: needs-decision proposal + decision-first alert. ──
-          const draftResponse = await generateDraftResponse(
-            listing,
-            inbound.body
-          );
+          // Soft-no uses the PURE pre-built re-engagement draft (sticky-number
+          // rule enforced in lib/reply-triage) — it never touches the model
+          // draft path, which reads record fields. Everything else keeps the
+          // existing draft generator.
+          const draftResponse =
+            triage.classification === "soft_no" && triage.suggestedReply
+              ? triage.suggestedReply
+              : await generateDraftResponse(
+                  listing,
+                  inbound.body
+                );
 
           const actionPayload = JSON.stringify({
             recordId: listing.id,

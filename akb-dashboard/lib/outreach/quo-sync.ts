@@ -20,6 +20,7 @@
 // Idempotent by Quo id — re-running the sync produces zero new appends.
 
 import { detectL3DollarAmounts, type DollarAmount } from "./l3-amount-detector";
+import { classifyReply } from "@/lib/reply-triage";
 
 export interface QuoSyncInputMessage {
   /** Quo (OpenPhone) message id. */
@@ -115,7 +116,13 @@ export function appendQuoMessagesToNotes(
       const monthDay = dateTag.match(/(\d{4})-(\d{2})-(\d{2})/);
       const md = monthDay ? `${parseInt(monthDay[2], 10)}/${parseInt(monthDay[3], 10)}` : dateTag;
       return [
-        `${md} — L3 INBOUND: UNCLASSIFIED. Body: ${e.body}`,
+        `${md} — L3 INBOUND: ${(() => {
+          // P1 fix (2026-07-08): this line used to stamp UNCLASSIFIED
+          // unconditionally — "No go" on 2718 Ave I died here. Stamp the
+          // real classification from the shared triage module.
+          const c = classifyReply(e.body).classification;
+          return c === "unknown" ? "UNCLASSIFIED" : c.toUpperCase().replace("_", "-");
+        })()}. Body: ${e.body}`,
         `[Quo inbound msg ${e.id} ts=${e.createdAt} src=${source} ingested_at=${ingestedAt}${dollarTag}]`,
       ].join("\n");
     });
