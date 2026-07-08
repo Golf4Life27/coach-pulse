@@ -2,10 +2,28 @@ import { describe, it, expect } from "vitest";
 import { classifyReply, determineNewStatus, triageSellerReply } from "./reply-triage";
 
 describe("classifyReply", () => {
-  it("rejection wins even when a price is present", () => {
-    expect(classifyReply("not interested at $200k").classification).toBe("rejection");
+  it("HARD rejection (compliance + gone-deals) wins even when a price is present", () => {
     expect(classifyReply("under contract").classification).toBe("rejection");
     expect(classifyReply("please remove my number").classification).toBe("rejection");
+    expect(classifyReply("STOP").classification).toBe("rejection");
+    expect(classifyReply("it sold last week for $90k").classification).toBe("rejection");
+  });
+
+  it("SOFT-NO (P1 2026-07-08): stance rejections classify and stay alive", () => {
+    // The 2718 Ave I anchor case — died "L3: UNCLASSIFIED" under the old list:
+    expect(classifyReply("No go").classification).toBe("soft_no");
+    expect(classifyReply("no").classification).toBe("soft_no");
+    expect(classifyReply("Nope").classification).toBe("soft_no");
+    expect(classifyReply("not interested at $200k").classification).toBe("soft_no");
+    expect(classifyReply("no thanks").classification).toBe("soft_no");
+    expect(classifyReply("owner is not selling right now").classification).toBe("soft_no");
+    expect(classifyReply("we're good, all set").classification).toBe("soft_no");
+    expect(classifyReply("the house is not for sale").classification).toBe("soft_no");
+    // pricing-flavored soft-nos:
+    expect(classifyReply("too low").classification).toBe("soft_no");
+    expect(classifyReply("seller is firm at asking").classification).toBe("soft_no");
+    // bare-"no" must NOT fire inside longer unrelated sentences:
+    expect(classifyReply("no problem, when can you close?").classification).not.toBe("soft_no");
   });
 
   it("counter needs BOTH a price token and counter language", () => {
@@ -92,9 +110,28 @@ describe("determineNewStatus", () => {
   });
 });
 
-describe("triageSellerReply — alert tiers (operator 2026-06-10)", () => {
-  it("rejection → tier_0_auto_close (system close, no alert)", () => {
-    expect(triageSellerReply("not interested", "Texted").tier).toBe("tier_0_auto_close");
+describe("triageSellerReply — alert tiers (operator 2026-06-10; soft-no carve-out 2026-07-08)", () => {
+  it("HARD rejection → tier_0_auto_close (system close, no alert)", () => {
+    expect(triageSellerReply("under contract", "Texted").tier).toBe("tier_0_auto_close");
+    expect(triageSellerReply("STOP", "Texted").tier).toBe("tier_0_auto_close");
+  });
+
+  it("soft-no → tier_1 with the 2A re-engagement draft; sticky number verbatim or ABSENT", () => {
+    const t = triageSellerReply("No go", "Texted", { sentOfferUsd: 12_000, street: "2718 Ave I" });
+    expect(t.classification).toBe("soft_no");
+    expect(t.tier).toBe("tier_1_decision");
+    expect(t.needsDecision).toBe(true);
+    expect(t.queueStatus).toBe("Response Received");
+    expect(t.suggestedReply).toContain("$12,000");
+    expect(t.suggestedReply).toContain("2718 Ave I");
+    // no delivery-stamped number → the draft carries NO dollar figure (never invents):
+    expect(triageSellerReply("no thanks", "Texted", {}).suggestedReply).not.toMatch(/\$\d/);
+    // price objection → pricing decision:
+    expect(triageSellerReply("that's too low", "Texted").decisionKind).toBe("pricing");
+    // soft-no never downgrades an advanced record:
+    expect(triageSellerReply("not right now", "Negotiating").queueStatus).toBeNull();
+    // "not interested" moved OUT of auto-close — it now queues for the operator:
+    expect(triageSellerReply("not interested", "Texted").tier).toBe("tier_1_decision");
   });
   it("counter / interest / unknown → tier_1_decision", () => {
     expect(triageSellerReply("seller is looking for $185,000", "Texted").tier).toBe("tier_1_decision");
