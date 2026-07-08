@@ -76,6 +76,15 @@ export async function GET() {
       offset = data.offset;
     } while (offset);
 
+    // jarvis_reply (a live seller waiting on a reply) always outranks
+    // housekeeping proposals — the operator's decision surface leads with
+    // revenue (operator 2026-07-08 queue-hygiene mandate).
+    allProposals.sort((a, b) => {
+      const ap = a.proposalType === "jarvis_reply" ? 0 : 1;
+      const bp = b.proposalType === "jarvis_reply" ? 0 : 1;
+      return ap - bp;
+    });
+
     return Response.json(allProposals);
   } catch (err) {
     console.error("[proposals] Error:", err);
