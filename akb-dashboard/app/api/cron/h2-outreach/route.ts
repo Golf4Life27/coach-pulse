@@ -46,7 +46,7 @@ import { getZipArvSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import { minOfferFloor } from "@/lib/per-market-pricer";
 import { getMarketForListing, openerArvPctMax } from "@/lib/markets/registry";
 import { resolveAnchorPct } from "@/lib/markets/anchor";
-import { readSendCapConfig, applySendCap } from "@/lib/outreach/send-cap";
+import { readSendCapConfig, resolveCoverage, applySendCap } from "@/lib/outreach/send-cap";
 import {
   authenticate,
   hasDashboardSession,
@@ -480,7 +480,17 @@ async function handle(req: Request): Promise<Response> {
   // H2_COVERED_ZIPS → zero). The cap is ALWAYS computed so a watched dry-run
   // previews exactly what would fire live; it only FILTERS dispatch when live.
   // The hard-disable above stays the master kill — this runs only once lifted.
-  const sendCap = applySendCap(plans, (p) => byId.get(p.recordId)?.zip ?? null, readSendCapConfig());
+  // UNLEASH ruling (operator 2026-07-09): H2_COVERED_ZIPS=auto collapses
+  // send coverage into the seeded-ZIP registry — a ZIP becomes send-covered
+  // the moment the system seeds it (intake -> seed-sweep -> covered), so
+  // metros expand autonomously with zero env edits. Legacy allowlist mode
+  // and unset-env fail-closed behavior are unchanged.
+  const rawCapCfg = readSendCapConfig();
+  const capCfg =
+    rawCapCfg.coverageMode === "auto"
+      ? resolveCoverage(rawCapCfg, await listSeededZips())
+      : rawCapCfg;
+  const sendCap = applySendCap(plans, (p) => byId.get(p.recordId)?.zip ?? null, capCfg);
   const dispatchPlans = dryRun ? plans : sendCap.allowed;
   const sendCapSummary = {
     enforced: !dryRun, // live dispatch is filtered; a dry run previews all + this projection
