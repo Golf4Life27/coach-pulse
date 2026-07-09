@@ -2,7 +2,7 @@
 // empty allowlist → zero; per-zip + per-run caps; env clamped to ceilings.
 
 import { describe, it, expect } from "vitest";
-import { applySendCap, readSendCapConfig, type SendCapConfig } from "./send-cap";
+import { applySendCap, readSendCapConfig, resolveCoverage, type SendCapConfig } from "./send-cap";
 
 type Plan = { id: string; zip: string | null };
 const zipOf = (p: Plan) => p.zip;
@@ -10,7 +10,7 @@ const plans = (...zips: Array<string | null>): Plan[] =>
   zips.map((z, i) => ({ id: `rec${i}`, zip: z }));
 
 function cfg(over: Partial<SendCapConfig> = {}): SendCapConfig {
-  return { maxPerRun: 5, maxPerZip: 2, coveredZips: new Set(["48227", "48205"]), ...over };
+  return { maxPerRun: 5, maxPerZip: 2, coveredZips: new Set(["48227", "48205"]), coverageMode: "allowlist" as const, ...over };
 }
 
 describe("applySendCap", () => {
@@ -60,7 +60,7 @@ describe("applySendCap", () => {
 
 describe("readSendCapConfig", () => {
   it("defaults are tight (5 / 2) with an empty allowlist", () => {
-    const c = readSendCapConfig({} as NodeJS.ProcessEnv);
+    const c = readSendCapConfig({} as unknown as NodeJS.ProcessEnv);
     expect(c.maxPerRun).toBe(5);
     expect(c.maxPerZip).toBe(2);
     expect(c.coveredZips.size).toBe(0);
@@ -81,5 +81,34 @@ describe("readSendCapConfig", () => {
     const c = readSendCapConfig({ H2_MAX_SENDS_PER_RUN: "-3", H2_MAX_SENDS_PER_ZIP: "abc" } as unknown as NodeJS.ProcessEnv);
     expect(c.maxPerRun).toBe(5);
     expect(c.maxPerZip).toBe(2);
+  });
+});
+
+describe("auto coverage mode (UNLEASH ruling 2026-07-09)", () => {
+  it("H2_COVERED_ZIPS=auto reads as auto mode with an empty allowlist", () => {
+    const c = readSendCapConfig({ H2_COVERED_ZIPS: "auto" } as unknown as NodeJS.ProcessEnv);
+    expect(c.coverageMode).toBe("auto");
+    expect(c.coveredZips.size).toBe(0);
+  });
+
+  it("unset env stays allowlist + FAIL-CLOSED (zero coverage)", () => {
+    const c = readSendCapConfig({} as unknown as NodeJS.ProcessEnv);
+    expect(c.coverageMode).toBe("allowlist");
+    expect(c.coveredZips.size).toBe(0);
+  });
+
+  it("resolveCoverage fills coverage from the seeded set in auto mode only", () => {
+    const auto = readSendCapConfig({ H2_COVERED_ZIPS: "auto" } as unknown as NodeJS.ProcessEnv);
+    const resolved = resolveCoverage(auto, ["44105", "48203", "bad"]);
+    expect([...resolved.coveredZips].sort()).toEqual(["44105", "48203"]);
+    // allowlist mode is a passthrough — the env list stays authoritative:
+    const listed = cfg();
+    expect(resolveCoverage(listed, ["44105"]).coveredZips).toBe(listed.coveredZips);
+  });
+
+  it("auto mode with an EMPTY seed store still sends nothing (fail-closed preserved)", () => {
+    const auto = resolveCoverage(readSendCapConfig({ H2_COVERED_ZIPS: "auto" } as unknown as NodeJS.ProcessEnv), []);
+    const d = applySendCap(plans("44105"), zipOf, auto);
+    expect(d.allowed).toHaveLength(0);
   });
 });

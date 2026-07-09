@@ -27,6 +27,14 @@ export interface SendCapConfig {
   maxPerRun: number;
   maxPerZip: number;
   coveredZips: ReadonlySet<string>;
+  /** "allowlist" = env-enumerated ZIPs (legacy). "auto" = the operator set
+   *  H2_COVERED_ZIPS=auto (UNLEASH ruling, 2026-07-09): coverage follows the
+   *  SEEDED-ZIP registry — any ZIP the system has seeded (and can therefore
+   *  value-anchor price in) is send-covered, so metros expand by seeding
+   *  alone, never by env surgery. The route fills coveredZips from the seed
+   *  store when mode is "auto"; this pure module only reports the mode.
+   *  Unset env stays FAIL-CLOSED (empty allowlist, zero sends). */
+  coverageMode: "allowlist" | "auto";
 }
 
 export type CapReason = "zip_not_covered" | "per_zip_cap" | "per_run_cap";
@@ -51,16 +59,36 @@ function norm5(zip: string | null | undefined): string | null {
 }
 
 export function readSendCapConfig(env: NodeJS.ProcessEnv = process.env): SendCapConfig {
+  const raw = (env.H2_COVERED_ZIPS ?? "").trim();
+  const coverageMode: SendCapConfig["coverageMode"] = raw.toLowerCase() === "auto" ? "auto" : "allowlist";
   const coveredZips = new Set<string>();
-  for (const tok of (env.H2_COVERED_ZIPS ?? "").split(/[,\s]+/)) {
-    const z = norm5(tok);
-    if (z) coveredZips.add(z);
+  if (coverageMode === "allowlist") {
+    for (const tok of raw.split(/[,\s]+/)) {
+      const z = norm5(tok);
+      if (z) coveredZips.add(z);
+    }
   }
   return {
     maxPerRun: clampInt(env.H2_MAX_SENDS_PER_RUN, DEFAULT_MAX_PER_RUN, CEIL_MAX_PER_RUN),
     maxPerZip: clampInt(env.H2_MAX_SENDS_PER_ZIP, DEFAULT_MAX_PER_ZIP, CEIL_MAX_PER_ZIP),
     coveredZips,
+    coverageMode,
   };
+}
+
+/** Route-side composition for "auto" mode: coverage = the seeded-ZIP set
+ *  (a ZIP without a seed can't value-anchor price, so it could never send
+ *  anyway — coverage and priceability collapse into one registry). In
+ *  "allowlist" mode this is a no-op passthrough. Still fail-closed: auto
+ *  mode with an EMPTY seed store covers nothing. */
+export function resolveCoverage(cfg: SendCapConfig, seededZips: Iterable<string>): SendCapConfig {
+  if (cfg.coverageMode !== "auto") return cfg;
+  const covered = new Set<string>();
+  for (const z of seededZips) {
+    const n = norm5(z);
+    if (n) covered.add(n);
+  }
+  return { ...cfg, coveredZips: covered };
 }
 
 /**
