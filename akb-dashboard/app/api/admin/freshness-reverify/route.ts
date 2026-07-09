@@ -84,13 +84,29 @@ export async function GET(req: Request) {
   // first-touch supply (status empty + Active + Auto Proceed + phone + v2,
   // via the same isH2Eligible the cron selects with — one gate, no drift)
   // plus the reply-bearing negotiation statuses the old pool carried.
-  const REPLY_BEARING = new Set(["Negotiating", "Response Received", "Counter Received", "Offer Accepted", "Texted", "Emailed"]);
+  // 2026-07-09 budget fix: "Texted"/"Emailed" REMOVED from the keep-warm set.
+  // They are not reply-bearing — they're one-and-done first touches whose
+  // freshness serves nothing (they can't first-touch again; no bump lane
+  // yet), and as the OLDEST stale records they consumed the entire daily
+  // limit ahead of sendable supply: Mark Twain-class June records were
+  // re-verified every 48h while the July first-touch cohort stranded at
+  // depth 3 (7/08 probe: 41 verify_stale). Live threads stay warm; dead
+  // air does not.
+  const REPLY_BEARING = new Set(["Negotiating", "Response Received", "Counter Received", "Offer Accepted"]);
   let active: Listing[];
   let seededZips: Set<string>;
   try {
     let all: Listing[];
     [all, seededZips] = await Promise.all([getListings(), listSeededZips()]);
-    active = all.filter((l) => isH2Eligible(l) || REPLY_BEARING.has(l.outreachStatus ?? ""));
+    // Third cohort (2026-07-09): untouched records whose Live_Status was
+    // never stamped (6/30 Indy class) are invisible to isH2Eligible until
+    // a verify pass writes Live_Status — which is exactly what THIS route
+    // does. Admit them so they graduate into the sendable pool.
+    const livenessUnknown = (l: Listing) =>
+      (l.liveStatus ?? "").trim() === "" && (l.outreachStatus ?? "").trim() === "";
+    active = all.filter(
+      (l) => isH2Eligible(l) || REPLY_BEARING.has(l.outreachStatus ?? "") || livenessUnknown(l),
+    );
   } catch (err) {
     return NextResponse.json({ error: "active_fetch_failed", message: err instanceof Error ? err.message : String(err) }, { status: 502 });
   }
