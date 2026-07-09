@@ -73,6 +73,7 @@ import {
 } from "@/lib/h2-working-hours";
 import { SOURCE_VERSION_V2 } from "@/lib/source-version";
 import { listSeededZips, FALLBACK_SEEDED_ZIPS } from "@/lib/buyer-median-store";
+import { listArvSeededZips } from "@/lib/zip-arv-seed-store";
 import {
   evaluateSupplyFloor,
   emitSupplyFloorAudit,
@@ -486,9 +487,17 @@ async function handle(req: Request): Promise<Response> {
   // metros expand autonomously with zero env edits. Legacy allowlist mode
   // and unset-env fail-closed behavior are unchanged.
   const rawCapCfg = readSendCapConfig();
+  // Coverage source = the ARV seed store (the pricer's actual value basis —
+  // a ZIP prices iff it carries an ARV seed) UNIONED with the legacy
+  // buyer-median set (Detroit era) so neither store's drift can dark a
+  // market. First live probe (7/09) caught listSeededZips() alone covering
+  // only the 10 Detroit buyer-median ZIPs and darkening B'ham/Indy/ATL.
   const capCfg =
     rawCapCfg.coverageMode === "auto"
-      ? resolveCoverage(rawCapCfg, await listSeededZips())
+      ? resolveCoverage(rawCapCfg, [
+          ...(await listArvSeededZips()),
+          ...(await listSeededZips()),
+        ])
       : rawCapCfg;
   const sendCap = applySendCap(plans, (p) => byId.get(p.recordId)?.zip ?? null, capCfg);
   const dispatchPlans = dryRun ? plans : sendCap.allowed;
