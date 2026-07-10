@@ -31,6 +31,7 @@ import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { verifyListingByUrl } from "@/lib/crawler/sources/firecrawl";
 import { isPriceableMarket } from "@/lib/markets/actionable";
 import { listSeededZips } from "@/lib/buyer-median-store";
+import { listArvSeededZips } from "@/lib/zip-arv-seed-store";
 import { isOutreachFresh, DEFAULT_FRESHNESS_HOURS } from "@/lib/outreach-freshness";
 import { isH2Eligible } from "@/lib/h2-outreach";
 import type { Listing } from "@/lib/types";
@@ -97,7 +98,16 @@ export async function GET(req: Request) {
   let seededZips: Set<string>;
   try {
     let all: Listing[];
-    [all, seededZips] = await Promise.all([getListings(), listSeededZips()]);
+    // 2026-07-10 autopsy fix (the 43-stale cohort): this route filtered
+    // markets against the LEGACY buyer-median store (10 Detroit ZIPs), so
+    // every stale record outside Detroit was skipped as "non-priceable" by
+    // EVERY freshness pass — the same wrong-store bug fixed in the send
+    // path (PR #80). Priceability = the ARV seed store, unioned with the
+    // legacy set.
+    let arvZips: Set<string>;
+    let medianZips: Set<string>;
+    [all, arvZips, medianZips] = await Promise.all([getListings(), listArvSeededZips(), listSeededZips()]);
+    seededZips = new Set<string>([...arvZips, ...medianZips]);
     // Third cohort (2026-07-09): untouched records whose Live_Status was
     // never stamped (6/30 Indy class) are invisible to isH2Eligible until
     // a verify pass writes Live_Status — which is exactly what THIS route
