@@ -1,7 +1,7 @@
 import { Listing, Deal, Buyer, ProspectiveBuyer } from "./types";
 import { auditWriteDrift, type FieldDrift } from "./airtable-verify";
 import { audit } from "./audit-log";
-import { SOURCE_VERSION_FIELD_ID, SOURCE_VERSION_V2 } from "./source-version";
+import { SOURCE_VERSION_FIELD_ID, SOURCE_VERSION_FIELD_NAME, SOURCE_VERSION_V2 } from "./source-version";
 
 const AIRTABLE_PAT = process.env.AIRTABLE_PAT!;
 const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
@@ -590,10 +590,13 @@ export async function getUrlLessActiveCandidates(opts: {
 }
 
 export async function getActiveVerificationUrlCoverage(): Promise<VerificationUrlCoverage> {
+  // FORWARD-ONLY (#38, The Forward Ruling): this is a GAUGE — it counts
+  // current-era inventory only. Legacy Active rows are fenced ghosts; a
+  // coverage percentage over them describes nothing the machine works.
   const records = await fetchRecords(
     LISTINGS_TABLE,
     ["fldXrW8CWUphUfKgJ"], // Verification_URL only
-    { filterByFormula: `{Live_Status}='Active'` },
+    { filterByFormula: `AND({Live_Status}='Active', {${SOURCE_VERSION_FIELD_NAME}}='${SOURCE_VERSION_V2}')` },
   );
   const activeTotal = records.length;
   let withUrl = 0;

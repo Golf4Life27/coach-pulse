@@ -376,6 +376,24 @@ ZIPs stale since 6/22, while the RentCast plan ran far under budget.
   `frontier_retire` PROPOSALS (never auto-paused — the `*_30d` registry
   stats are latest-run snapshots, not 30-day evidence).
 
+## 8f. NEW 2026-07-11 — Forward-only gauge truth (#38)
+
+The Forward Ruling encoded in code: **measurement surfaces count v2+
+inventory only**. `lib/forward-inventory.ts` (`filterForwardInventory` /
+`forwardInventorySplit`) is the one place the rule lives.
+
+- **Pulse scan** (`/api/agents/pulse/scan`): the detector input pool
+  (previously `getActiveListingsForBrief`, era-blind) is filtered to v2;
+  the response reports `legacy_rows_dropped` so the gauge proves it.
+- **`getActiveVerificationUrlCoverage`**: formula now requires
+  `Source_Version = v2` — coverage % describes workable inventory.
+- **freshness-reverify `livenessUnknown`**: v2-era only (an unstamped
+  legacy row is a fenced ghost; a verify credit on it buys nothing).
+- **Deliberately NOT filtered**: reconcile/sync paths (quo-sync,
+  gmail-sync, quo-reconcile, webhook match pools), dedup/prior-contact
+  indexes, and the sentinel reply queue — inbound on ANY thread revives it
+  (Mahmoud/Memphis class stays fair game).
+
 ## 9. Pointers
 
 - Hard rules / invariants: **[`docs/INVARIANTS.md`](../INVARIANTS.md)** — load every session.

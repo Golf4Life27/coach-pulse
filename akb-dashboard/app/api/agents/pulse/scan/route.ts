@@ -22,6 +22,7 @@ import { NextResponse } from "next/server";
 import { readRecentFromKv } from "@/lib/audit-log";
 import { countSpineRowsSince } from "@/lib/pulse/spine-count";
 import { getActiveListingsForBrief, getActiveVerificationUrlCoverage } from "@/lib/airtable";
+import { forwardInventorySplit } from "@/lib/forward-inventory";
 import { fetchCodebaseMetadataState } from "@/lib/maverick/sources/codebase-metadata";
 import { readPulseState } from "@/lib/pulse/active-store";
 import { runPulseScan } from "@/lib/pulse/runner";
@@ -46,7 +47,7 @@ export async function GET() {
     const nowMs = Date.now();
     const since24Iso = new Date(nowMs - 24 * 3_600_000).toISOString();
     const since48Iso = new Date(nowMs - 48 * 3_600_000).toISOString();
-    const [audit, listings, metadata, previousState, urlCoverage, spine24, spine48, deals] = await Promise.all([
+    const [audit, listingsAllEras, metadata, previousState, urlCoverage, spine24, spine48, deals] = await Promise.all([
       readRecentFromKv(DEFAULT_AUDIT_LIMIT),
       getActiveListingsForBrief({ recentDays: 14 }),
       fetchCodebaseMetadataState({ timeoutMs: 3_000 }).catch(() => null),
@@ -59,6 +60,13 @@ export async function GET() {
       // of Pulse keeps running.
       getDeals().catch(() => null),
     ]);
+
+    // FORWARD-ONLY GAUGES (#38 — The Forward Ruling): every Pulse detector
+    // count runs over current-era (v2+) inventory only. The brief pool
+    // includes reply-bearing legacy rows (correct for reply capture, wrong
+    // for measurement) — filter them here, and report how many ghosts were
+    // dropped so the gauge proves it is forward-only.
+    const { forward: listings, legacyDropped } = forwardInventorySplit(listingsAllEras);
 
     const testCount =
       metadata && metadata.ok && metadata.data ? metadata.data.test_count : null;
@@ -103,6 +111,8 @@ export async function GET() {
       elapsed_ms: Date.now() - t0,
       audit_log_size: audit.length,
       listings_examined: listings.length,
+      // Forward Ruling proof: legacy/ghost rows the gauges did NOT count.
+      legacy_rows_dropped: legacyDropped,
       verification_url_coverage: urlCoverage,
       test_count: testCount,
       previous_test_count: previousState.test_count_anchor,
