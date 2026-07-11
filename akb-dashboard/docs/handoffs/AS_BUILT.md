@@ -325,6 +325,30 @@ in the response `send_cap` block. `[verified — 193 files / 2631 tests green, t
 
 ---
 
+## 8d. NEW 2026-07-11 — H2 bump lane (#33)
+
+Day-3/day-7 re-touch of SILENT v2 first-touch threads (the cheap send
+multiplier). `lib/h2-outreach/bump-lane.ts` (pure, tested) +
+`/api/cron/bump-followup` (2 daily slots: 16:15Z / 20:15Z, limit 10) +
+`.github/workflows/bump-send.yml` (on-demand catch-up dispatch).
+
+- **Sticky number from the DELIVERY STAMP only** (`[H2 sent …] Quo msg …:`
+  in `Verification_Notes`) — never a field (P3 drift evidence). No stamp →
+  no bump, fail closed. Max 2 bumps (`Follow_Up_Count`), then silence.
+- **Same rails as first touch:** master `H2_OUTREACH_HARD_DISABLE`, live
+  needs `H2_OUTREACH_LIVE` + `STOP_OPT_OUT_LIVE` + `?dry_run=false`, send
+  cap (auto coverage), quiet hours, KV run lock + per-attempt claims,
+  positive-confirmation polling, carrier-failure auto-quarantine, and the
+  >85%-of-list rail re-checked against the CURRENT list price. Scoped kill:
+  `H2_BUMP_DISABLE=true` darkens bumps without touching first touch.
+- **Forward-only:** `Source_Version` v2 gate; ANY inbound → the reply lane
+  owns the thread; agents in live threads are never robo-bumped.
+- **Freshness-reverify re-admission, budget-partitioned:** bump-waiting
+  Texted records rejoin the re-verify pool (`isBumpReverifyCandidate` —
+  only when the next bump lands inside the 48h window) at ≤40% of each
+  batch (`partitionReverifyBatch`); core supply keeps priority. Per spine
+  recFYBbF5H9YU1GWm ("re-admit THEN, budget-partitioned").
+
 ## 9. Pointers
 
 - Hard rules / invariants: **[`docs/INVARIANTS.md`](../INVARIANTS.md)** — load every session.

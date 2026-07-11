@@ -34,6 +34,10 @@ import { listSeededZips } from "@/lib/buyer-median-store";
 import { listArvSeededZips } from "@/lib/zip-arv-seed-store";
 import { isOutreachFresh, DEFAULT_FRESHNESS_HOURS } from "@/lib/outreach-freshness";
 import { isH2Eligible } from "@/lib/h2-outreach";
+import {
+  isBumpReverifyCandidate,
+  partitionReverifyBatch,
+} from "@/lib/h2-outreach/bump-lane";
 import type { Listing } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -93,6 +97,15 @@ export async function GET(req: Request) {
   // re-verified every 48h while the July first-touch cohort stranded at
   // depth 3 (7/08 probe: 41 verify_stale). Live threads stay warm; dead
   // air does not.
+  // 2026-07-11 bump-lane re-admission (#33, spine recFYBbF5H9YU1GWm ruled
+  // "re-admit THEN, budget-partitioned, not before" — the bump lane now
+  // exists): Texted records regain a freshness consumer, but ONLY the
+  // bump-waiting subset (silent v2 threads with bumps remaining whose next
+  // bump lands inside the freshness window — isBumpReverifyCandidate), and
+  // only at a MINORITY SHARE of each batch (partitionReverifyBatch): the
+  // core pool (first-touch supply + live threads + liveness-unknown) keeps
+  // ≥60% of the slots whenever it needs them. Exhausted/replied/DNT Texted
+  // records stay out — dead air stays cold.
   const REPLY_BEARING = new Set(["Negotiating", "Response Received", "Counter Received", "Offer Accepted"]);
   let active: Listing[];
   let seededZips: Set<string>;
@@ -115,7 +128,11 @@ export async function GET(req: Request) {
     const livenessUnknown = (l: Listing) =>
       (l.liveStatus ?? "").trim() === "" && (l.outreachStatus ?? "").trim() === "";
     active = all.filter(
-      (l) => isH2Eligible(l) || REPLY_BEARING.has(l.outreachStatus ?? "") || livenessUnknown(l),
+      (l) =>
+        isH2Eligible(l) ||
+        REPLY_BEARING.has(l.outreachStatus ?? "") ||
+        livenessUnknown(l) ||
+        isBumpReverifyCandidate(l, now),
     );
   } catch (err) {
     return NextResponse.json({ error: "active_fetch_failed", message: err instanceof Error ? err.message : String(err) }, { status: 502 });
@@ -146,7 +163,13 @@ export async function GET(req: Request) {
     const tb = b.lastVerified ? Date.parse(b.lastVerified) : -Infinity;
     return ta - tb;
   });
-  const batch = candidates.slice(0, limit);
+  // Budget partition (#33): bump-waiting Texted records take at most a
+  // minority share of the batch; core supply (first-touch + live threads +
+  // liveness-unknown) keeps priority. Spare core slots backfill with bumps.
+  const bumpPool = candidates.filter((l) => isBumpReverifyCandidate(l, now));
+  const corePool = candidates.filter((l) => !isBumpReverifyCandidate(l, now));
+  const partition = partitionReverifyBatch(corePool, bumpPool, limit);
+  const batch = partition.batch;
 
   if (!apply) {
     return NextResponse.json({
@@ -158,6 +181,12 @@ export async function GET(req: Request) {
       seeded_zips: [...seededZips],
       active_total: active.length,
       due_total: candidates.length,
+      bump_partition: {
+        bump_due: bumpPool.length,
+        core_due: corePool.length,
+        core_taken: partition.coreTaken,
+        bump_taken: partition.bumpTaken,
+      },
       skipped_non_priceable: skippedNonActionable.length,
       batch: batch.map((l) => ({ recordId: l.id, address: l.address, state: l.state, zip: l.zip, lastVerified: l.lastVerified ?? null, url: l.verificationUrl })),
       duration_ms: Date.now() - t0,
@@ -210,6 +239,12 @@ export async function GET(req: Request) {
       unresolved: results.filter((r) => r.error && r.stillActive === null).length,
       credits_used: creditsUsed,
       payment_required: paymentRequired,
+      bump_partition: {
+        bump_due: bumpPool.length,
+        core_due: corePool.length,
+        core_taken: partition.coreTaken,
+        bump_taken: partition.bumpTaken,
+      },
     },
     results,
     duration_ms: Date.now() - t0,
