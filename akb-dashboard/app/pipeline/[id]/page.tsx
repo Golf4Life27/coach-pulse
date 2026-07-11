@@ -26,8 +26,30 @@ function cleanPhone(phone: string): string {
   return `+${digits}`;
 }
 
-function roundOffer(listPrice: number): number {
-  return Math.ceil((listPrice * 0.65) / 250) * 250;
+// The retired 65%-of-list roundOffer() display was removed 2026-07-11
+// (silver-platter cockpit): the deal room shows DELIVERY-STAMPED numbers
+// only — the offer the agent actually received, parsed server-side from the
+// [H2 sent …] stamp by /api/conversations/[id] (fields drift; stamps don't).
+
+interface CaptureGap {
+  direction: "inbound" | "outbound";
+  stampedAt: string;
+  ageHours: number;
+  detail: string;
+}
+
+interface ConvoNumbers {
+  stamped_offer: number | null;
+  outreach_offer_field: number | null;
+  ceiling: number | null;
+  list_price: number | null;
+}
+
+interface DraftProposal {
+  id: string;
+  proposalType: string;
+  recordId: string;
+  actionPayload: string;
 }
 
 function statusColor(status: string | null): string {
@@ -69,6 +91,13 @@ export default function DealWorkspace() {
     timestamp: string; from: string; to: string;
   }>>([]);
   const [convoLoading, setConvoLoading] = useState(false);
+  // Comms integrity + sourced numbers (from /api/conversations/[id]).
+  const [captureGaps, setCaptureGaps] = useState<CaptureGap[]>([]);
+  const [numbers, setNumbers] = useState<ConvoNumbers | null>(null);
+  // Drafted replies waiting on a thumb — Pending jarvis_reply proposals for
+  // THIS record, surfaced in-room so the fire happens where the context is.
+  const [drafts, setDrafts] = useState<Array<{ id: string; to: string; body: string; inbound: string | null }>>([]);
+  const [draftBusy, setDraftBusy] = useState<string | null>(null);
 
   // Deal context (Jarvis Phase 1 keystone)
   const [dealContext, setDealContext] = useState<DealContext | null>(null);
@@ -103,10 +132,66 @@ export default function DealWorkspace() {
     setConvoLoading(true);
     fetch(`/api/conversations/${rid}`)
       .then((r) => r.ok ? r.json() : null)
-      .then((data) => { if (data?.messages) setConvoMessages(data.messages); })
+      .then((data) => {
+        if (data?.messages) setConvoMessages(data.messages);
+        if (data?.integrity) setCaptureGaps(data.integrity.gaps ?? []);
+        if (data?.numbers) setNumbers(data.numbers);
+      })
       .catch(() => {})
       .finally(() => setConvoLoading(false));
   }, [params?.id]);
+
+  const fetchDrafts = useCallback(() => {
+    const rid = params?.id;
+    if (!rid) return;
+    fetch("/api/proposals")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: DraftProposal[]) => {
+        if (!Array.isArray(rows)) return;
+        const mine = rows
+          .filter((p) => p.proposalType === "jarvis_reply" && p.recordId === rid)
+          .map((p) => {
+            try {
+              const payload = JSON.parse(p.actionPayload) as Record<string, unknown>;
+              if (payload.action !== "send_sms") return null;
+              return {
+                id: p.id,
+                to: String(payload.to ?? ""),
+                body: String(payload.draftBody ?? ""),
+                inbound: typeof payload.inboundBody === "string" ? payload.inboundBody : null,
+              };
+            } catch {
+              return null;
+            }
+          })
+          .filter((d): d is { id: string; to: string; body: string; inbound: string | null } => d != null && !!d.to && !!d.body);
+        setDrafts(mine);
+      })
+      .catch(() => {});
+  }, [params?.id]);
+
+  const fireDraft = async (draftId: string, body: string) => {
+    setDraftBusy(draftId);
+    try {
+      const res = await fetch("/api/proposals", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ proposalId: draftId, action: "approve", dispatch: true, editedBody: body }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showToast(data.skipReason || data.error || "Send failed");
+        return;
+      }
+      showToast("Reply sent ✓", "success");
+      setDrafts((prev) => prev.filter((d) => d.id !== draftId));
+      setTimeout(fetchConversation, 2000);
+    } catch {
+      showToast("Send failed");
+    } finally {
+      setDraftBusy(null);
+    }
+  };
 
   const fetchDealContext = useCallback(() => {
     const rid = params?.id;
@@ -117,7 +202,7 @@ export default function DealWorkspace() {
       .catch(() => {});
   }, [params?.id]);
 
-  useEffect(() => { fetchListing(); fetchConversation(); fetchDealContext(); }, [fetchListing, fetchConversation, fetchDealContext]);
+  useEffect(() => { fetchListing(); fetchConversation(); fetchDealContext(); fetchDrafts(); }, [fetchListing, fetchConversation, fetchDealContext, fetchDrafts]);
 
   useEffect(() => {
     if (replyOpen && replyRef.current) replyRef.current.focus();
@@ -192,10 +277,12 @@ export default function DealWorkspace() {
     );
   }
 
-  const offer = listing.listPrice ? roundOffer(listing.listPrice) : null;
+  // The offer shown/used anywhere in the room is the DELIVERY-STAMPED number
+  // (the agent's phone got it) — never a recomputed fraction of list.
+  const stampedOffer = numbers?.stamped_offer ?? null;
   const checked = new Set(listing.ddChecklist ?? []);
   const bbcNum = parseFloat(bbcCeiling);
-  const bbcSpread = !isNaN(bbcNum) && offer ? bbcNum - offer : null;
+  const bbcSpread = !isNaN(bbcNum) && stampedOffer ? bbcNum - stampedOffer : null;
 
   return (
     <div className="space-y-4">
@@ -211,6 +298,43 @@ export default function DealWorkspace() {
         <span className={`px-2.5 py-1 rounded text-xs font-bold ${statusColor(listing.outreachStatus)}`}>
           {listing.outreachStatus ?? "No Status"}
         </span>
+      </div>
+
+      {/* COMMS INTEGRITY — a capture gap is an ALERT, never silent (the
+          3731 Baltimore class: the record's stamps claim a message the
+          timeline doesn't carry). */}
+      {captureGaps.length > 0 && (
+        <div className="bg-red-500/10 border border-red-500/60 rounded-lg px-4 py-3 space-y-1">
+          <div className="flex items-center gap-2 text-red-300 text-sm font-bold">
+            <span>⚠️</span> CAPTURE GAP — a message is on the wire but not on this record
+          </div>
+          {captureGaps.map((g, i) => (
+            <p key={i} className="text-xs text-red-300/90 leading-relaxed">{g.detail}</p>
+          ))}
+          <p className="text-[11px] text-red-400/70">
+            Check the sibling threads and the Quo/Gmail apps for the missing message, then log it as a note so the record is whole.
+          </p>
+        </div>
+      )}
+
+      {/* NUMBERS RAIL — delivery-stamped offer · ceiling · list. Sourced
+          only; "—" beats a guessed number. */}
+      <div className="grid grid-cols-3 gap-2">
+        <div className="bg-[#1c2128] border border-[#30363d] rounded-lg px-3 py-2.5">
+          <div className="text-[10px] uppercase tracking-wider text-gray-500">Offer (stamped)</div>
+          <div className="text-emerald-300 font-bold text-lg leading-tight">{stampedOffer != null ? formatCurrency(stampedOffer) : "—"}</div>
+          {stampedOffer == null && numbers?.outreach_offer_field != null && (
+            <div className="text-[10px] text-gray-600" title="Field value only — no delivery stamp found; do not treat as the sent number">field: {formatCurrency(numbers.outreach_offer_field)}</div>
+          )}
+        </div>
+        <div className="bg-[#1c2128] border border-[#30363d] rounded-lg px-3 py-2.5">
+          <div className="text-[10px] uppercase tracking-wider text-gray-500">Your ceiling</div>
+          <div className="text-white font-bold text-lg leading-tight">{numbers?.ceiling != null ? formatCurrency(numbers.ceiling) : "—"}</div>
+        </div>
+        <div className="bg-[#1c2128] border border-[#30363d] rounded-lg px-3 py-2.5">
+          <div className="text-[10px] uppercase tracking-wider text-gray-500">List</div>
+          <div className="text-gray-300 font-bold text-lg leading-tight">{listing.listPrice != null ? formatCurrency(listing.listPrice) : "—"}</div>
+        </div>
       </div>
 
       {/* Phase 9.8 — Maverick deal commentary */}
@@ -375,7 +499,7 @@ export default function DealWorkspace() {
             <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wider mb-2">Property Summary</h3>
             <div className="grid grid-cols-2 gap-2">
               <div><span className="text-gray-500">List Price</span><p className="text-white font-medium">{formatCurrency(listing.listPrice)}</p></div>
-              <div><span className="text-gray-500">Your Offer (65%)</span><p className="text-emerald-400 font-medium">{formatCurrency(offer)}</p></div>
+              <div><span className="text-gray-500">Offer (stamped)</span><p className="text-emerald-400 font-medium">{stampedOffer != null ? formatCurrency(stampedOffer) : "—"}</p></div>
               <div><span className="text-gray-500">Bed/Bath</span><p className="text-white">{listing.bedrooms ?? "—"} / {listing.bathrooms ?? "—"}</p></div>
               <div><span className="text-gray-500">SqFt</span><p className="text-white">{listing.buildingSqFt?.toLocaleString() ?? "—"}</p></div>
               <div><span className="text-gray-500">DOM</span><p className="text-white">{listing.dom ?? "—"}</p></div>
@@ -495,6 +619,37 @@ export default function DealWorkspace() {
             </div>
           </div>
 
+          {/* DRAFTED REPLIES — Pending jarvis_reply proposals for THIS
+              record, ready to fire where the context lives. Sticky numbers
+              arrive in the draft from the classifier lane (delivery stamps
+              only). */}
+          {drafts.map((d) => (
+            <div key={d.id} className="bg-[#1c2128] rounded-lg border border-emerald-500/40 p-3 space-y-2">
+              <div className="text-[10px] uppercase tracking-wider text-emerald-300 font-bold">Drafted reply — ready to fire</div>
+              {d.inbound && (
+                <blockquote className="text-[11px] text-gray-400 border-l-2 border-[#30363d] pl-2 leading-relaxed">“{d.inbound}”</blockquote>
+              )}
+              <p className="text-sm text-gray-200 bg-[#0d1117] border border-[#30363d] rounded p-2 leading-relaxed whitespace-pre-wrap">{d.body}</p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={draftBusy === d.id}
+                  onClick={() => fireDraft(d.id, d.body)}
+                  className="flex-1 bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold py-2 rounded min-h-[44px] disabled:opacity-50"
+                >
+                  {draftBusy === d.id ? "Sending…" : "Approve & Send"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setReplyText(d.body); setReplyOpen(true); }}
+                  className="bg-[#30363d] hover:bg-[#3d444d] text-gray-300 text-xs px-4 py-2 rounded min-h-[44px]"
+                >
+                  Edit first
+                </button>
+              </div>
+            </div>
+          ))}
+
           {replyOpen && (
             <div className="bg-[#1c2128] rounded-lg border border-emerald-500/50 p-3 space-y-2">
               <textarea ref={replyRef} value={replyText} onChange={(e) => setReplyText(e.target.value)} placeholder={`Reply to ${listing.agentName?.split(" ")[0] ?? "agent"}...`} rows={3} className="w-full bg-[#0d1117] border border-[#30363d] rounded p-2 text-sm text-white focus:outline-none focus:border-emerald-400 resize-y placeholder-gray-600" disabled={sending} onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSendReply(); if (e.key === "Escape") { setReplyOpen(false); setReplyText(""); } }} />
@@ -516,7 +671,7 @@ export default function DealWorkspace() {
                 <button type="button" onClick={() => { setReplyText(`Hi ${listing.agentName?.split(" ")[0] ?? "there"}, quick due-diligence questions on ${listing.address}:\n1) Confirming bed/bath count?\n2) Vacancy status?\n3) Approx roof age?\n4) Approx HVAC age?\n5) Water heater age?\n6) Can you grant showing access?\nThanks!`); setReplyOpen(true); }} className="bg-blue-700 hover:bg-blue-600 text-white text-xs font-semibold px-3 py-2 rounded min-h-[44px]">Send DD Questions</button>
               )}
               {listing.agentEmail && (
-                <a href={`mailto:${listing.agentEmail}?subject=${encodeURIComponent(`Cash Offer — ${listing.address}`)}&body=${encodeURIComponent(`Hi ${listing.agentName?.split(" ")[0] ?? "there"},\n\nI'd like to submit a formal cash offer on ${listing.address}.\n\nOffer: ${formatCurrency(offer)}\nTerms: Cash, as-is, 10-day option period, quick close\nClosing entity: We may close under one of our affiliated entities.\n\nPlease let me know if the seller is open to this offer. Happy to provide proof of funds.\n\nBest,\nAlex Balog\nAKB Solutions LLC\nalex@akb-properties.com\n(815) 556-9965`)}`} className="bg-purple-700 hover:bg-purple-600 text-white text-xs font-semibold px-3 py-2 rounded min-h-[44px] inline-flex items-center">Send Formal Offer Email</a>
+                <a href={`mailto:${listing.agentEmail}?subject=${encodeURIComponent(`Cash Offer — ${listing.address}`)}&body=${encodeURIComponent(`Hi ${listing.agentName?.split(" ")[0] ?? "there"},\n\nI'd like to submit a formal cash offer on ${listing.address}.\n\nOffer: ${stampedOffer != null ? formatCurrency(stampedOffer) : "[CONFIRM OFFER — no delivery-stamped number on record]"}\nTerms: Cash, as-is, 10-day option period, quick close\nClosing entity: We may close under one of our affiliated entities.\n\nPlease let me know if the seller is open to this offer. Happy to provide proof of funds.\n\nBest,\nAlex Balog\nAKB Solutions LLC\nalex@akb-properties.com\n(815) 556-9965`)}`} className="bg-purple-700 hover:bg-purple-600 text-white text-xs font-semibold px-3 py-2 rounded min-h-[44px] inline-flex items-center">Send Formal Offer Email</a>
               )}
               <div className="relative group">
                 <button type="button" className="bg-red-900/50 hover:bg-red-900/70 text-red-300 text-xs font-semibold px-3 py-2 rounded min-h-[44px]">Mark Dead ▾</button>
