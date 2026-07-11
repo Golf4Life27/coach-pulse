@@ -349,6 +349,33 @@ multiplier). `lib/h2-outreach/bump-lane.ts` (pure, tested) +
   batch (`partitionReverifyBatch`); core supply keeps priority. Per spine
   recFYBbF5H9YU1GWm ("re-admit THEN, budget-partitioned").
 
+## 8e. NEW 2026-07-11 — Frontier rotation governor (#37)
+
+The registry already held **88 ZIPs / 9 metros**, but the belt crawled only
+~4-6/day (one daily run × static cap 6) — a ~15-day sweep with Detroit core
+ZIPs stale since 6/22, while the RentCast plan ran far under budget.
+
+- **`lib/crawler/frontier-governor.ts`** (pure, tested): daily crawl budget
+  = (estimated remaining ÷ days left in cycle) − reserve (fallback:
+  plan-pro-rata, can never overshoot); per-run cap clamps to the unspent
+  daily allowance (KV meter `rentcast:intake:calls:<date>`, advisory).
+  ~30 crawls/day ⇒ ~3-day rotation over the ~85 actionable ZIPs — the
+  frontier shape, derived from the plan instead of an env knob.
+- **Intake route**: `ZIPS_PER_RUN` default 6→10; 3 daily slots (13:00Z +
+  17:20Z + 21:20Z) each followed by a seed-sweep (producers before
+  consumers, same day: 13:35Z / 17:50Z / 21:50Z). Zero-ZIP responses now
+  disambiguate `daily_crawl_budget_spent` (healthy pacing) from real
+  misconfiguration.
+- **Paused-market crawl leak FIXED**: Memphis rows sat tier=active, so the
+  belt kept buying RentCast calls on a market paused at contract (38109
+  burned a call 7/09). Intake now applies the same `isActionableMarket`
+  gate the send path uses.
+- **`/api/cron/frontier-rotation`** (weekly, Mon 07:10Z, apply=1):
+  staged→launch promotion bounded by sustainable capacity (dailyBudget ×
+  3-day cycle) — autonomous per the UNLEASH ruling; zero-yield ZIPs become
+  `frontier_retire` PROPOSALS (never auto-paused — the `*_30d` registry
+  stats are latest-run snapshots, not 30-day evidence).
+
 ## 9. Pointers
 
 - Hard rules / invariants: **[`docs/INVARIANTS.md`](../INVARIANTS.md)** — load every session.

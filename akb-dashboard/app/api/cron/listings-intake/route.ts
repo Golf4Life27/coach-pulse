@@ -56,6 +56,16 @@ import { type BuyerTrack } from "@/lib/buyer-median-input";
 import { buildIntakeListingFields } from "@/lib/crawler/intake-fields";
 import { rentcastQuotaAllows, computeBurnRate } from "@/lib/maverick/rentcast-burn-rate";
 import { selectDueZips, type ZipDueResult } from "@/lib/crawler/zip-rotation";
+import {
+  computeDailyCrawlBudget,
+  governRunCap,
+  crawlMeterKey,
+  CRAWL_METER_TTL_S,
+  DEFAULT_RENTCAST_MONTHLY_PLAN,
+  type CrawlBudget,
+  type RunCapVerdict,
+} from "@/lib/crawler/frontier-governor";
+import { isActionableMarket } from "@/lib/markets/actionable";
 import { fetchExternalRentCastState } from "@/lib/maverick/sources/external-rentcast";
 import { fetchVercelKvAuditState } from "@/lib/maverick/sources/vercel-kv-audit";
 import { verifyListing, classifyVerifiedListing, probeFirecrawlBalance, FIRECRAWL_RATE_LIMIT_PER_MINUTE } from "@/lib/crawler/sources/firecrawl";
@@ -84,11 +94,14 @@ const PER_RUN_CAP = Number(process.env.RENTCAST_INTAKE_MAX_CALLS_PER_RUN ?? "30"
 // Per-invocation ZIP cap (2026-06-08 timeout fix). The 30-ZIP daily slice
 // hit FUNCTION_INVOCATION_TIMEOUT (300s). Fix forward via FREQUENCY: a
 // SMALL cap per invocation + a frequent cron, advancing a freshness cursor.
-// Default 6 is a deliberately conservative starting point — the
-// self-limiting wall-clock budget below is the hard safety, and the
-// per-ZIP timing telemetry in the response lets us size this from
-// MEASUREMENT (not a guess): set ≈ floor(LAMBDA_BUDGET_MS / per_zip_avg_ms).
-const ZIPS_PER_RUN = Number(process.env.RENTCAST_INTAKE_ZIPS_PER_RUN ?? "6");
+// Raised 6 → 10 with the frontier governor (#37, 2026-07-11): at 3 daily
+// slots × 10 ZIPs the belt sweeps ~30/day — the ~3-day rotation over the
+// ~85-ZIP registry that the RentCast plan sustains. The wall-clock budget
+// below remains the hard safety (a slow run rolls unfinished ZIPs to the
+// next slot), and the governor clamps the cap DOWN when the day's crawl
+// budget is spent — the env can still tune this, but pacing now derives
+// from the plan, not from a static knob.
+const ZIPS_PER_RUN = Number(process.env.RENTCAST_INTAKE_ZIPS_PER_RUN ?? "10");
 // Freshness-cycle window: a ZIP is "due" when last ingested > this many
 // hours ago (or never). 24h → each ZIP gets one pass per day, spread
 // across many small frequent runs.
@@ -278,21 +291,65 @@ export async function GET(req: Request) {
   let zipSource: "override" | "registry" = "override";
   // Freshness-cursor selection diagnostic — populated for registry fires.
   let zipDue: ZipDueResult | null = null;
+  // Frontier governor (#37, 2026-07-11): the crawl pace derives from the
+  // RentCast plan. One /listings/sale call per ZIP; budget the day's calls
+  // as (estimated remaining / days left in cycle) − reserve, meter today's
+  // spend in KV, and clamp this run's ZIP cap to the unspent allowance.
+  // The soft monthly estimate is computed ONCE here and reused by the
+  // legacy quota gate below.
+  const estimatedRemaining = await estimateRentcastRemaining();
+  const monthlyPlanRaw = Number(process.env.RENTCAST_MONTHLY_PLAN);
+  const crawlBudget: CrawlBudget = computeDailyCrawlBudget({
+    monthlyPlan: Number.isFinite(monthlyPlanRaw) && monthlyPlanRaw > 0
+      ? Math.floor(monthlyPlanRaw)
+      : DEFAULT_RENTCAST_MONTHLY_PLAN,
+    estimatedRemaining,
+    now: new Date(),
+  });
+  let meterUsedToday: number | null = null;
+  if (kvConfigured()) {
+    try {
+      const raw = await kvProd.get(crawlMeterKey(new Date()));
+      meterUsedToday = raw == null ? 0 : Number(raw) || 0;
+    } catch {
+      meterUsedToday = null; // unreadable → env-cap fallback in governRunCap
+    }
+  }
+  const runCap: RunCapVerdict = governRunCap({
+    envZipCap: zipCap,
+    dailyBudget: crawlBudget.dailyBudget,
+    usedToday: meterUsedToday,
+  });
+  let pausedMarketExcluded = 0;
   if (!overrideUsed) {
     zipSource = "registry";
     try {
-      const rows = await getActiveIntakeRows();
+      const allRows = await getActiveIntakeRows();
+      // PAUSED-MARKET CRAWL LEAK (#37 fix): Memphis rows sat tier=active in
+      // the registry, so the belt kept spending RentCast calls on a market
+      // the operator paused at contract (isActionableMarket has refused it
+      // at outreach all along — 38109 burned a call as recently as 7/09).
+      // The crawl now honors the same market gate the send path uses.
+      const rows = allRows.filter(
+        (r) => isActionableMarket({ state: r.state, city: r.market, zip: r.zip }).actionable,
+      );
+      pausedMarketExcluded = allRows.length - rows.length;
       for (const r of rows) if (!zipToRecordId.has(r.zip)) zipToRecordId.set(r.zip, r.recordId);
 
-      // FRESHNESS CURSOR (2026-06-08 timeout fix). Pick the `zipCap` stalest
-      // DUE ZIPs (null or last-ingested > ZIP_CYCLE_HOURS ago). Many small
+      // FRESHNESS CURSOR (2026-06-08 timeout fix). Pick the stalest DUE
+      // ZIPs (null or last-ingested > ZIP_CYCLE_HOURS ago). Many small
       // frequent runs cover the registry; each run is bounded; a ZIP already
       // freshened this cycle is skipped (no re-dig); an errored ZIP stays
       // due for the next run. Replaces the day-index rotation, which picked
       // the SAME slice on every sub-daily run and couldn't advance.
+      // The cap is the governor's (budget-clamped) unless the operator
+      // pinned an explicit ?cap= for a measurement run.
+      const effectiveCap = Number.isFinite(capOverrideRaw) && capOverrideRaw > 0
+        ? zipCap
+        : runCap.zipCapThisRun;
       zipDue = selectDueZips(
         rows.map((r) => ({ zip: r.zip, lastIngestedAt: r.lastIngestedAt })),
-        zipCap,
+        effectiveCap,
         new Date(),
         ZIP_CYCLE_HOURS,
       );
@@ -316,11 +373,18 @@ export async function GET(req: Request) {
     // look like a regression. Now they're distinct outcomes with distinct
     // audit + response shapes.
     const allFresh = zipSource === "registry" && zipDue != null && zipDue.dueTotal === 0 && zipDue.freshTotal > 0;
-    const outcome = allFresh ? "all_fresh_no_due" : "no_target_zips";
-    const auditStatus = allFresh ? "confirmed_success" : "uncertain";
+    // Third zero-ZIP shape (#37): the day's crawl budget is spent — ZIPs are
+    // due, but the governor clamped this run to zero. Healthy pacing, not a
+    // misconfiguration; tomorrow's budget re-opens the tap.
+    const budgetSpent =
+      zipSource === "registry" && zipDue != null && zipDue.dueTotal > 0 && runCap.zipCapThisRun === 0;
+    const outcome = allFresh ? "all_fresh_no_due" : budgetSpent ? "daily_crawl_budget_spent" : "no_target_zips";
+    const auditStatus = allFresh || budgetSpent ? "confirmed_success" : "uncertain";
     const detail = allFresh
       ? `All ${zipDue?.freshTotal ?? 0} eligible ZIPs were freshened within the last ${ZIP_CYCLE_HOURS}h. No work this run; the next ZIP becomes due ${ZIP_CYCLE_HOURS}h after its last ingest. This is the steady state, not a blocker.`
-      : "No launch/active, non-wholesale-restricted ZIPs in ZIP_Registry. Add/activate ZIPs there, or pass ?zips=78201 for a manual run.";
+      : budgetSpent
+        ? `Today's crawl budget is spent (${crawlBudget.dailyBudget} calls/day, basis ${crawlBudget.basis}); ${zipDue?.dueTotal ?? 0} ZIP(s) stay due and roll to tomorrow's budget. Healthy pacing, not a blocker.`
+        : "No launch/active, non-wholesale-restricted ZIPs in ZIP_Registry. Add/activate ZIPs there, or pass ?zips=78201 for a manual run.";
     await audit({
       agent: "scout",
       event: "listings_intake_no_zips",
@@ -328,7 +392,7 @@ export async function GET(req: Request) {
       inputSummary: { auth_kind: authKind, dry_run: dryRun, zip_source: zipSource, outcome },
       outputSummary: {
         outcome,
-        blocker: allFresh ? null : "no active ZIPs in ZIP_Registry",
+        blocker: allFresh || budgetSpent ? null : "no active ZIPs in ZIP_Registry",
         fresh_total: zipDue?.freshTotal ?? null,
         due_total: zipDue?.dueTotal ?? null,
         cycle_hours: zipDue?.cycleHours ?? null,
@@ -338,10 +402,18 @@ export async function GET(req: Request) {
     return NextResponse.json({
       ok: true,
       outcome,
+      crawl_governor: {
+        daily_budget: crawlBudget.dailyBudget,
+        basis: crawlBudget.basis,
+        used_today_at_start: meterUsedToday,
+        zip_cap_this_run: runCap.zipCapThisRun,
+        reason: runCap.reason,
+        paused_market_excluded: pausedMarketExcluded,
+      },
       // Keep `blocked` populated only for the REAL blocker case so
       // existing operators / dashboards reading that key see "blocked" only
       // when action is actually needed.
-      blocked: allFresh ? null : "no_target_zips",
+      blocked: allFresh || budgetSpent ? null : "no_target_zips",
       detail,
       zip_source: zipSource,
       zip_due: zipDue
@@ -361,7 +433,7 @@ export async function GET(req: Request) {
   }
 
   // ── RentCast quota gate (stall + Spine-write if would exceed) ───
-  const estimatedRemaining = await estimateRentcastRemaining();
+  // estimatedRemaining computed once above (frontier governor) and reused.
   const quota = rentcastQuotaAllows({
     estimatedRemaining,
     callsNeeded: zips.length,
@@ -399,6 +471,19 @@ export async function GET(req: Request) {
       dry_run: dryRun,
       duration_ms: Date.now() - t0,
     });
+  }
+
+  // ── Crawl meter (#37): reserve today's allowance up-front so the next
+  // slot's governor sees this run's spend. Advisory (non-atomic add) — the
+  // slots are hours apart and the per-run hard cap bounds any race.
+  if (kvConfigured() && zips.length > 0) {
+    try {
+      const key = crawlMeterKey(new Date());
+      const cur = Number((await kvProd.get(key)) ?? 0) || 0;
+      await kvProd.setEx(key, String(cur + zips.length), CRAWL_METER_TTL_S);
+    } catch {
+      /* advisory meter — never blocks the run */
+    }
   }
 
   // ── Existing-address dedup set ──────────────────────────────────
@@ -1278,6 +1363,13 @@ export async function GET(req: Request) {
       // Run-duration telemetry → consumed by the Pulse
       // intake_run_duration detector (creep alarm before timeout).
       timing,
+      crawl_governor: {
+        daily_budget: crawlBudget.dailyBudget,
+        basis: crawlBudget.basis,
+        used_today_at_start: meterUsedToday,
+        zip_cap_this_run: runCap.zipCapThisRun,
+        paused_market_excluded: pausedMarketExcluded,
+      },
     },
     ms: Date.now() - t0,
   });
@@ -1289,6 +1381,15 @@ export async function GET(req: Request) {
     timing,
     verify_cache_skipped: verifyCacheSkipped,
     zip_source: zipSource,
+    crawl_governor: {
+      daily_budget: crawlBudget.dailyBudget,
+      basis: crawlBudget.basis,
+      days_left_in_cycle: crawlBudget.daysLeftInCycle,
+      used_today_at_start: meterUsedToday,
+      zip_cap_this_run: runCap.zipCapThisRun,
+      reason: runCap.reason,
+      paused_market_excluded: pausedMarketExcluded,
+    },
     zip_due: zipDue
       ? {
           selected: zipDue.selected,

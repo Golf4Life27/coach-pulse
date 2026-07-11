@@ -197,6 +197,27 @@ export async function getApprovalPendingRows(): Promise<ZipRegistryRow[]> {
   return fetchRows("{Market_Tier}='approval_pending'");
 }
 
+// Every registry row — the weekly frontier pass needs staged + paused rows
+// too, not just the intake-eligible set.
+export async function getAllRegistryRows(): Promise<ZipRegistryRow[]> {
+  return fetchRows();
+}
+
+// Frontier promotion (#37): staged → launch, stamped note appended.
+// Autonomous within the UNLEASH ruling's rails (allowed states only —
+// callers filter restricted rows; budget capacity bounds how many promote
+// per pass).
+export async function promoteStagedZip(
+  recordId: string,
+  opts: { note: string; existingNotes?: string | null },
+): Promise<void> {
+  const stamped = `[${new Date().toISOString()}] ${opts.note}`;
+  await patchRow(recordId, {
+    [ZR.marketTier]: "launch",
+    [ZR.notes]: opts.existingNotes ? `${opts.existingNotes}\n\n${stamped}` : stamped,
+  });
+}
+
 // Per-ZIP stats write-back after a successful intake run.
 //
 // NOTE on semantics: v1 writes the LATEST successful run's snapshot into
