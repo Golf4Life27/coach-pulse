@@ -219,34 +219,55 @@ export function fromProposal(p: ProposalRow): ConveyorItem {
   const sms = parseSendSms(p.actionPayload);
   const posted = p.createdTime ?? null;
   const isReply = p.proposalType === "jarvis_reply";
+  const isHold = p.proposalType === "h2_opener_hold";
+  const href = p.recordId && p.recordId.startsWith("rec") ? `/pipeline/${p.recordId}` : null;
   const deadlineAt =
     type === "2A"
       ? impliedDeadline(posted, isReply ? REPLY_IMPLIED_DEADLINE_H : FOLLOWUP_IMPLIED_DEADLINE_H)
       : null;
+  // A HOLD's "Approve" would only flip a status — nothing dispatches, which
+  // reads as "send it" and lies. The ruling needs the deal room: primary =
+  // Open; ✕ kills (skip the record), ⏰ snoozes. (Operator 2026-07-11, the
+  // 817 Regal card.)
   const actions: ConveyorAction[] = sms
     ? [
         { kind: "proposal_send", proposalId: p.id, to: sms.to, draftBody: sms.draftBody, inboundBody: sms.inboundBody },
         { kind: "proposal_snooze", proposalId: p.id },
         { kind: "proposal_reject", proposalId: p.id },
       ]
-    : [
-        {
-          kind: "proposal_approve",
-          proposalId: p.id,
-          label: p.proposalType === "frontier_retire" ? "Approve — pause ZIP" : "Approve",
-        },
-        { kind: "proposal_snooze", proposalId: p.id },
-        { kind: "proposal_reject", proposalId: p.id },
-      ];
+    : isHold && href
+      ? [
+          { kind: "open", href, label: "Open deal" },
+          { kind: "proposal_snooze", proposalId: p.id },
+          { kind: "proposal_reject", proposalId: p.id },
+        ]
+      : [
+          {
+            kind: "proposal_approve",
+            proposalId: p.id,
+            label: p.proposalType === "frontier_retire" ? "Approve — pause ZIP" : "Approve",
+          },
+          { kind: "proposal_snooze", proposalId: p.id },
+          { kind: "proposal_reject", proposalId: p.id },
+        ];
+  // Holds get a plain-English preface — the raw reasoning is pricer
+  // internals ("rough ceiling null (hold_no_value_basis) × anchor ?").
+  const reasoning = isHold
+    ? `Pricer HOLD — no autonomous text will fire on this record. Rule it: re-source and re-run, route to the creative lane, or kill. (${firstSentence(p.reasoning)})`
+    : firstSentence(p.reasoning);
   return {
     key: `proposal:${p.id}`,
     source: "proposal",
     type,
     title: p.recordAddress || p.recordId,
-    reasoning: firstSentence(p.reasoning),
+    reasoning,
     recordId: p.recordId || null,
-    href: p.recordId && p.recordId.startsWith("rec") ? `/pipeline/${p.recordId}` : null,
-    dollars: firstDollarAmount(sms?.draftBody, p.reasoning),
+    href,
+    // Dollars-in-play come from the DRAFT BODY only (the number that would
+    // actually be sent). A hold's reasoning cites the LIST price — that is
+    // not money in play, and ranking by it put a $355k ask above real
+    // revenue (operator 2026-07-11). No draft → "$—".
+    dollars: firstDollarAmount(sms?.draftBody),
     deadlineAt,
     deadlineImplied: deadlineAt != null,
     postedAt: posted,
