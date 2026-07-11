@@ -5,6 +5,7 @@ import { parseConversation } from "@/lib/notes";
 import { mergeTimeline, type SiblingRecord } from "@/lib/timeline-merge";
 import { detectCaptureGaps } from "@/lib/comms-integrity";
 import { extractStickyOffer } from "@/lib/h2-outreach/bump-lane";
+import { fixNoteTimestamp } from "@/lib/timeline-fixups";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -91,7 +92,13 @@ export async function GET(
 
     // 3. Notes — emails/SMS/manual entries already logged to the record
     // (durable backstop; deduped against the live pulls by the merge engine).
-    const notesEntries = listing.notes ? parseConversation(listing.notes) : [];
+    // Timestamp fixups (2026-07-11 Ivy Bend): prefer the embedded sync
+    // metadata ts= (the carrier's message time); null fabricated pre-2015
+    // parses so true chronological order holds.
+    const notesEntries = (listing.notes ? parseConversation(listing.notes) : []).map((e) => ({
+      ...e,
+      timestamp: fixNoteTimestamp({ text: e.text, timestamp: e.timestamp }),
+    }));
 
     // Single merge engine: texts + Gmail + notes, deduped, attributed, and
     // SORTED STRICTLY BY TIMESTAMP — so a $100 text 5:00, a $101 email 5:01,

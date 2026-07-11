@@ -156,7 +156,7 @@ describe("dedupe + buildConveyor", () => {
   });
 
   it("buildConveyor merges all four sources into one ranked feed", () => {
-    const feed = buildConveyor(
+    const { items: feed } = buildConveyor(
       {
         proposals: [proposal()],
         actionItems: [],
@@ -173,5 +173,54 @@ describe("dedupe + buildConveyor", () => {
     expect(feed).toHaveLength(2);
     expect(feed[0].key).toBe("priority:p1"); // overdue money outranks
     expect(feed[1].key).toBe("proposal:recPROP000000001");
+  });
+
+  it("the machine-work gate: housekeeping proposals never render, and are counted as proof", () => {
+    const { items, hidden } = buildConveyor(
+      {
+        proposals: [
+          proposal(), // jarvis_reply — decision-grade, renders
+          proposal({ id: "recFUP0000000001", proposalType: "follow_up", recordId: "recDEAD00000001", reasoning: "[HIGH] Silent for multiple days after Negotiating status." }),
+          proposal({ id: "recKILL0000000001", proposalType: "kill_dead_deal", recordId: "recDEAD00000002" }),
+          proposal({ id: "recSTALE000000001", proposalType: "surface_stale", recordId: "recDEAD00000003" }),
+        ],
+        actionItems: [],
+        priorities: [],
+        broCards: [],
+      },
+      NOW,
+    );
+    expect(items.map((i) => i.key)).toEqual(["proposal:recPROP000000001"]);
+    expect(hidden.machineWork).toBe(3);
+    expect(hidden.stale).toBe(0);
+  });
+
+  it("the staleness gate: a cold reply draft (>10d) and an ancient hold (>14d) hide", () => {
+    const { items, hidden } = buildConveyor(
+      {
+        proposals: [
+          proposal({ id: "recCOLD0000000001", createdTime: "2026-06-25T10:00:00Z" }), // 16d-old jarvis_reply
+          proposal({
+            id: "recHOLD0000000001",
+            proposalType: "h2_opener_hold",
+            createdTime: "2026-06-20T10:00:00Z", // 21d-old hold
+            actionPayload: JSON.stringify({ action: "h2_opener_hold" }),
+          }),
+          proposal({
+            id: "recFRESH000000001",
+            proposalType: "h2_opener_hold",
+            createdTime: "2026-07-10T10:00:00Z", // fresh hold — renders
+            actionPayload: JSON.stringify({ action: "h2_opener_hold" }),
+          }),
+        ],
+        actionItems: [],
+        priorities: [],
+        broCards: [],
+      },
+      NOW,
+    );
+    expect(items.map((i) => i.key)).toEqual(["proposal:recFRESH000000001"]);
+    expect(hidden.stale).toBe(2);
+    expect(hidden.machineWork).toBe(0);
   });
 });
