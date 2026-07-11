@@ -135,6 +135,14 @@
     {
       "path": "/api/cron/frontier-rotation?apply=1",
       "schedule": "10 7 * * 1"
+    },
+    {
+      "path": "/api/cron/decision-escalation",
+      "schedule": "5 * * * *"
+    },
+    {
+      "path": "/api/cron/morning-digest",
+      "schedule": "31 13 * * *"
     }
   ]
 }

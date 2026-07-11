@@ -10,6 +10,7 @@ import ToastContainer from "@/components/Toast";
 import CommandBar from "@/components/CommandBar";
 import CommandBarFAB from "@/components/CommandBarFAB";
 import MaverickDock from "@/components/MaverickDock";
+import LastSeenPing from "@/components/LastSeenPing";
 import BriefingProvider from "@/components/BriefingProvider";
 import { v2Enabled } from "./v2/_lib/flag";
 import V2Frame from "./v2/_components/V2Frame";
@@ -67,6 +68,8 @@ export default function RootLayout({
                 the conveyor (one surface per job). */}
             <MaverickDock />
             <MobileTabBar />
+            {/* Server-side last-seen (KV) — the escalation cron's presence signal. */}
+            <LastSeenPing />
           </BriefingProvider>
         </AuthGate>
         <ToastContainer />
