@@ -9,6 +9,7 @@
 
 import { NextResponse } from "next/server";
 import {
+  countLiveNegotiations,
   bucketByDay,
   buildTape,
   cronFreshness,
@@ -62,9 +63,14 @@ export async function GET() {
   const nowIso = now.toISOString();
   const todayStart = chicagoMidnightIso(now, 0);
   const yesterdayStart = chicagoMidnightIso(now, 1);
+  const chicagoNow = new Date(now.toLocaleString("en-US", { timeZone: "America/Chicago" }));
+  const monthOffsetMs = now.getTime() - chicagoNow.getTime();
+  const monthStart = new Date(
+    new Date(chicagoNow.getFullYear(), chicagoNow.getMonth(), 1, 0, 0, 0).getTime() + monthOffsetMs,
+  ).toISOString();
 
   try {
-    const [crawled, outbound, inbound] = await Promise.all([
+    const [crawled, outbound, inbound, monthInbound] = await Promise.all([
       fetchFiltered(`IS_AFTER(CREATED_TIME(), '${yesterdayStart}')`, ["Execution_Path"]),
       fetchFiltered(`IS_AFTER({Last_Outbound_At}, '${yesterdayStart}')`, [
         "Address",
@@ -73,6 +79,7 @@ export async function GET() {
         "Outreach_Status",
       ]),
       fetchFiltered(`IS_AFTER({Last_Inbound_At}, '${yesterdayStart}')`, ["Address", "Last_Inbound_At"]),
+      fetchFiltered(`IS_AFTER({Last_Inbound_At}, '${monthStart}')`, ["Last_Inbound_At", "Outreach_Status"]),
     ]);
 
     const path = (r: RawRecord) => {
@@ -114,6 +121,19 @@ export async function GET() {
         accepted: bucketByDay(acceptedRows, todayStart, yesterdayStart),
         sent: bucketByDay(sentRows, todayStart, yesterdayStart),
         replies: bucketByDay(replyRows, todayStart, yesterdayStart),
+      },
+      north_star: {
+        live_negotiations_this_month: countLiveNegotiations(
+          monthInbound.map((r) => ({
+            lastInboundAt: (r.fields["Last_Inbound_At"] as string) ?? null,
+            status:
+              typeof r.fields["Outreach_Status"] === "string"
+                ? (r.fields["Outreach_Status"] as string)
+                : ((r.fields["Outreach_Status"] as { name?: string })?.name ?? null),
+          })),
+          monthStart,
+        ),
+        month_start: monthStart,
       },
       heartbeats: {
         intake: { last: lastIntakeAt, freshness: cronFreshness(lastIntakeAt, nowIso) },

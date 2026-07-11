@@ -1,6 +1,7 @@
 // Mission Control heartbeat: day bucketing, freshness tiers, slots, tape.
 import { describe, it, expect } from "vitest";
 import {
+  countLiveNegotiations,
   bucketByDay,
   cronFreshness,
   nextSendSlotIso,
@@ -54,5 +55,18 @@ describe("buildTape — merged newest-first, quarantine labeled", () => {
     expect(tape[0].line).toContain("3232 Magnolia Ave");
     expect(tape[1].line).toContain("$80,665");
     expect(tape[2].line).toContain("7200 Suttles Dr SW");
+  });
+});
+
+describe("countLiveNegotiations — the north-star counter (operator 2026-07-10)", () => {
+  it("counts this month's replied conversation-status records only", () => {
+    const rows = [
+      { lastInboundAt: "2026-07-09T18:10:00Z", status: "Negotiating" },        // Nazareth-class ✓
+      { lastInboundAt: "2026-07-09T17:45:00Z", status: "Response Received" },  // Mahmoud-class ✓
+      { lastInboundAt: "2026-06-10T16:18:00Z", status: "Negotiating" },        // last month ✗
+      { lastInboundAt: "2026-07-08T12:00:00Z", status: "Dead" },               // rejected ✗
+      { lastInboundAt: null, status: "Negotiating" },                          // never replied ✗
+    ];
+    expect(countLiveNegotiations(rows, "2026-07-01T05:00:00.000Z")).toBe(2);
   });
 });

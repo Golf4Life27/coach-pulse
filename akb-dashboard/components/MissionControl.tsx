@@ -33,6 +33,7 @@ interface HeartbeatPayload {
     replies: DayBuckets;
   };
   heartbeats: { intake: Heartbeat; send: Heartbeat; next_send_slot: string };
+  north_star?: { live_negotiations_this_month: number };
   tape: TapeEvent[];
 }
 
@@ -143,6 +144,11 @@ export default function MissionControl() {
           />
           <h2 className="text-sm font-bold text-white tracking-wide">MISSION CONTROL — TODAY&apos;S RUN</h2>
         </div>
+        {data?.north_star && (
+          <span className="text-[11px] text-gray-400" title="Sellers/agents in live conversation who replied this month — the retirement counter">
+            🎯 <span className="text-white font-bold tabular-nums">{data.north_star.live_negotiations_this_month}</span> live negotiations this month
+          </span>
+        )}
         <button type="button" onClick={load} className="text-[11px] text-gray-500 hover:text-gray-300 transition-colors">
           refresh
         </button>
