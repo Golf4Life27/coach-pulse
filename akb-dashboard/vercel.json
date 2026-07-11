@@ -115,6 +115,26 @@
     {
       "path": "/api/admin/seed-sweep?apply=1&limit=15",
       "schedule": "35 13 * * *"
+    },
+    {
+      "path": "/api/cron/listings-intake",
+      "schedule": "20 17 * * *"
+    },
+    {
+      "path": "/api/cron/listings-intake",
+      "schedule": "20 21 * * *"
+    },
+    {
+      "path": "/api/admin/seed-sweep?apply=1&limit=15",
+      "schedule": "50 17 * * *"
+    },
+    {
+      "path": "/api/admin/seed-sweep?apply=1&limit=15",
+      "schedule": "50 21 * * *"
+    },
+    {
+      "path": "/api/cron/frontier-rotation?apply=1",
+      "schedule": "10 7 * * 1"
     }
   ]
 }
