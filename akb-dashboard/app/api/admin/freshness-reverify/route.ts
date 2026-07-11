@@ -34,6 +34,7 @@ import { listSeededZips } from "@/lib/buyer-median-store";
 import { listArvSeededZips } from "@/lib/zip-arv-seed-store";
 import { isOutreachFresh, DEFAULT_FRESHNESS_HOURS } from "@/lib/outreach-freshness";
 import { isH2Eligible } from "@/lib/h2-outreach";
+import { SOURCE_VERSION_V2 } from "@/lib/source-version";
 import {
   isBumpReverifyCandidate,
   partitionReverifyBatch,
@@ -125,8 +126,13 @@ export async function GET(req: Request) {
     // never stamped (6/30 Indy class) are invisible to isH2Eligible until
     // a verify pass writes Live_Status — which is exactly what THIS route
     // does. Admit them so they graduate into the sendable pool.
+    // 2026-07-11 (#38 Forward Ruling): v2-era only — an unstamped LEGACY
+    // row is a fenced ghost, and a verify credit spent on it buys nothing
+    // the send path can ever use.
     const livenessUnknown = (l: Listing) =>
-      (l.liveStatus ?? "").trim() === "" && (l.outreachStatus ?? "").trim() === "";
+      (l.liveStatus ?? "").trim() === "" &&
+      (l.outreachStatus ?? "").trim() === "" &&
+      l.sourceVersion === SOURCE_VERSION_V2;
     active = all.filter(
       (l) =>
         isH2Eligible(l) ||
