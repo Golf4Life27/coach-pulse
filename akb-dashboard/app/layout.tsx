@@ -2,6 +2,9 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import AuthGate from "@/components/AuthGate";
 import Navigation from "@/components/Navigation";
+import NorthStarHeader from "@/components/NorthStarHeader";
+import MobileTabBar from "@/components/MobileTabBar";
+import PwaRegister from "@/components/PwaRegister";
 import QuotesBar from "@/components/QuotesBar";
 import ToastContainer from "@/components/Toast";
 import CommandBar from "@/components/CommandBar";
@@ -12,14 +15,24 @@ import { v2Enabled } from "./v2/_lib/flag";
 import V2Frame from "./v2/_components/V2Frame";
 
 export const metadata: Metadata = {
-  title: "AKB Solutions — Pipeline Dashboard",
-  description: "Wholesale pipeline operations dashboard",
+  title: "AKB Cockpit",
+  description: "AKB Solutions — the operator cockpit",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "AKB",
+  },
+  icons: {
+    apple: "/icons/apple-touch-icon.png",
+  },
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
+  themeColor: "#0d1117",
+  viewportFit: "cover",
 };
 
 export default function RootLayout({
@@ -33,6 +46,8 @@ export default function RootLayout({
         <AuthGate>
           <BriefingProvider>
             <QuotesBar />
+            {/* North star + belt health — always visible, every page. */}
+            <NorthStarHeader />
             <Navigation v2={v2Enabled()} />
             {v2Enabled() ? (
               // V2 absorption (flag-gated): slim health strip + shared data
@@ -42,14 +57,17 @@ export default function RootLayout({
               // trigger a rebuild (flipping V2_DASHBOARD requires redeploy).
               <V2Frame>{children}</V2Frame>
             ) : (
-              <main className="max-w-7xl mx-auto px-4 py-6">{children}</main>
+              // pb-24 clears the mobile tab bar's thumb zone.
+              <main className="max-w-7xl mx-auto px-4 py-6 pb-24 lg:pb-6">{children}</main>
             )}
             <CommandBar />
             <CommandBarFAB />
             <ShepherdPanel />
+            <MobileTabBar />
           </BriefingProvider>
         </AuthGate>
         <ToastContainer />
+        <PwaRegister />
       </body>
     </html>
   );
