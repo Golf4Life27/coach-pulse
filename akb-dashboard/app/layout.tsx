@@ -9,7 +9,7 @@ import QuotesBar from "@/components/QuotesBar";
 import ToastContainer from "@/components/Toast";
 import CommandBar from "@/components/CommandBar";
 import CommandBarFAB from "@/components/CommandBarFAB";
-import ShepherdPanel from "@/components/ShepherdPanel";
+import MaverickDock from "@/components/MaverickDock";
 import BriefingProvider from "@/components/BriefingProvider";
 import { v2Enabled } from "./v2/_lib/flag";
 import V2Frame from "./v2/_components/V2Frame";
@@ -62,7 +62,10 @@ export default function RootLayout({
             )}
             <CommandBar />
             <CommandBarFAB />
-            <ShepherdPanel />
+            {/* Maverick everywhere — context-aware chat dock. Replaced the
+                ShepherdPanel priorities list 2026-07-11: its cards duplicated
+                the conveyor (one surface per job). */}
+            <MaverickDock />
             <MobileTabBar />
           </BriefingProvider>
         </AuthGate>

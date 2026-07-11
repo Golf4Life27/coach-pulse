@@ -4,9 +4,10 @@
 // deprecation tag; URL kept live until the Shepherd panel's chat
 // surface (Phase 9.1) routes through MCP instead.
 
-import { getListings, getDeals } from "@/lib/airtable";
+import { getListings, getListing, getDeals } from "@/lib/airtable";
 import { buildActionQueue } from "@/lib/actionQueue";
 import { synthesize, type SynthesizeMessage } from "@/lib/maverick/synthesizer";
+import { extractStickyOffer } from "@/lib/h2-outreach/bump-lane";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -118,12 +119,17 @@ function buildContextSummary(
   return lines.join("\n");
 }
 
-const SYSTEM_PROMPT = `You are Jarvis, the AI operations assistant for AKB Solutions' wholesale pipeline dashboard.
+const SYSTEM_PROMPT = `You are Maverick, the AI operations co-pilot for AKB Solutions' wholesale cockpit.
 
-Alex is asking you what to focus on right now. You have full visibility into the action queue, pending deals, and stale leads.
+Alex is asking you a question — sometimes about the whole pipeline, sometimes about the specific deal on his screen (its context block is injected when present).
+
+## PRICING DOCTRINE (HOLD, never improvise — operator rulings 2026-06-28 / 2026-07-01)
+- The value-anchored formula is the ONLY producer of offer numbers: anchor × (ARV × buy-box − rehab − fee). The flat 65%-of-list rule is RETIRED — never compute, suggest, or sanity-check a price as a fraction of list.
+- You NEVER invent a number. Cite only numbers present in the injected context: the DELIVERY-STAMPED offer (the number the agent's phone received — stamps outrank fields, which drift), the underwritten MAO ceiling, ARV/rehab bands with their confidence. If a number you need is absent, say exactly which producer must run (Appraiser ARV / rehab vision / underwrite) — that IS the correct answer.
+- The two-lane MAO (landlord / flipper) is the negotiation CEILING. Never suggest a number above the ceiling; never suggest re-anchoring to the seller's list price.
+- Sticky offers: the seller-facing number never drifts. If Alex already stated or sent a number, do not propose a different one unless he asks to re-price — then route to the pricer, don't compute inline.
 
 ## BUSINESS RULES
-- Offers are 65% of list price, rounded up to nearest $250. Never use AVM, ARV, or estimates.
 - Never use "assignable" — say "affiliated entity"
 - Never disclose contract price, ARV, or repairs to buyers. Buyers see Assignment Price only.
 - DD checklist must be complete before contracting.
@@ -160,6 +166,29 @@ interface ChatMessage {
   content: string;
 }
 
+/** On-screen record context (cockpit dock): the deal Alex is LOOKING AT.
+ *  Sourced numbers only — the stamped offer, the ceiling, the bands with
+ *  their confidence. The model is instructed to cite these and nothing
+ *  else. */
+async function buildRecordContext(recordId: string): Promise<string | null> {
+  const listing = await getListing(recordId).catch(() => null);
+  if (!listing) return null;
+  const stamped = extractStickyOffer(listing.notes)?.offer ?? null;
+  const money = (n: number | null | undefined) => (n == null ? "— (not produced)" : formatCurrency(n));
+  return [
+    "## THE DEAL ON ALEX'S SCREEN (cite ONLY these numbers)",
+    `Address: ${listing.address}${listing.city ? `, ${listing.city}` : ""}${listing.state ? `, ${listing.state}` : ""}`,
+    `Status: ${listing.outreachStatus ?? "—"} · Live: ${listing.liveStatus ?? "—"} · DOM ${listing.dom ?? "—"}`,
+    `List price: ${money(listing.listPrice)}`,
+    `DELIVERY-STAMPED offer (the number the agent received): ${stamped == null ? "NONE — no [H2 sent] stamp on record" : formatCurrency(stamped)}`,
+    `Ceiling (underwritten MAO): ${money(listing.underwrittenMao ?? listing.mao)}`,
+    `ARV: ${money(listing.realArvMedian)} (confidence ${listing.arvConfidence ?? "—"}, comps ${listing.arvCompCount ?? "—"})`,
+    `Rehab band: mid ${money(listing.estRehabMid)} (confidence ${listing.rehabConfidenceScore ?? "—"})`,
+    `Last inbound: ${listing.lastInboundAt ?? "never"} · Last outbound: ${listing.lastOutboundAt ?? "never"}`,
+    `Agent: ${listing.agentName ?? "—"}${listing.doNotText ? " · DO NOT TEXT" : ""}`,
+  ].join("\n");
+}
+
 export async function POST(req: Request) {
   const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
   if (!ANTHROPIC_API_KEY) {
@@ -169,7 +198,7 @@ export async function POST(req: Request) {
     );
   }
 
-  let body: { messages: ChatMessage[] };
+  let body: { messages: ChatMessage[]; recordId?: string };
   try {
     const text = await req.text();
     body = JSON.parse(text);
@@ -182,21 +211,32 @@ export async function POST(req: Request) {
   }
 
   try {
-    const [allListings, deals, pendingCount] = await Promise.all([
-      getListings(),
-      getDeals(),
-      fetchPendingProposalCount(),
-    ]);
+    // Record-scoped chat (the dock on a deal room): focused context, no
+    // full-pipeline scan — fast, and the model can only cite this deal's
+    // sourced numbers. Falls through to the pipeline-wide summary when the
+    // record can't be loaded.
+    let contextSummary: string | null = null;
+    if (body.recordId && /^rec[A-Za-z0-9]{14}$/.test(body.recordId)) {
+      contextSummary = await buildRecordContext(body.recordId);
+    }
 
-    // Filter out dead/walked/terminated listings before building queue
-    const listings = allListings.filter(
-      (l) =>
-        !DEAD_STATUSES.has(l.outreachStatus ?? "") &&
-        l.actionCardState !== "Cleared"
-    );
+    if (contextSummary == null) {
+      const [allListings, deals, pendingCount] = await Promise.all([
+        getListings(),
+        getDeals(),
+        fetchPendingProposalCount(),
+      ]);
 
-    const queue = buildActionQueue(listings, deals);
-    const contextSummary = buildContextSummary(queue, pendingCount);
+      // Filter out dead/walked/terminated listings before building queue
+      const listings = allListings.filter(
+        (l) =>
+          !DEAD_STATUSES.has(l.outreachStatus ?? "") &&
+          l.actionCardState !== "Cleared"
+      );
+
+      const queue = buildActionQueue(listings, deals);
+      contextSummary = buildContextSummary(queue, pendingCount);
+    }
 
     // Inject context into the first user message
     const messages = body.messages.map((m, i) => {
