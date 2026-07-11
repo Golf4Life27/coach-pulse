@@ -49,6 +49,14 @@
       "schedule": "45 23 * * *"
     },
     {
+      "path": "/api/cron/bump-followup?dry_run=false&limit=10",
+      "schedule": "15 16 * * *"
+    },
+    {
+      "path": "/api/cron/bump-followup?dry_run=false&limit=10",
+      "schedule": "15 20 * * *"
+    },
+    {
       "path": "/api/scan-replies",
       "schedule": "0 11 * * *"
     },
