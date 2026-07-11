@@ -89,7 +89,7 @@ export default function ConveyorFeed() {
     };
   }, [loadFast, loadBrief]);
 
-  const items = useMemo(
+  const { items, hidden } = useMemo(
     () => buildConveyor({ proposals, actionItems, priorities, broCards }, new Date(nowMs).toISOString()),
     [proposals, actionItems, priorities, broCards, nowMs],
   );
@@ -185,6 +185,14 @@ export default function ConveyorFeed() {
             ({items.length}
             {briefLoading ? " · scanning replies…" : ""})
           </span>
+          {hidden.machineWork + hidden.stale > 0 && (
+            <span
+              className="ml-2 text-[10px] text-gray-600 font-normal"
+              title="Housekeeping proposals the machine handles itself (bump lane, d3 disposal) and stale items past the decision-age gates — hidden by the UX law: if it renders, it needs you."
+            >
+              {hidden.machineWork} machine-work · {hidden.stale} stale hidden
+            </span>
+          )}
         </h2>
         <button
           type="button"

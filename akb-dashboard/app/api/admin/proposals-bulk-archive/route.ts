@@ -29,7 +29,9 @@ const AIRTABLE_PAT = process.env.AIRTABLE_PAT;
 const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
 const TABLE = process.env.AGENT_PROPOSALS_TABLE_ID ?? null;
 const BUDGET_MS = 250_000;
-const PROTECTED_TYPES = new Set(["jarvis_reply"]);
+// frontier_retire added 2026-07-11: retirement one-taps are operator
+// decisions (coverage reduction) — a hygiene purge must never eat them.
+const PROTECTED_TYPES = new Set(["jarvis_reply", "frontier_retire"]);
 
 function authorized(req: Request): boolean {
   const secret = process.env.CRON_SECRET;

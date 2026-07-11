@@ -118,6 +118,58 @@ export interface ProposalRow {
   createdTime?: string | null;
 }
 
+// ── Machine-work gate (operator 2026-07-11, on seeing 116 Act Now items:
+// "I assume 95% of them are noise") ──────────────────────────────────────
+//
+// The propose-actions cron mints housekeeping proposals daily (follow_up /
+// kill_dead_deal / surface_stale / flag_price_drop / suggest_dispo_price)
+// with no consumer — the exact pile the 7/08 purge cleared once and that
+// re-accumulated since. Under the UX LAW those are MACHINE-WORK: the bump
+// lane does the re-touching, the d3 lanes do the disposing. They never
+// render. Only decision-grade proposal types reach the conveyor:
+//   jarvis_reply    — a live seller waiting on a drafted reply (2A)
+//   h2_opener_hold  — price-guard HOLD needing a sourcing/skip ruling (2C)
+//   frontier_retire — coverage-reduction ruling (2C)
+// Age gates on top (a stale "decision" is not a decision): jarvis_reply
+// older than 10 days is a cold thread (the 7/08 staleness doctrine — the
+// re-engagement lane owns it); other decision types cap at 14 days.
+export const DECISION_PROPOSAL_TYPES: ReadonlySet<string> = new Set([
+  "jarvis_reply",
+  "h2_opener_hold",
+  "frontier_retire",
+]);
+export const REPLY_PROPOSAL_MAX_AGE_DAYS = 10;
+export const DECISION_PROPOSAL_MAX_AGE_DAYS = 14;
+
+export interface ProposalGateResult {
+  kept: ProposalRow[];
+  /** Housekeeping proposals hidden as machine-work — the proof counter. */
+  machineWorkHidden: number;
+  /** Decision-grade proposals hidden as stale (cold threads / dead holds). */
+  staleHidden: number;
+}
+
+export function filterDecisionProposals(rows: ProposalRow[], nowIso: string): ProposalGateResult {
+  const now = Date.parse(nowIso);
+  const kept: ProposalRow[] = [];
+  let machineWorkHidden = 0;
+  let staleHidden = 0;
+  for (const p of rows) {
+    if (!DECISION_PROPOSAL_TYPES.has(p.proposalType)) {
+      machineWorkHidden++;
+      continue;
+    }
+    const created = p.createdTime ? Date.parse(p.createdTime) : NaN;
+    const maxDays = p.proposalType === "jarvis_reply" ? REPLY_PROPOSAL_MAX_AGE_DAYS : DECISION_PROPOSAL_MAX_AGE_DAYS;
+    if (Number.isFinite(created) && now - created > maxDays * 24 * HOUR_MS) {
+      staleHidden++;
+      continue;
+    }
+    kept.push(p);
+  }
+  return { kept, machineWorkHidden, staleHidden };
+}
+
 export interface ActionItemRow {
   id: string;
   title: string;
@@ -316,6 +368,12 @@ export function dedupeConveyor(items: ConveyorItem[]): ConveyorItem[] {
   return items.filter((i) => !(i.source === "brocard" && i.recordId && proposalRecords.has(i.recordId)));
 }
 
+export interface ConveyorBuildResult {
+  items: ConveyorItem[];
+  /** Proof of the machine-work gate — what did NOT render, and why. */
+  hidden: { machineWork: number; stale: number };
+}
+
 export function buildConveyor(
   input: {
     proposals: ProposalRow[];
@@ -324,12 +382,16 @@ export function buildConveyor(
     broCards: BroCardRow[];
   },
   nowIso: string,
-): ConveyorItem[] {
+): ConveyorBuildResult {
+  const gate = filterDecisionProposals(input.proposals, nowIso);
   const items = [
-    ...input.proposals.map(fromProposal),
+    ...gate.kept.map(fromProposal),
     ...input.actionItems.map(fromActionItem),
     ...input.priorities.map(fromPriority),
     ...input.broCards.map(fromBroCard),
   ];
-  return rankConveyor(dedupeConveyor(items), nowIso);
+  return {
+    items: rankConveyor(dedupeConveyor(items), nowIso),
+    hidden: { machineWork: gate.machineWorkHidden, stale: gate.staleHidden },
+  };
 }

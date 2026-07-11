@@ -98,12 +98,14 @@ async function fetchPriorities(): Promise<PriorityRow[]> {
 }
 
 /** The ranked feed as the crons see it — brief cards excluded (they carry
- *  no sourced $ and duplicate proposals; escalation never needs them). */
+ *  no sourced $ and duplicate proposals; escalation never needs them).
+ *  Inherits the machine-work gate: housekeeping proposals can neither
+ *  render NOR text the operator's phone. */
 export async function fetchConveyorItemsServer(nowIso: string): Promise<ConveyorItem[]> {
   const [proposals, actionItems, priorities] = await Promise.all([
     fetchPendingProposals(),
     fetchOpenActionItems(),
     fetchPriorities(),
   ]);
-  return buildConveyor({ proposals, actionItems, priorities, broCards: [] }, nowIso);
+  return buildConveyor({ proposals, actionItems, priorities, broCards: [] }, nowIso).items;
 }
