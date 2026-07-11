@@ -1,0 +1,90 @@
+# Email recovery — controlled, on-demand dispatch (operator "get started"
+# 2026-07-11).
+#
+# Dead-by-carrier records (SMS undeliverable) with an Agent_Email get ONE
+# value-anchored email opener via the operator's Gmail. DRY by default —
+# previews the exact recipients, offers, and bodies with zero sends.
+# mode=live sends: this is the operator's watched-first switch for a brand
+# new outbound channel — review the dry output, then click live (no env
+# surgery). The daily cron slot stays dry until EMAIL_RECOVERY_LIVE=true.
+#
+# Required GitHub secret: CRON_SECRET. Gmail env must be configured in
+# Vercel (GMAIL_OAUTH_*, GMAIL_FROM_ADDRESS) or live sends fail closed.
+
+name: Email recovery (controlled)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "live = send emails. Default dry = preview recipients + priced offers, zero sends."
+        required: false
+        default: "dry"
+        type: choice
+        options: ["dry", "live"]
+      limit:
+        description: "Max emails this run (route caps at 15)."
+        required: false
+        default: "5"
+        type: string
+      base_url:
+        description: "Production base URL (override only for staging tests)."
+        required: false
+        default: "https://coach-pulse-ten.vercel.app"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      MODE: ${{ inputs.mode }}
+      LIMIT: ${{ inputs.limit }}
+      BASE_URL: ${{ inputs.base_url }}
+    steps:
+      - name: Refuse to run when CRON_SECRET is missing
+        run: |
+          if [ -z "${{ secrets.CRON_SECRET }}" ]; then
+            echo "::error::CRON_SECRET is not configured as a GitHub Actions secret."
+            exit 1
+          fi
+          echo "CRON_SECRET present; proceeding."
+
+      - name: Invoke /api/cron/email-recovery
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          Q="force_run=1&limit=${LIMIT}"
+          if [ "${MODE}" = "live" ]; then Q="${Q}&live=1"; fi
+          URL="${BASE_URL}/api/cron/email-recovery?${Q}"
+          echo "GET ${URL}  (mode=${MODE})"
+          HTTP_CODE=$(curl -sS -o /tmp/email.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "x-vercel-cron: 1" \
+            "${URL}")
+          echo "HTTP ${HTTP_CODE}"
+          echo "--- response body ---"
+          jq . /tmp/email.json 2>/dev/null || cat /tmp/email.json
+          if [ "${HTTP_CODE}" -ge 400 ]; then
+            echo "::error::email-recovery returned HTTP ${HTTP_CODE}"
+            exit 1
+          fi
+
+      - name: Surface the headline numbers
+        if: success()
+        run: |
+          set -euo pipefail
+          {
+            echo "## Email recovery (${MODE})"
+            echo ""
+            jq -r '
+              "- mode: \(.mode // "?")",
+              "- candidates: \(.candidates_total // "?")",
+              "- sent/would-send: \([.rows[]? | select(.status=="sent" or .status=="would_send")] | length)",
+              "- held by pricer: \([.rows[]? | select(.status=="skipped_hold")] | length)"
+            ' /tmp/email.json 2>/dev/null || echo "- (see raw response above)"
+          } >> "$GITHUB_STEP_SUMMARY"
