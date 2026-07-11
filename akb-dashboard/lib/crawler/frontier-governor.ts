@@ -207,3 +207,24 @@ export function frontierDecisions(input: {
     capacityLeft,
   };
 }
+
+/** Payload shape the frontier-rotation pass writes into a frontier_retire
+ *  proposal's Suggested_Action_Payload, and the one-tap Approve dispatch
+ *  parses back. Returns null on anything that is not a well-formed
+ *  frontier_retire action (the dispatch then refuses — fail closed). */
+export function parseFrontierRetirePayload(
+  raw: string | null | undefined,
+): { recordId: string; zip: string } | null {
+  if (!raw) return null;
+  try {
+    const p = JSON.parse(raw) as Record<string, unknown>;
+    if (p.action !== "frontier_retire") return null;
+    const recordId = typeof p.recordId === "string" ? p.recordId : "";
+    const zip = typeof p.zip === "string" ? p.zip : "";
+    if (!/^rec[A-Za-z0-9]{14}$/.test(recordId)) return null;
+    if (!/^\d{5}$/.test(zip)) return null;
+    return { recordId, zip };
+  } catch {
+    return null;
+  }
+}

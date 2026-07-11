@@ -218,6 +218,24 @@ export async function promoteStagedZip(
   });
 }
 
+// Frontier retirement execution (#37 one-tap card): ZIP → paused, stamped.
+// ONLY fired by an operator-approved frontier_retire proposal — retirement
+// (coverage reduction) is never autonomous; this is the dispatch the
+// Approve tap runs.
+export async function retireZip(
+  recordId: string,
+  opts: { note: string },
+): Promise<void> {
+  // Fetch current notes so the stamp appends instead of overwriting.
+  const rows = await fetchRows(`RECORD_ID()='${recordId}'`);
+  const existing = rows[0]?.notes ?? null;
+  const stamped = `[${new Date().toISOString()}] ${opts.note}`;
+  await patchRow(recordId, {
+    [ZR.marketTier]: "paused",
+    [ZR.notes]: existing ? `${existing}\n\n${stamped}` : stamped,
+  });
+}
+
 // Per-ZIP stats write-back after a successful intake run.
 //
 // NOTE on semantics: v1 writes the LATEST successful run's snapshot into

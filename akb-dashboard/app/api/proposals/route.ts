@@ -1,5 +1,8 @@
 import { getListing, updateListingRecord } from "@/lib/airtable";
 import { parseSendSmsPayload, sendApprovedReply } from "@/lib/approve-send";
+import { parseFrontierRetirePayload } from "@/lib/crawler/frontier-governor";
+import { retireZip } from "@/lib/zip-registry";
+import { audit } from "@/lib/audit-log";
 
 const AIRTABLE_PAT = process.env.AIRTABLE_PAT!;
 const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
@@ -243,6 +246,63 @@ export async function PATCH(req: Request) {
       return Response.json(
         { error: "Dispatch failed", detail: String(err) },
         { status: 500 }
+      );
+    }
+  }
+
+  // ── frontier_retire one-tap (#37, operator 2026-07-11): approving the
+  // card EXECUTES the retirement — ZIP_Registry row → paused, stamped —
+  // then marks the proposal Approved. Retirement is never autonomous;
+  // this tap IS the operator decision. Fail-closed: a malformed payload
+  // refuses instead of approving a no-op, and a non-Pending proposal
+  // never executes twice.
+  if (action === "approve") {
+    try {
+      const res = await fetch(
+        `https://api.airtable.com/v0/${BASE_ID}/${tableId}/${proposalId}`,
+        { headers: { Authorization: `Bearer ${AIRTABLE_PAT}` }, cache: "no-store" },
+      );
+      if (res.ok) {
+        const rec = await res.json();
+        const f = (rec.fields ?? {}) as Record<string, unknown>;
+        if ((f.Proposal_Type as string) === "frontier_retire") {
+          if (((f.Status as string) ?? "Pending") !== "Pending") {
+            return Response.json(
+              { success: false, skipReason: `proposal is ${f.Status}, not Pending` },
+              { status: 409 },
+            );
+          }
+          const payload = parseFrontierRetirePayload(f.Suggested_Action_Payload as string);
+          if (!payload) {
+            return Response.json(
+              { success: false, skipReason: "not_dispatchable: payload is not a frontier_retire action" },
+              { status: 422 },
+            );
+          }
+          const iso = new Date().toISOString();
+          await retireZip(payload.recordId, {
+            note: `frontier_retire approved by operator (proposal ${proposalId}): ZIP ${payload.zip} paused — zero-yield snapshot`,
+          });
+          await patchProposal(tableId, proposalId, {
+            Status: "Approved",
+            Reviewed_At: iso,
+          });
+          await audit({
+            agent: "scout",
+            event: "frontier_retire_executed",
+            status: "confirmed_success",
+            recordId: payload.recordId,
+            inputSummary: { proposal_id: proposalId, zip: payload.zip },
+            outputSummary: { market_tier: "paused" },
+          });
+          return Response.json({ success: true, action, executed: "frontier_retire", zip: payload.zip });
+        }
+      }
+    } catch (err) {
+      console.error("[proposals] frontier_retire dispatch error:", err);
+      return Response.json(
+        { error: "frontier_retire dispatch failed", detail: String(err) },
+        { status: 500 },
       );
     }
   }
