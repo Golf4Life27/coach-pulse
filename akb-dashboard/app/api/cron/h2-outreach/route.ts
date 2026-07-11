@@ -282,12 +282,14 @@ async function handle(req: Request): Promise<Response> {
     // older selectH2Eligible which would have re-engaged the 25 legacy
     // unbacked-status records (forward-only directive) and any pre-
     // priceable-gate listings still in the cohort.
-    queue = selectOutreachReady(allListings).slice(0, limit);
+    // NOTE: no .slice(0, limit) here — the ranked queue is walked below and
+    // the slice happens AFTER pricing (see head-of-queue starvation fix).
+    queue = selectOutreachReady(allListings);
   }
 
   // eligibleCount uses the same strict selector as the queue so the dry-run
   // headline matches the real send pool.
-  const eligibleCount = recordId ? queue.length : selectOutreachReady(allListings).length;
+  const eligibleCount = queue.length;
 
   // ── TIER A door-opener guard (keystone rewrite 2026-06-12, adjudication
   // recXJrM7EYK3pEFmF item 1) ──────────────────────────────────────────
@@ -320,8 +322,21 @@ async function handle(req: Request): Promise<Response> {
   // a 100-record cohort doesn't hit KV per record.
   const anchorCache = new Map<string, number>();
   const seedCache = new Map<string, ZipArvSeed | null>();
+  // ── HEAD-OF-QUEUE STARVATION FIX (2026-07-11) ── the queue used to be
+  // sliced to `limit` BEFORE pricing. Once the top-`limit` ranked records
+  // were all stable pricer HOLDs (over-ARV asks whose status never changes),
+  // every slot re-priced the same holds and sent ZERO — first-touch
+  // flatlined 7/10–7/11 while 100+ sendable records sat one rank deeper.
+  // Now the slot walks the ranked queue until `limit` records actually
+  // plan, bounded by a scan cap so a hold-heavy cohort can't eat the
+  // lambda budget. Holds still surface (deduped h2_opener_hold proposals);
+  // they just stop blocking the records behind them.
+  const scanCap = Math.max(limit * 5, 50);
+  let scanned = 0;
   const filteredQueue: typeof queue = [];
   for (const l of queue) {
+    if (filteredQueue.length >= limit || scanned >= scanCap) break;
+    scanned += 1;
     const market = getMarketForListing({ state: l.state, zip: l.zip });
     const marketId = market?.id ?? "";
     let anchorPct = anchorCache.get(marketId);
@@ -363,7 +378,12 @@ async function handle(req: Request): Promise<Response> {
         address: l.address ?? null,
         listPrice: l.listPrice ?? null,
         action: "skipped",
-        reason: priced.basis === "hold_no_value_basis" ? "market_not_priceable" : "opener_hold",
+        // HONEST LABEL (2026-07-11): this was previously labeled
+        // "market_not_priceable", which sent tonight's outage diagnosis
+        // chasing market config. hold_no_value_basis here almost always
+        // means the ARV-sanity gate distrusted an over-ARV ask (the
+        // creative-lane class), not a market problem.
+        reason: priced.basis === "hold_no_value_basis" ? "opener_hold_no_value_basis" : "opener_hold",
         ceiling: priced.ceiling,
         ceilingSource: priced.basis,
         anchorPct: priced.anchorPct,
@@ -846,6 +866,7 @@ async function handle(req: Request): Promise<Response> {
     started_at: startedAt,
     finished_at: new Date().toISOString(),
     eligible_count: eligibleCount,
+    queue_scan: { scanned, scan_cap: scanCap, planned: queue.length },
     processed,
     summary,
     send_cap: sendCapSummary,
