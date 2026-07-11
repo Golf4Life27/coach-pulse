@@ -174,6 +174,12 @@ export interface BackfillEndpointOutcome {
   http_status: number | null;
   elapsed_ms: number;
   error: string | null;
+  /** P2 done-gate (#35): set when the leg was NOT fired this run —
+   *  skip_done (completion marker present), skip_stable (two agreeing
+   *  vision reads recorded), or skip_failure_capped (benched after N
+   *  consecutive errors). A skipped leg reports status "ok" with no call
+   *  spent. */
+  skipped_reason?: "skip_done" | "skip_stable" | "skip_failure_capped";
 }
 
 export interface BackfillRecordApplyOutcome {

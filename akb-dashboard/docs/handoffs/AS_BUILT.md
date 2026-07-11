@@ -394,6 +394,26 @@ inventory only**. `lib/forward-inventory.ts` (`filterForwardInventory` /
   indexes, and the sentinel reply queue — inbound on ANY thread revives it
   (Mahmoud/Memphis class stays fair game).
 
+## 8g. NEW 2026-07-11 — P2 done-gate on appraiser-backfill (#35)
+
+The */5-min `appraiser-backfill?selection=rehab_ready&limit=3` cron fired
+ALL THREE legs (ARV/ScraperAPI, rehab/Anthropic vision, rent/RentCast) on
+every eligible record every pass — and one permanently-missing leg kept a
+record eligible forever (reccyLTGRZzMmbe2w: 5 identical vision reads,
+conf 42, rehab_mid $51,183).
+
+- **`lib/admin/p2-done-gate.ts`** (pure, tested): per-leg idempotency (a
+  completed leg never re-buys its call); the rehab leg gets exactly ONE
+  confirmation read — two agreeing reads (conf equal + mid within ±$5,
+  env `P2_STABLE_REHAB_DELTA_USD`) mark the record STABLE in KV
+  (`p2:rehab:stable:<id>`, 30d TTL) and the vision leg never fires again;
+  a leg erroring 5× consecutively (env `P2_LEG_FAILURE_CAP`) is benched
+  (KV, 7d TTL) instead of looping. KV unreachable → any completed read is
+  treated as done (fail toward NOT spending). `force=1` overrides all.
+- **Burn quantification**: apply response + audit carry `p2_done_gate`
+  (calls_avoided by vendor, legs_skipped, stable_marked); dry-run
+  `eligible_sample` previews each record's `leg_plan`.
+
 ## 9. Pointers
 
 - Hard rules / invariants: **[`docs/INVARIANTS.md`](../INVARIANTS.md)** — load every session.
