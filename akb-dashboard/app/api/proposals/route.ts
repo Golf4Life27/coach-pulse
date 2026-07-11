@@ -23,6 +23,8 @@ export interface Proposal {
   actionPayload: string;
   status: string;
   snoozeUntil: string | null;
+  /** Airtable record creation time — drives the conveyor's waiting clock. */
+  createdTime: string | null;
 }
 
 export async function GET() {
@@ -74,6 +76,7 @@ export async function GET() {
           actionPayload: (f.Suggested_Action_Payload as string) ?? "{}",
           status: (f.Status as string) ?? "Pending",
           snoozeUntil,
+          createdTime: (rec.createdTime as string) ?? null,
         });
       }
       offset = data.offset;
