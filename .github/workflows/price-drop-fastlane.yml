@@ -1,0 +1,94 @@
+# Price-drop fast lane — controlled, on-demand dispatch (operator "get
+# started" 2026-07-11).
+#
+# Lists (dry) or same-day re-verifies (apply) the newly-penciling cuts:
+# first-touch v2 records with a real price cut on record whose ask now sits
+# BELOW the ZIP's renovated value. Re-verify spends 1 Firecrawl credit per
+# record (known-URL scrape, freshness-reverify semantics) and stamps
+# Last_Verified + Live_Status so the NEXT send slot fires the opener while
+# the cut is hot. This lane NEVER sends.
+#
+# DRY by default — zero credits, prints the ranked targets with ask, prev
+# ask, renovated value, and headroom. mode=apply spends at most `limit`
+# credits.
+#
+# Required GitHub secret: CRON_SECRET.
+
+name: Price-drop fast lane (controlled)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "apply = re-verify + stamp (<= limit credits). Default dry = ranked target list, zero credits."
+        required: false
+        default: "dry"
+        type: choice
+        options: ["dry", "apply"]
+      limit:
+        description: "Max re-verifies this run (1 credit each; route caps at 20)."
+        required: false
+        default: "8"
+        type: string
+      base_url:
+        description: "Production base URL (override only for staging tests)."
+        required: false
+        default: "https://coach-pulse-ten.vercel.app"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      MODE: ${{ inputs.mode }}
+      LIMIT: ${{ inputs.limit }}
+      BASE_URL: ${{ inputs.base_url }}
+    steps:
+      - name: Refuse to run when CRON_SECRET is missing
+        run: |
+          if [ -z "${{ secrets.CRON_SECRET }}" ]; then
+            echo "::error::CRON_SECRET is not configured as a GitHub Actions secret."
+            exit 1
+          fi
+          echo "CRON_SECRET present; proceeding."
+
+      - name: Invoke /api/cron/price-drop-fastlane
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          Q="force_run=1&limit=${LIMIT}"
+          if [ "${MODE}" = "apply" ]; then Q="${Q}&apply=1"; fi
+          URL="${BASE_URL}/api/cron/price-drop-fastlane?${Q}"
+          echo "GET ${URL}  (mode=${MODE})"
+          HTTP_CODE=$(curl -sS -o /tmp/fastlane.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "x-vercel-cron: 1" \
+            "${URL}")
+          echo "HTTP ${HTTP_CODE}"
+          echo "--- response body ---"
+          jq . /tmp/fastlane.json 2>/dev/null || cat /tmp/fastlane.json
+          if [ "${HTTP_CODE}" -ge 400 ]; then
+            echo "::error::price-drop-fastlane returned HTTP ${HTTP_CODE}"
+            exit 1
+          fi
+
+      - name: Surface the headline numbers
+        if: success()
+        run: |
+          set -euo pipefail
+          {
+            echo "## Price-drop fast lane (${MODE})"
+            echo ""
+            jq -r '
+              "- mode: \(.mode // "?")",
+              "- cut-evidence pool: \(.cut_evidence_pool // "n/a")",
+              "- due (newly penciling): \(.due_total // "?")",
+              "- re-verified now sendable: \(.summary.now_sendable // "n/a")",
+              "- credits used: \(.summary.credits_used // 0)"
+            ' /tmp/fastlane.json 2>/dev/null || echo "- (see raw response above)"
+          } >> "$GITHUB_STEP_SUMMARY"
