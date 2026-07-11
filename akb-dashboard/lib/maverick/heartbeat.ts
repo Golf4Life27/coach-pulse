@@ -104,3 +104,29 @@ export function buildTape(inputs: TapeInputs, cap = 10): TapeEvent[] {
     .sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime())
     .slice(0, cap);
 }
+
+/** NORTH STAR (operator 2026-07-10: "10-20-50 negotiations nationwide a
+ *  month with good math... I WILL RETIRE MY WIFE"): a live negotiation is
+ *  a record whose seller/agent replied THIS calendar month and now sits in
+ *  a conversation status. Forward-only by construction — the inputs come
+ *  from the same current-era reads as the belt. Pure; route supplies rows. */
+export const NEGOTIATION_STATUSES: ReadonlySet<string> = new Set([
+  "Negotiating",
+  "Response Received",
+  "Counter Received",
+  "Offer Accepted",
+]);
+
+export function countLiveNegotiations(
+  rows: Array<{ lastInboundAt: string | null; status: string | null }>,
+  monthStartIso: string,
+): number {
+  const start = new Date(monthStartIso).getTime();
+  let n = 0;
+  for (const r of rows) {
+    if (!r.lastInboundAt || !NEGOTIATION_STATUSES.has(r.status ?? "")) continue;
+    const t = new Date(r.lastInboundAt).getTime();
+    if (Number.isFinite(t) && t >= start) n++;
+  }
+  return n;
+}
