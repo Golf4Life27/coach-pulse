@@ -3,6 +3,8 @@ import { getThreadVerified } from "@/lib/quo";
 import { getThreadsForEmail } from "@/lib/gmail";
 import { parseConversation } from "@/lib/notes";
 import { mergeTimeline, type SiblingRecord } from "@/lib/timeline-merge";
+import { detectCaptureGaps } from "@/lib/comms-integrity";
+import { extractStickyOffer } from "@/lib/h2-outreach/bump-lane";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -135,6 +137,19 @@ export async function GET(
         return msg;
       });
 
+    // COMMS INTEGRITY (operator 2026-07-11, hard requirement): the record's
+    // own contact stamps claim messages happened — if this record's merged
+    // timeline is missing one (the 3731 Baltimore cross-thread class, a
+    // vanished append, a sibling-attribution miss), the gap SURFACES as an
+    // alert, never silently.
+    const integrity = detectCaptureGaps({
+      lastInboundAt: listing.lastInboundAt,
+      lastOutboundAt: listing.lastOutboundAt,
+      lastEmailOutreachDate: listing.lastEmailOutreachDate,
+      messages: messages.map((m) => ({ direction: m.direction, timestamp: m.timestamp })),
+      nowIso: new Date().toISOString(),
+    });
+
     return Response.json({
       recordId: id,
       address: listing.address,
@@ -146,6 +161,17 @@ export async function GET(
       emailCount: messages.filter((m) => m.source === "email").length,
       notesCount: messages.filter((m) => m.source === "notes").length,
       messages,
+      integrity,
+      // NUMBERS RAIL (sourced only — INVARIANTS §1/§3): the delivery-stamped
+      // offer parsed from the [H2 sent …] stamp (the number the agent
+      // actually received; fields drift, stamps don't), the operator's
+      // ceiling, and list. Null when un-sourced — the UI renders "—".
+      numbers: {
+        stamped_offer: extractStickyOffer(listing.notes)?.offer ?? null,
+        outreach_offer_field: listing.outreachOfferPrice ?? null,
+        ceiling: listing.underwrittenMao ?? listing.mao ?? null,
+        list_price: listing.listPrice ?? null,
+      },
     });
   } catch (err) {
     console.error(`[conversations] Error for ${id}:`, err);
