@@ -28,9 +28,10 @@
 // the final audit always lands.
 
 import { NextResponse } from "next/server";
-import { getActiveListingsForBrief, getRehabSweepCandidates } from "@/lib/airtable";
+import { getActiveListingsForBrief, getRehabSweepCandidates, getListing } from "@/lib/airtable";
 import { audit } from "@/lib/audit-log";
 import { noteWorkRun, noteZeroRun } from "@/lib/admin/retire-me-signal";
+import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import {
   aggregateBackfillStatus,
   classifyBackfillEligibility,
@@ -42,6 +43,18 @@ import {
   type BackfillEndpointOutcome,
   type BackfillRecordApplyOutcome,
 } from "@/lib/admin/appraiser-backfill";
+import {
+  planLegs,
+  readsAgree,
+  callsAvoided,
+  readP2Config,
+  rehabStableKey,
+  legFailureKey,
+  STABLE_FLAG_TTL_S,
+  FAILURE_COUNT_TTL_S,
+  type LegName,
+  type RecordLegPlan,
+} from "@/lib/admin/p2-done-gate";
 
 function originFromReq(req: Request): string {
   const url = new URL(req.url);
@@ -266,6 +279,17 @@ export async function GET(req: Request) {
       },
       eligible_sample: eligible.slice(0, 100).map((o) => ({
         recordId: o.record.recordId,
+        // P2 done-gate preview (field-based; the apply run also consults
+        // the KV stable/bench ledgers): which legs would actually fire.
+        leg_plan: planLegs({
+          arvValidatedAt: o.record.current.arv_validated_at,
+          rehabEstimatedAt: o.record.current.rehab_estimated_at,
+          estimatedMonthlyRent: o.record.current.estimated_monthly_rent,
+          force,
+          kvAvailable: false,
+          rehabStable: false,
+          failures: { arv: 0, rehab: 0, rent: 0 },
+        }),
         address: o.address,
         state: o.state,
         outreach_status: o.outreach_status,
@@ -293,6 +317,44 @@ export async function GET(req: Request) {
   const applied: BackfillRecordApplyOutcome[] = [];
   let truncated_by_budget = false;
 
+  // ── P2 done-gate (#35) state ─────────────────────────────────────────
+  const p2 = readP2Config();
+  const byId = new Map(subset.map((l) => [l.id, l] as const));
+  const appliedPlans: RecordLegPlan[] = [];
+  let stableMarked = 0;
+  const kvUp = kvConfigured();
+  const skippedOutcome = (
+    reason: NonNullable<BackfillEndpointOutcome["skipped_reason"]>,
+  ): BackfillEndpointOutcome => ({
+    status: "ok",
+    http_status: null,
+    elapsed_ms: 0,
+    error: null,
+    skipped_reason: reason,
+  });
+  const readFailure = async (recordId: string, leg: LegName): Promise<number> => {
+    const raw = await kvProd.get(legFailureKey(recordId, leg));
+    return raw == null ? 0 : Number(raw) || 0;
+  };
+  // On a leg error: extend the bench counter; on success: clear it.
+  const recordLegResult = async (
+    recordId: string,
+    leg: LegName,
+    outcome: BackfillEndpointOutcome,
+    prior: number,
+  ): Promise<void> => {
+    if (!kvUp || outcome.skipped_reason) return;
+    try {
+      if (outcome.status === "error") {
+        await kvProd.setEx(legFailureKey(recordId, leg), String(prior + 1), FAILURE_COUNT_TTL_S);
+      } else if (prior > 0) {
+        await kvProd.del(legFailureKey(recordId, leg));
+      }
+    } catch {
+      /* bench ledger is advisory */
+    }
+  };
+
   for (let i = 0; i < eligible.length; i++) {
     const o = eligible[i];
     const elapsed = Date.now() - t0;
@@ -306,27 +368,110 @@ export async function GET(req: Request) {
     }
 
     const recordT0 = Date.now();
-    const arv = await callEndpoint(
-      origin,
-      `/api/agents/appraiser/arv/${o.record.recordId}`,
-      cookie,
-      authorization,
-      xVercelCron,
-    );
-    const rehab = await callEndpoint(
-      origin,
-      `/api/agents/appraiser/rehab/${o.record.recordId}`,
-      cookie,
-      authorization,
-      xVercelCron,
-    );
-    const buyerIntel = await callEndpoint(
-      origin,
-      `/api/agents/appraiser/buyer-intelligence/${o.record.recordId}`,
-      cookie,
-      authorization,
-      xVercelCron,
-    );
+
+    // ── P2 done-gate: which legs does this record still OWE? A completed
+    // leg never re-buys its call; the rehab leg gets exactly one
+    // confirmation read, then a stable mark stops it forever (the
+    // reccyLTGRZzMmbe2w class: 5 identical vision reads on the 5-min cron).
+    const listing = byId.get(o.record.recordId) ?? null;
+    let kvAvailable = kvUp;
+    let rehabStable = false;
+    let failures = { arv: 0, rehab: 0, rent: 0 };
+    if (kvUp) {
+      try {
+        const [stableFlag, fArv, fRehab, fRent] = await Promise.all([
+          kvProd.get(rehabStableKey(o.record.recordId)),
+          readFailure(o.record.recordId, "arv"),
+          readFailure(o.record.recordId, "rehab"),
+          readFailure(o.record.recordId, "rent"),
+        ]);
+        rehabStable = stableFlag != null;
+        failures = { arv: fArv, rehab: fRehab, rent: fRent };
+      } catch {
+        kvAvailable = false; // ledger unreadable → fail toward not spending
+      }
+    }
+    const plan = planLegs({
+      arvValidatedAt: o.record.current.arv_validated_at,
+      rehabEstimatedAt: o.record.current.rehab_estimated_at,
+      estimatedMonthlyRent: o.record.current.estimated_monthly_rent,
+      force,
+      kvAvailable,
+      rehabStable,
+      failures,
+      failureCap: p2.failureCap,
+    });
+    appliedPlans.push(plan);
+    // Snapshot the PRIOR vision read before a new one lands (consecutive-
+    // agreement needs read N-1; the fields hold it until the endpoint
+    // overwrites them).
+    const prevRead = {
+      conf: listing?.rehabConfidenceScore ?? null,
+      mid: listing?.estRehabMid ?? null,
+    };
+
+    const arv =
+      plan.arv === "run"
+        ? await callEndpoint(
+            origin,
+            `/api/agents/appraiser/arv/${o.record.recordId}`,
+            cookie,
+            authorization,
+            xVercelCron,
+          )
+        : skippedOutcome(plan.arv);
+    const rehab =
+      plan.rehab === "run"
+        ? await callEndpoint(
+            origin,
+            `/api/agents/appraiser/rehab/${o.record.recordId}`,
+            cookie,
+            authorization,
+            xVercelCron,
+          )
+        : skippedOutcome(plan.rehab);
+    const buyerIntel =
+      plan.rent === "run"
+        ? await callEndpoint(
+            origin,
+            `/api/agents/appraiser/buyer-intelligence/${o.record.recordId}`,
+            cookie,
+            authorization,
+            xVercelCron,
+          )
+        : skippedOutcome(plan.rent);
+
+    await recordLegResult(o.record.recordId, "arv", arv, failures.arv);
+    await recordLegResult(o.record.recordId, "rehab", rehab, failures.rehab);
+    await recordLegResult(o.record.recordId, "rent", buyerIntel, failures.rent);
+
+    // ── Stability mark: when a CONFIRMATION read (a prior read existed)
+    // lands and agrees with it (conf equal + mid within ±$5), the record
+    // is done — the vision leg never fires again.
+    if (
+      kvAvailable &&
+      plan.rehab === "run" &&
+      rehab.status === "ok" &&
+      prevRead.mid != null
+    ) {
+      try {
+        const fresh = await getListing(o.record.recordId);
+        const nextRead = {
+          conf: fresh?.rehabConfidenceScore ?? null,
+          mid: fresh?.estRehabMid ?? null,
+        };
+        if (readsAgree(prevRead, nextRead, p2.stableDeltaUsd)) {
+          await kvProd.setEx(
+            rehabStableKey(o.record.recordId),
+            new Date().toISOString(),
+            STABLE_FLAG_TTL_S,
+          );
+          stableMarked++;
+        }
+      } catch {
+        /* stability mark is best-effort — worst case one more read */
+      }
+    }
 
     const aggregate = aggregateBackfillStatus(arv.status, rehab.status, buyerIntel.status);
 
@@ -384,6 +529,20 @@ export async function GET(req: Request) {
     remaining_eligible: eligible.length - applied.length,
   };
 
+  // P2 done-gate burn quantification (#35): the calls each skip avoided
+  // this run, by vendor — the honest counter for what the gate saves.
+  const p2Summary = {
+    calls_avoided: callsAvoided(appliedPlans),
+    stable_marked: stableMarked,
+    legs_skipped: {
+      arv: appliedPlans.filter((p) => p.arv !== "run").length,
+      rehab: appliedPlans.filter((p) => p.rehab !== "run").length,
+      rent: appliedPlans.filter((p) => p.rent !== "run").length,
+    },
+    stable_delta_usd: p2.stableDeltaUsd,
+    failure_cap: p2.failureCap,
+  };
+
   await audit({
     agent: "appraiser",
     event: "backfill_apply_run",
@@ -400,6 +559,7 @@ export async function GET(req: Request) {
     outputSummary: {
       ...apply_summary,
       cost_estimate: totalCost,
+      p2_done_gate: p2Summary,
     },
     decision: truncated_by_budget ? "applied_truncated_by_budget" : "applied",
     ms: Date.now() - t0,
@@ -432,6 +592,7 @@ export async function GET(req: Request) {
       skip_breakdown,
       cost_estimate: totalCost,
       apply: apply_summary,
+      p2_done_gate: p2Summary,
     },
     applied,
     skipped_sample: skipped.slice(0, 100).map((o) => ({
