@@ -71,6 +71,25 @@ describe("mappers", () => {
     expect(item.reasoning).toBe("Seller said no go to $12,000; soft-no re-engagement drafted.");
   });
 
+  it("h2_opener_hold → list price NEVER renders as money-in-play; Open is the tap; plain-English preface", () => {
+    const item = fromProposal(
+      proposal({
+        id: "recHOLD0000000002",
+        proposalType: "h2_opener_hold",
+        recordId: "recREGAL00000001",
+        recordAddress: "817 Regal Ln SW, Atlanta, GA 30331",
+        reasoning:
+          "H2 opener HOLD [market_not_priceable]: rough ceiling null (hold_no_value_basis) × anchor ? vs list $355,000. Decide: source ARV/rehab and re-run, or skip this record.",
+        actionPayload: JSON.stringify({ action: "h2_opener_hold" }),
+      }),
+    );
+    expect(item.dollars).toBeNull(); // $355,000 is the ASK, not money in play
+    expect(item.actions[0]).toMatchObject({ kind: "open", href: "/pipeline/recREGAL00000001" });
+    expect(item.actions.some((a) => a.kind === "proposal_approve")).toBe(false);
+    expect(item.reasoning).toContain("Pricer HOLD — no autonomous text will fire");
+    expect(item.deadlineAt).toBeNull(); // holds rank by age, never by a fake clock
+  });
+
   it("frontier_retire proposal → 2C one-tap approve, no implied clock", () => {
     const item = fromProposal(
       proposal({
