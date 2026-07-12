@@ -16,10 +16,15 @@ export interface GmailSyncInputMessage {
   body: string;
   /** ISO date. */
   date: string;
+  /** Gmail thread id — stamped into the marker so deal-thread links can be
+   *  rebuilt from notes and correlation never depends on subject/recipients
+   *  (Sunbeam CC-only + Re:→Fwd: miss, spine rec17krmeSuttdyNy). */
+  threadId?: string;
 }
 
 export interface GmailSyncEvent {
   id: string;
+  threadId: string | null;
   body: string;
   date: string;
   amounts: DollarAmount[];
@@ -66,7 +71,13 @@ export function appendGmailMessagesToNotes(
       skippedAlreadyPresent.push(m.id);
       continue;
     }
-    newEvents.push({ id: m.id, body: m.body, date: m.date, amounts: detectL3DollarAmounts(m.body).amounts });
+    newEvents.push({
+      id: m.id,
+      threadId: m.threadId?.trim() || null,
+      body: m.body,
+      date: m.date,
+      amounts: detectL3DollarAmounts(m.body).amounts,
+    });
   }
 
   if (newEvents.length === 0) {
@@ -82,9 +93,10 @@ export function appendGmailMessagesToNotes(
           : "";
       const mm = e.date.match(/(\d{4})-(\d{2})-(\d{2})/);
       const md = mm ? `${parseInt(mm[2], 10)}/${parseInt(mm[3], 10)}` : e.date.slice(0, 10);
+      const threadTag = e.threadId ? ` thread=${e.threadId}` : "";
       return [
         `${md} — EMAIL INBOUND: UNCLASSIFIED. Body: ${e.body}`,
-        `[Gmail inbound msg ${e.id} ts=${e.date} src=${source} ingested_at=${ingestedAt}${dollarTag}]`,
+        `[Gmail inbound msg ${e.id}${threadTag} ts=${e.date} src=${source} ingested_at=${ingestedAt}${dollarTag}]`,
       ].join("\n");
     });
 
@@ -96,4 +108,17 @@ export function appendGmailMessagesToNotes(
     skippedAlreadyPresent,
     escalationCount: newEvents.filter((e) => e.amounts.length > 0).length,
   };
+}
+
+/** Pure: newest inbound timestamp among ingested events — the sweep stamps
+ *  Last_Inbound_At with this (only forward, never backward) so downstream
+ *  gauges/escalation see email replies the same way they see SMS. */
+export function newestInboundIso(events: Array<{ date: string }>): string | null {
+  let best: string | null = null;
+  for (const e of events) {
+    const t = Date.parse(e.date);
+    if (!Number.isFinite(t)) continue;
+    if (!best || t > Date.parse(best)) best = e.date;
+  }
+  return best;
 }

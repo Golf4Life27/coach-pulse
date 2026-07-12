@@ -158,4 +158,15 @@ describe("detectEndpointErrorRate", () => {
       expect(dets.find((d) => d.id === `endpoint_error_rate_high:${ev}`)).toBeUndefined();
     }
   });
+
+  it("REGRESSION 2026-07-12: delivery quarantine working-as-designed never fires a critical", () => {
+    // 5/5 h2_outreach_delivery_quarantine (carrier-undeliverable numbers
+    // correctly quarantined during healthy ~55-msg live traffic) fired a
+    // false critical + Tier-3 SMS. The event records the CARRIER's failure,
+    // not ours — it is failure-only by design and must be excluded.
+    const auditLog = Array(5).fill(0).map(() => audit("h2_outreach_delivery_quarantine", "confirmed_failure"));
+    const dets = detectEndpointErrorRate({ ...baseInput, audit_log: auditLog });
+    expect(dets.find((d) => d.id === "endpoint_error_rate_high:h2_outreach_delivery_quarantine")).toBeUndefined();
+    expect(dets).toEqual([]);
+  });
 });

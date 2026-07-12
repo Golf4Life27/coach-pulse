@@ -59,6 +59,13 @@ const DEFAULT_FAILURE_ONLY_EXCLUSIONS = [
   "batch_patch_failed",
   "formula_field_write_blocked",
   "proposal_patch_failed",
+  // Quarantine-working-as-designed: the event records the CARRIER's failure
+  // (undeliverable number) — the quarantine action itself succeeded. It is
+  // audited confirmed_failure with no success counterpart, so any quarantine
+  // in the window pins the rate at 100% and fired a false critical + Tier-3
+  // SMS on 2026-07-12 (5/5 during ~55-msg/48h live traffic). Belt health for
+  // sends is the send-slot summary, not this event.
+  "h2_outreach_delivery_quarantine",
 ];
 
 function readExclusions(env: Record<string, string | undefined>): Set<string> {

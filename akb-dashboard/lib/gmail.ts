@@ -18,8 +18,16 @@ import { updateListingRecord } from "./airtable";
 
 export interface GmailMessage {
   id: string;
+  /** Gmail thread the message belongs to — the durable deal-thread key.
+   *  Persisted to Listings_V1.Gmail_Thread_Ids so the sync sweep ingests
+   *  ANY new message on a linked thread regardless of sender/recipients/
+   *  subject (the 3123 Sunbeam CC-only + Re:→Fwd: miss class). */
+  threadId: string;
   from: string;
   to: string;
+  /** Cc header, verbatim. The operator being CC-only (To: went to the
+   *  transaction coordinator) must never break capture. */
+  cc: string;
   subject: string;
   body: string;
   date: string;
@@ -90,11 +98,12 @@ function shapeMessage(msg: GmailFullMessage): GmailMessage {
   const subject = findHeader(headers, "Subject");
   const from = findHeader(headers, "From");
   const to = findHeader(headers, "To");
+  const cc = findHeader(headers, "Cc");
   const dateHeader = findHeader(headers, "Date");
   const body = extractBodyFromPayload(msg.payload);
   const epoch = msg.internalDate ? parseInt(msg.internalDate, 10) : NaN;
   const date = !isNaN(epoch) ? new Date(epoch).toISOString() : (dateHeader || "");
-  return { id: msg.id, from, to, subject, body, date };
+  return { id: msg.id, threadId: msg.threadId, from, to, cc, subject, body, date };
 }
 
 const MAX_THREADS_TO_PULL = 50;
@@ -158,6 +167,32 @@ export async function getThreadsForEmail(
   });
 
   return messages;
+}
+
+/** Fetch every message on ONE Gmail thread by id (oldest-first). This is the
+ *  linked-thread ingestion path: once a deal thread is linked to a listing,
+ *  the sweep pulls the whole thread directly — sender, recipients, and
+ *  subject mutations (Re:→Fwd:) can no longer break capture. Returns [] when
+ *  Gmail is unconfigured or the thread is gone (fail-soft, like the query
+ *  path). */
+export async function getThreadById(threadId: string): Promise<GmailMessage[]> {
+  const id = (threadId ?? "").trim();
+  if (!id) return [];
+  const token = await getAccessToken();
+  if (!token) return [];
+  const r = await fetch(`${GMAIL_API}/threads/${encodeURIComponent(id)}?format=full`, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+  if (!r.ok) {
+    const errText = await r.text().catch(() => "");
+    console.error(`[gmail] threads.get ${id} ${r.status}:`, errText.slice(0, 200));
+    return [];
+  }
+  const data = (await r.json()) as { messages?: GmailFullMessage[] };
+  const msgs = (data.messages ?? []).slice(0, MAX_MESSAGES_PER_THREAD).map(shapeMessage);
+  msgs.sort((a, b) => (a.date ? new Date(a.date).getTime() : 0) - (b.date ? new Date(b.date).getTime() : 0));
+  return msgs;
 }
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
