@@ -1,8 +1,34 @@
 import { getListing, updateListingRecord } from "@/lib/airtable";
-import { parseSendSmsPayload, sendApprovedReply } from "@/lib/approve-send";
+import { parseSendEmailPayload, parseSendSmsPayload, sendApprovedReply } from "@/lib/approve-send";
 import { parseFrontierRetirePayload } from "@/lib/crawler/frontier-governor";
 import { retireZip } from "@/lib/zip-registry";
 import { audit } from "@/lib/audit-log";
+import { sendEmail } from "@/lib/gmail";
+import { parseDraftMeta } from "@/lib/recommended-reply";
+
+/** RECOMMENDED-REPLIES mirror: flip the listing's Draft_Reply_Meta state
+ *  when its queued draft is sent or dismissed through this rail. Matched by
+ *  proposal_id so a newer draft is never clobbered by an older proposal's
+ *  outcome. Best-effort — the proposal is the source of dispatch truth. */
+async function mirrorDraftState(
+  recordId: string | null | undefined,
+  proposalId: string,
+  state: "sent" | "dismissed",
+  sentAt?: string,
+): Promise<void> {
+  if (!recordId) return;
+  try {
+    const listing = await getListing(recordId);
+    const meta = parseDraftMeta((listing as { draftReplyMeta?: string | null })?.draftReplyMeta);
+    if (!meta || meta.proposal_id !== proposalId || meta.state === "sent") return;
+    await updateListingRecord(recordId, {
+      Draft_Reply_Meta: JSON.stringify({ ...meta, state, sent_at: sentAt }),
+      ...(state === "sent" ? {} : {}),
+    });
+  } catch (err) {
+    console.error("[proposals] draft-state mirror failed:", err);
+  }
+}
 
 const AIRTABLE_PAT = process.env.AIRTABLE_PAT!;
 const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
@@ -181,10 +207,56 @@ export async function PATCH(req: Request) {
         );
       }
 
+      // ── send_email dispatch (recommended-replies email lane, 2026-07-12).
+      // Same idempotency shell as SMS: Pending-only, edited body wins, notes
+      // stamped, listing draft mirror flipped to sent.
+      const emailPayload = parseSendEmailPayload(f.Suggested_Action_Payload as string);
+      if (emailPayload) {
+        const recordId = (f.Record_ID as string) || emailPayload.recordId || "";
+        const finalBody = (editedBody ?? "").trim() || emailPayload.draftBody;
+        const send = await sendEmail({
+          to: emailPayload.to,
+          subject: emailPayload.subject,
+          body: finalBody,
+          listingRecordId: recordId || undefined,
+        });
+        if (!send.success) {
+          return Response.json(
+            { success: false, skipReason: send.error ?? "email_send_failed" },
+            { status: 409 }
+          );
+        }
+        const iso = new Date().toISOString();
+        await patchProposal(tableId, proposalId, {
+          Status: "Approved",
+          Reviewed_At: iso,
+          Suggested_Action_Payload: JSON.stringify({
+            ...JSON.parse((f.Suggested_Action_Payload as string) ?? "{}"),
+            sentBody: finalBody,
+            gmailMessageId: send.messageId ?? null,
+            sentAt: iso,
+          }),
+        });
+        if (recordId) {
+          try {
+            const listing = await getListing(recordId);
+            const line = `[operator email sent ${iso}] ${emailPayload.subject} — ${finalBody.slice(0, 400)} [gmail ${send.messageId ?? "?"}]`;
+            await updateListingRecord(recordId, {
+              Last_Outbound_At: iso,
+              Verification_Notes: listing?.notes ? `${listing.notes}\n\n${line}` : line,
+            });
+          } catch (err) {
+            console.error("[proposals] email listing write-back failed:", err);
+          }
+          await mirrorDraftState(recordId, proposalId, "sent", iso);
+        }
+        return Response.json({ success: true, action, sent: true, gmailMessageId: send.messageId ?? null });
+      }
+
       const payload = parseSendSmsPayload(f.Suggested_Action_Payload as string);
       if (!payload) {
         return Response.json(
-          { success: false, skipReason: "not_dispatchable: payload is not a send_sms action" },
+          { success: false, skipReason: "not_dispatchable: payload is not a send_sms or send_email action" },
           { status: 422 }
         );
       }
@@ -236,6 +308,7 @@ export async function PATCH(req: Request) {
         } catch (err) {
           console.error("[proposals] listing write-back failed:", err);
         }
+        await mirrorDraftState(recordId, proposalId, "sent", iso);
       }
 
       return Response.json({
@@ -328,6 +401,22 @@ export async function PATCH(req: Request) {
 
   try {
     await patchProposal(tableId, proposalId, fields);
+    // Rejecting a reply draft dismisses its listing mirror so the Live Deals
+    // strip stops showing it. Record_ID lookup is best-effort.
+    if (action === "reject") {
+      try {
+        const res = await fetch(`https://api.airtable.com/v0/${BASE_ID}/${tableId}/${proposalId}`, {
+          headers: { Authorization: `Bearer ${AIRTABLE_PAT}` },
+          cache: "no-store",
+        });
+        if (res.ok) {
+          const rec = await res.json();
+          await mirrorDraftState((rec.fields?.Record_ID as string) ?? null, proposalId, "dismissed");
+        }
+      } catch {
+        /* mirror is cosmetic on reject */
+      }
+    }
     return Response.json({ success: true, action });
   } catch (err) {
     console.error("[proposals] PATCH error:", err);

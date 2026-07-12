@@ -60,9 +60,10 @@ describe("voice-registry — model lockdown", () => {
     expect(VOICE_REGISTRY.scout.model).toBe(MODEL_SONNET_4_5);
   });
 
-  it("forge → Sonnet 4.5 (disabled, Phase 13 deliverable)", () => {
+  it("forge → Sonnet 4.5 (ENABLED 2026-07-12: email register for recommended replies)", () => {
     expect(VOICE_REGISTRY.forge.model).toBe(MODEL_SONNET_4_5);
-    expect(VOICE_REGISTRY.forge.disabled).toBe(true);
+    expect(VOICE_REGISTRY.forge.disabled).toBeUndefined();
+    expect(VOICE_REGISTRY.forge.voice_fragment).toContain("stamped number verbatim or no number at all");
   });
 
   it("sentry → Sonnet 4.5 (disabled, gates run pure)", () => {
@@ -154,25 +155,25 @@ describe("voice-registry — completeness invariants", () => {
     }
   });
 
-  it("active agents (LLM today) — 7 entries", () => {
+  it("active agents (LLM today) — 8 entries (forge enabled 2026-07-12)", () => {
     expect(listActiveVoiceAgents().sort()).toEqual([
       "agent_context",
       "appraiser",
       "briefing",
       "crier",
+      "forge",
       "maverick",
       "scout",
       "sentinel",
     ]);
   });
 
-  it("disabled agents (registry held for future) — 6 entries", () => {
+  it("disabled agents (registry held for future) — 5 entries (forge enabled 2026-07-12)", () => {
     const disabled = Object.entries(VOICE_REGISTRY)
       .filter(([, e]) => e.disabled)
       .map(([a]) => a as VoiceAgent)
       .sort();
     expect(disabled).toEqual([
-      "forge",
       "ledger",
       "pulse",
       "scribe",

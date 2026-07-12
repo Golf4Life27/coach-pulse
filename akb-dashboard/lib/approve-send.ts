@@ -70,6 +70,40 @@ export function parseSendSmsPayload(actionPayload: string | null | undefined): S
   }
 }
 
+export interface SendEmailPayload {
+  recordId: string | null;
+  to: string;
+  subject: string;
+  draftBody: string;
+  inboundBody: string | null;
+  classification: string | null;
+}
+
+/** Pure: parse a Suggested_Action_Payload and accept ONLY an explicit
+ *  send_email action with a usable address + subject + draft (the
+ *  recommended-replies email lane, 2026-07-12). Anything else → null. */
+export function parseSendEmailPayload(actionPayload: string | null | undefined): SendEmailPayload | null {
+  if (!actionPayload) return null;
+  try {
+    const p = JSON.parse(actionPayload) as Record<string, unknown>;
+    if (p.action !== "send_email") return null;
+    const to = typeof p.to === "string" ? p.to.trim() : "";
+    const subject = typeof p.subject === "string" ? p.subject.trim() : "";
+    const draftBody = typeof p.draftBody === "string" ? p.draftBody.trim() : "";
+    if (!to || !to.includes("@") || !subject || !draftBody) return null;
+    return {
+      recordId: typeof p.recordId === "string" ? p.recordId : null,
+      to,
+      subject,
+      draftBody,
+      inboundBody: typeof p.inboundBody === "string" ? p.inboundBody : null,
+      classification: typeof p.classification === "string" ? p.classification : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Pure: the no-I/O gate order. null = pass to the I/O rails. */
 export function approveSendStaticSkip(input: {
   body: string;

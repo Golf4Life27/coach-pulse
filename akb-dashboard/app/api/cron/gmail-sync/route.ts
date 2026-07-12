@@ -25,12 +25,21 @@ import { NextResponse } from "next/server";
 import { getActiveListingsForBrief, updateListingRecord } from "@/lib/airtable";
 import { getThreadsForEmail, getThreadById, type GmailMessage } from "@/lib/gmail";
 import { appendGmailMessagesToNotes, newestInboundIso } from "@/lib/inbound/gmail-capture";
-import { mergeThreadIds, parseThreadIds, selectSweepCohort } from "@/lib/inbound/gmail-thread-link";
+import { mergeThreadIds, normalizeSubject, parseThreadIds, selectSweepCohort } from "@/lib/inbound/gmail-thread-link";
 import { isInboundCaptureLive } from "@/lib/inbound/flag";
 import { audit } from "@/lib/audit-log";
 import type { Listing } from "@/lib/types";
 import { authenticate, readAuthEnv, readAuthHeaders } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
+import { extractEmailAddress } from "@/lib/inbound/match";
+import { triageSellerReply } from "@/lib/reply-triage";
+import {
+  conversationTail,
+  flagsFromNotes,
+  generateRecommendedReply,
+  parseDraftMeta,
+  stickyOfferFromNotes,
+} from "@/lib/recommended-reply";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -39,6 +48,45 @@ const DEFAULT_LIMIT = 40;
 const DEFAULT_HOURS_BACK = 48;
 const MAX_HOURS_BACK = 24 * 14; // backfill sweeps may reach 14 days
 const POPULATION_RECENT_DAYS = 365;
+
+/** Create a jarvis_reply proposal row (the 2A queue item) for an email
+ *  draft. Single-row create; false on any failure (the listing mirror
+ *  still records the draft either way). */
+async function createReplyProposal(p: {
+  proposalId: string;
+  recordId: string;
+  address: string | null;
+  priority: string;
+  reasoning: string;
+  actionPayload: string;
+}): Promise<boolean> {
+  const pat = process.env.AIRTABLE_PAT;
+  const tableId = process.env.AGENT_PROPOSALS_TABLE_ID;
+  const baseId = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
+  if (!pat || !tableId) return false;
+  const res = await fetch(`https://api.airtable.com/v0/${baseId}/${tableId}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${pat}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      records: [
+        {
+          fields: {
+            Proposal_ID: p.proposalId,
+            Proposal_Type: "jarvis_reply",
+            Priority: p.priority,
+            Record_ID: p.recordId,
+            Record_Address: p.address ?? "",
+            Reasoning: p.reasoning,
+            Suggested_Action_Payload: p.actionPayload,
+            Status: "Pending",
+          },
+        },
+      ],
+      typecast: true,
+    }),
+  }).catch(() => null);
+  return Boolean(res?.ok);
+}
 
 async function handle(req: Request) {
   const t0 = Date.now();
@@ -144,6 +192,70 @@ async function handle(req: Request) {
       if (mergedLinks != null) {
         fields["Gmail_Thread_Ids"] = mergedLinks;
         totalNewThreadLinks++;
+      }
+      // ── RECOMMENDED REPLIES (2026-07-12): the newest ingested inbound
+      // generates a guardrailed 2A draft (forge, email register) — queued as
+      // a jarvis_reply proposal with a send_email payload and mirrored onto
+      // the listing for the Live Deals strip. Idempotent by inbound msg id
+      // (Draft_Reply_Meta.inbound_msg_id). Guardrail failure → HOLD surfaced.
+      if (r.newEvents.length > 0) {
+        try {
+          const newestEvent = [...r.newEvents].sort((a, b) => Date.parse(b.date) - Date.parse(a.date))[0];
+          const srcMsg = msgs.find((m) => m.id === newestEvent.id);
+          const priorMeta = parseDraftMeta(l.draftReplyMeta);
+          if (srcMsg && priorMeta?.inbound_msg_id !== newestEvent.id) {
+            const triage = triageSellerReply(srcMsg.body, l.outreachStatus ?? null, {
+              street: (l.address ?? "").split(",")[0].trim() || null,
+            });
+            if (triage.tier !== "tier_0_auto_close") {
+              const gen = await generateRecommendedReply(
+                {
+                  recordId: l.id,
+                  street: (l.address ?? "").split(",")[0].trim(),
+                  channel: "email",
+                  classification: triage.classification,
+                  inbound: srcMsg.body,
+                  conversationTail: conversationTail(r.notes),
+                  stickyOfferUsd: stickyOfferFromNotes(r.notes),
+                  ceilingUsd: l.underwrittenMao ?? l.mao ?? null,
+                  listPriceUsd: l.listPrice ?? null,
+                  cappedToList: /capped[_\s-]?to[_\s-]?list/i.test(r.notes ?? ""),
+                  flags: flagsFromNotes(r.notes),
+                  agentFirstName: (l.agentName ?? "").split(/\s+/)[0] || null,
+                },
+                { matchedPattern: triage.matchedPattern, inboundMsgId: newestEvent.id },
+              );
+              const proposalId = `jarvis_reply-${Date.now()}-${l.id.slice(-6)}`;
+              const replyTo = extractEmailAddress(srcMsg.from) || email;
+              const subject = `Re: ${normalizeSubject(srcMsg.subject) || `Your listing — ${(l.address ?? "").split(",")[0]}`}`;
+              const created = await createReplyProposal({
+                proposalId,
+                recordId: l.id,
+                address: l.address,
+                priority: triage.priority,
+                reasoning: gen.draft
+                  ? `Email inbound [${triage.classification}${triage.queueStatus ? ` → ${triage.queueStatus}` : ""}]: ${triage.reasoning}`
+                  : `HOLD (${gen.holdReason}) — email inbound [${triage.classification}]: ${triage.reasoning}`,
+                actionPayload: JSON.stringify({
+                  recordId: l.id,
+                  action: gen.draft ? "send_email" : "hold_review",
+                  to: replyTo,
+                  subject,
+                  draftBody: gen.draft ?? "",
+                  holdReason: gen.holdReason,
+                  inboundBody: srcMsg.body.slice(0, 1000),
+                  classification: triage.classification,
+                  decisionKind: triage.decisionKind,
+                  tier: triage.tier,
+                }),
+              });
+              fields["Draft_Reply_Text"] = gen.draft ?? "";
+              fields["Draft_Reply_Meta"] = JSON.stringify({ ...gen.meta, proposal_id: created ? proposalId : undefined });
+            }
+          }
+        } catch (err) {
+          console.error("[gmail_sync] reply draft failed:", err);
+        }
       }
       if (Object.keys(fields).length > 0) {
         await updateListingRecord(l.id, fields);

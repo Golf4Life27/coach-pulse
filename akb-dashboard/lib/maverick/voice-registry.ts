@@ -143,9 +143,8 @@ export const VOICE_REGISTRY: Record<VoiceAgent, VoiceEntry> = {
     model: MODEL_SONNET_4_5,
     max_tokens: 1024,
     voice_fragment:
-      "Outreach-template / voice-library voice. Composes first-touch cold-script variants. Not yet shipping — registry entry held for Phase 13 templates + voice library deliverable.",
-    description: "Outreach drafting (templates + voice library).",
-    disabled: true,
+      "Email-register drafting voice (RECOMMENDED REPLIES, 2026-07-12). Short professional emails — two brief paragraphs max, plain text, signed Alex Balog · AKB Solutions LLC. Answers the counterparty's actual question first, one clear next step last. Carries the delivery-stamped number verbatim or no number at all; costs are paid from proceeds at closing; title facts defer to the title company. Never acknowledges legal disclosures on the operator's behalf.",
+    description: "Email reply drafting (recommended-replies 2A lane).",
   },
   sentry: {
     agent: "sentry",

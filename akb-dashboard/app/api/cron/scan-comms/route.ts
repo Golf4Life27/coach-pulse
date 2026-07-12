@@ -1,9 +1,14 @@
 import { getListings, updateListingRecord } from "@/lib/airtable";
 import { getMessagesForParticipant } from "@/lib/quo";
-import { synthesize } from "@/lib/maverick/synthesizer";
 // toE164 moved to lib/phone.ts on 2026-06-08 — conversation-check shares it
 // (it was calling Quo without normalization → empty threads on every record).
 import { toE164 } from "@/lib/phone";
+import {
+  conversationTail,
+  flagsFromNotes,
+  generateRecommendedReply,
+  stickyOfferFromNotes,
+} from "@/lib/recommended-reply";
 import { isSelfEchoOrAutoreply } from "@/lib/conversation-check";
 import { triageSellerReply } from "@/lib/reply-triage";
 import { sendReplyAlert, type ReplyAlertInput } from "@/lib/reply-alert";
@@ -29,64 +34,13 @@ function cleanPhone(phone: string): string {
   return phone.replace(/[^0-9]/g, "").slice(-10);
 }
 
-function formatCurrency(n: number | null | undefined): string {
-  if (n == null) return "Unknown";
-  return "$" + Math.round(n).toLocaleString("en-US");
-}
-
-async function generateDraftResponse(
-  listing: {
-    address: string;
-    agentName: string | null;
-    listPrice: number | null;
-    mao: number | null;
-    notes: string | null;
-  },
-  inboundMessage: string
-): Promise<string> {
-  const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-  if (!ANTHROPIC_API_KEY) return "[No API key — draft not generated]";
-
-  const systemPrompt = `You are an AI assistant for AKB Solutions LLC, a real estate wholesale operation run by Alex Balog. Your job is to draft short, professional text message responses to listing agents.
-
-Rules:
-- Use 65% of List Price as the offer number
-- Never use the word "assignable" — say "affiliated entity" instead
-- Never disclose wholesale fee, spread, or contract price to agents
-- Keep responses under 3 sentences unless the situation requires more
-- Be professional but casual — these are text messages, not emails
-- Always include an inspection period (10 days) in any offer terms
-- Never waive inspection/option periods
-- If the agent is countering, you can acknowledge but Alex makes all pricing decisions — draft a response that keeps the conversation alive without committing to a new number
-- Start with "Hey [FirstName]," — extract the first name from the agent name`;
-
-  const userPrompt = `Property: ${listing.address}
-Agent: ${listing.agentName || "Unknown"}
-List Price: ${formatCurrency(listing.listPrice)}
-Our MAO: ${formatCurrency(listing.mao)}
-Recent Notes: ${(listing.notes || "").slice(-500)}
-
-New inbound message from agent:
-"${inboundMessage}"
-
-Draft a text message response for Alex to review.`;
-
-  try {
-    // Phase 10 / P.2 migration — routed through unified synthesizer.
-    const result = await synthesize({
-      agent: "crier",
-      system: systemPrompt,
-      user: userPrompt,
-      max_tokens: 300,
-      apiKey: ANTHROPIC_API_KEY,
-      event_label: "crier_reply_drafted",
-    });
-    return result.text || "[Draft generation failed]";
-  } catch (err) {
-    console.error("[Crier] AI draft error:", err);
-    return "[Draft generation failed]";
-  }
-}
+// generateDraftResponse RETIRED 2026-07-12 (RECOMMENDED REPLIES): its system
+// prompt instructed "Use 65% of List Price as the offer number" — the exact
+// formula retired 2026-06-28 (INVARIANTS §2, the Blackmoor over-offer) —
+// with no post-generation validation. Drafting now routes through
+// lib/recommended-reply's guardrailed generator: sticky-number-or-silence,
+// ceiling clamp, proceeds-at-closing cost framing, no legal/title
+// assertions, refuse-and-surface HOLD lane.
 
 async function fetchExistingPendingProposals(
   tableId: string
@@ -339,23 +293,55 @@ export async function GET(req: Request) {
           }
 
           // ── TIER 1 / 2: needs-decision proposal + decision-first alert. ──
-          // Soft-no uses the PURE pre-built re-engagement draft (sticky-number
-          // rule enforced in lib/reply-triage) — it never touches the model
-          // draft path, which reads record fields. Everything else keeps the
-          // existing draft generator.
-          const draftResponse =
-            triage.classification === "soft_no" && triage.suggestedReply
-              ? triage.suggestedReply
-              : await generateDraftResponse(
-                  listing,
-                  inbound.body
-                );
+          // Soft-no keeps the PURE pre-built re-engagement draft (sticky-
+          // number rule enforced in lib/reply-triage). Everything else routes
+          // through the RECOMMENDED-REPLIES guardrailed generator (2026-07-12):
+          // sticky-or-silence, ceiling clamp, proceeds framing, no legal
+          // assertions; guardrail failure → HOLD surfaced, never a bad draft.
+          const proposalId = `jarvis_reply-${Date.now()}-${newProposals.length}`;
+          let draftResponse: string | null = null;
+          let holdReason: string | null = null;
+          let draftMetaJson: string;
+          if (triage.classification === "soft_no" && triage.suggestedReply) {
+            draftResponse = triage.suggestedReply;
+            draftMetaJson = JSON.stringify({
+              state: "queued",
+              generated_at: inbound.createdAt,
+              classification: triage.classification,
+              confidence: 0.9,
+              channel: "sms",
+              proposal_id: proposalId,
+              inbound_excerpt: inbound.body.slice(0, 160),
+            });
+          } else {
+            const gen = await generateRecommendedReply(
+              {
+                recordId: listing.id,
+                street: (listing.address ?? "").split(",")[0].trim(),
+                channel: "sms",
+                classification: triage.classification,
+                inbound: inbound.body,
+                conversationTail: conversationTail(listing.notes),
+                stickyOfferUsd: stickyOfferFromNotes(listing.notes),
+                ceilingUsd: listing.underwrittenMao ?? listing.mao ?? null,
+                listPriceUsd: listing.listPrice ?? null,
+                cappedToList: /capped[_\s-]?to[_\s-]?list/i.test(listing.notes ?? ""),
+                flags: flagsFromNotes(listing.notes),
+                agentFirstName: (listing.agentName ?? "").split(/\s+/)[0] || null,
+              },
+              { matchedPattern: triage.matchedPattern },
+            );
+            draftResponse = gen.draft;
+            holdReason = gen.holdReason;
+            draftMetaJson = JSON.stringify({ ...gen.meta, proposal_id: proposalId });
+          }
 
           const actionPayload = JSON.stringify({
             recordId: listing.id,
-            action: "send_sms",
+            action: draftResponse ? "send_sms" : "hold_review",
             to: phone,
-            draftBody: draftResponse,
+            draftBody: draftResponse ?? "",
+            holdReason,
             inboundBody: inbound.body,
             classification: triage.classification,
             decisionKind: triage.decisionKind,
@@ -366,16 +352,29 @@ export async function GET(req: Request) {
 
           newProposals.push({
             fields: {
-              Proposal_ID: `jarvis_reply-${Date.now()}-${newProposals.length}`,
+              Proposal_ID: proposalId,
               Proposal_Type: "jarvis_reply",
               Priority: triage.priority,
               Record_ID: listing.id,
               Record_Address: listing.address,
-              Reasoning: `Inbound from ${listing.agentName || "agent"} [${triage.classification}${triage.queueStatus ? ` → ${triage.queueStatus}` : ""}]: ${triage.reasoning}`,
+              Reasoning: draftResponse
+                ? `Inbound from ${listing.agentName || "agent"} [${triage.classification}${triage.queueStatus ? ` → ${triage.queueStatus}` : ""}]: ${triage.reasoning}`
+                : `HOLD (${holdReason}) — inbound from ${listing.agentName || "agent"} [${triage.classification}]: ${triage.reasoning}`,
               Suggested_Action_Payload: actionPayload,
               Status: "Pending",
             },
           });
+
+          // Mirror the draft onto the listing (the Live Deals strip's read
+          // path). Best-effort — the proposal is the dispatch rail either way.
+          try {
+            await updateListingRecord(listing.id, {
+              Draft_Reply_Text: draftResponse ?? "",
+              Draft_Reply_Meta: draftMetaJson,
+            });
+          } catch (err) {
+            console.error("[scan-comms] draft mirror write failed:", err);
+          }
 
           // Queue the decision/urgent alert for AFTER batch-create succeeds.
           // The body leads with the decision, never the inbound text (Quo

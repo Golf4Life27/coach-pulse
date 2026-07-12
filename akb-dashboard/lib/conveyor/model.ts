@@ -204,7 +204,9 @@ export interface BroCardRow {
 function parseSendSms(actionPayload: string): { to: string; draftBody: string; inboundBody: string | null } | null {
   try {
     const p = JSON.parse(actionPayload) as Record<string, unknown>;
-    if (p.action !== "send_sms") return null;
+    // send_email (recommended-replies lane, 2026-07-12) renders through the
+    // same card shape — the dispatch rail branches by payload server-side.
+    if (p.action !== "send_sms" && p.action !== "send_email") return null;
     const to = typeof p.to === "string" ? p.to.trim() : "";
     const draftBody = typeof p.draftBody === "string" ? p.draftBody.trim() : "";
     if (!to || !draftBody) return null;
@@ -235,7 +237,10 @@ export function fromProposal(p: ProposalRow): ConveyorItem {
         { kind: "proposal_snooze", proposalId: p.id },
         { kind: "proposal_reject", proposalId: p.id },
       ]
-    : isHold && href
+    : // Pricer holds AND guardrail-held reply drafts (jarvis_reply with no
+      // dispatchable draft — the refuse-and-surface lane): "Approve" would
+      // dispatch nothing and lie. Primary = Open the deal room.
+      (isHold || isReply) && href
       ? [
           { kind: "open", href, label: "Open deal" },
           { kind: "proposal_snooze", proposalId: p.id },
