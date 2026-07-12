@@ -43,6 +43,11 @@ export interface Listing {
   actionCardState: "Open" | "Held" | "Cleared" | null;
   lastInboundAt: string | null;
   lastOutboundAt: string | null;
+  /** Space-separated Gmail thread ids linked to this deal. Once linked, the
+   *  gmail-sync sweep ingests ANY new message on the thread regardless of
+   *  sender/recipients/subject (Sunbeam CC-only/Fwd miss, rec17krmeSuttdyNy).
+   *  Optional: absent on fixtures/paths that never touch email sync. */
+  gmailThreadIds?: string | null;
   // Phase 11.2 — email outbound timestamp. Crier staleness uses max()
   // of all four contact timestamps to avoid false-stale on active email
   // negotiations (the 23 Fields scenario). Null until first attributable

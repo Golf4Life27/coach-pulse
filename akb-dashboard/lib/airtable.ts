@@ -185,6 +185,7 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "Action_Hold_Until": "actionHoldUntil",
   "Action_Card_State": "actionCardState",
   "Last_Inbound_At": "lastInboundAt",
+  "Gmail_Thread_Ids": "gmailThreadIds",
   "Last_Outbound_At": "lastOutboundAt",
   "Last_Email_Outreach_Date": "lastEmailOutreachDate",
   "Envelope_ID": "envelopeId",
