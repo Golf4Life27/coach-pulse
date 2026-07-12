@@ -16,6 +16,7 @@
 
 import { useEffect } from "react";
 import MissionControl from "@/components/MissionControl";
+import LiveDealsStrip from "@/components/LiveDealsStrip";
 import ConveyorFeed from "@/components/conveyor/ConveyorFeed";
 import FactoryFloor from "@/components/factory-floor/FactoryFloor";
 
@@ -32,6 +33,10 @@ export default function CommandCenter() {
 
   return (
     <div className="space-y-6">
+      {/* 0 — Your active money: every live negotiation, any era, ranked by
+             who owes the next move. Renders only when deals are live. */}
+      <LiveDealsStrip />
+
       {/* 1 — What needs the operator, ranked. */}
       <ConveyorFeed />
 
