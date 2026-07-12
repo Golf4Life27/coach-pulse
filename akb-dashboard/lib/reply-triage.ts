@@ -21,6 +21,13 @@ export type ReplyClassification =
   | "interest"
   | "counter"
   | "acceptance"
+  // RECOMMENDED-REPLIES extension (operator 2026-07-12, the 9360 Cheyenne
+  // miss: "Are you covering costs? There is a water bill, and a tax bill...
+  // And I need to be paid." fell through to UNCLASSIFIED with no next step):
+  | "seller_costs"     // who-pays questions: liens, back taxes, bills, commission
+  | "offer_format"     // "email me your offer" / GAR-TREC form / in-writing requests
+  | "appointment"      // showing / walkthrough / scheduled-call steps
+  | "disclosure_step"  // IABS / consumer-protection / read-and-agree compliance
   | "unknown";
 
 /** Alert routing tier (operator 2026-06-10). Maverick's SMS channel is
@@ -121,6 +128,62 @@ const SOFT_NO_PATTERNS = [
  *  "go away" — routed as a pricing decision. */
 const PRICE_OBJECTION_RE = /\btoo low\b|\bfirm at\b|\bnot at (?:that|this) price\b/i;
 
+/** Seller-cost / lien / commission questions — the money-STRUCTURE class.
+ *  The seller isn't objecting to the price; they're asking who pays what.
+ *  Doctrine for the draft: everything is paid FROM PROCEEDS AT CLOSING —
+ *  never "on top of" the offer; lien/estate validity is the title company's
+ *  fact to verify. Anchor case: 9360 Cheyenne (water bill + tax bill +
+ *  "I need to be paid" + "let me call the lien holder"). */
+const SELLER_COSTS_PATTERNS = [
+  /\b(?:are\s+you|you\s+guys?|will\s+you|would\s+you|who(?:'s|\s+is)?)\s+(?:covering|paying|pays?|cover)\b/i,
+  /\b(?:cover|covering|pay|paying|pays)\b[^.?!]{0,60}\b(?:costs?|fees?|bills?|commission|tax(?:es)?)\b/i,
+  /\b(?:water|tax|utility|sewer|gas|electric)\s+bill\b/i,
+  /\bback\s+tax(?:es)?\b/i,
+  /\blien\s*(?:s|holder|holders)?\b/i,
+  /\bcommission\b/i,
+  /\bclosing\s+costs?\b/i,
+  /\bi\s+need\s+to\s+(?:be|get)\s+paid\b/i,
+  /\bwhat(?:'s| is| will)\s+(?:my|the\s+seller'?s?)\s+net\b/i,
+];
+
+/** Offer-format / delivery-mechanics requests — the seller/agent wants the
+ *  offer in a specific shape or channel. High-intent (they're processing the
+ *  offer), zero pricing content. */
+const OFFER_FORMAT_PATTERNS = [
+  /\bemail\s+(?:me\s+)?(?:the\s+|your\s+|an?\s+)?offer\b/i,
+  /\b(?:gar|trec|far\s?bar)\b[^.?!]{0,30}\b(?:form|contract)\b/i,
+  /\bon\s+(?:a\s+)?(?:gar|trec|far\s?bar|state)\s+(?:form|contract)\b/i,
+  /\b(?:official|formal|written)\s+offer\b/i,
+  /\bin\s+writing\b/i,
+  /\bsubmit\s+(?:it|the\s+offer|your\s+offer)?\s*(?:through|via|to|on)\b/i,
+  /\bput\s+(?:it|that|the\s+offer)\s+(?:in\s+writing|on\s+paper|in\s+an?\s+email)\b/i,
+];
+
+/** Appointment / next-step scheduling — showings, walkthroughs, timed calls.
+ *  (A bare "call me" stays interest; a TIMED or place-bound ask lands here.) */
+const APPOINTMENT_PATTERNS = [
+  /\b(?:schedule|scheduling)\b/i,
+  /\bappointment\b/i,
+  /\b(?:showing|walk[\s-]?through|walkthrough)\b/i,
+  /\bcome\s+(?:see|by|out|take\s+a\s+look)\b/i,
+  /\bmeet\s+(?:you\s+)?(?:at|there|at\s+the\s+property|on\s+site)\b/i,
+  /\bcall\s+me\s+(?:at|around|after|before|tomorrow|tonight|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i,
+  /\bcalendly\b/i,
+  /\b(?:available|free)\s+(?:at|on|tomorrow|this\s+week)\b/i,
+];
+
+/** Compliance-disclosure steps (IABS etc.) — the machine NEVER acknowledges
+ *  a legal disclosure on the operator's behalf; this class always HOLDs with
+ *  the reason surfaced (draft policy lives in lib/recommended-reply). */
+const DISCLOSURE_PATTERNS = [
+  /\biabs\b/i,
+  /\binformation\s+about\s+brokerage\s+services\b/i,
+  /\bconsumer\s+protection\s+notice\b/i,
+  /\bread\s+and\s+agree\b/i,
+  /\b(?:sign|review|acknowledge)\b[^.?!]{0,40}\bdisclosures?\b/i,
+  /\bdisclosures?\b[^.?!]{0,40}\b(?:sign|review|acknowledge)\b/i,
+];
+
 const INTEREST_PATTERNS = [
   /\byes\b/i,
   /\binterested\b/i,
@@ -156,6 +219,10 @@ const COUNTER_LANGUAGE_PATTERNS = [
   /\b(?:lowest|min(?:imum)?)\s+(?:they|seller|we)\b/i,
   /\bmeet\s+(?:in\s+the\s+)?middle\b/i,
   /\bif\s+you\s+can\s+(?:do|come|go)\s+\$?\d/i,
+  // "I need $120k…" / "my lowest is…" — a quoted floor is a counter even
+  // when it arrives wrapped in cost language (the number conversation wins).
+  /\b(?:i|we|they|seller)\s+need\s+\$?\d/i,
+  /\b(?:my|our|their)\s+(?:lowest|bottom|floor|number)\b/i,
 ];
 
 /** Pure: classify a genuine inbound reply. Rejection wins over everything
@@ -187,10 +254,32 @@ export function classifyReply(body: string): {
     if (pat.test(trimmed)) return { classification: "soft_no", matchedPattern: pat.source };
   }
 
+  // Disclosure steps BEFORE everything price-flavored — an IABS blast often
+  // contains zero deal content and must never draft an acknowledgment.
+  for (const pat of DISCLOSURE_PATTERNS) {
+    if (pat.test(trimmed)) return { classification: "disclosure_step", matchedPattern: pat.source };
+  }
+
+  // A counter (price token + counter language) outranks seller_costs — "I
+  // need $120k to cover the liens" is a NUMBER conversation first.
   if (COUNTER_PRICE_RE.test(trimmed)) {
     for (const pat of COUNTER_LANGUAGE_PATTERNS) {
       if (pat.test(trimmed)) return { classification: "counter", matchedPattern: pat.source };
     }
+  }
+
+  // Seller-costs BEFORE interest — "are you covering closing costs?" must
+  // not degrade to generic interest via a stray pattern.
+  for (const pat of SELLER_COSTS_PATTERNS) {
+    if (pat.test(trimmed)) return { classification: "seller_costs", matchedPattern: pat.source };
+  }
+
+  for (const pat of OFFER_FORMAT_PATTERNS) {
+    if (pat.test(trimmed)) return { classification: "offer_format", matchedPattern: pat.source };
+  }
+
+  for (const pat of APPOINTMENT_PATTERNS) {
+    if (pat.test(trimmed)) return { classification: "appointment", matchedPattern: pat.source };
   }
 
   for (const pat of INTEREST_PATTERNS) {
@@ -234,6 +323,21 @@ export function determineNewStatus(
     return "Counter Received";
   }
   if (classification === "interest") return "Negotiating";
+  // The engaged-conversation classes: a seller asking who-pays-what, how to
+  // receive the offer, or when to meet is IN the negotiation.
+  if (
+    classification === "seller_costs" ||
+    classification === "offer_format" ||
+    classification === "appointment"
+  ) {
+    return currentStatus === "Negotiating" ? null : "Negotiating";
+  }
+  // A disclosure step is process, not intent — promote first-touch to
+  // Response Received (same as an unknown genuine reply), never downgrade.
+  if (classification === "disclosure_step") {
+    if (currentStatus === "Texted" || currentStatus === "Parked") return "Response Received";
+    return null;
+  }
   // Texted OR Parked → Response Received. Parked added 2026-06-14
   // (rebuild-stale-deal-handling): a Parked record is one that aged out
   // of active outreach into the cold follow-up loop; a reply on it is
@@ -358,6 +462,54 @@ export function triageSellerReply(
         priority: "HIGH",
         queueStatus,
         reasoning: `Seller engaged / asked to proceed — operator decision: advance to offer or DD. Reply: "${snippet}"`,
+        matchedPattern,
+        suggestedReply: null,
+      };
+    case "seller_costs":
+      return {
+        classification,
+        tier: "tier_1_decision",
+        needsDecision: true,
+        decisionKind: "pricing",
+        priority: "HIGH",
+        queueStatus,
+        reasoning: `Seller asked WHO PAYS WHAT (liens/bills/commission/costs) — money-structure decision. Doctrine: everything is paid from proceeds at closing, never on top of the offer; lien/estate validity is the title company's to verify. Reply: "${snippet}"`,
+        matchedPattern,
+        suggestedReply: null,
+      };
+    case "offer_format":
+      return {
+        classification,
+        tier: "tier_1_decision",
+        needsDecision: true,
+        decisionKind: "engagement",
+        priority: "HIGH",
+        queueStatus,
+        reasoning: `Seller/agent asked for the offer in a specific FORM or CHANNEL (email/state form/in writing) — they are processing the offer; deliver it their way, numbers unchanged. Reply: "${snippet}"`,
+        matchedPattern,
+        suggestedReply: null,
+      };
+    case "appointment":
+      return {
+        classification,
+        tier: "tier_1_decision",
+        needsDecision: true,
+        decisionKind: "engagement",
+        priority: "NORMAL",
+        queueStatus,
+        reasoning: `Seller proposed a SHOWING / call time / next-step meeting — confirm scheduling; operator owns the calendar commitment. Reply: "${snippet}"`,
+        matchedPattern,
+        suggestedReply: null,
+      };
+    case "disclosure_step":
+      return {
+        classification,
+        tier: "tier_1_decision",
+        needsDecision: true,
+        decisionKind: "review",
+        priority: "NORMAL",
+        queueStatus,
+        reasoning: `Compliance disclosure step (IABS / consumer-protection / read-and-agree) — the machine NEVER acknowledges legal disclosures for the operator; personal acknowledgment required. Reply: "${snippet}"`,
         matchedPattern,
         suggestedReply: null,
       };

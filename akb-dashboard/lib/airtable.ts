@@ -186,6 +186,8 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "Action_Card_State": "actionCardState",
   "Last_Inbound_At": "lastInboundAt",
   "Gmail_Thread_Ids": "gmailThreadIds",
+  "Draft_Reply_Text": "draftReplyText",
+  "Draft_Reply_Meta": "draftReplyMeta",
   "Last_Outbound_At": "lastOutboundAt",
   "Last_Email_Outreach_Date": "lastEmailOutreachDate",
   "Envelope_ID": "envelopeId",

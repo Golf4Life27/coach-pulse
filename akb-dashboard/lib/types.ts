@@ -48,6 +48,11 @@ export interface Listing {
    *  sender/recipients/subject (Sunbeam CC-only/Fwd miss, rec17krmeSuttdyNy).
    *  Optional: absent on fixtures/paths that never touch email sync. */
   gmailThreadIds?: string | null;
+  /** RECOMMENDED REPLIES (2A): current guardrail-validated draft + JSON meta
+   *  ({state, generated_at, classification, confidence, channel, ...}).
+   *  Optional: absent on fixtures/paths that never touch the draft lane. */
+  draftReplyText?: string | null;
+  draftReplyMeta?: string | null;
   // Phase 11.2 — email outbound timestamp. Crier staleness uses max()
   // of all four contact timestamps to avoid false-stale on active email
   // negotiations (the 23 Fields scenario). Null until first attributable

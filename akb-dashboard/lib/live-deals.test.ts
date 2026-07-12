@@ -12,6 +12,8 @@ function row(o: Partial<LiveDealRow> = {}): LiveDealRow {
     lastInboundAt: "2026-07-11T20:00:00Z",
     lastOutboundAt: "2026-07-11T18:00:00Z",
     sourceVersion: "v2_post_2026-05-26",
+    draftReplyText: null,
+    draftReplyMeta: null,
     ...o,
   };
 }
@@ -28,6 +30,60 @@ describe("ballInOurCourt", () => {
   });
   it("no inbound at all → not our move", () => {
     expect(ballInOurCourt(null, "2026-07-11T20:00:00Z")).toBe(false);
+  });
+});
+
+describe("recommended-reply drafts on the strip", () => {
+  const queuedMeta = JSON.stringify({
+    state: "queued",
+    classification: "seller_costs",
+    channel: "sms",
+    generated_at: "2026-07-12T18:00:00Z",
+    proposal_id: "jarvis_reply-1",
+  });
+
+  it("a queued draft forces needsYou and carries the text", () => {
+    const [d] = rankLiveDeals([
+      row({
+        // we replied last (would be waiting-on-them) BUT a draft is queued
+        lastInboundAt: "2026-07-12T09:00:00Z",
+        lastOutboundAt: "2026-07-12T10:00:00Z",
+        draftReplyText: "Bills get paid from proceeds at closing.",
+        draftReplyMeta: queuedMeta,
+      }),
+    ]);
+    expect(d.needsYou).toBe(true);
+    expect(d.draft?.state).toBe("queued");
+    expect(d.draft?.text).toContain("proceeds");
+    expect(d.draft?.proposalId).toBe("jarvis_reply-1");
+  });
+
+  it("a HOLD renders reason, no text; sent/dismissed render nothing", () => {
+    const [held] = rankLiveDeals([
+      row({
+        draftReplyText: "",
+        draftReplyMeta: JSON.stringify({ state: "hold", classification: "disclosure_step", channel: "email", hold_reason: "operator_must_acknowledge_disclosure" }),
+      }),
+    ]);
+    expect(held.draft?.state).toBe("hold");
+    expect(held.draft?.text).toBeNull();
+    expect(held.draft?.holdReason).toBe("operator_must_acknowledge_disclosure");
+    const [sent] = rankLiveDeals([
+      row({ draftReplyText: "x", draftReplyMeta: JSON.stringify({ state: "sent", channel: "sms", classification: "interest" }) }),
+    ]);
+    expect(sent.draft).toBeNull();
+  });
+
+  it("deal heat orders within needs-you: Accepted > Counter > Negotiating > Response", () => {
+    const mk = (id: string, status: string) =>
+      row({ id, status, lastInboundAt: "2026-07-12T09:00:00Z", lastOutboundAt: null });
+    const deals = rankLiveDeals([
+      mk("recRESP", "Response Received"),
+      mk("recNEG", "Negotiating"),
+      mk("recACC", "Offer Accepted"),
+      mk("recCTR", "Counter Received"),
+    ]);
+    expect(deals.map((d) => d.id)).toEqual(["recACC", "recCTR", "recNEG", "recRESP"]);
   });
 });
 

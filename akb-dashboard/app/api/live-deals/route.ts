@@ -29,6 +29,8 @@ const FIELDS = [
   "Last_Inbound_At",
   "Last_Outbound_At",
   "Source_Version",
+  "Draft_Reply_Text",
+  "Draft_Reply_Meta",
 ];
 
 interface RawRecord {
@@ -82,6 +84,8 @@ export async function GET() {
       lastInboundAt: str(r.fields["Last_Inbound_At"]),
       lastOutboundAt: str(r.fields["Last_Outbound_At"]),
       sourceVersion: str(r.fields["Source_Version"]),
+      draftReplyText: str(r.fields["Draft_Reply_Text"]),
+      draftReplyMeta: str(r.fields["Draft_Reply_Meta"]),
     }));
     const deals = rankLiveDeals(rows);
     return NextResponse.json({

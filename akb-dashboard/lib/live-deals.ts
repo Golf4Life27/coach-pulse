@@ -32,6 +32,20 @@ export interface LiveDealRow {
   lastInboundAt: string | null;
   lastOutboundAt: string | null;
   sourceVersion: string | null;
+  /** RECOMMENDED REPLIES: current draft + meta (Draft_Reply_Text/Meta). */
+  draftReplyText: string | null;
+  draftReplyMeta: string | null;
+}
+
+/** A queued/held recommended reply attached to a deal card. */
+export interface DealDraft {
+  state: "queued" | "hold";
+  text: string | null;
+  classification: string;
+  channel: string;
+  holdReason: string | null;
+  generatedAt: string | null;
+  proposalId: string | null;
 }
 
 export interface RankedLiveDeal {
@@ -52,6 +66,9 @@ export interface RankedLiveDeal {
   /** True for pre-v2 records — surfaced as a quiet "legacy" tag, never hidden. */
   legacy: boolean;
   href: string;
+  /** RECOMMENDED REPLIES: a queued draft (one-tap approve/edit/send) or a
+   *  guardrail HOLD (reason surfaced). Null when nothing is pending. */
+  draft: DealDraft | null;
 }
 
 const SOURCE_VERSION_V2 = "v2_post_2026-05-26";
@@ -77,10 +94,42 @@ export function ballInOurCourt(lastInboundAt: string | null, lastOutboundAt: str
   return inbound > outbound;
 }
 
+/** Parse the listing's draft mirror into a card-ready DealDraft. Only
+ *  queued/hold states render — sent/dismissed drafts are history. */
+export function dealDraftFromFields(text: string | null, metaRaw: string | null): DealDraft | null {
+  if (!metaRaw || !metaRaw.trim()) return null;
+  try {
+    const meta = JSON.parse(metaRaw) as Record<string, unknown>;
+    const state = meta.state;
+    if (state !== "queued" && state !== "hold") return null;
+    return {
+      state,
+      text: state === "queued" ? ((text ?? "").trim() || null) : null,
+      classification: typeof meta.classification === "string" ? meta.classification : "unknown",
+      channel: typeof meta.channel === "string" ? meta.channel : "sms",
+      holdReason: typeof meta.hold_reason === "string" ? meta.hold_reason : null,
+      generatedAt: typeof meta.generated_at === "string" ? meta.generated_at : null,
+      proposalId: typeof meta.proposal_id === "string" ? meta.proposal_id : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Deal heat — operator 2026-07-12: drafts (and deals) order by how close
+ *  the money is. Lower = hotter. */
+const STATUS_HEAT: Record<string, number> = {
+  "Offer Accepted": 0,
+  "Counter Received": 1,
+  Negotiating: 2,
+  "Response Received": 3,
+};
+
 /** Pure: shape + rank the live-deal set. Ordering:
- *   1. ball in your court first (needs a reply),
- *   2. then most-recent activity (newest first),
- *   3. id as a stable final tiebreak.
+ *   1. ball in your court first (needs a reply — a queued draft counts),
+ *   2. then deal heat (Offer Accepted > Counter > Negotiating > Response),
+ *   3. then most-recent activity (newest first),
+ *   4. id as a stable final tiebreak.
  *  Every negotiation-status record is included, any era — that is the point. */
 export function rankLiveDeals(rows: LiveDealRow[]): RankedLiveDeal[] {
   const deals: RankedLiveDeal[] = rows
@@ -88,6 +137,7 @@ export function rankLiveDeals(rows: LiveDealRow[]): RankedLiveDeal[] {
     .map((r) => {
       const headroom =
         r.ceiling != null && r.contractPrice != null ? r.ceiling - r.contractPrice : null;
+      const draft = dealDraftFromFields(r.draftReplyText, r.draftReplyMeta);
       return {
         id: r.id,
         street: street(r.address),
@@ -96,15 +146,21 @@ export function rankLiveDeals(rows: LiveDealRow[]): RankedLiveDeal[] {
         listPrice: r.listPrice,
         ceiling: r.ceiling,
         headroom,
-        needsYou: ballInOurCourt(r.lastInboundAt, r.lastOutboundAt),
+        // A queued draft IS a ball-in-your-court state: the machine answered,
+        // the operator's tap is the only thing between it and the seller.
+        needsYou: ballInOurCourt(r.lastInboundAt, r.lastOutboundAt) || draft != null,
         lastActivityAt: laterIso(r.lastInboundAt, r.lastOutboundAt),
         legacy: (r.sourceVersion ?? "") !== SOURCE_VERSION_V2,
         href: `/pipeline/${r.id}`,
+        draft,
       };
     });
 
   return deals.sort((a, b) => {
     if (a.needsYou !== b.needsYou) return a.needsYou ? -1 : 1;
+    const ha = STATUS_HEAT[a.status] ?? 9;
+    const hb = STATUS_HEAT[b.status] ?? 9;
+    if (ha !== hb) return ha - hb;
     const at = a.lastActivityAt ? new Date(a.lastActivityAt).getTime() : 0;
     const bt = b.lastActivityAt ? new Date(b.lastActivityAt).getTime() : 0;
     if (bt !== at) return bt - at;

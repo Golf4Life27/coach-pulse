@@ -37,11 +37,11 @@ describe("voice-registry", () => {
     }
   });
 
-  it("getVoiceEntry throws on disabled agent (shepherd / scribe / sentry / pulse / ledger / forge)", () => {
+  it("getVoiceEntry throws on disabled agent (forge ENABLED 2026-07-12 for reply drafting)", () => {
     expect(() => getVoiceEntry("shepherd")).toThrow(/disabled/);
     expect(() => getVoiceEntry("pulse")).toThrow(/disabled/);
     expect(() => getVoiceEntry("scribe")).toThrow(/disabled/);
-    expect(() => getVoiceEntry("forge")).toThrow(/disabled/);
+    expect(() => getVoiceEntry("forge")).not.toThrow();
     expect(() => getVoiceEntry("sentry")).toThrow(/disabled/);
     expect(() => getVoiceEntry("ledger")).toThrow(/disabled/);
   });
