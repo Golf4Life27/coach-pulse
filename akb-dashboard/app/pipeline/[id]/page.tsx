@@ -98,7 +98,11 @@ export default function DealWorkspace() {
   const [numbers, setNumbers] = useState<ConvoNumbers | null>(null);
   // Drafted replies waiting on a thumb — Pending jarvis_reply proposals for
   // THIS record, surfaced in-room so the fire happens where the context is.
-  const [drafts, setDrafts] = useState<Array<{ id: string; to: string; body: string; inbound: string | null }>>([]);
+  const [drafts, setDrafts] = useState<Array<{ id: string; channel: "sms" | "email"; to: string; subject: string | null; body: string; inbound: string | null }>>([]);
+  // Inline edit-before-send (channel-agnostic — the server dispatch honors
+  // editedBody for both SMS and email). P2.2 (2026-07-13).
+  const [editingDraftId, setEditingDraftId] = useState<string | null>(null);
+  const [editDraftText, setEditDraftText] = useState("");
   const [draftBusy, setDraftBusy] = useState<string | null>(null);
 
   // Deal context (Jarvis Phase 1 keystone)
@@ -155,10 +159,16 @@ export default function DealWorkspace() {
           .map((p) => {
             try {
               const payload = JSON.parse(p.actionPayload) as Record<string, unknown>;
-              if (payload.action !== "send_sms") return null;
+              const action = payload.action;
+              // Both channels surface here — the server dispatch (/api/proposals
+              // PATCH) routes send_sms → OpenPhone and send_email → Gmail, both
+              // server-side with the Vercel env key (P2.2).
+              if (action !== "send_sms" && action !== "send_email") return null;
               return {
                 id: p.id,
+                channel: action === "send_email" ? ("email" as const) : ("sms" as const),
                 to: String(payload.to ?? ""),
+                subject: typeof payload.subject === "string" ? payload.subject : null,
                 body: String(payload.draftBody ?? ""),
                 inbound: typeof payload.inboundBody === "string" ? payload.inboundBody : null,
               };
@@ -166,7 +176,7 @@ export default function DealWorkspace() {
               return null;
             }
           })
-          .filter((d): d is { id: string; to: string; body: string; inbound: string | null } => d != null && !!d.to && !!d.body);
+          .filter((d): d is { id: string; channel: "sms" | "email"; to: string; subject: string | null; body: string; inbound: string | null } => d != null && !!d.to && !!d.body);
         setDrafts(mine);
       })
       .catch(() => {});
@@ -187,6 +197,7 @@ export default function DealWorkspace() {
       }
       showToast("Reply sent ✓", "success");
       setDrafts((prev) => prev.filter((d) => d.id !== draftId));
+      if (editingDraftId === draftId) { setEditingDraftId(null); setEditDraftText(""); }
       setTimeout(fetchConversation, 2000);
     } catch {
       showToast("Send failed");
@@ -647,32 +658,57 @@ export default function DealWorkspace() {
               record, ready to fire where the context lives. Sticky numbers
               arrive in the draft from the classifier lane (delivery stamps
               only). */}
-          {drafts.map((d) => (
+          {drafts.map((d) => {
+            const editing = editingDraftId === d.id;
+            const sendBody = editing ? editDraftText : d.body;
+            return (
             <div key={d.id} className="bg-[#1c2128] rounded-lg border border-emerald-500/40 p-3 space-y-2">
-              <div className="text-[10px] uppercase tracking-wider text-emerald-300 font-bold">Drafted reply — ready to fire</div>
+              <div className="flex items-center justify-between">
+                <div className="text-[10px] uppercase tracking-wider text-emerald-300 font-bold">Drafted reply — ready to fire</div>
+                <div className="text-[10px] text-gray-400 flex items-center gap-1">
+                  <span>{d.channel === "email" ? "📧" : "💬"}</span>
+                  <span className="uppercase tracking-wider">{d.channel === "email" ? "Email" : "Text"} → {d.to}</span>
+                </div>
+              </div>
+              {d.channel === "email" && d.subject && (
+                <div className="text-[11px] text-gray-400"><span className="text-gray-500">Subject:</span> {d.subject}</div>
+              )}
               {d.inbound && (
                 <blockquote className="text-[11px] text-gray-400 border-l-2 border-[#30363d] pl-2 leading-relaxed">“{d.inbound}”</blockquote>
               )}
-              <p className="text-sm text-gray-200 bg-[#0d1117] border border-[#30363d] rounded p-2 leading-relaxed whitespace-pre-wrap">{d.body}</p>
+              {editing ? (
+                <textarea
+                  value={editDraftText}
+                  onChange={(e) => setEditDraftText(e.target.value)}
+                  rows={d.channel === "email" ? 6 : 3}
+                  className="w-full bg-[#0d1117] border border-emerald-500/40 rounded p-2 text-sm text-white focus:outline-none focus:border-emerald-400 resize-y"
+                />
+              ) : (
+                <p className="text-sm text-gray-200 bg-[#0d1117] border border-[#30363d] rounded p-2 leading-relaxed whitespace-pre-wrap">{d.body}</p>
+              )}
               <div className="flex gap-2">
                 <button
                   type="button"
-                  disabled={draftBusy === d.id}
-                  onClick={() => fireDraft(d.id, d.body)}
+                  disabled={draftBusy === d.id || !sendBody.trim()}
+                  onClick={() => fireDraft(d.id, sendBody)}
                   className="flex-1 bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-semibold py-2 rounded min-h-[44px] disabled:opacity-50"
                 >
-                  {draftBusy === d.id ? "Sending…" : "Approve & Send"}
+                  {draftBusy === d.id ? "Sending…" : editing ? "Approve edited & Send" : "Approve & Send"}
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setReplyText(d.body); setReplyOpen(true); }}
+                  onClick={() => {
+                    if (editing) { setEditingDraftId(null); setEditDraftText(""); }
+                    else { setEditingDraftId(d.id); setEditDraftText(d.body); }
+                  }}
                   className="bg-[#30363d] hover:bg-[#3d444d] text-gray-300 text-xs px-4 py-2 rounded min-h-[44px]"
                 >
-                  Edit first
+                  {editing ? "Cancel edit" : "Edit first"}
                 </button>
               </div>
             </div>
-          ))}
+            );
+          })}
 
           {replyOpen && (
             <div className="bg-[#1c2128] rounded-lg border border-emerald-500/50 p-3 space-y-2">
