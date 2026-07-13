@@ -103,7 +103,21 @@ export interface MergeOptions {
   targetPrices: readonly number[];
   agentName: string | null;
   siblings?: SiblingRecord[];
+  /** SOLE-ENGAGED TIE-BREAK (685 Bolton fix, 2026-07-13). True when the
+   *  TARGET record is in a live-money status (Negotiating / Response
+   *  Received / Counter Received / Offer Accepted) and NO sibling is. A
+   *  multi-listing agent's generic SMS ("Ok, sounds good") carries no
+   *  address/price signal, scored 0, and was hidden from ALL of the phone's
+   *  threads — including the one deal actually being negotiated. Absent
+   *  contrary signals, a mid-negotiation message belongs to the negotiation:
+   *  the tie-break lifts signal-less messages to exactly the 0.6 render
+   *  floor on the sole engaged record only. A message with a sibling
+   *  address/price hit still routes to the sibling. */
+  targetSoleEngaged?: boolean;
 }
+
+/** Messages at/above this confidence render in the record's thread. */
+export const ATTRIBUTION_RENDER_FLOOR = 0.6;
 
 export function mergeTimeline(
   quoMessages: QuoMessage[],
@@ -116,10 +130,24 @@ export function mergeTimeline(
   const siblings = opts.siblings ?? [];
   const hasSiblings = siblings.length > 0;
 
+  /** Apply the sole-engaged tie-break: only when no sibling claimed the
+   *  message (no address/price hit ≥0.5) and the raw score is below the
+   *  render floor. Never overrides a sibling win. */
+  const withTieBreak = (match: { recordId: string; confidence: number }) => {
+    if (
+      opts.targetSoleEngaged &&
+      match.confidence < ATTRIBUTION_RENDER_FLOOR &&
+      (!match.recordId || match.recordId === opts.recordId)
+    ) {
+      return { recordId: opts.recordId, confidence: ATTRIBUTION_RENDER_FLOOR };
+    }
+    return match;
+  };
+
   for (const msg of quoMessages) {
     const direction = msg.direction === "incoming" ? "in" as const : "out" as const;
     const match = hasSiblings
-      ? scorePropertyMatch(msg.body, opts.targetAddress, opts.targetPrices, siblings)
+      ? withTieBreak(scorePropertyMatch(msg.body, opts.targetAddress, opts.targetPrices, siblings))
       : { recordId: opts.recordId, confidence: 1.0 };
     const entry: TimelineEntry = {
       timestamp: msg.createdAt, channel: "sms", direction, body: msg.body,
@@ -135,7 +163,7 @@ export function mergeTimeline(
     const isInbound = !msg.from.toLowerCase().includes("alex") && !msg.from.toLowerCase().includes("akb");
     const direction = isInbound ? "in" as const : "out" as const;
     const match = hasSiblings
-      ? scorePropertyMatch(msg.body, opts.targetAddress, opts.targetPrices, siblings)
+      ? withTieBreak(scorePropertyMatch(msg.body, opts.targetAddress, opts.targetPrices, siblings))
       : { recordId: opts.recordId, confidence: 1.0 };
     const entry: TimelineEntry = {
       timestamp: msg.date, channel: "email", direction, body: msg.body,
