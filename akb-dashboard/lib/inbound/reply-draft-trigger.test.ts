@@ -37,6 +37,12 @@ function stubGenerate(draftText: string | null, holdReason: string | null = null
 
 const COSTS = "Are you covering the water bill and back taxes? I need to be paid.";
 
+// A body that throws if the model stub is ever called — proves the DD "ask"
+// path replaces the generated reply (never invokes generate).
+const NEVER = () => {
+  throw new Error("generate must not be called on the DD ask path");
+};
+
 describe("buildInboundReplyDraft — SMS (quo-sync path)", () => {
   it("queues a jarvis_reply proposal with a send_sms payload + mirror fields", async () => {
     const res = await buildInboundReplyDraft({
@@ -141,5 +147,80 @@ describe("buildInboundReplyDraft — HOLD (refuse-and-surface)", () => {
     const payload = JSON.parse(res.proposal!.actionPayload);
     expect(payload.action).toBe("hold_review");
     expect(res.proposal!.reasoning).toMatch(/^HOLD \(/);
+  });
+});
+
+describe("buildInboundReplyDraft — B2 DD-volley (watched-first)", () => {
+  it("DD off (default) → normal recommended reply, no DD state", async () => {
+    const res = await buildInboundReplyDraft({
+      listing: LISTING,
+      notes: "",
+      inbound: { msgId: "ACa", body: COSTS, toPhoneE164: "+13135551212" },
+      channel: "sms",
+      deps: { generate: stubGenerate("normal reply"), nowMs: 1_000 },
+    });
+    expect(res.draftText).toBe("normal reply");
+    expect(res.extraFields).toBeUndefined();
+  });
+
+  it("DD on + engagement → the DD question IS the draft (generate never called)", async () => {
+    const res = await buildInboundReplyDraft({
+      listing: LISTING,
+      notes: "",
+      inbound: { msgId: "ACdd1", body: COSTS, toPhoneE164: "+13135551212" },
+      channel: "sms",
+      deps: { generate: NEVER, ddLive: true, nowMs: 1_000, nowIso: "2026-07-13T02:00:00.000Z" },
+    });
+    // seller_costs opens with the payoff question.
+    expect(res.drafted).toBe(true);
+    expect(res.draftText).toMatch(/still owed/i);
+    expect(res.proposal!.reasoning).toMatch(/DD volley/);
+    const payload = JSON.parse(res.proposal!.actionPayload);
+    expect(payload.action).toBe("send_sms");
+    expect(payload.draftBody).toMatch(/still owed/i);
+    // State persisted with the first slot asked.
+    const state = JSON.parse(res.extraFields!.DD_Volley_State as string);
+    expect(state.classification).toBe("seller_costs");
+    expect(state.asked).toEqual(["payoff_amount"]);
+    expect(state.volleyCount).toBe(1);
+  });
+
+  it("DD on + answering a pending question → stamps the answer + asks the next", async () => {
+    const priorState = JSON.stringify({
+      status: "active",
+      classification: "seller_costs",
+      volleyCount: 1,
+      asked: ["payoff_amount"],
+      answers: [],
+      openedAt: "2026-07-13T01:00:00.000Z",
+      updatedAt: "2026-07-13T01:00:00.000Z",
+    });
+    const res = await buildInboundReplyDraft({
+      listing: { ...LISTING, ddVolleyState: priorState },
+      notes: "prior",
+      inbound: { msgId: "ACdd2", body: "About 40k left on the mortgage", toPhoneE164: "+13135551212" },
+      channel: "sms",
+      deps: { generate: NEVER, ddLive: true, nowMs: 2_000, nowIso: "2026-07-13T02:00:00.000Z" },
+    });
+    // The payoff answer is stamped to the notes ledger…
+    expect(res.notesAppend).toMatch(/\[DD Volley\] payoff_amount/);
+    expect(res.notesAppend).toMatch(/40k/);
+    // …and the next slot (lien_details) is asked.
+    const state = JSON.parse(res.extraFields!.DD_Volley_State as string);
+    expect(state.answers.map((a: { slot: string }) => a.slot)).toEqual(["payoff_amount"]);
+    expect(state.asked).toEqual(["payoff_amount", "lien_details"]);
+  });
+
+  it("DD on + non-engagement classification → falls through to normal reply", async () => {
+    const res = await buildInboundReplyDraft({
+      listing: LISTING,
+      notes: "",
+      inbound: { msgId: "ACdd3", body: "We'll take it, let's move forward.", toPhoneE164: "+13135551212" },
+      channel: "sms",
+      deps: { generate: stubGenerate("normal reply for acceptance"), ddLive: true, nowMs: 3_000, nowIso: "2026-07-13T02:00:00.000Z" },
+    });
+    // acceptance opens no volley → normal reply, no DD state.
+    expect(res.draftText).toBe("normal reply for acceptance");
+    expect(res.extraFields).toBeUndefined();
   });
 });

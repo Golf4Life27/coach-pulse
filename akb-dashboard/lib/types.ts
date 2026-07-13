@@ -53,6 +53,10 @@ export interface Listing {
    *  Optional: absent on fixtures/paths that never touch the draft lane. */
   draftReplyText?: string | null;
   draftReplyMeta?: string | null;
+  // B2 DD-volley state machine (JSON). Bounded due-diligence question volley
+  // on the RECOMMENDED-REPLIES rails; parsed by lib/dd-volley-machine. Null
+  // until a volley opens (or when DD_VOLLEY_LIVE is off).
+  ddVolleyState?: string | null;
   // Phase 11.2 — email outbound timestamp. Crier staleness uses max()
   // of all four contact timestamps to avoid false-stale on active email
   // negotiations (the 23 Fields scenario). Null until first attributable
