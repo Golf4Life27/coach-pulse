@@ -195,6 +195,7 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "Gmail_Thread_Ids": "gmailThreadIds",
   "Draft_Reply_Text": "draftReplyText",
   "Draft_Reply_Meta": "draftReplyMeta",
+  "DD_Volley_State": "ddVolleyState",
   "Last_Outbound_At": "lastOutboundAt",
   "Last_Email_Outreach_Date": "lastEmailOutreachDate",
   "Envelope_ID": "envelopeId",

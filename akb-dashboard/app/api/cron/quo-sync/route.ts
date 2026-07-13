@@ -137,6 +137,7 @@ async function handle(req: Request) {
               agentName: l.agentName ?? null,
               agentEmail: l.agentEmail ?? null,
               draftReplyMeta: l.draftReplyMeta ?? null,
+              ddVolleyState: l.ddVolleyState ?? null,
             },
             notes: r.notes,
             inbound: { msgId: newest.id, body: newest.body, toPhoneE164: toE164(phone) },
@@ -154,6 +155,11 @@ async function handle(req: Request) {
             else draftsHeld++;
             // Once queued, guard scan-comms (and later rows) from re-drafting.
             if (created) pendingReplyRecordIds.add(l.id);
+          }
+          // B2 DD-volley: persist updated state + stamp any DD answer to notes.
+          if (draft.extraFields) Object.assign(fields, draft.extraFields);
+          if (draft.notesAppend) {
+            fields["Verification_Notes"] = `${fields["Verification_Notes"] ?? r.notes}\n\n${draft.notesAppend}`;
           }
         } catch (err) {
           console.error("[quo_sync] reply draft failed:", err);

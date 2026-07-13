@@ -168,6 +168,7 @@ async function handle(req: Request) {
                 agentName: l.agentName ?? null,
                 agentEmail: email || null,
                 draftReplyMeta: l.draftReplyMeta ?? null,
+                ddVolleyState: l.ddVolleyState ?? null,
               },
               notes: r.notes,
               inbound: { msgId: newestEvent.id, body: srcMsg.body, from: srcMsg.from, subject: srcMsg.subject },
@@ -180,6 +181,11 @@ async function handle(req: Request) {
                 ...draft.draftMeta,
                 proposal_id: created ? draft.proposal.proposalId : undefined,
               });
+            }
+            // B2 DD-volley: persist updated state + stamp any DD answer to notes.
+            if (draft.extraFields) Object.assign(fields, draft.extraFields);
+            if (draft.notesAppend) {
+              fields["Verification_Notes"] = `${fields["Verification_Notes"] ?? r.notes}\n\n${draft.notesAppend}`;
             }
           }
         } catch (err) {

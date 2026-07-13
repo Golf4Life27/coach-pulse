@@ -24,12 +24,27 @@ import {
   generateRecommendedReply,
   parseDraftMeta,
   stickyOfferFromNotes,
+  validateReplyDraft,
   type DraftMeta,
   type GeneratedReply,
   type ReplyDraftContext,
 } from "@/lib/recommended-reply";
 import { extractEmailAddress } from "@/lib/inbound/match";
 import { normalizeSubject } from "@/lib/inbound/gmail-thread-link";
+import {
+  decideDDAction,
+  ddAnswerStampLine,
+  parseVolleyState,
+  pendingSlot,
+  serializeVolleyState,
+} from "@/lib/dd-volley-machine";
+
+/** B2 DD-volley wiring is watched-first: dormant until the operator creates
+ *  the DD_Volley_State field (done) AND sets DD_VOLLEY_LIVE=true. Off ⇒ the
+ *  trigger behaves exactly as the #103 recommended-reply path. */
+export function isDDVolleyLive(): boolean {
+  return process.env.DD_VOLLEY_LIVE === "true";
+}
 
 export interface DraftTriggerListing {
   id: string;
@@ -42,6 +57,8 @@ export interface DraftTriggerListing {
   agentEmail: string | null;
   /** Prior Draft_Reply_Meta JSON — for inbound-msg-id idempotency. */
   draftReplyMeta: string | null;
+  /** Prior DD_Volley_State JSON (B2). Null until a volley opens / DD off. */
+  ddVolleyState?: string | null;
 }
 
 export interface DraftTriggerInbound {
@@ -84,6 +101,11 @@ export interface DraftTriggerResult {
   draftMeta: DraftMeta | null;
   /** The proposal to create; null when skipped. */
   proposal: ProposalSpec | null;
+  /** Extra listing fields the caller must merge (B2: DD_Volley_State). */
+  extraFields?: Record<string, unknown>;
+  /** A notes-ledger line to append (B2: a delivery-stamped DD answer). The
+   *  caller appends it to the Verification_Notes it is already writing. */
+  notesAppend?: string | null;
 }
 
 export interface DraftTriggerDeps {
@@ -94,10 +116,57 @@ export interface DraftTriggerDeps {
   /** Injectable clock for the proposal id (tests pin it; scripts can't call
    *  Date.now). */
   nowMs?: number;
+  /** Injectable ISO clock for DD-volley stamps/state (tests pin it). */
+  nowIso?: string;
+  /** Force DD-volley on in tests without touching process.env. */
+  ddLive?: boolean;
 }
 
 function skip(reason: DraftSkipReason, classification: string): DraftTriggerResult {
   return { drafted: false, skipped: reason, classification, holdReason: null, draftText: "", draftMeta: null, proposal: null };
+}
+
+/** Build the 2A action payload for either channel. Shared by the normal
+ *  recommended-reply path and the DD-volley path so the row shape can't drift.
+ *  An empty `body` means HOLD (hold_review). */
+function buildReplyPayload(
+  channel: "sms" | "email",
+  listing: DraftTriggerListing,
+  inbound: DraftTriggerInbound,
+  street: string,
+  body: string,
+  holdReason: string | null,
+  classification: string,
+  decisionKind: string | null,
+  tier: string,
+): string {
+  if (channel === "email") {
+    const replyTo = extractEmailAddress(inbound.from ?? "") || listing.agentEmail || "";
+    const subject = `Re: ${normalizeSubject(inbound.subject ?? "") || `Your listing — ${street}`}`;
+    return JSON.stringify({
+      recordId: listing.id,
+      action: body ? "send_email" : "hold_review",
+      to: replyTo,
+      subject,
+      draftBody: body,
+      holdReason,
+      inboundBody: inbound.body.slice(0, 1000),
+      classification,
+      decisionKind,
+      tier,
+    });
+  }
+  return JSON.stringify({
+    recordId: listing.id,
+    action: body ? "send_sms" : "hold_review",
+    to: inbound.toPhoneE164 ?? "",
+    draftBody: body,
+    holdReason,
+    inboundBody: inbound.body.slice(0, 1000),
+    classification,
+    decisionKind,
+    tier,
+  });
 }
 
 /** Build a guardrailed recommended-reply draft for a freshly-ingested inbound.
@@ -120,6 +189,7 @@ export async function buildInboundReplyDraft(args: {
   const { listing, notes, inbound, channel } = args;
   const generate = args.deps?.generate ?? generateRecommendedReply;
   const nowMs = args.deps?.nowMs ?? Date.now();
+  const nowIso = args.deps?.nowIso ?? new Date().toISOString();
 
   // Idempotency 1: this exact inbound already produced a draft.
   const priorMeta = parseDraftMeta(listing.draftReplyMeta);
@@ -143,6 +213,81 @@ export async function buildInboundReplyDraft(args: {
     return skip("pending_proposal", triage.classification);
   }
 
+  // ── B2 DD-VOLLEY (watched-first) ───────────────────────────────────────────
+  // When live, an engagement runs a bounded DD question volley BEFORE any
+  // number move: the DD question BECOMES the draft, each seller answer is
+  // delivery-stamped to notes, and the state persists on DD_Volley_State. On
+  // completion (facts gathered) or cap, we fall through to the normal reply.
+  let ddExtraFields: Record<string, unknown> | undefined;
+  let ddNotesAppend: string | null = null;
+  const ddLive = args.deps?.ddLive ?? isDDVolleyLive();
+  if (ddLive) {
+    const prevVolley = parseVolleyState(listing.ddVolleyState);
+    const pendingBefore = prevVolley ? pendingSlot(prevVolley) : null;
+    const action = decideDDAction(prevVolley, triage.classification, inbound.body, inbound.msgId, nowIso);
+    if (pendingBefore) {
+      // This inbound answered the pending DD question — stamp it to the ledger.
+      ddNotesAppend = ddAnswerStampLine(pendingBefore, inbound.body, nowIso, inbound.msgId);
+    }
+    if (action.kind === "ask") {
+      // The DD question IS the draft. It rides the SAME universal guardrails —
+      // validated as "unknown" classification so a cost-volley's timeline
+      // question isn't held for lacking proceeds framing (that G2 rule is for
+      // cost ANSWERS; the DD templates are authored safe + unit-tested).
+      const guardCtx: ReplyDraftContext = {
+        recordId: listing.id,
+        street,
+        channel,
+        classification: "unknown",
+        inbound: inbound.body,
+        conversationTail: conversationTail(notes),
+        stickyOfferUsd: null,
+        ceilingUsd: listing.underwrittenMao ?? listing.mao ?? null,
+        listPriceUsd: listing.listPrice ?? null,
+        cappedToList: false,
+        flags: flagsFromNotes(notes),
+        agentFirstName: (listing.agentName ?? "").split(/\s+/)[0] || null,
+      };
+      const v = validateReplyDraft(action.question, guardCtx);
+      const ddBody = v.ok ? action.question : "";
+      const ddHold = v.ok ? null : `dd_question_guardrail: ${v.holdReason}`;
+      const proposal: ProposalSpec = {
+        proposalId: `jarvis_reply-${nowMs}-${listing.id.slice(-6)}`,
+        recordId: listing.id,
+        address: listing.address,
+        priority: triage.priority,
+        reasoning: v.ok
+          ? `DD volley [${triage.classification}] — asking ${action.slot}`
+          : `HOLD (${ddHold}) — DD volley [${triage.classification}] ${action.slot}`,
+        actionPayload: buildReplyPayload(channel, listing, inbound, street, ddBody, ddHold, triage.classification, triage.decisionKind, triage.tier),
+      };
+      return {
+        drafted: v.ok,
+        skipped: null,
+        classification: triage.classification,
+        holdReason: ddHold,
+        draftText: ddBody,
+        draftMeta: {
+          state: v.ok ? "queued" : "hold",
+          generated_at: nowIso,
+          classification: triage.classification,
+          confidence: 0.9,
+          channel,
+          inbound_msg_id: inbound.msgId,
+          hold_reason: ddHold ?? undefined,
+        },
+        proposal,
+        extraFields: { DD_Volley_State: serializeVolleyState(action.state) },
+        notesAppend: ddNotesAppend,
+      };
+    }
+    // number_gate_open | capped: persist the updated state and fall through to
+    // the normal recommended reply. "none" leaves the state untouched.
+    if (action.kind !== "none") {
+      ddExtraFields = { DD_Volley_State: serializeVolleyState(action.state) };
+    }
+  }
+
   const gen = await generate(
     {
       recordId: listing.id,
@@ -161,48 +306,16 @@ export async function buildInboundReplyDraft(args: {
     { matchedPattern: triage.matchedPattern, inboundMsgId: inbound.msgId },
   );
 
-  const proposalId = `jarvis_reply-${nowMs}-${listing.id.slice(-6)}`;
   const channelLabel = channel === "email" ? "Email" : "SMS";
-
-  let actionPayload: string;
-  if (channel === "email") {
-    const replyTo = extractEmailAddress(inbound.from ?? "") || listing.agentEmail || "";
-    const subject = `Re: ${normalizeSubject(inbound.subject ?? "") || `Your listing — ${street}`}`;
-    actionPayload = JSON.stringify({
-      recordId: listing.id,
-      action: gen.draft ? "send_email" : "hold_review",
-      to: replyTo,
-      subject,
-      draftBody: gen.draft ?? "",
-      holdReason: gen.holdReason,
-      inboundBody: inbound.body.slice(0, 1000),
-      classification: triage.classification,
-      decisionKind: triage.decisionKind,
-      tier: triage.tier,
-    });
-  } else {
-    actionPayload = JSON.stringify({
-      recordId: listing.id,
-      action: gen.draft ? "send_sms" : "hold_review",
-      to: inbound.toPhoneE164 ?? "",
-      draftBody: gen.draft ?? "",
-      holdReason: gen.holdReason,
-      inboundBody: inbound.body.slice(0, 1000),
-      classification: triage.classification,
-      decisionKind: triage.decisionKind,
-      tier: triage.tier,
-    });
-  }
-
   const proposal: ProposalSpec = {
-    proposalId,
+    proposalId: `jarvis_reply-${nowMs}-${listing.id.slice(-6)}`,
     recordId: listing.id,
     address: listing.address,
     priority: triage.priority,
     reasoning: gen.draft
       ? `${channelLabel} inbound [${triage.classification}${triage.queueStatus ? ` → ${triage.queueStatus}` : ""}]: ${triage.reasoning}`
       : `HOLD (${gen.holdReason}) — ${channelLabel.toLowerCase()} inbound [${triage.classification}]: ${triage.reasoning}`,
-    actionPayload,
+    actionPayload: buildReplyPayload(channel, listing, inbound, street, gen.draft ?? "", gen.holdReason, triage.classification, triage.decisionKind, triage.tier),
   };
 
   return {
@@ -213,6 +326,8 @@ export async function buildInboundReplyDraft(args: {
     draftText: gen.draft ?? "",
     draftMeta: gen.meta,
     proposal,
+    extraFields: ddExtraFields,
+    notesAppend: ddNotesAppend,
   };
 }
 
