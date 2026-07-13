@@ -21,6 +21,7 @@ import { getThreadVerified } from "@/lib/quo";
 import { normalizePhone } from "@/lib/phone-normalize";
 import { toE164 } from "@/lib/phone";
 import { appendQuoMessagesToNotes } from "@/lib/outreach/quo-sync";
+import { selectSweepCohort } from "@/lib/inbound/gmail-thread-link";
 import {
   buildInboundReplyDraft,
   createReplyProposal,
@@ -70,7 +71,26 @@ async function handle(req: Request) {
   } catch (err) {
     return NextResponse.json({ ok: false, error: "population_fetch_failed", message: err instanceof Error ? err.message : String(err) }, { status: 500 });
   }
-  const cohort = listings.slice(0, limit);
+  // COHORT (685 Bolton fix, 2026-07-13): was `listings.slice(0, limit)` — an
+  // UNSORTED prefix, so any record past the first `limit` rows NEVER got its
+  // SMS appended to notes (the exact starvation class the Sunbeam gmail miss
+  // exposed; gmail-sync got selectSweepCohort in #102, this path kept the
+  // naive slice). Now: live-money statuses ALWAYS sync; the remainder rotates
+  // by run-hour so staleness is bounded, never permanent. 685 Bolton
+  // (Negotiating, live counter-thread) was invisible on its own deal page.
+  const selection = selectSweepCohort(
+    listings.map((l) => ({
+      id: l.id,
+      status: l.outreachStatus,
+      syncable: Boolean(normalizePhone((l as { agentPhone?: string | null }).agentPhone)),
+      lastActivityAt:
+        [l.lastInboundAt, l.lastOutboundAt].filter(Boolean).sort().pop() ?? null,
+      listing: l,
+    })),
+    limit,
+    Math.floor(Date.now() / 3_600_000),
+  );
+  const cohort = selection.cohort.map((c) => c.listing);
 
   interface RowOutcome {
     recordId: string;
@@ -222,6 +242,10 @@ async function handle(req: Request) {
 
   const summary = {
     cohort_size: cohort.length,
+    population_syncable: selection.populationSyncable,
+    live_money_always_synced: selection.liveMoneyCount,
+    truncated_this_run: selection.truncated,
+    rotation_window: selection.rotationWindow,
     rows_with_new_events: outcomes.filter((r) => r.new_events > 0).length,
     total_escalations: totalEscalations,
     reply_drafts_queued: draftsQueued,

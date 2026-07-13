@@ -54,19 +54,28 @@ export async function GET(
     // attributed to a specific property — keeps THIS property's thread clean
     // when an agent holds several listings.
     let siblings: SiblingRecord[] = [];
+    // Sole-engaged tie-break input (685 Bolton, 2026-07-13): when THIS record
+    // is the phone's only live-money deal, signal-less messages render here
+    // instead of vanishing from every thread.
+    let targetSoleEngaged = false;
+    const ENGAGED = new Set(["Negotiating", "Response Received", "Counter Received", "Offer Accepted"]);
     if (listing.agentPhone) {
       try {
         const all = await getListings();
         const target = cleanPhone(listing.agentPhone);
-        siblings = all
-          .filter((l) => l.id !== id && l.agentPhone && cleanPhone(l.agentPhone) === target)
-          .map((l) => ({
-            recordId: l.id,
-            address: l.address,
-            candidatePrices: [l.listPrice, l.outreachOfferPrice ?? null].filter(
-              (n): n is number => typeof n === "number" && n > 0,
-            ),
-          }));
+        const siblingListings = all.filter(
+          (l) => l.id !== id && l.agentPhone && cleanPhone(l.agentPhone) === target,
+        );
+        siblings = siblingListings.map((l) => ({
+          recordId: l.id,
+          address: l.address,
+          candidatePrices: [l.listPrice, l.outreachOfferPrice ?? null].filter(
+            (n): n is number => typeof n === "number" && n > 0,
+          ),
+        }));
+        targetSoleEngaged =
+          ENGAGED.has(listing.outreachStatus ?? "") &&
+          !siblingListings.some((l) => ENGAGED.has(l.outreachStatus ?? ""));
       } catch (err) {
         console.error(`[conversations] Sibling lookup failed for ${id}:`, err);
       }
@@ -121,6 +130,7 @@ export async function GET(
       ),
       agentName: listing.agentName ?? null,
       siblings,
+      targetSoleEngaged,
     });
 
     // Keep only entries confidently attributed to THIS property (sibling- or

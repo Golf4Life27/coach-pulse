@@ -358,3 +358,55 @@ describe("computeResponseStatus — INV-010 stage suppression", () => {
     expect(computeResponseStatus(tl, undefined).responseDue).toBe(true);
   });
 });
+
+describe("mergeTimeline — sole-engaged tie-break (685 Bolton, 2026-07-13)", () => {
+  const SIBLINGS = [
+    { recordId: "recSib1", address: "474 Center Hill Ave NW", candidatePrices: [287_996] },
+    { recordId: "recSib2", address: "3346 Delmar Ln NW", candidatePrices: [233_996] },
+  ];
+  const BASE = {
+    recordId: "recBolton",
+    targetAddress: "685 Bolton Rd NW, Atlanta, GA 30331",
+    targetPrices: [224_996],
+    agentName: "The J A M Team",
+    siblings: SIBLINGS,
+  };
+
+  it("REGRESSION: a signal-less SMS renders on the sole engaged record (was hidden from all threads)", () => {
+    const { timeline, ambiguous } = mergeTimeline(
+      [{ id: "q1", from: "agent", to: "alex", body: "Ok, you're welcome. I understand. Ok, I will let you know if that happens. Have a great day!", direction: "incoming", createdAt: "2026-07-13T14:15:00Z" }],
+      [], [],
+      { ...BASE, targetSoleEngaged: true },
+    );
+    expect(timeline[0].propertyMatch).toEqual({ recordId: "recBolton", confidence: 0.6 });
+    expect(ambiguous).toHaveLength(0);
+  });
+
+  it("without the flag (target not sole-engaged) the message stays ambiguous — sibling pages unchanged", () => {
+    const { ambiguous } = mergeTimeline(
+      [{ id: "q1", from: "agent", to: "alex", body: "Ok sounds good", direction: "incoming", createdAt: "2026-07-13T14:15:00Z" }],
+      [], [],
+      { ...BASE, targetSoleEngaged: false },
+    );
+    expect(ambiguous).toHaveLength(1);
+  });
+
+  it("a sibling address hit still routes to the sibling — the tie-break never overrides a signal", () => {
+    const { timeline } = mergeTimeline(
+      [{ id: "q1", from: "agent", to: "alex", body: "About 3346 Delmar Ln NW — seller said no", direction: "incoming", createdAt: "2026-07-13T14:15:00Z" }],
+      [], [],
+      { ...BASE, targetSoleEngaged: true },
+    );
+    expect(timeline[0].propertyMatch.recordId).toBe("recSib2");
+  });
+
+  it("a strong target signal keeps its full confidence (tie-break only lifts, never lowers)", () => {
+    const { timeline } = mergeTimeline(
+      [{ id: "q1", from: "agent", to: "alex", body: "Re your listing at 685 Bolton Rd NW — we can talk", direction: "incoming", createdAt: "2026-07-13T14:15:00Z" }],
+      [], [],
+      { ...BASE, targetSoleEngaged: true },
+    );
+    expect(timeline[0].propertyMatch.recordId).toBe("recBolton");
+    expect(timeline[0].propertyMatch.confidence).toBeGreaterThanOrEqual(0.6);
+  });
+});
