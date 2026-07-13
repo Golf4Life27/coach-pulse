@@ -86,7 +86,8 @@ export interface ProposalSpec {
 export type DraftSkipReason =
   | "already_drafted"
   | "pending_proposal"
-  | "tier0_auto_close";
+  | "tier0_auto_close"
+  | "no_reply_needed";
 
 export interface DraftTriggerResult {
   drafted: boolean;
@@ -305,6 +306,23 @@ export async function buildInboundReplyDraft(args: {
     },
     { matchedPattern: triage.matchedPattern, inboundMsgId: inbound.msgId },
   );
+
+  // Conversation-closer → explicit DISMISSED: no proposal, no Send button,
+  // but the meta mirror still records the inbound was seen (msg-id
+  // idempotency) so nothing re-processes it.
+  if (gen.meta.state === "dismissed") {
+    return {
+      drafted: false,
+      skipped: "no_reply_needed",
+      classification: triage.classification,
+      holdReason: gen.holdReason,
+      draftText: "",
+      draftMeta: gen.meta,
+      proposal: null,
+      extraFields: ddExtraFields,
+      notesAppend: ddNotesAppend,
+    };
+  }
 
   const channelLabel = channel === "email" ? "Email" : "SMS";
   const proposal: ProposalSpec = {

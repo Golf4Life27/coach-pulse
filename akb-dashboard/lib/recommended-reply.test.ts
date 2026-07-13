@@ -10,6 +10,7 @@ import {
   parseDraftMeta,
   validateReplyDraft,
   type ReplyDraftContext,
+  isConversationCloser,
 } from "./recommended-reply";
 import { classifyReply, triageSellerReply } from "./reply-triage";
 import { parseSendEmailPayload } from "./approve-send";
@@ -303,5 +304,114 @@ describe("context pack + plumbing", () => {
     expect(parseSendEmailPayload(JSON.stringify({ action: "send_sms", to: "a@b.com", subject: "s", draftBody: "x" }))).toBeNull();
     expect(parseSendEmailPayload(JSON.stringify({ action: "send_email", to: "not-an-email", subject: "s", draftBody: "x" }))).toBeNull();
     expect(parseSendEmailPayload(JSON.stringify({ action: "send_email", to: "a@b.com", subject: "", draftBody: "x" }))).toBeNull();
+  });
+});
+
+describe("conversation-closer policy (685 Bolton leak, 2026-07-13)", () => {
+  it("the verbatim Bolton closer is detected", () => {
+    expect(
+      isConversationCloser("Ok, you're welcome. I understand. Ok, I will let you know if that happens. Have a great day!"),
+    ).toBe(true);
+  });
+
+  it("questions, money, and long messages are never closers", () => {
+    expect(isConversationCloser("Sounds good — can you send the contract?")).toBe(false);
+    expect(isConversationCloser("Sounds good, we can do $27,000")).toBe(false);
+    expect(isConversationCloser("x".repeat(250))).toBe(false);
+    expect(isConversationCloser("")).toBe(false);
+  });
+
+  it("generateRecommendedReply short-circuits an unknown closer to DISMISSED without a model call", async () => {
+    let synthCalled = false;
+    const gen = await generateRecommendedReply(
+      {
+        recordId: "recBOLTON",
+        street: "685 Bolton Rd NW",
+        channel: "sms",
+        classification: "unknown",
+        inbound: "Ok, you're welcome. Take care!",
+        conversationTail: "",
+        stickyOfferUsd: null,
+        ceilingUsd: null,
+        listPriceUsd: null,
+        cappedToList: false,
+        flags: { estate: false, lien: false, probate: false, multiOffer: false },
+        agentFirstName: null,
+      },
+      {},
+      {
+        synthesize: async () => {
+          synthCalled = true;
+          return { text: "should never run" } as never;
+        },
+        writeAudit: async () => {},
+        nowIso: "2026-07-13T22:00:00.000Z",
+      },
+    );
+    expect(synthCalled).toBe(false);
+    expect(gen.draft).toBeNull();
+    expect(gen.meta.state).toBe("dismissed");
+    expect(gen.holdReason).toBe("no_reply_needed_conversation_closer");
+  });
+
+  it("a CLASSIFIED intent with closer-looking phrasing still drafts (classification outranks)", async () => {
+    let synthCalled = false;
+    const gen = await generateRecommendedReply(
+      {
+        recordId: "rec1",
+        street: "1 Test St",
+        channel: "sms",
+        classification: "acceptance",
+        inbound: "Sounds good, we'll take it",
+        conversationTail: "",
+        stickyOfferUsd: 50_000,
+        ceilingUsd: 60_000,
+        listPriceUsd: 70_000,
+        cappedToList: false,
+        flags: { estate: false, lien: false, probate: false, multiOffer: false },
+        agentFirstName: "Sam",
+      },
+      {},
+      {
+        synthesize: async () => {
+          synthCalled = true;
+          return { text: "Great — I'll get the paperwork moving today." } as never;
+        },
+        writeAudit: async () => {},
+        nowIso: "2026-07-13T22:00:00.000Z",
+      },
+    );
+    expect(synthCalled).toBe(true);
+    expect(gen.meta.state).toBe("queued");
+  });
+});
+
+describe("meta-commentary validator (the leaked-reasoning draft)", () => {
+  const CTX = {
+    recordId: "recX",
+    street: "685 Bolton Rd NW",
+    channel: "sms" as const,
+    classification: "unknown" as const,
+    inbound: "ok",
+    conversationTail: "",
+    stickyOfferUsd: null,
+    ceilingUsd: null,
+    listPriceUsd: null,
+    cappedToList: false,
+    flags: { estate: false, lien: false, probate: false, multiOffer: false },
+    agentFirstName: null,
+  };
+
+  it("the verbatim Bolton leak is HELD, never sendable", () => {
+    const v = validateReplyDraft(
+      "No reply needed — this is a conversation closer. Sending another message would be over-communication.\n\nIf a draft is required for the record: You're welcome, take care!",
+      CTX,
+    );
+    expect(v.ok).toBe(false);
+    expect(v.holdReason).toBe("generation_meta_commentary");
+  });
+
+  it("a normal message passes", () => {
+    expect(validateReplyDraft("Happy to answer any questions the seller has.", CTX).ok).toBe(true);
   });
 });
