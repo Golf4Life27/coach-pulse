@@ -10,6 +10,7 @@
 
 import { NextResponse } from "next/server";
 import { NEGOTIATION_STATUS_LIST, rankLiveDeals, needsYouCount, type LiveDealRow } from "@/lib/live-deals";
+import { resolveDisplayOffer } from "@/lib/deal-numbers";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -22,6 +23,7 @@ const FIELDS = [
   "Address",
   "Outreach_Status",
   "Contract_Offer_Price",
+  "Rough_Opener_Amount",
   "Outreach_Offer_Price",
   "List_Price",
   "Underwritten_MAO",
@@ -78,7 +80,15 @@ export async function GET() {
       id: r.id,
       address: str(r.fields["Address"]),
       status: str(r.fields["Outreach_Status"]),
-      contractPrice: num(r.fields["Contract_Offer_Price"]) ?? num(r.fields["Outreach_Offer_Price"]),
+      // Doctrine-safe offer resolution (P1.1): contract → value-anchored
+      // rough opener → legacy outreach. Never MAO_V1 (List×0.65). The card
+      // resolves from fields only (no notes fetch); the deal room adds the
+      // delivery-stamp authority on top.
+      contractPrice: resolveDisplayOffer({
+        contractOfferPrice: num(r.fields["Contract_Offer_Price"]),
+        roughOpenerAmount: num(r.fields["Rough_Opener_Amount"]),
+        outreachOfferPrice: num(r.fields["Outreach_Offer_Price"]),
+      }).amount,
       listPrice: num(r.fields["List_Price"]),
       ceiling: num(r.fields["Underwritten_MAO"]) ?? num(r.fields["Underwritten_Property_MAO"]),
       lastInboundAt: str(r.fields["Last_Inbound_At"]),

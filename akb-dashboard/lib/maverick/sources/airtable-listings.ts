@@ -11,6 +11,7 @@
 
 import { getListings } from "@/lib/airtable";
 import type { Listing } from "@/lib/types";
+import { resolveDisplayOffer } from "@/lib/deal-numbers";
 import { runWithTimeout } from "../timeout";
 import type { FetchOpts, SourceResult } from "../types";
 import { classifyBbcTierFromRate } from "@/lib/appraiser/rehab-calibration";
@@ -47,6 +48,11 @@ export interface ListingsActiveDeal {
   // outreach when both exist.
   outreach_offer_price: number | null;
   contract_offer_price: number | null;
+  /** Doctrine-safe resolved offer to DISPLAY (P1.1, 2026-07-13): contract →
+   *  value-anchored rough opener → legacy outreach. The real sent number,
+   *  never the MAO_V1 65%-of-list formula. Consumers should read THIS, not
+   *  the raw two fields (which are empty on modern value-anchored deals). */
+  offer_price: number | null;
   seller_motivation_score: number | null;
   last_outreach_date: string | null;
   last_inbound_at: string | null;
@@ -168,6 +174,11 @@ export function summarizeListings(
         list_price: l.listPrice ?? null,
         outreach_offer_price: l.outreachOfferPrice ?? null,
         contract_offer_price: l.contractOfferPrice ?? null,
+        offer_price: resolveDisplayOffer({
+          contractOfferPrice: l.contractOfferPrice,
+          roughOpenerAmount: l.roughOpenerAmount,
+          outreachOfferPrice: l.outreachOfferPrice,
+        }).amount,
         seller_motivation_score: l.sellerMotivationScore ?? null,
         last_outreach_date: l.lastOutreachDate ?? null,
         last_inbound_at: l.lastInboundAt ?? null,
