@@ -137,9 +137,19 @@ export async function GET(req: Request) {
       "Offer Accepted",
       "Texted",
     ]);
-    const actionableListings = listings.filter(
-      (l) => l.agentPhone && ACTIONABLE.has(l.outreachStatus ?? "")
-    );
+    const actionableListings = listings
+      .filter((l) => l.agentPhone && ACTIONABLE.has(l.outreachStatus ?? ""))
+      // Hottest first (2026-07-13): the phone pool below is capped at
+      // MAX_PHONES_PER_RUN, and the old unsorted order starved everything
+      // past the cap — the 4th instance of the prefix-slice bug class
+      // (gmail-sync #102, quo-sync #113, engaged-cron #112). Records with
+      // the freshest inbound sort to the front so a live conversation is
+      // never behind a stale Texted backlog.
+      .sort((a, b) => {
+        const at = Math.max(Date.parse(a.lastInboundAt ?? "") || 0, Date.parse(a.lastOutboundAt ?? "") || 0);
+        const bt = Math.max(Date.parse(b.lastInboundAt ?? "") || 0, Date.parse(b.lastOutboundAt ?? "") || 0);
+        return bt - at;
+      });
 
     // Dedupe phones — multiple listings can share an agent phone
     const phoneToListings = new Map<string, typeof actionableListings>();

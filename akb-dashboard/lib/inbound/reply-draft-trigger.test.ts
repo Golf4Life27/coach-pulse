@@ -224,3 +224,35 @@ describe("buildInboundReplyDraft — B2 DD-volley (watched-first)", () => {
     expect(res.extraFields).toBeUndefined();
   });
 });
+
+describe("buildInboundReplyDraft — closer → dismissed (no Send button, no HOLD noise)", () => {
+  it("a dismissed generation yields draftMeta (mirror written) but NO proposal", async () => {
+    const res = await buildInboundReplyDraft({
+      listing: LISTING,
+      notes: "",
+      inbound: { msgId: "ACcloser", body: "Ok, you're welcome. Take care!", toPhoneE164: "+13135551212" },
+      channel: "sms",
+      deps: {
+        generate: async (_ctx, opts) => ({
+          draft: null,
+          holdReason: "no_reply_needed_conversation_closer",
+          meta: {
+            state: "dismissed",
+            generated_at: "2026-07-13T22:00:00.000Z",
+            classification: "unknown",
+            confidence: 0.4,
+            channel: "sms",
+            inbound_msg_id: opts?.inboundMsgId ?? undefined,
+            hold_reason: "no_reply_needed_conversation_closer",
+          },
+        }),
+        nowMs: 9_000,
+      },
+    });
+    expect(res.skipped).toBe("no_reply_needed");
+    expect(res.proposal).toBeNull();
+    expect(res.draftMeta?.state).toBe("dismissed");
+    // The mirror carries the msg id, so this inbound is never re-processed.
+    expect(res.draftMeta?.inbound_msg_id).toBe("ACcloser");
+  });
+});

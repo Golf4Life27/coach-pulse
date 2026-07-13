@@ -21,10 +21,18 @@ import { parseQuoWebhookPayload } from "@/lib/inbound/webhook-parse";
 import { planInboundCapture } from "@/lib/inbound/capture";
 import { isInboundCaptureLive } from "@/lib/inbound/flag";
 import { createUnmatchedReply } from "@/lib/inbound/store";
+import {
+  buildInboundReplyDraft,
+  createReplyProposal,
+  fetchPendingReplyProposalRecordIds,
+} from "@/lib/inbound/reply-draft-trigger";
+import { persistDecisionMath } from "@/lib/decision-persist";
 import type { MatchableListing } from "@/lib/inbound/types";
 
 export const runtime = "nodejs";
-export const maxDuration = 30;
+// 60s: capture (~2s) + guardrailed draft generation (~5-25s) in the same
+// pass. OpenPhone retries on timeout; every step is idempotent by msg id.
+export const maxDuration = 60;
 
 /** Shared-secret guard. When QUO_WEBHOOK_SECRET is set, the caller must
  *  present it (?secret= or x-webhook-secret). Unset ⇒ accept for PARSING
@@ -132,6 +140,66 @@ async function handle(req: Request) {
     const fields: Record<string, unknown> = { Last_Inbound_At: msg.receivedAt };
     if (append.newEvents.length > 0) fields.Verification_Notes = append.notes;
     if (plan.newStatus) fields.Outreach_Status = plan.newStatus;
+
+    // ── ONE PIPELINE (unification, 2026-07-13): the draft happens AT CAPTURE,
+    // in the same pass as the notes/status write — every inbound leaves this
+    // handler with exactly one of: queued draft / HOLD with reason / explicit
+    // no-reply-needed dismissal. Same shared trigger (guardrails, DD-volley,
+    // closer policy, msg-id idempotency, pending-proposal dedupe) the sync
+    // reconcilers use — one workflow for every message, not one per lane.
+    // Best-effort: a draft failure never fails the capture (the hourly
+    // quo-sync reconciler heals it).
+    let draftOutcome: string | null = null;
+    if (listing) {
+      try {
+        const pending = await fetchPendingReplyProposalRecordIds();
+        const draft = await buildInboundReplyDraft({
+          listing: {
+            id: listing.id,
+            address: listing.address,
+            outreachStatus: plan.newStatus ?? listing.outreachStatus,
+            underwrittenMao: listing.underwrittenMao ?? null,
+            mao: listing.mao ?? null,
+            listPrice: listing.listPrice ?? null,
+            agentName: listing.agentName ?? null,
+            agentEmail: listing.agentEmail ?? null,
+            draftReplyMeta: listing.draftReplyMeta ?? null,
+            ddVolleyState: listing.ddVolleyState ?? null,
+          },
+          notes: append.notes,
+          inbound: { msgId: msg.externalId, body: msg.body, toPhoneE164: msg.sender },
+          channel: "sms",
+          hasPendingProposal: pending.has(listing.id),
+        });
+        draftOutcome = draft.skipped ?? (draft.drafted ? "queued" : "hold");
+        if (draft.draftMeta) {
+          let proposalIdForMeta: string | undefined;
+          if (draft.proposal) {
+            const created = await createReplyProposal(draft.proposal);
+            proposalIdForMeta = created ? draft.proposal.proposalId : undefined;
+          }
+          fields.Draft_Reply_Text = draft.draftText;
+          fields.Draft_Reply_Meta = JSON.stringify({ ...draft.draftMeta, proposal_id: proposalIdForMeta });
+        }
+        if (draft.extraFields) Object.assign(fields, draft.extraFields);
+        if (draft.notesAppend) {
+          fields.Verification_Notes = `${(fields.Verification_Notes as string) ?? append.notes}\n\n${draft.notesAppend}`;
+        }
+        // Counter → refresh the decision math against the seller's new number
+        // in the same second the message lands.
+        if (draft.classification === "counter") {
+          const counterUsd = plan.amounts.amounts[0]?.amountUsd ?? null;
+          await persistDecisionMath(listing, {
+            trigger: "counter_ingest_webhook",
+            latestCounterUsd: counterUsd,
+          }).catch((err) => console.error("[quo-inbound] decision refresh failed:", err));
+        }
+      } catch (err) {
+        draftOutcome = "draft_error";
+        console.error("[quo-inbound] reply draft failed:", err);
+      }
+    }
+
     await updateListingRecord(plan.listingId, fields);
     await audit({
       agent: "outreach",
@@ -139,10 +207,10 @@ async function handle(req: Request) {
       status: "confirmed_success",
       recordId: plan.listingId,
       inputSummary: { channel: msg.channel, sender: msg.sender },
-      outputSummary: { classification: plan.triage.classification, new_status: plan.newStatus, escalate: plan.escalate, appended: append.newEvents.length },
+      outputSummary: { classification: plan.triage.classification, new_status: plan.newStatus, escalate: plan.escalate, appended: append.newEvents.length, draft: draftOutcome },
       decision: plan.escalate ? "escalate" : "capture",
     });
-    return NextResponse.json({ ok: true, plan: "matched", recordId: plan.listingId, newStatus: plan.newStatus });
+    return NextResponse.json({ ok: true, plan: "matched", recordId: plan.listingId, newStatus: plan.newStatus, draft: draftOutcome });
   } catch (err) {
     // Transient write failure → 500 so Quo retries (we never want to lose a reply).
     await audit({

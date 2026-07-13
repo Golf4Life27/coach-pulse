@@ -175,12 +175,18 @@ async function handle(req: Request) {
               inbound: { msgId: newestEvent.id, body: srcMsg.body, from: srcMsg.from, subject: srcMsg.subject },
               channel: "email",
             });
-            if (draft.proposal) {
-              const created = await createReplyProposal(draft.proposal);
+            if (draft.draftMeta) {
+              let proposalIdForMeta: string | undefined;
+              if (draft.proposal) {
+                const created = await createReplyProposal(draft.proposal);
+                proposalIdForMeta = created ? draft.proposal.proposalId : undefined;
+              }
+              // Written even with no proposal (closer → dismissed): the meta
+              // records the inbound was seen, so nothing re-processes it.
               fields["Draft_Reply_Text"] = draft.draftText;
               fields["Draft_Reply_Meta"] = JSON.stringify({
                 ...draft.draftMeta,
-                proposal_id: created ? draft.proposal.proposalId : undefined,
+                proposal_id: proposalIdForMeta,
               });
             }
             // B2 DD-volley: persist updated state + stamp any DD answer to notes.

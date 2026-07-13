@@ -119,6 +119,28 @@ export function draftPolicy(classification: ReplyClassification): "draft" | "hol
   return "draft";
 }
 
+// ── Conversation-closer policy (2026-07-13, 685 Bolton leak) ────────────────
+// "Ok, you're welcome. I understand. … Have a great day!" needs NO reply —
+// but the pipeline drafted one, and the model's REASONING ("No reply needed —
+// this is a conversation closer…") leaked through as a sendable bubble.
+// Deterministic detection, applied ONLY to `unknown`-classified inbounds
+// (a classified intent — acceptance, counter, costs — always outranks
+// closer-looking phrasing). A closer produces an explicit DISMISSED state:
+// no Send button, no HOLD noise, and the msg-id idempotency still records
+// that the inbound was seen.
+const CLOSER_RE =
+  /\b(?:you'?re welcome|no problem|take care|have a (?:good|great|nice|wonderful) (?:day|night|evening|weekend|one)|sounds good|will do|talk (?:soon|later)|good\s?bye|bye now|thanks?,? (?:again|so much)|got it|understood)\b/i;
+
+/** Pure: a short, question-free, number-free pleasantry that closes the
+ *  exchange. Callers gate this on classification === "unknown". */
+export function isConversationCloser(inbound: string | null | undefined): boolean {
+  const t = (inbound ?? "").trim();
+  if (!t || t.length > 200) return false;
+  if (t.includes("?")) return false;
+  if (/\$\s*\d|\d{4,}/.test(t)) return false; // money or long numbers → substance
+  return CLOSER_RE.test(t);
+}
+
 export function classificationConfidence(classification: ReplyClassification, matchedPattern: string | null): number {
   if (classification === "unknown") return 0.4;
   return matchedPattern ? 0.9 : 0.6;
@@ -209,11 +231,22 @@ function matchesSticky(amount: number, stickyUsd: number): boolean {
   return false;
 }
 
+// The model's editorial voice leaking into a sendable draft (the Bolton
+// bubble: "No reply needed — this is a conversation closer. Sending another
+// message would be over-communication."). A draft is the MESSAGE, never
+// commentary about whether to send one — deterministic catch, belt+braces
+// under the isConversationCloser policy.
+const META_COMMENTARY_RE =
+  /\bno reply (?:is )?(?:needed|required)\b|\bif a draft is required\b|\bconversation[- ]closer\b|\bover-?communicat|\bwould be redundant\b|\bdoes not (?:need|require|warrant) a (?:reply|response)\b|\bas an ai\b|\bi (?:would|will) not (?:draft|recommend)\b/i;
+
 export function validateReplyDraft(draft: string, ctx: ReplyDraftContext): DraftValidation {
   const text = (draft ?? "").trim();
   if (!text) return { ok: false, holdReason: "generation_failed_empty" };
   if (text.startsWith("[") && /failed|no api key/i.test(text)) {
     return { ok: false, holdReason: "generation_failed" };
+  }
+  if (META_COMMENTARY_RE.test(text)) {
+    return { ok: false, holdReason: "generation_meta_commentary" };
   }
 
   // G4 — disclosure acknowledgment is never the machine's to draft.
@@ -303,8 +336,14 @@ export async function generateRecommendedReply(
   const policy = draftPolicy(ctx.classification);
   let draft: string | null = null;
   let holdReason: string | null = null;
+  let dismissed = false;
 
-  if (policy === "hold") {
+  // Closer policy — decided BEFORE any model call (deterministic, free).
+  // Only `unknown` inbounds qualify; a classified intent always drafts.
+  if (policy === "draft" && ctx.classification === "unknown" && isConversationCloser(ctx.inbound)) {
+    dismissed = true;
+    holdReason = "no_reply_needed_conversation_closer";
+  } else if (policy === "hold") {
     holdReason = "operator_must_acknowledge_disclosure";
   } else if (policy === "none") {
     holdReason = "tier0_auto_close_lane";
@@ -328,11 +367,15 @@ export async function generateRecommendedReply(
     }
   }
 
-  const meta: DraftMeta = { ...baseMeta, state: draft ? "queued" : "hold", hold_reason: holdReason ?? undefined };
+  const meta: DraftMeta = {
+    ...baseMeta,
+    state: draft ? "queued" : dismissed ? "dismissed" : "hold",
+    hold_reason: holdReason ?? undefined,
+  };
   await writeAudit({
     agent: ctx.channel === "sms" ? "crier" : "forge",
     event: "reply_draft_created",
-    status: draft ? "confirmed_success" : "confirmed_failure",
+    status: draft || dismissed ? "confirmed_success" : "confirmed_failure",
     recordId: ctx.recordId,
     inputSummary: {
       channel: ctx.channel,
@@ -345,7 +388,7 @@ export async function generateRecommendedReply(
     outputSummary: draft
       ? { state: "queued", draft_length: draft.length }
       : { state: "hold", hold_reason: holdReason },
-    decision: draft ? "draft_queued" : "hold_surfaced",
+    decision: draft ? "draft_queued" : dismissed ? "no_reply_needed" : "hold_surfaced",
   });
 
   return { draft, holdReason, meta };

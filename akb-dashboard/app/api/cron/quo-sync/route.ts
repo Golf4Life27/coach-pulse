@@ -21,6 +21,8 @@ import { getThreadVerified } from "@/lib/quo";
 import { normalizePhone } from "@/lib/phone-normalize";
 import { toE164 } from "@/lib/phone";
 import { appendQuoMessagesToNotes } from "@/lib/outreach/quo-sync";
+import { detectL3DollarAmounts } from "@/lib/outreach/l3-amount-detector";
+import { isSelfEchoOrAutoreply } from "@/lib/conversation-check";
 import { selectSweepCohort } from "@/lib/inbound/gmail-thread-link";
 import {
   buildInboundReplyDraft,
@@ -137,18 +139,27 @@ async function handle(req: Request) {
       const fields: Record<string, unknown> = {};
       if (r.newEvents.length > 0) {
         fields["Verification_Notes"] = r.notes;
+      }
 
-        // ── RECOMMENDED REPLIES (P2.1, 2026-07-13): the newest ingested SMS
-        // inbound generates a guardrailed 2A draft (crier, SMS register) —
-        // queued as a jarvis_reply proposal with a send_sms payload and
-        // mirrored onto the listing for the Live Deals strip. Idempotent by
-        // inbound msg id; cross-deduped against scan-comms' pending queue.
-        // Guardrail failure → HOLD surfaced. Best-effort — the notes write
-        // still lands even if drafting throws.
-        try {
-          const newest = [...r.newEvents].sort(
-            (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt),
-          )[0];
+      // ── ONE PIPELINE (unification, 2026-07-13): the draft trigger runs for
+      // the record's NEWEST genuine inbound whether or not THIS run appended
+      // it. The old `newEvents`-gated trigger went dead the moment the Quo
+      // webhook went live — the webhook always appends first, so quo-sync saw
+      // zero new events and never drafted again (1150 Mayland: Duane's 21:26Z
+      // counter captured in 1s, no draft an hour later). This is now the
+      // hourly RECONCILER: idempotent by inbound msg id, cross-deduped against
+      // pending proposals, and gated ball-in-court (never draft after the
+      // operator already replied). Closers come back DISMISSED (no Send
+      // button); guardrail failures HOLD. Best-effort — the notes write still
+      // lands even if drafting throws.
+      try {
+        const newestInbound = msgs
+          .filter((m) => m.direction === "incoming" && !isSelfEchoOrAutoreply(m.body))
+          .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
+        const ballInCourt =
+          newestInbound != null &&
+          (!l.lastOutboundAt || Date.parse(newestInbound.createdAt) > Date.parse(l.lastOutboundAt));
+        if (newestInbound && ballInCourt) {
           const draft = await buildInboundReplyDraft({
             listing: {
               id: l.id,
@@ -163,21 +174,25 @@ async function handle(req: Request) {
               ddVolleyState: l.ddVolleyState ?? null,
             },
             notes: r.notes,
-            inbound: { msgId: newest.id, body: newest.body, toPhoneE164: toE164(phone) },
+            inbound: { msgId: newestInbound.id, body: newestInbound.body, toPhoneE164: toE164(phone) },
             channel: "sms",
             hasPendingProposal: pendingReplyRecordIds.has(l.id),
           });
-          if (draft.proposal) {
-            const created = await createReplyProposal(draft.proposal);
+          if (draft.draftMeta) {
+            let proposalIdForMeta: string | undefined;
+            if (draft.proposal) {
+              const created = await createReplyProposal(draft.proposal);
+              proposalIdForMeta = created ? draft.proposal.proposalId : undefined;
+              if (draft.drafted) draftsQueued++;
+              else draftsHeld++;
+              // Once queued, guard scan-comms (and later rows) from re-drafting.
+              if (created) pendingReplyRecordIds.add(l.id);
+            }
             fields["Draft_Reply_Text"] = draft.draftText;
             fields["Draft_Reply_Meta"] = JSON.stringify({
               ...draft.draftMeta,
-              proposal_id: created ? draft.proposal.proposalId : undefined,
+              proposal_id: proposalIdForMeta,
             });
-            if (draft.drafted) draftsQueued++;
-            else draftsHeld++;
-            // Once queued, guard scan-comms (and later rows) from re-drafting.
-            if (created) pendingReplyRecordIds.add(l.id);
           }
           // B2 DD-volley: persist updated state + stamp any DD answer to notes.
           if (draft.extraFields) Object.assign(fields, draft.extraFields);
@@ -186,14 +201,10 @@ async function handle(req: Request) {
           }
           // DECISION REFRESH on a classified COUNTER (decision-math build,
           // 2026-07-13): re-check the spread against the seller's new number
-          // in the same ingestion cycle — Mayfield's $27k counter must show
-          // instantly whether it still clears. Best-effort; hash-gated so an
-          // unchanged number is a no-op.
+          // in the same ingestion cycle. Best-effort; hash-gated no-op when
+          // the number didn't move.
           if (draft.classification === "counter") {
-            const newest2 = [...r.newEvents].sort(
-              (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt),
-            )[0];
-            const counterUsd = newest2?.amounts?.[0]?.amountUsd ?? null;
+            const counterUsd = detectL3DollarAmounts(newestInbound.body).amounts[0]?.amountUsd ?? null;
             try {
               const d = await persistDecisionMath(l, {
                 trigger: "counter_ingest_sms",
@@ -204,9 +215,9 @@ async function handle(req: Request) {
               console.error("[quo_sync] decision refresh failed:", err);
             }
           }
-        } catch (err) {
-          console.error("[quo_sync] reply draft failed:", err);
         }
+      } catch (err) {
+        console.error("[quo_sync] reply draft failed:", err);
       }
       if (Object.keys(fields).length > 0) {
         await updateListingRecord(l.id, fields);
