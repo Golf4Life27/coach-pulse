@@ -182,10 +182,19 @@ async function handleScan(req: Request) {
           try {
             await updateListingRecord(listing.id, fields);
             notesAppended++;
-            // Event-driven Appraiser kick — only on the transition INTO
-            // Response Received (not Negotiating / Counter Received /
-            // Dead). Ruling 2026-06-10: the reply is the gate.
-            if (newStatus === "Response Received") {
+            // Event-driven Appraiser kick — on any transition INTO an
+            // ENGAGED stage (Response Received OR straight to Negotiating /
+            // Counter Received / Offer Accepted). Ruling 2026-06-10: the
+            // reply is the gate. Broadened 2026-07-13 (P1.2) — an interest
+            // reply that jumps directly to Negotiating was silently skipped;
+            // the auto-underwrite-engaged cron is the channel-agnostic
+            // backstop for email/manual/legacy advances this path can't see.
+            if (
+              newStatus === "Response Received" ||
+              newStatus === "Negotiating" ||
+              newStatus === "Counter Received" ||
+              newStatus === "Offer Accepted"
+            ) {
               try {
                 const r = await autoRunOnEngaged({
                   recordId: listing.id,
@@ -208,6 +217,10 @@ async function handleScan(req: Request) {
                   repriceYourMao: null,
                   repriceElapsedMs: 0,
                   repriceError: String(err).slice(0, 240),
+                  buyerIntel: "failed",
+                  buyerIntelHttpStatus: null,
+                  buyerIntelElapsedMs: 0,
+                  buyerIntelError: String(err).slice(0, 240),
                 });
               }
             }
