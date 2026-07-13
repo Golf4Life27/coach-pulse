@@ -33,10 +33,22 @@ export const RENTCAST_LOOP_TRIP_AFTER = (() => {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 3;
 })();
 
-/** TTL on the failure-counter key. Long enough that a slow loop can't
- *  reset by simple time-passing, short enough that a real recovery
- *  (address now indexed; API back up) heals without manual reset. */
+/** TTL on the failure-counter key for TRANSIENT failures (5xx, network).
+ *  Long enough that a slow loop can't reset by simple time-passing, short
+ *  enough that a real recovery (API back up) heals without manual reset. */
 const COUNTER_TTL_S = 60 * 60 * 6; // 6h
+
+/** Cooldown when the looping failure is a STABLE 404 — "property not in
+ *  RentCast's index." Unlike a 5xx / network blip, a 404 will NOT heal on the
+ *  next tick: the address simply isn't there. With the 6h transient TTL a
+ *  permanently-missing address re-burns 3 billed 404s every 6h FOREVER (~12/
+ *  day). A much longer 404 window means a genuinely-absent address is re-probed
+ *  at most ~once/week, while still self-healing if it later gets indexed. This
+ *  is the "stop the retry burn" half of the P3 fix (2026-07-13). Env-tunable. */
+export const RENTCAST_NOT_FOUND_TTL_S = (() => {
+  const raw = Number(process.env.RENTCAST_NOT_FOUND_TTL_S);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 7 * 24 * 3600; // 7d
+})();
 
 const KV_PREFIX = "rc:loop:";
 
@@ -87,10 +99,10 @@ async function readCounter(key: string): Promise<CounterState | null> {
   return memoryRing.get(key) ?? null;
 }
 
-async function writeCounter(key: string, state: CounterState): Promise<void> {
+async function writeCounter(key: string, state: CounterState, ttlS: number = COUNTER_TTL_S): Promise<void> {
   if (kvConfigured()) {
     try {
-      await kvProd.setEx(`${KV_PREFIX}${key}`, JSON.stringify(state), COUNTER_TTL_S);
+      await kvProd.setEx(`${KV_PREFIX}${key}`, JSON.stringify(state), ttlS);
       return;
     } catch {
       /* fall through to memory */
@@ -123,6 +135,16 @@ export interface BreakerState {
   tripAfter: number;
   /** The call-shape key, so callers can emit it in audit/alert. */
   key: string;
+  /** Cooldown (seconds) the counter is (or would be) held for — the long
+   *  RENTCAST_NOT_FOUND_TTL_S for a stable 404, else the transient 6h. Lets
+   *  callers/tests see that a 404 loop is parked far longer than a 5xx blip. */
+  cooldownS: number;
+}
+
+/** The cooldown a given HTTP status earns: a 404 is a stable "not indexed"
+ *  and is parked for the long window; everything else is treated as transient. */
+function cooldownForStatus(httpStatus: number | null): number {
+  return httpStatus === 404 ? RENTCAST_NOT_FOUND_TTL_S : COUNTER_TTL_S;
 }
 
 /** Read-only check — call this BEFORE the paid fetch to decide whether
@@ -134,7 +156,7 @@ export async function checkLoopBreaker(
   const key = callShapeKey(endpoint, params);
   const state = await readCounter(key);
   if (!state) {
-    return { tripped: false, count: 0, lastStatus: null, tripAfter: RENTCAST_LOOP_TRIP_AFTER, key };
+    return { tripped: false, count: 0, lastStatus: null, tripAfter: RENTCAST_LOOP_TRIP_AFTER, key, cooldownS: COUNTER_TTL_S };
   }
   return {
     tripped: state.count >= RENTCAST_LOOP_TRIP_AFTER,
@@ -142,6 +164,7 @@ export async function checkLoopBreaker(
     lastStatus: state.lastStatus,
     tripAfter: RENTCAST_LOOP_TRIP_AFTER,
     key,
+    cooldownS: cooldownForStatus(state.lastStatus),
   };
 }
 
@@ -160,7 +183,7 @@ export async function recordCallOutcome(
   // Success — clear and short-circuit out.
   if (httpStatus >= 200 && httpStatus < 300) {
     await clearCounter(key);
-    return { tripped: false, count: 0, lastStatus: httpStatus, tripAfter: RENTCAST_LOOP_TRIP_AFTER, key };
+    return { tripped: false, count: 0, lastStatus: httpStatus, tripAfter: RENTCAST_LOOP_TRIP_AFTER, key, cooldownS: COUNTER_TTL_S };
   }
 
   const prev = (await readCounter(key)) ?? {
@@ -179,6 +202,10 @@ export async function recordCallOutcome(
     lastAt: new Date().toISOString(),
     alertedAt: prev.alertedAt,
   };
+  // A stable 404 ("not in RentCast's index") is parked for the long window so
+  // it can't re-burn every 6h; transient failures keep the short heal window.
+  const ttlS = cooldownForStatus(httpStatus);
+  const stableNotFound = httpStatus === 404;
 
   // Edge-trigger the alert: one audit at the moment the breaker trips.
   // Not on every subsequent skip — alerts are for decisions, not noise.
@@ -188,21 +215,28 @@ export async function recordCallOutcome(
       agent: "appraiser",
       event: "rentcast_loop_tripped",
       status: "confirmed_failure",
+      recordId: params.recordId ?? undefined,
       inputSummary: {
         endpoint,
         recordId: params.recordId ?? null,
+        // Now carried for avm/value + rent calls too (P3) — without the
+        // address here the operator could not name the failing property.
         address: params.address ?? null,
+        city: params.city ?? null,
+        state: params.state ?? null,
         zip: params.zip ?? null,
         http_status: httpStatus,
         consecutive_failures: nextCount,
         trip_after: RENTCAST_LOOP_TRIP_AFTER,
+        stable_not_found: stableNotFound,
+        cooldown_s: ttlS,
       },
-      error: `RentCast loop breaker tripped after ${nextCount} consecutive HTTP ${httpStatus} on the same call shape — subsequent calls short-circuit until a success clears the counter.`,
+      error: `RentCast loop breaker tripped after ${nextCount} consecutive HTTP ${httpStatus} on ${endpoint} for ${params.address ?? params.recordId ?? "unknown shape"}${stableNotFound ? ` — STABLE 404 (not in index), parked ${Math.round(ttlS / 3600)}h` : ""}. Subsequent calls short-circuit until a success clears the counter.`,
     });
   }
 
-  await writeCounter(key, next);
-  return { tripped: nowTripped, count: nextCount, lastStatus: httpStatus, tripAfter: RENTCAST_LOOP_TRIP_AFTER, key };
+  await writeCounter(key, next, ttlS);
+  return { tripped: nowTripped, count: nextCount, lastStatus: httpStatus, tripAfter: RENTCAST_LOOP_TRIP_AFTER, key, cooldownS: ttlS };
 }
 
 /** Record a thrown error (network blip, DNS fail). Counted as a failure

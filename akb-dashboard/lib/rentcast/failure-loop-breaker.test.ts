@@ -8,6 +8,7 @@ import {
   recordCallError,
   _resetMemoryRing,
   RENTCAST_LOOP_TRIP_AFTER,
+  RENTCAST_NOT_FOUND_TTL_S,
 } from "./failure-loop-breaker";
 
 const PARAMS = { address: "123 Main St", city: "San Antonio", state: "TX", zip: "78201", recordId: "recABC" };
@@ -100,6 +101,36 @@ describe("recordCallError — network failures", () => {
     const v = await recordCallError("properties", PARAMS);
     expect(v.tripped).toBe(true);
     expect(v.lastStatus).toBe(-1);
+  });
+});
+
+describe("stable-404 vs transient cooldown (P3 — stop the retry burn)", () => {
+  it("a 404 trip is parked for the LONG not-found window, not the 6h transient one", async () => {
+    let last;
+    for (let i = 0; i < RENTCAST_LOOP_TRIP_AFTER; i++) {
+      last = await recordCallOutcome("avm/value", PARAMS, 404);
+    }
+    expect(last!.tripped).toBe(true);
+    expect(last!.cooldownS).toBe(RENTCAST_NOT_FOUND_TTL_S);
+    // checkLoopBreaker reflects the same long cooldown for the stored 404.
+    expect((await checkLoopBreaker("avm/value", PARAMS)).cooldownS).toBe(RENTCAST_NOT_FOUND_TTL_S);
+  });
+
+  it("a transient 5xx loop keeps the SHORT heal window (upstream may recover)", async () => {
+    const shape = { ...PARAMS, recordId: "rec5XX" };
+    let last;
+    for (let i = 0; i < RENTCAST_LOOP_TRIP_AFTER; i++) {
+      last = await recordCallOutcome("avm/value", shape, 503);
+    }
+    expect(last!.tripped).toBe(true);
+    // 503 heals fast; 404 is parked ~weeks. The whole point of the split.
+    expect(last!.cooldownS).toBeLessThan(RENTCAST_NOT_FOUND_TTL_S);
+  });
+
+  it("a 404 window is dramatically longer than the transient window", async () => {
+    const a = await recordCallOutcome("properties", { ...PARAMS, recordId: "recA" }, 404);
+    const b = await recordCallOutcome("properties", { ...PARAMS, recordId: "recB" }, 500);
+    expect(a.cooldownS).toBeGreaterThan(b.cooldownS);
   });
 });
 

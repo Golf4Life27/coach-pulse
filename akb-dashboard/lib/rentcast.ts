@@ -185,6 +185,7 @@ export async function getAvmValue(
     url,
     { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" },
     recordId,
+    { address: input.address, city: input.city, state: input.state, zip: input.zip, recordId: recordId ?? null },
   );
   if (!res.ok) {
     const errText = await res.text().catch(() => "");
@@ -220,6 +221,7 @@ export async function getSaleComparables(
     url,
     { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" },
     recordId,
+    { address: input.address, city: input.city, state: input.state, zip: input.zip, recordId: recordId ?? null },
   );
 
   const bodyText = await res.text();
@@ -301,6 +303,7 @@ export async function getRentEstimate(
     url,
     { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" },
     recordId,
+    { address: input.address, city: input.city, state: input.state, zip: input.zip, recordId: recordId ?? null },
   );
 
   const bodyText = await res.text();
