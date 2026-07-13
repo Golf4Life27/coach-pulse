@@ -73,6 +73,13 @@ export interface EngagedAutoRunResult {
   repriceYourMao: number | null;
   repriceElapsedMs: number;
   repriceError: string | null;
+  // ── Buyer-ceiling / ARV buy-box (P1.2, 2026-07-13) ────────────────
+  // The 4th offer-readiness item: the dual-track buyer MAO ceiling.
+  //   "ok" | "failed" | "skipped_by_caller"
+  buyerIntel: "ok" | "failed" | "skipped_by_caller";
+  buyerIntelHttpStatus: number | null;
+  buyerIntelElapsedMs: number;
+  buyerIntelError: string | null;
 }
 
 export interface EngagedAutoRunInput {
@@ -86,6 +93,8 @@ export interface EngagedAutoRunInput {
   skipRehab?: boolean;
   /** Skip the landlord V2.1 re-price step. */
   skipReprice?: boolean;
+  /** Skip the buyer-ceiling / ARV buy-box (dual-track) compute. */
+  skipBuyerIntel?: boolean;
   /** Epoch ms after which the CALLER's lambda budget is exhausted.
    *  Rehab is only attempted when at least REHAB_BUDGET_MS remains.
    *  Omit to always attempt (callers with their own budget loop). */
@@ -122,7 +131,7 @@ async function callRoute(
 export async function autoRunOnEngaged(
   input: EngagedAutoRunInput,
 ): Promise<EngagedAutoRunResult> {
-  const { recordId, origin, cookie, skipRehab, skipReprice, deadlineAtMs } = input;
+  const { recordId, origin, cookie, skipRehab, skipReprice, skipBuyerIntel, deadlineAtMs } = input;
 
   const headers: Record<string, string> = {};
   if (cookie) headers.cookie = cookie;
@@ -211,6 +220,23 @@ export async function autoRunOnEngaged(
     repriceElapsedMs = Date.now() - t0;
   }
 
+  // ── Buyer-ceiling / ARV buy-box (P1.2) — the dual-track buyer MAO. Runs
+  // after ARV so the compute reads fresh comps. Best-effort like rehab: a
+  // failure is reported, never thrown.
+  let buyerIntel: EngagedAutoRunResult["buyerIntel"];
+  let buyerIntelHttpStatus: number | null = null;
+  let buyerIntelElapsedMs = 0;
+  let buyerIntelError: string | null = null;
+  if (skipBuyerIntel) {
+    buyerIntel = "skipped_by_caller";
+  } else {
+    const bi = await callRoute(`${origin}/api/agents/appraiser/buyer-intelligence/${recordId}`, headers);
+    buyerIntel = bi.ok ? "ok" : "failed";
+    buyerIntelHttpStatus = bi.status;
+    buyerIntelElapsedMs = bi.elapsedMs;
+    buyerIntelError = bi.error;
+  }
+
   return {
     recordId,
     arvOk: arv.ok,
@@ -225,6 +251,10 @@ export async function autoRunOnEngaged(
     repriceYourMao,
     repriceElapsedMs,
     repriceError,
+    buyerIntel,
+    buyerIntelHttpStatus,
+    buyerIntelElapsedMs,
+    buyerIntelError,
   };
 }
 
