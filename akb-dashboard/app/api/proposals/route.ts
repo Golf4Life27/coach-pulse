@@ -9,25 +9,50 @@ import { parseDraftMeta } from "@/lib/recommended-reply";
 /** RECOMMENDED-REPLIES mirror: flip the listing's Draft_Reply_Meta state
  *  when its queued draft is sent or dismissed through this rail. Matched by
  *  proposal_id so a newer draft is never clobbered by an older proposal's
- *  outcome. Best-effort — the proposal is the source of dispatch truth. */
+ *  outcome. `proposalIds` carries BOTH id namespaces (Airtable rec… id and
+ *  the human Proposal_ID string) — the meta stores whichever its writer had
+ *  (sync crons stamp the human id; the deal page passes the rec id), and the
+ *  mirror must match either. Best-effort — the proposal is dispatch truth. */
 async function mirrorDraftState(
   recordId: string | null | undefined,
-  proposalId: string,
+  proposalIds: Array<string | null | undefined>,
   state: "sent" | "dismissed",
   sentAt?: string,
 ): Promise<void> {
   if (!recordId) return;
   try {
+    const candidates = new Set(proposalIds.filter((p): p is string => Boolean(p)));
     const listing = await getListing(recordId);
     const meta = parseDraftMeta((listing as { draftReplyMeta?: string | null })?.draftReplyMeta);
-    if (!meta || meta.proposal_id !== proposalId || meta.state === "sent") return;
+    if (!meta || !meta.proposal_id || !candidates.has(meta.proposal_id) || meta.state === "sent") return;
     await updateListingRecord(recordId, {
       Draft_Reply_Meta: JSON.stringify({ ...meta, state, sent_at: sentAt }),
-      ...(state === "sent" ? {} : {}),
     });
   } catch (err) {
     console.error("[proposals] draft-state mirror failed:", err);
   }
+}
+
+/** Resolve a caller-supplied proposal reference to the Airtable RECORD id.
+ *  Two id namespaces reach this rail (2026-07-13 Act Now 404): the deal page
+ *  passes rec… ids from GET /api/proposals, but the Live Deals strip passes
+ *  Draft_Reply_Meta.proposal_id — the HUMAN Proposal_ID string the sync crons
+ *  stamp ("jarvis_reply-<ts>-…"). Using that string as a record id 404s at
+ *  Airtable ("proposal fetch failed (404)"). Non-rec refs resolve via a
+ *  {Proposal_ID} lookup; null when nothing matches. */
+async function resolveProposalRecordId(tableId: string, ref: string): Promise<string | null> {
+  if (ref.startsWith("rec")) return ref;
+  const params = new URLSearchParams();
+  params.set("filterByFormula", `{Proposal_ID}="${ref.replace(/"/g, '\\"')}"`);
+  params.set("maxRecords", "1");
+  const res = await fetch(`https://api.airtable.com/v0/${BASE_ID}/${tableId}?${params.toString()}`, {
+    headers: { Authorization: `Bearer ${AIRTABLE_PAT}` },
+    cache: "no-store",
+  });
+  if (!res.ok) return null;
+  const data = await res.json();
+  const rec = data.records?.[0];
+  return rec?.id ?? null;
 }
 
 const AIRTABLE_PAT = process.env.AIRTABLE_PAT!;
@@ -184,6 +209,23 @@ export async function PATCH(req: Request) {
     );
   }
 
+  // Resolve to the Airtable record id — callers legitimately pass either
+  // namespace (see resolveProposalRecordId). All Airtable ops below use the
+  // record id; the mirror matches on both.
+  let proposalRecId: string;
+  try {
+    const resolved = await resolveProposalRecordId(tableId, proposalId);
+    if (!resolved) {
+      return Response.json(
+        { success: false, skipReason: `proposal not found for ref ${proposalId}` },
+        { status: 404 }
+      );
+    }
+    proposalRecId = resolved;
+  } catch (err) {
+    return Response.json({ error: "proposal lookup failed", detail: String(err) }, { status: 502 });
+  }
+
   // ── Wire 2: Approve & Send — dispatch the operator-approved draft ──
   if (action === "approve" && dispatch === true) {
     try {
@@ -191,7 +233,7 @@ export async function PATCH(req: Request) {
       // non-Pending proposal must never dispatch (second idempotency belt on
       // top of the KV claim).
       const res = await fetch(
-        `https://api.airtable.com/v0/${BASE_ID}/${tableId}/${proposalId}`,
+        `https://api.airtable.com/v0/${BASE_ID}/${tableId}/${proposalRecId}`,
         { headers: { Authorization: `Bearer ${AIRTABLE_PAT}` }, cache: "no-store" }
       );
       if (!res.ok) {
@@ -227,7 +269,7 @@ export async function PATCH(req: Request) {
           );
         }
         const iso = new Date().toISOString();
-        await patchProposal(tableId, proposalId, {
+        await patchProposal(tableId, proposalRecId, {
           Status: "Approved",
           Reviewed_At: iso,
           Suggested_Action_Payload: JSON.stringify({
@@ -248,7 +290,7 @@ export async function PATCH(req: Request) {
           } catch (err) {
             console.error("[proposals] email listing write-back failed:", err);
           }
-          await mirrorDraftState(recordId, proposalId, "sent", iso);
+          await mirrorDraftState(recordId, [proposalId, proposalRecId, f.Proposal_ID as string], "sent", iso);
         }
         return Response.json({ success: true, action, sent: true, gmailMessageId: send.messageId ?? null });
       }
@@ -266,7 +308,7 @@ export async function PATCH(req: Request) {
       const finalBody = (editedBody ?? "").trim() || payload.draftBody;
 
       const result = await sendApprovedReply({
-        proposalId,
+        proposalId: proposalRecId,
         recordId: recordId || proposalId,
         toE164: payload.to,
         body: finalBody,
@@ -285,7 +327,7 @@ export async function PATCH(req: Request) {
       }
 
       const iso = new Date().toISOString();
-      await patchProposal(tableId, proposalId, {
+      await patchProposal(tableId, proposalRecId, {
         Status: "Approved",
         Reviewed_At: iso,
         Suggested_Action_Payload: JSON.stringify({
@@ -308,7 +350,7 @@ export async function PATCH(req: Request) {
         } catch (err) {
           console.error("[proposals] listing write-back failed:", err);
         }
-        await mirrorDraftState(recordId, proposalId, "sent", iso);
+        await mirrorDraftState(recordId, [proposalId, proposalRecId, f.Proposal_ID as string], "sent", iso);
       }
 
       return Response.json({
@@ -335,7 +377,7 @@ export async function PATCH(req: Request) {
   if (action === "approve") {
     try {
       const res = await fetch(
-        `https://api.airtable.com/v0/${BASE_ID}/${tableId}/${proposalId}`,
+        `https://api.airtable.com/v0/${BASE_ID}/${tableId}/${proposalRecId}`,
         { headers: { Authorization: `Bearer ${AIRTABLE_PAT}` }, cache: "no-store" },
       );
       if (res.ok) {
@@ -359,7 +401,7 @@ export async function PATCH(req: Request) {
           await retireZip(payload.recordId, {
             note: `frontier_retire approved by operator (proposal ${proposalId}): ZIP ${payload.zip} paused — zero-yield snapshot`,
           });
-          await patchProposal(tableId, proposalId, {
+          await patchProposal(tableId, proposalRecId, {
             Status: "Approved",
             Reviewed_At: iso,
           });
@@ -400,18 +442,18 @@ export async function PATCH(req: Request) {
   }
 
   try {
-    await patchProposal(tableId, proposalId, fields);
+    await patchProposal(tableId, proposalRecId, fields);
     // Rejecting a reply draft dismisses its listing mirror so the Live Deals
     // strip stops showing it. Record_ID lookup is best-effort.
     if (action === "reject") {
       try {
-        const res = await fetch(`https://api.airtable.com/v0/${BASE_ID}/${tableId}/${proposalId}`, {
+        const res = await fetch(`https://api.airtable.com/v0/${BASE_ID}/${tableId}/${proposalRecId}`, {
           headers: { Authorization: `Bearer ${AIRTABLE_PAT}` },
           cache: "no-store",
         });
         if (res.ok) {
           const rec = await res.json();
-          await mirrorDraftState((rec.fields?.Record_ID as string) ?? null, proposalId, "dismissed");
+          await mirrorDraftState((rec.fields?.Record_ID as string) ?? null, [proposalId, proposalRecId, rec.fields?.Proposal_ID as string], "dismissed");
         }
       } catch {
         /* mirror is cosmetic on reject */
