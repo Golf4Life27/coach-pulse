@@ -88,8 +88,10 @@ export default function DealWorkspace() {
   // Unified conversation
   const [convoMessages, setConvoMessages] = useState<Array<{
     id: string; source: string; direction: string; body: string;
-    timestamp: string; from: string; to: string;
+    raw_body?: string; timestamp: string; from: string; to: string;
   }>>([]);
+  // Message ids whose full (uncleaned) email body is expanded (P1.3).
+  const [rawShown, setRawShown] = useState<Set<string>>(new Set());
   const [convoLoading, setConvoLoading] = useState(false);
   // Comms integrity + sourced numbers (from /api/conversations/[id]).
   const [captureGaps, setCaptureGaps] = useState<CaptureGap[]>([]);
@@ -596,6 +598,12 @@ export default function DealWorkspace() {
                 }
                 const isOutbound = msg.direction === "outbound";
                 const sourceIcon = msg.source === "quo" ? "💬" : msg.source === "email" ? "📧" : "📝";
+                // P1.3: email bubbles show the CLEAN body (quoted history +
+                // signature/disclaimer stripped server-side). raw_body is set
+                // when cleaning changed the text — offer a quiet toggle so the
+                // full original is one tap away, never lost.
+                const expanded = rawShown.has(msg.id);
+                const shownBody = expanded && msg.raw_body ? msg.raw_body : msg.body;
                 return (
                   <div key={msg.id} className={`flex ${isOutbound ? "justify-end" : "justify-start"}`}>
                     <div className="max-w-[80%]">
@@ -604,13 +612,29 @@ export default function DealWorkspace() {
                           ? "bg-blue-600 text-white rounded-br-sm"
                           : "bg-[#30363d] text-gray-200 rounded-bl-sm"
                       }`}>
-                        {msg.body}
+                        {shownBody}
                       </div>
                       <div className={`flex items-center gap-1 mt-1 ${isOutbound ? "justify-end" : ""}`}>
                         <span className="text-[9px]">{sourceIcon}</span>
                         <span className="text-[10px] text-gray-500">
                           {msg.from}{msg.timestamp ? ` · ${new Date(msg.timestamp).toLocaleString()}` : ""}
                         </span>
+                        {msg.raw_body && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setRawShown((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(msg.id)) next.delete(msg.id);
+                                else next.add(msg.id);
+                                return next;
+                              })
+                            }
+                            className="text-[10px] text-gray-500 underline hover:text-gray-300"
+                          >
+                            {expanded ? "hide original" : "show original"}
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
