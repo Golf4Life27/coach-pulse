@@ -6,7 +6,7 @@ import { mergeTimeline, type SiblingRecord } from "@/lib/timeline-merge";
 import { detectCaptureGaps } from "@/lib/comms-integrity";
 import { extractStickyOffer } from "@/lib/h2-outreach/bump-lane";
 import { resolveDisplayOffer, resolveDisplayCeiling } from "@/lib/deal-numbers";
-import { fixNoteTimestamp } from "@/lib/timeline-fixups";
+import { fixNoteTimestamp, stripSyncMarkers } from "@/lib/timeline-fixups";
 import { cleanEmailBody } from "@/lib/email-clean";
 
 export const runtime = "nodejs";
@@ -154,6 +154,13 @@ export async function GET(
         // actually changed (never lose the verbatim record).
         let body = e.body;
         let rawBody: string | undefined;
+        // Sync provenance markers ([Quo/Gmail inbound msg … src=…]) are
+        // machine metadata glued onto notes entries by the parser — the
+        // ledger keeps them verbatim; the bubble never shows them (Duane
+        // Covert report, 2026-07-13).
+        if (source === "notes" && body) {
+          body = stripSyncMarkers(body);
+        }
         if (source === "email" && e.body) {
           const cleaned = cleanEmailBody(e.body);
           // Keep the raw if cleaning left nothing (message was pure quote/
