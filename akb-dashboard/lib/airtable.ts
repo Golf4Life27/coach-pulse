@@ -128,6 +128,13 @@ const LISTING_FIELDS: Record<string, string> = {
   // = 1-5 rubric. See Listing type in lib/types.ts for full notes.
   fldBFnL0HQJWahRov: "outreachOfferPrice",
   fldfJWuEIHqaRuWq3: "contractOfferPrice",
+  // Rough_Opener_Amount — the VALUE-ANCHORED door-opener the modern send path
+  // writes (anchor × (ARV×buybox − rehab − fee)). This is the real sent
+  // number for value-anchored deals; Outreach_Offer_Price is the legacy 65%
+  // slot and is empty on modern deals. The serializer read the empty legacy
+  // field → "no price on record" (P1.1, 2026-07-13). Never confuse either
+  // with MAO_V1 (flduPNI7iLK8Yj07E, the retired List×0.65 formula).
+  fldiOvLQZaLpK7lTD: "roughOpenerAmount",
   fldfEVJijfPOBulpc: "sellerMotivationScore",
   fldusUTeJQ2ALX37U: "listPriceAtSend",
   // Underwritten_MAO (operator 2026-06-09): the COMPUTED MAO ceiling the

@@ -5,6 +5,7 @@ import { parseConversation } from "@/lib/notes";
 import { mergeTimeline, type SiblingRecord } from "@/lib/timeline-merge";
 import { detectCaptureGaps } from "@/lib/comms-integrity";
 import { extractStickyOffer } from "@/lib/h2-outreach/bump-lane";
+import { resolveDisplayOffer, resolveDisplayCeiling } from "@/lib/deal-numbers";
 import { fixNoteTimestamp } from "@/lib/timeline-fixups";
 
 export const runtime = "nodejs";
@@ -174,9 +175,23 @@ export async function GET(
       // actually received; fields drift, stamps don't), the operator's
       // ceiling, and list. Null when un-sourced — the UI renders "—".
       numbers: {
-        stamped_offer: extractStickyOffer(listing.notes)?.offer ?? null,
-        outreach_offer_field: listing.outreachOfferPrice ?? null,
-        ceiling: listing.underwrittenMao ?? listing.mao ?? null,
+        // Offer: delivery-stamp authority, then the real working fields
+        // (contract → value-anchored rough opener → legacy outreach). Never
+        // MAO_V1 (List×0.65). P1.1 (2026-07-13).
+        stamped_offer: resolveDisplayOffer(
+          {
+            contractOfferPrice: listing.contractOfferPrice,
+            roughOpenerAmount: listing.roughOpenerAmount,
+            outreachOfferPrice: listing.outreachOfferPrice,
+          },
+          extractStickyOffer(listing.notes)?.offer ?? null,
+        ).amount,
+        outreach_offer_field: listing.roughOpenerAmount ?? listing.outreachOfferPrice ?? null,
+        // Ceiling: value-anchored Underwritten_MAO only. Was `?? listing.mao`
+        // — MAO_V1, the retired List×0.65 formula — which showed a list-
+        // anchored number as "your ceiling" on un-underwritten legacy deals
+        // (Sunbeam). Null now → "—" until P1.2 underwrites the record.
+        ceiling: resolveDisplayCeiling(listing),
         list_price: listing.listPrice ?? null,
       },
     });
