@@ -410,3 +410,43 @@ describe("mergeTimeline — sole-engaged tie-break (685 Bolton, 2026-07-13)", ()
     expect(timeline[0].propertyMatch.confidence).toBeGreaterThanOrEqual(0.6);
   });
 });
+
+describe("mergeTimeline — notes/live dedup (Duane Covert duplicate, 2026-07-13)", () => {
+  // The live Quo body has a paragraph break ("\n\n"); the notes parser drops
+  // blank lines so the ledger copy has "\n". Raw substring dedup missed it
+  // and the same reply rendered as TWO bubbles.
+  const LIVE_BODY =
+    "Alex,\n\nThe owner responded pretty quickly. We're too far apart to make your number work.\n\nCheers.";
+  const NOTES_BODY =
+    "Alex,\nThe owner responded pretty quickly. We're too far apart to make your number work.\nCheers.\n[Quo inbound msg ACtest ts=2026-07-13T21:26:47.950Z src=quo_webhook ingested_at=2026-07-13T21:26:48.969Z]";
+
+  it("REGRESSION: whitespace-normalized dedup collapses the notes copy of a live message", () => {
+    const { timeline } = mergeTimeline(
+      [{ id: "q1", from: "agent", to: "alex", body: LIVE_BODY, direction: "incoming", createdAt: "2026-07-13T21:26:47Z" }],
+      [],
+      [{ type: "inbound", text: NOTES_BODY, timestamp: "2026-07-13T21:26:47.950Z" }],
+      { recordId: "recTarget", targetAddress: "1150 Mayland Cir SW", targetPrices: [], agentName: "Duane Covert", siblings: [] },
+    );
+    expect(timeline.filter((e) => e.direction === "in")).toHaveLength(1);
+  });
+
+  it("a deduped notes copy LIFTS the live entry to full confidence (record-scoped truth)", () => {
+    const { timeline } = mergeTimeline(
+      [{ id: "q1", from: "agent", to: "alex", body: LIVE_BODY, direction: "incoming", createdAt: "2026-07-13T21:26:47Z" }],
+      [],
+      [{ type: "inbound", text: NOTES_BODY, timestamp: "2026-07-13T21:26:47.950Z" }],
+      {
+        recordId: "recTarget",
+        targetAddress: "1150 Mayland Cir SW",
+        targetPrices: [199_000],
+        agentName: "Duane Covert",
+        // Sibling present + generic body → the live copy alone would score
+        // below the render floor; the notes copy must rescue it, not vanish.
+        siblings: [{ recordId: "recSib", address: "99 Elsewhere St", candidatePrices: [80_000] }],
+      },
+    );
+    const inbound = timeline.filter((e) => e.direction === "in");
+    expect(inbound).toHaveLength(1);
+    expect(inbound[0].propertyMatch).toEqual({ recordId: "recTarget", confidence: 1.0 });
+  });
+});

@@ -26,3 +26,18 @@ export function fixNoteTimestamp(entry: { text: string; timestamp: string | null
   }
   return entry.timestamp;
 }
+
+// Sync-marker strip (2026-07-13, Duane Covert duplicate-bubble report): the
+// sync crons + webhook append a provenance marker line after each captured
+// body —
+//   [Quo inbound msg AC… ts=… src=quo_webhook ingested_at=… ⚠ ESCALATE: …]
+//   [Gmail inbound msg … thread=… ts=… src=gmail_sync …]
+// The notes parser glues that line onto the entry text, so it rendered raw
+// inside the conversation bubble. Machine provenance — the notes ledger
+// keeps it verbatim; the DISPLAY strips it.
+const SYNC_MARKER_RE = /\n?\[(?:Quo|Gmail) inbound msg [^\]]*\]/g;
+
+/** Pure: remove sync provenance-marker lines from a display body. */
+export function stripSyncMarkers(body: string): string {
+  return body.replace(SYNC_MARKER_RE, "").trim();
+}

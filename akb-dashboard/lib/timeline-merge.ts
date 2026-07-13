@@ -87,11 +87,25 @@ export function scorePropertyMatch(
   return { recordId: "", confidence: targetScore };
 }
 
-function isDuplicate(entry: { body: string; direction: string }, existing: TimelineEntry[]): boolean {
-  if (entry.body.length < 10) return false;
-  const snippet = entry.body.slice(0, 40).toLowerCase();
+/** Whitespace-normalized text for dedup comparison. The notes parser drops
+ *  blank lines (a "\n\n" paragraph break becomes "\n"), so raw substring
+ *  matching missed the notes copy of a live message and rendered it TWICE
+ *  (Duane Covert, 2026-07-13: live Quo bubble + quo_webhook notes bubble of
+ *  the same reply). All whitespace collapses to single spaces before compare. */
+function dedupNorm(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function findDuplicate(entry: { body: string; direction: string }, existing: TimelineEntry[]): TimelineEntry | null {
+  if (entry.body.length < 10) return null;
+  const snippet = dedupNorm(entry.body).slice(0, 40);
+  if (snippet.length < 10) return null;
   const dir = entry.direction === "in" ? "in" : "out";
-  return existing.some((e) => e.direction === dir && e.body.toLowerCase().includes(snippet));
+  return existing.find((e) => e.direction === dir && dedupNorm(e.body).includes(snippet)) ?? null;
+}
+
+function isDuplicate(entry: { body: string; direction: string }, existing: TimelineEntry[]): boolean {
+  return findDuplicate(entry, existing) != null;
 }
 
 export interface MergeOptions {
@@ -183,7 +197,17 @@ export function mergeTimeline(
       continue;
     }
     const direction = entry.type === "inbound" ? "in" as const : "out" as const;
-    if (!isDuplicate({ body: entry.text, direction }, timeline)) {
+    const dup = findDuplicate({ body: entry.text, direction }, timeline);
+    if (dup) {
+      // The notes ledger is record-scoped truth: a captured copy on THIS
+      // record proves the live message belongs here. Lift the live entry to
+      // full confidence instead of just skipping the note — otherwise a
+      // below-floor sibling-ambiguous quo/gmail copy survives the dedup and
+      // then gets filtered out of the thread, vanishing the message.
+      if (dup.propertyMatch.confidence < 1.0) {
+        dup.propertyMatch = { recordId: opts.recordId, confidence: 1.0 };
+      }
+    } else {
       timeline.push({ timestamp: entry.timestamp ?? "", channel: "note", direction, body: entry.text, sender: entry.type === "inbound" ? (opts.agentName ?? "Agent") : "Alex (AKB)", propertyMatch: { recordId: opts.recordId, confidence: 1.0 } });
     }
   }
