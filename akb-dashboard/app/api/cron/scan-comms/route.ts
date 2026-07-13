@@ -172,6 +172,8 @@ export async function GET(req: Request) {
     // response so the daily digest + audit trail have the full picture.
     const autoCloseResults: Array<{ recordId: string; sent: boolean; reason: string | null }> = [];
     const autoAckResults: Array<{ recordId: string; sent: boolean; reason: string | null }> = [];
+    // Tier-0 rejections whose Outreach_Status this run flipped to Dead (P3).
+    let deadFlipped = 0;
     // M8 / Gate 3 — STOP/opt-out (operator 2026-06-18).
     let optOutDetected = 0;
     let optOutFlipped = 0;
@@ -271,6 +273,29 @@ export async function GET(req: Request) {
               address: listing.address ?? null,
             });
             autoCloseResults.push({ recordId: listing.id, sent: ac.sent, reason: ac.reason });
+            // A hard rejection ENDS the thread — flip Outreach_Status to Dead.
+            // The auto-close SMS may be skipped (quiet hours / DNT / already-
+            // closed), but the STATUS must still reflect the rejection. Wingate
+            // (rec5ogZdXQ0xgGxEv) classified REJECTION 7/11 yet lingered in
+            // Response Received because this branch only ever sent the SMS and
+            // never touched the status field (2026-07-13 P3). Idempotent: skip
+            // if already Dead. determineNewStatus(rejection) === "Dead" — this
+            // makes the auto-close path self-complete instead of depending on
+            // the separate daily scan-replies flip.
+            if (listing.outreachStatus !== "Dead") {
+              try {
+                const stamp = new Date().toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "2-digit" });
+                const deadNote = `${stamp} — [Reply Triage] Inbound from ${listing.agentName ?? "agent"}: "${inbound.body.slice(0, 200)}". Classified REJECTION (${triage.matchedPattern ?? "hard"}). Status → Dead (tier-0 auto-close).`;
+                await updateListingRecord(listing.id, {
+                  Outreach_Status: "Dead",
+                  Last_Inbound_At: inbound.createdAt,
+                  Verification_Notes: listing.notes ? `${listing.notes}\n\n${deadNote}` : deadNote,
+                });
+                deadFlipped++;
+              } catch (err) {
+                errors.push(`${listing.address}: reject→Dead flip failed: ${String(err)}`);
+              }
+            }
             continue;
           }
 
@@ -449,6 +474,7 @@ export async function GET(req: Request) {
       autoCloseAttempted: autoCloseResults.length,
       autoCloseSent: autoCloseResults.filter((r) => r.sent).length,
       autoCloseResults: autoCloseResults.length > 0 ? autoCloseResults : undefined,
+      rejectionDeadFlipped: deadFlipped,
       autoAckAttempted: autoAckResults.length,
       autoAckSent: autoAckResults.filter((r) => r.sent).length,
       autoAckResults: autoAckResults.length > 0 ? autoAckResults : undefined,
