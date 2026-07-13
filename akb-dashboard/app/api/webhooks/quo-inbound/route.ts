@@ -26,9 +26,9 @@ import type { MatchableListing } from "@/lib/inbound/types";
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
-/** Optional shared-secret guard. When QUO_WEBHOOK_SECRET is set, the caller
- *  must present it (?secret= or x-webhook-secret). Unset ⇒ accept (the
- *  endpoint is dark/test-only until activation). */
+/** Shared-secret guard. When QUO_WEBHOOK_SECRET is set, the caller must
+ *  present it (?secret= or x-webhook-secret). Unset ⇒ accept for PARSING
+ *  only — live execution additionally requires the secret (see below). */
 function secretOk(req: Request): boolean {
   const want = process.env.QUO_WEBHOOK_SECRET;
   if (!want) return true;
@@ -39,6 +39,28 @@ function secretOk(req: Request): boolean {
 
 async function handle(req: Request) {
   if (!secretOk(req)) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
+  // FAIL-CLOSED (Tier-2 hardening, 2026-07-13): INBOUND_CAPTURE_LIVE is
+  // already true in prod (gmail-sync writes prove it), which armed this
+  // endpoint to EXECUTE — status flips + notes writes — while the secret
+  // guard above degrades to accept-all when QUO_WEBHOOK_SECRET is unset.
+  // An unauthenticated caller could forge "inbound SMS" and poison records.
+  // Live execution now refuses without a configured secret; watched mode
+  // (parse + audit, zero writes) stays reachable for validation.
+  if (isInboundCaptureLive() && !process.env.QUO_WEBHOOK_SECRET) {
+    await audit({
+      agent: "outreach",
+      event: "inbound_webhook_misconfigured",
+      status: "confirmed_failure",
+      inputSummary: {},
+      outputSummary: { reason: "live_without_secret" },
+      error: "INBOUND_CAPTURE_LIVE=true but QUO_WEBHOOK_SECRET unset — refusing to execute (fail-closed). Set the secret and include it in the webhook URL.",
+    });
+    return NextResponse.json(
+      { error: "misconfigured", reason: "live_capture_requires_webhook_secret" },
+      { status: 503 },
+    );
+  }
 
   let payload: unknown = null;
   try {
