@@ -41,6 +41,7 @@ import { getListings, getListing, updateListingRecord } from "@/lib/airtable";
 import { sendMessageWithId, getMessageStatus } from "@/lib/quo";
 import { audit } from "@/lib/audit-log";
 import { checkFirstOutreachHydration, checkOfferOverList } from "@/lib/outreach-economics";
+import { persistDecisionMath } from "@/lib/decision-persist";
 import { priceOpenerWithSeed } from "@/lib/opener-pricing";
 import { getZipArvSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import { minOfferFloor } from "@/lib/per-market-pricer";
@@ -770,6 +771,17 @@ async function handle(req: Request): Promise<Response> {
             row.delivered = true;
             row.airtable_updated = true;
             summary.first_touch_sent++; // Texted only counted on confirmed delivery
+            // DECISION MATH at offer-fire (decision-math build, 2026-07-13):
+            // the opener just went out — persist the go/no-go set in the same
+            // pass so no record carries a sent offer without either the math
+            // or an explicit NEEDS_DATA reason. Best-effort, hash-gated.
+            if (fresh) {
+              try {
+                await persistDecisionMath(fresh, { trigger: "opener_fired_h2" });
+              } catch (err) {
+                console.error("[h2-outreach] decision persist failed:", err);
+              }
+            }
           } else if (terminalFailure) {
             // AUTO-QUARANTINE (operator 2026-07-01): Quo confirmed the carrier
             // could not deliver (undelivered/failed) — a dead/non-SMS number

@@ -32,6 +32,7 @@ import type { Listing } from "@/lib/types";
 import { authenticate, readAuthEnv, readAuthHeaders } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { buildInboundReplyDraft, createReplyProposal } from "@/lib/inbound/reply-draft-trigger";
+import { persistDecisionMath } from "@/lib/decision-persist";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -186,6 +187,21 @@ async function handle(req: Request) {
             if (draft.extraFields) Object.assign(fields, draft.extraFields);
             if (draft.notesAppend) {
               fields["Verification_Notes"] = `${fields["Verification_Notes"] ?? r.notes}\n\n${draft.notesAppend}`;
+            }
+            // DECISION REFRESH on a classified COUNTER (decision-math build,
+            // 2026-07-13): the email twin of the quo-sync hook — a fresh
+            // counter re-checks the spread within the same ingestion cycle.
+            // Best-effort; hash-gated no-op when the number didn't move.
+            if (draft.classification === "counter") {
+              const counterUsd = newestEvent.amounts?.[0]?.amountUsd ?? null;
+              try {
+                await persistDecisionMath(l, {
+                  trigger: "counter_ingest_email",
+                  latestCounterUsd: counterUsd,
+                });
+              } catch (err) {
+                console.error("[gmail_sync] decision refresh failed:", err);
+              }
             }
           }
         } catch (err) {

@@ -8,6 +8,7 @@ import { formatCurrency } from "@/lib/utils";
 import { ALL_DD_ITEMS } from "@/lib/actionQueue";
 import { showToast } from "@/components/Toast";
 import MaverickDealCommentary from "@/components/MaverickDealCommentary";
+import DecisionCard from "@/components/DecisionCard";
 import DealFilePanel from "@/components/DealFilePanel";
 import PreEmdGatePanel from "@/components/PreEmdGatePanel";
 import OfferReadinessPanel from "@/components/OfferReadinessPanel";
@@ -349,6 +350,12 @@ export default function DealWorkspace() {
           <div className="text-gray-300 font-bold text-lg leading-tight">{listing.listPrice != null ? formatCurrency(listing.listPrice) : "—"}</div>
         </div>
       </div>
+
+      {/* DECISION CARD (decision-math build, 2026-07-13) — the 15-second
+          go/no-go: verdict badge, stat row, price waterfall, all-in meter,
+          risk flags. Live math from lib/decision-math (same module the
+          server persists with). */}
+      <DecisionCard listing={listing} onRefresh={fetchListing} />
 
       {/* Phase 9.8 — Maverick deal commentary */}
       <MaverickDealCommentary

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   selectEngagedUnderwriteTargets,
   underwriteFresh,
+  inNeedsDataBackoff,
   ENGAGED_STATUSES,
 } from "./engaged-underwrite-select";
 import type { Listing } from "@/lib/types";
@@ -68,5 +69,75 @@ describe("selectEngagedUnderwriteTargets", () => {
       NOW,
     );
     expect(targets.map((t) => t.id)).toEqual(["recNEW", "recOLD"]);
+  });
+});
+
+describe("inNeedsDataBackoff (queue-starvation fix, decision-math build)", () => {
+  it("a failed attempt AFTER the last activity backs the record off", () => {
+    expect(
+      inNeedsDataBackoff(
+        {
+          decisionVerdict: "NEEDS_DATA",
+          decisionComputedAt: "2026-07-13T01:00:00Z", // 1h ago, after activity
+          lastInboundAt: "2026-07-12T20:00:00Z",
+          lastOutboundAt: null,
+        },
+        NOW,
+      ),
+    ).toBe(true);
+  });
+
+  it("fresh activity since the failed attempt clears the backoff (a live counter always re-attempts)", () => {
+    expect(
+      inNeedsDataBackoff(
+        {
+          decisionVerdict: "NEEDS_DATA",
+          decisionComputedAt: "2026-07-12T20:00:00Z",
+          lastInboundAt: "2026-07-13T01:30:00Z", // NEW inbound after the attempt
+          lastOutboundAt: null,
+        },
+        NOW,
+      ),
+    ).toBe(false);
+  });
+
+  it("backoff expires after the window", () => {
+    expect(
+      inNeedsDataBackoff(
+        {
+          decisionVerdict: "NEEDS_DATA",
+          decisionComputedAt: "2026-07-11T00:00:00Z", // >20h ago
+          lastInboundAt: "2026-07-10T00:00:00Z",
+          lastOutboundAt: null,
+        },
+        NOW,
+      ),
+    ).toBe(false);
+  });
+
+  it("non-NEEDS_DATA verdicts never back off", () => {
+    expect(
+      inNeedsDataBackoff(
+        { decisionVerdict: "GO", decisionComputedAt: "2026-07-13T01:00:00Z", lastInboundAt: null, lastOutboundAt: null },
+        NOW,
+      ),
+    ).toBe(false);
+  });
+
+  it("selection excludes a backed-off record; a re-engaged one stays in", () => {
+    const backedOff = deal({
+      id: "recBACKOFF",
+      decisionVerdict: "NEEDS_DATA",
+      decisionComputedAt: "2026-07-13T01:00:00Z",
+      lastInboundAt: "2026-07-12T20:00:00Z",
+    });
+    const reEngaged = deal({
+      id: "recREENGAGED",
+      decisionVerdict: "NEEDS_DATA",
+      decisionComputedAt: "2026-07-12T20:30:00Z",
+      lastInboundAt: "2026-07-13T01:45:00Z",
+    });
+    const ids = selectEngagedUnderwriteTargets([backedOff, reEngaged], NOW).map((t) => t.id);
+    expect(ids).toEqual(["recREENGAGED"]);
   });
 });
