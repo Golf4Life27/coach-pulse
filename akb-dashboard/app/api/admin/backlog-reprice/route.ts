@@ -30,6 +30,7 @@
 import { NextResponse } from "next/server";
 import { getListings, updateListingRecord } from "@/lib/airtable";
 import { audit } from "@/lib/audit-log";
+import { persistDecisionMath } from "@/lib/decision-persist";
 import {
   authenticate,
   hasDashboardSession,
@@ -255,6 +256,18 @@ export async function GET(req: Request) {
       if (verdict.manualReview) fields["Outreach_Status"] = "Manual Review"; // else left at Review
       try {
         await updateListingRecord(l.id, fields);
+        // DECISION MATH at offer-compute (decision-math build, 2026-07-13):
+        // the opener was just derived — persist the go/no-go set in the same
+        // pass (Opener_Basis is never on record without either the math or an
+        // explicit NEEDS_DATA reason). Best-effort, hash-gated.
+        try {
+          await persistDecisionMath(
+            { ...l, roughOpenerAmount: priced.opener },
+            { trigger: "opener_computed_reprice" },
+          );
+        } catch (err) {
+          console.error("[backlog-reprice] decision persist failed:", err);
+        }
         await audit({ agent: "crier", event: "backlog_reprice_priced", status: "confirmed_success", recordId: l.id, ms: 0, inputSummary: { list_price: l.listPrice ?? null, zip: l.zip, arv_source: pricedW.arvSource }, outputSummary: { opener: priced.opener, basis: pricedW.basisLabel, route: verdict.route }, decision: verdict.manualReview ? "opener_written_manual_review" : "opener_written_review" });
         return {
           recordId: l.id, address: l.address, zip: l.zip, action: "priced", route: verdict.route,

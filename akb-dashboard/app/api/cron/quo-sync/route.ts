@@ -27,6 +27,7 @@ import {
   fetchPendingReplyProposalRecordIds,
 } from "@/lib/inbound/reply-draft-trigger";
 import { audit } from "@/lib/audit-log";
+import { persistDecisionMath } from "@/lib/decision-persist";
 import type { Listing } from "@/lib/types";
 import {
   authenticate,
@@ -88,6 +89,8 @@ async function handle(req: Request) {
   const pendingReplyRecordIds = await fetchPendingReplyProposalRecordIds();
   let draftsQueued = 0;
   let draftsHeld = 0;
+  // Decision-math refreshes fired by classified counters this run.
+  const decisionRefreshed: Array<{ recordId: string; verdict: string; counter: number | null }> = [];
 
   for (const l of cohort) {
     const phone = normalizePhone((l as { agentPhone?: string | null }).agentPhone);
@@ -161,6 +164,26 @@ async function handle(req: Request) {
           if (draft.notesAppend) {
             fields["Verification_Notes"] = `${fields["Verification_Notes"] ?? r.notes}\n\n${draft.notesAppend}`;
           }
+          // DECISION REFRESH on a classified COUNTER (decision-math build,
+          // 2026-07-13): re-check the spread against the seller's new number
+          // in the same ingestion cycle — Mayfield's $27k counter must show
+          // instantly whether it still clears. Best-effort; hash-gated so an
+          // unchanged number is a no-op.
+          if (draft.classification === "counter") {
+            const newest2 = [...r.newEvents].sort(
+              (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt),
+            )[0];
+            const counterUsd = newest2?.amounts?.[0]?.amountUsd ?? null;
+            try {
+              const d = await persistDecisionMath(l, {
+                trigger: "counter_ingest_sms",
+                latestCounterUsd: counterUsd,
+              });
+              decisionRefreshed.push({ recordId: l.id, verdict: d.result.verdict, counter: counterUsd });
+            } catch (err) {
+              console.error("[quo_sync] decision refresh failed:", err);
+            }
+          }
         } catch (err) {
           console.error("[quo_sync] reply draft failed:", err);
         }
@@ -202,6 +225,7 @@ async function handle(req: Request) {
     rows_with_new_events: outcomes.filter((r) => r.new_events > 0).length,
     total_escalations: totalEscalations,
     reply_drafts_queued: draftsQueued,
+    decision_refreshed: decisionRefreshed.length,
     reply_drafts_held: draftsHeld,
     errors: outcomes.filter((r) => r.error).length,
     duration_ms: Date.now() - t0,

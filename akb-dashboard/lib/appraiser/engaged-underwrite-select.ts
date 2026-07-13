@@ -50,9 +50,38 @@ export interface EngagedTarget {
   lastActivityAt: string | null;
 }
 
+/** Retry backoff for a target whose last attempt FAILED to produce data
+ *  (Decision_Verdict=NEEDS_DATA stamped after the record's last activity).
+ *  Without this, a record whose address RentCast can't resolve sits at the
+ *  top of the newest-first queue and burns the whole bounded run every tick
+ *  — starving everything behind it (2026-07-13 discovery: the 14:25 run's
+ *  budget went to nobody). New inbound/outbound activity clears the backoff
+ *  immediately — a live counter always re-attempts. */
+export const NEEDS_DATA_RETRY_BACKOFF_H = 20;
+
+/** Pure: true when the record's last underwrite attempt failed AFTER its
+ *  latest activity and within the backoff window — skip it this run. */
+export function inNeedsDataBackoff(
+  l: Pick<Listing, "decisionVerdict" | "decisionComputedAt" | "lastInboundAt" | "lastOutboundAt">,
+  now: Date,
+  backoffHours: number = NEEDS_DATA_RETRY_BACKOFF_H,
+): boolean {
+  if (l.decisionVerdict !== "NEEDS_DATA" || !l.decisionComputedAt) return false;
+  const computed = Date.parse(l.decisionComputedAt);
+  if (!Number.isFinite(computed)) return false;
+  if (now.getTime() - computed > backoffHours * 3_600_000) return false; // backoff expired
+  const lastActivity = Math.max(
+    l.lastInboundAt ? Date.parse(l.lastInboundAt) : 0,
+    l.lastOutboundAt ? Date.parse(l.lastOutboundAt) : 0,
+  );
+  // Fresh activity since the failed attempt → re-attempt now.
+  return lastActivity <= computed;
+}
+
 /** Pure: the engaged, Auto-Proceed, stale-underwrite cohort — newest activity
- *  first so a bounded run does the hottest deals. Returns full listings so the
- *  route can pass them straight to the compute step. */
+ *  first so a bounded run does the hottest deals. Records in NEEDS_DATA retry
+ *  backoff are excluded so one unresolvable address can't starve the queue.
+ *  Returns full listings so the route can pass them straight to compute. */
 export function selectEngagedUnderwriteTargets(
   listings: Listing[],
   now: Date = new Date(),
@@ -63,7 +92,8 @@ export function selectEngagedUnderwriteTargets(
       (l) =>
         ENGAGED_STATUSES.has(l.outreachStatus ?? "") &&
         (l.executionPath ?? "").trim() === "Auto Proceed" &&
-        !underwriteFresh(l, now, maxAgeDays),
+        !underwriteFresh(l, now, maxAgeDays) &&
+        !inNeedsDataBackoff(l, now),
     )
     .sort((a, b) => {
       const at = a.lastInboundAt ?? a.lastOutboundAt ?? null;

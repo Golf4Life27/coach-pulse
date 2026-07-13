@@ -57,6 +57,20 @@ export interface Listing {
   // on the RECOMMENDED-REPLIES rails; parsed by lib/dd-volley-machine. Null
   // until a volley opens (or when DD_VOLLEY_LIVE is off).
   ddVolleyState?: string | null;
+  // Decision math (2026-07-13) — the machine-computed go/no-go set the
+  // Decision Card renders. Written only by lib/decision-persist; null until
+  // the record's first compute. AllIn_Pct_ARV is an Airtable percent (0-1).
+  buyerCeiling?: number | null;
+  dealSpread?: number | null;
+  allInPctArv?: number | null;
+  decisionVerdict?: "GO" | "TIGHT" | "PASS" | "NEEDS_DATA" | "HOLD_LOW_CONF" | null;
+  decisionReason?: string | null;
+  decisionComputedAt?: string | null;
+  decisionInputsHash?: string | null;
+  underwriteConfidence?: "High" | "Med" | "Low" | null;
+  latestCounterUsd?: number | null;
+  /** Opener_Basis receipt (capped_to_list / arv_buybox_seed / …). */
+  openerBasis?: string | null;
   // Phase 11.2 — email outbound timestamp. Crier staleness uses max()
   // of all four contact timestamps to avoid false-stale on active email
   // negotiations (the 23 Fields scenario). Null until first attributable
