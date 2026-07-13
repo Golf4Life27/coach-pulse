@@ -19,7 +19,13 @@ import { NextResponse } from "next/server";
 import { getActiveListingsForBrief, updateListingRecord } from "@/lib/airtable";
 import { getThreadVerified } from "@/lib/quo";
 import { normalizePhone } from "@/lib/phone-normalize";
+import { toE164 } from "@/lib/phone";
 import { appendQuoMessagesToNotes } from "@/lib/outreach/quo-sync";
+import {
+  buildInboundReplyDraft,
+  createReplyProposal,
+  fetchPendingReplyProposalRecordIds,
+} from "@/lib/inbound/reply-draft-trigger";
 import { audit } from "@/lib/audit-log";
 import type { Listing } from "@/lib/types";
 import {
@@ -76,6 +82,12 @@ async function handle(req: Request) {
   }
   const outcomes: RowOutcome[] = [];
   let totalEscalations = 0;
+  // Cross-path dedup with scan-comms (both draft SMS replies): a record that
+  // already has a pending jarvis_reply proposal is skipped here so the two
+  // paths never double-queue the same inbound (P2.1, 2026-07-13).
+  const pendingReplyRecordIds = await fetchPendingReplyProposalRecordIds();
+  let draftsQueued = 0;
+  let draftsHeld = 0;
 
   for (const l of cohort) {
     const phone = normalizePhone((l as { agentPhone?: string | null }).agentPhone);
@@ -99,23 +111,71 @@ async function handle(req: Request) {
         });
       }
       const r = appendQuoMessagesToNotes(l.notes, msgs.map((m) => ({ id: m.id, body: m.body, createdAt: m.createdAt, direction: m.direction })), { syncMarkerSource: "quo_sync" });
+      const fields: Record<string, unknown> = {};
       if (r.newEvents.length > 0) {
-        await updateListingRecord(l.id, { Verification_Notes: r.notes });
-        if (r.escalationCount > 0) {
-          await audit({
-            agent: "outreach",
-            event: "quo_sync_escalation",
-            status: "confirmed_success",
-            recordId: l.id,
-            inputSummary: { address: l.address, agent_phone: phone, hours_back: hoursBack },
-            outputSummary: {
-              new_events: r.newEvents.length,
-              escalations: r.escalationCount,
-              amounts: r.newEvents.flatMap((e) => e.amounts.map((a) => a.amountUsd)),
+        fields["Verification_Notes"] = r.notes;
+
+        // ── RECOMMENDED REPLIES (P2.1, 2026-07-13): the newest ingested SMS
+        // inbound generates a guardrailed 2A draft (crier, SMS register) —
+        // queued as a jarvis_reply proposal with a send_sms payload and
+        // mirrored onto the listing for the Live Deals strip. Idempotent by
+        // inbound msg id; cross-deduped against scan-comms' pending queue.
+        // Guardrail failure → HOLD surfaced. Best-effort — the notes write
+        // still lands even if drafting throws.
+        try {
+          const newest = [...r.newEvents].sort(
+            (a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt),
+          )[0];
+          const draft = await buildInboundReplyDraft({
+            listing: {
+              id: l.id,
+              address: l.address,
+              outreachStatus: l.outreachStatus,
+              underwrittenMao: l.underwrittenMao ?? null,
+              mao: l.mao ?? null,
+              listPrice: l.listPrice ?? null,
+              agentName: l.agentName ?? null,
+              agentEmail: l.agentEmail ?? null,
+              draftReplyMeta: l.draftReplyMeta ?? null,
             },
-            decision: "escalate",
+            notes: r.notes,
+            inbound: { msgId: newest.id, body: newest.body, toPhoneE164: toE164(phone) },
+            channel: "sms",
+            hasPendingProposal: pendingReplyRecordIds.has(l.id),
           });
+          if (draft.proposal) {
+            const created = await createReplyProposal(draft.proposal);
+            fields["Draft_Reply_Text"] = draft.draftText;
+            fields["Draft_Reply_Meta"] = JSON.stringify({
+              ...draft.draftMeta,
+              proposal_id: created ? draft.proposal.proposalId : undefined,
+            });
+            if (draft.drafted) draftsQueued++;
+            else draftsHeld++;
+            // Once queued, guard scan-comms (and later rows) from re-drafting.
+            if (created) pendingReplyRecordIds.add(l.id);
+          }
+        } catch (err) {
+          console.error("[quo_sync] reply draft failed:", err);
         }
+      }
+      if (Object.keys(fields).length > 0) {
+        await updateListingRecord(l.id, fields);
+      }
+      if (r.newEvents.length > 0 && r.escalationCount > 0) {
+        await audit({
+          agent: "outreach",
+          event: "quo_sync_escalation",
+          status: "confirmed_success",
+          recordId: l.id,
+          inputSummary: { address: l.address, agent_phone: phone, hours_back: hoursBack },
+          outputSummary: {
+            new_events: r.newEvents.length,
+            escalations: r.escalationCount,
+            amounts: r.newEvents.flatMap((e) => e.amounts.map((a) => a.amountUsd)),
+          },
+          decision: "escalate",
+        });
       }
       outcomes.push({
         recordId: l.id,
@@ -135,6 +195,8 @@ async function handle(req: Request) {
     cohort_size: cohort.length,
     rows_with_new_events: outcomes.filter((r) => r.new_events > 0).length,
     total_escalations: totalEscalations,
+    reply_drafts_queued: draftsQueued,
+    reply_drafts_held: draftsHeld,
     errors: outcomes.filter((r) => r.error).length,
     duration_ms: Date.now() - t0,
   };
