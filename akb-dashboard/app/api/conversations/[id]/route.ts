@@ -7,6 +7,7 @@ import { detectCaptureGaps } from "@/lib/comms-integrity";
 import { extractStickyOffer } from "@/lib/h2-outreach/bump-lane";
 import { resolveDisplayOffer, resolveDisplayCeiling } from "@/lib/deal-numbers";
 import { fixNoteTimestamp } from "@/lib/timeline-fixups";
+import { cleanEmailBody } from "@/lib/email-clean";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -16,6 +17,10 @@ interface UnifiedMessage {
   source: "quo" | "email" | "notes";
   direction: "inbound" | "outbound" | "system";
   body: string;
+  // Full verbatim body BEFORE quoted-history / signature stripping. Only set
+  // when `body` was cleaned (email source) and differs — lets the panel offer
+  // a "show original" without losing the raw record. Undefined = body IS raw.
+  raw_body?: string;
   timestamp: string;
   from: string;
   to: string;
@@ -132,15 +137,33 @@ export async function GET(
         const direction: UnifiedMessage["direction"] =
           e.channel === "system" ? "system" : e.direction === "in" ? "inbound" : "outbound";
         const rawId = (e.raw as { id?: string } | undefined)?.id;
+        // P1.3 (2026-07-13): email bodies dump the ENTIRE quoted thread +
+        // signature/IABS/wire-fraud boilerplate into one bubble. Strip that for
+        // DISPLAY so each message reads like the SMS bubbles do. SMS/notes pass
+        // through untouched. The raw body is preserved on `raw_body` when it
+        // actually changed (never lose the verbatim record).
+        let body = e.body;
+        let rawBody: string | undefined;
+        if (source === "email" && e.body) {
+          const cleaned = cleanEmailBody(e.body);
+          // Keep the raw if cleaning left nothing (message was pure quote/
+          // boilerplate) so the bubble isn't empty; otherwise show the clean
+          // text and stash the original.
+          if (cleaned && cleaned !== e.body) {
+            body = cleaned;
+            rawBody = e.body;
+          }
+        }
         const msg: UnifiedMessage = {
           id: `${e.channel}-${i}-${rawId ?? "x"}`,
           source,
           direction,
-          body: e.body,
+          body,
           timestamp: e.timestamp,
           from: e.sender,
           to: direction === "inbound" ? "Alex (AKB)" : (listing.agentName ?? "Agent"),
         };
+        if (rawBody) msg.raw_body = rawBody;
         if (e.subject) msg.subject = e.subject;
         return msg;
       });
