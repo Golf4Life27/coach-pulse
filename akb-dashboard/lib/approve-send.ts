@@ -202,13 +202,29 @@ export async function sendApprovedReply(input: ApproveSendInput): Promise<Approv
     return { sent: true, reason: null, quoMessageId: send.id };
   } catch (err) {
     const reason = err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200);
+    // The send threw — it did NOT confirm delivery, so RELEASE the dispatch
+    // claim. Holding it (the prior behavior) left every retry returning
+    // "already_dispatched" forever (7-day TTL) while nothing had actually gone
+    // out — a live reply silently locked out (14851 Indiana / Daleik Vaughn,
+    // 2026-07-14: the opener delivered but the follow-up reply's first send
+    // threw, and the operator could never retry). The claim exists for
+    // double-SEND protection; a failed send is not a send. Concurrent
+    // double-CLICK is still guarded — the in-flight first attempt holds the
+    // claim until it resolves, and only then is it released for a real retry.
+    if (kvConfigured()) {
+      try {
+        await kvProd.del(approveSendClaimKey(input.proposalId));
+      } catch {
+        /* best effort — a lingering claim is recoverable; a stuck one is the bug */
+      }
+    }
     await audit({
       agent: "crier",
       event: "queue_approve_send_failed",
       status: "confirmed_failure",
       recordId: input.recordId,
       inputSummary: { proposalId: input.proposalId, address: input.address ?? null },
-      outputSummary: { sent: false, error: reason },
+      outputSummary: { sent: false, error: reason, claim_released: kvConfigured() },
     });
     return { sent: false, reason: `send_error: ${reason}`, quoMessageId: null };
   }

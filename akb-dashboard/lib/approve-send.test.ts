@@ -1,10 +1,29 @@
 // Approve-actually-sends (Wire 2): payload parsing + static gate order.
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// ── Mocks for the sendApprovedReply I/O path (release-on-failure guard) ──
+const sendMessageWithId = vi.fn();
+const setNx = vi.fn();
+const del = vi.fn();
+vi.mock("@/lib/quo", () => ({ sendMessageWithId: (...a: unknown[]) => sendMessageWithId(...a) }));
+vi.mock("@/lib/maverick/oauth/kv", () => ({
+  kvConfigured: () => true,
+  kvProd: {
+    setNx: (...a: unknown[]) => setNx(...a),
+    del: (...a: unknown[]) => del(...a),
+  },
+}));
+vi.mock("@/lib/h2-working-hours", () => ({
+  evaluateSendWindow: () => ({ inside: true, meta: { local_hour: 10, timezone: "America/Detroit" } }),
+}));
+vi.mock("@/lib/audit-log", () => ({ audit: vi.fn(async () => {}) }));
+
 import {
   parseSendSmsPayload,
   approveSendStaticSkip,
   approveSendClaimKey,
   APPROVE_SEND_MAX_BODY,
+  sendApprovedReply,
 } from "./approve-send";
 
 const PAYLOAD = JSON.stringify({
@@ -54,5 +73,50 @@ describe("approveSendStaticSkip — mistake rails (judgment stays with the opera
 describe("claim key", () => {
   it("is per-PROPOSAL (multiple replies per record are legit; double-click is not)", () => {
     expect(approveSendClaimKey("recProposal123")).toBe("approve_send:recProposal123");
+  });
+});
+
+describe("sendApprovedReply — dispatch claim lifecycle (the 14851 Indiana stuck-claim bug)", () => {
+  const input = {
+    proposalId: "jarvis_reply-123-ABCDEF",
+    recordId: "rec87JNYqI12WUILQ",
+    toE164: "+13058149310",
+    body: "Sure, happy to connect with them directly.",
+    state: "MI",
+    doNotText: false,
+    address: "14851 Indiana St",
+  };
+
+  beforeEach(() => {
+    sendMessageWithId.mockReset();
+    setNx.mockReset();
+    del.mockReset();
+  });
+
+  it("RELEASES the claim when the Quo send throws, so a retry is possible", async () => {
+    setNx.mockResolvedValue(true); // claim acquired
+    sendMessageWithId.mockRejectedValue(new Error("Quo 503 upstream")); // send fails
+    const res = await sendApprovedReply(input);
+    expect(res.sent).toBe(false);
+    expect(res.reason).toMatch(/send_error/);
+    // The bug: without this the claim stuck for 7 days → permanent already_dispatched.
+    expect(del).toHaveBeenCalledWith("approve_send:jarvis_reply-123-ABCDEF");
+  });
+
+  it("HOLDS the claim on a successful send (that IS a real dispatch)", async () => {
+    setNx.mockResolvedValue(true);
+    sendMessageWithId.mockResolvedValue({ id: "ACsent123" });
+    const res = await sendApprovedReply(input);
+    expect(res.sent).toBe(true);
+    expect(res.quoMessageId).toBe("ACsent123");
+    expect(del).not.toHaveBeenCalled();
+  });
+
+  it("still guards a genuine double-dispatch: claim already held → already_dispatched, no send", async () => {
+    setNx.mockResolvedValue(false); // claim already exists
+    const res = await sendApprovedReply(input);
+    expect(res.reason).toBe("already_dispatched");
+    expect(sendMessageWithId).not.toHaveBeenCalled();
+    expect(del).not.toHaveBeenCalled(); // an in-flight peer holds it — don't yank it
   });
 });
