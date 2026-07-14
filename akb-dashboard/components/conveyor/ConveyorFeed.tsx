@@ -27,6 +27,7 @@ import {
   type PriorityRow,
   type ProposalRow,
 } from "@/lib/conveyor/model";
+import { fetchFastSources, fetchBriefCards } from "@/lib/conveyor/sources";
 
 export default function ConveyorFeed() {
   const [proposals, setProposals] = useState<ProposalRow[]>([]);
@@ -40,42 +41,24 @@ export default function ConveyorFeed() {
   const alive = useRef(true);
 
   const loadFast = useCallback(async () => {
-    const [p, a, pr] = await Promise.allSettled([
-      fetch("/api/proposals").then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
-      fetch("/api/operator-actions").then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
-      fetch("/api/maverick/priorities", { cache: "no-store" }).then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
-    ]);
+    // Shared source fetch (lib/conveyor/sources) — the identical data the
+    // Maverick dock narrates, so the two surfaces can never disagree on what
+    // needs the operator. null per-source = keep prior data (no empty flicker).
+    const s = await fetchFastSources();
     if (!alive.current) return;
-    if (p.status === "fulfilled" && Array.isArray(p.value)) setProposals(p.value);
-    if (a.status === "fulfilled") setActionItems(a.value.items ?? []);
-    if (pr.status === "fulfilled") setPriorities(pr.value.actions ?? []);
+    if (s.proposals) setProposals(s.proposals);
+    if (s.actionItems) setActionItems(s.actionItems);
+    if (s.priorities) setPriorities(s.priorities);
     setNowMs(Date.now());
     setLoading(false);
   }, []);
 
   const loadBrief = useCallback(async () => {
     setBriefLoading(true);
-    try {
-      const res = await fetch("/api/jarvis-brief");
-      if (!res.ok) throw new Error(String(res.status));
-      const data = await res.json();
-      if (!alive.current) return;
-      const cards = Array.isArray(data.broCards) ? data.broCards : [];
-      setBroCards(
-        cards
-          .filter((c: Record<string, unknown>) => typeof c.recordId === "string")
-          .map((c: Record<string, unknown>) => ({
-            recordId: c.recordId as string,
-            address: (c.address as string) ?? "",
-            headline: (c.headline as string) ?? "",
-            why_this_matters: (c.why_this_matters as string) ?? "",
-          })),
-      );
-    } catch {
-      /* brief is progressive enhancement — the fast feed stands alone */
-    } finally {
-      if (alive.current) setBriefLoading(false);
-    }
+    const cards = await fetchBriefCards(); // null on failure — progressive only
+    if (!alive.current) return;
+    if (cards) setBroCards(cards);
+    setBriefLoading(false);
   }, []);
 
   useEffect(() => {
