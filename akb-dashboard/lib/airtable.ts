@@ -49,6 +49,27 @@ const LISTING_FIELDS: Record<string, string> = {
   fldiNKFpIBUYgg7el: "actionCardState",
   fld3IhR1DXzcVuq6F: "lastInboundAt",
   fldaK4lR5UNvycg11: "lastOutboundAt",
+  // ── TWO-MAP RULE (2026-07-14 Mayfield counter miss): this fld-ID map is
+  // what getListings / getActiveListingsForBrief (BULK — every cron) fetch
+  // and map with; LISTING_NAME_MAP below serves getListing (single record).
+  // A field present only in the name map is silently NULL on every cron read
+  // — the P1.1 Rough_Opener_Amount bug, repeated with the whole decision-math
+  // set (the 00:05Z backfill recomputed Mayfield WITHOUT its $27k counter and
+  // overwrote the engaged cron's correct number). EVERY new field goes in
+  // BOTH maps; lib/airtable-map-parity.test.ts enforces it for this set.
+  fld4r1a94Uv8tVy5k: "draftReplyText",
+  fldlRrtCUBppUbQam: "draftReplyMeta",
+  fldjO7rbGYkdhB7dM: "ddVolleyState",
+  fldczfQMESZEhEOR3: "buyerCeiling",
+  fldlhhMf4IBd3i9iD: "dealSpread",
+  fldliR5VFMDfvwKOs: "allInPctArv",
+  fldzmptnwPFIR5iaU: "decisionVerdict",
+  fldVvFRx9rjCZeG4d: "decisionReason",
+  fld2W8U9RckaGdAL9: "decisionComputedAt",
+  fldaa58hwu6AWUDYU: "decisionInputsHash",
+  fldw0zfap0NbzqsO5: "underwriteConfidence",
+  fldVEInwbGdWOlt5F: "latestCounterUsd",
+  fldCjwSV2vLeui8Mf: "openerBasis",
   // Phase 11.2 (5/18) — email-attributable outbound send timestamp.
   // Crier staleness math takes max() across this + lastOutreachDate
   // (SMS) + lastInboundAt + lastOutboundAt so active email negotiations
@@ -156,6 +177,10 @@ const LISTING_FIELDS: Record<string, string> = {
 };
 
 // Reverse map: field name -> prop name (for single-record GET which returns field names)
+// Test-only export surface for the two-map parity check (see the TWO-MAP
+// RULE comment in LISTING_FIELDS). Not for runtime use.
+export const __TEST_LISTING_MAPS = { byId: LISTING_FIELDS };
+
 const LISTING_NAME_MAP: Record<string, string> = {
   "Address": "address",
   "City": "city",
@@ -1038,3 +1063,6 @@ export async function createManualFixQueueRecord(fields: {
   }
   return { recordId };
 }
+
+// Test-only (two-map rule parity check).
+export const __TEST_LISTING_NAME_MAP: Record<string, string> = LISTING_NAME_MAP;
