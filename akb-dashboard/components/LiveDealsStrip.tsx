@@ -224,7 +224,10 @@ export default function LiveDealsStrip() {
                           className="w-full rounded-lg border border-[#30363d] bg-[#161b22] p-3 text-sm text-gray-200 focus:border-emerald-500 focus:outline-none"
                         />
                       ) : (
-                        <p className="text-sm text-gray-300 whitespace-pre-wrap">{d.draft.text}</p>
+                        <div className="border-l-2 border-emerald-500/50 bg-emerald-950/25 rounded-r px-3 py-2 text-sm text-gray-100 whitespace-pre-wrap leading-relaxed">
+                          <span className="block text-emerald-400/80 text-[9px] font-bold uppercase tracking-wide mb-0.5">Your reply</span>
+                          {d.draft.text}
+                        </div>
                       )}
                       <div className="flex items-center gap-2">
                         <button

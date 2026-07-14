@@ -376,6 +376,15 @@ export default function MaverickDock() {
                           </blockquote>
                         )}
 
+                        {/* the reply we're proposing — visible BEFORE you Send,
+                            never hidden behind Edit (operator 2026-07-14). */}
+                        {m.primary.kind === "send" && !isEditing && (
+                          <div className="mt-1.5 border-l-2 border-emerald-500/50 bg-emerald-950/25 pl-2.5 pr-2 py-1.5 rounded-r text-[12.5px] text-gray-100 leading-snug whitespace-pre-wrap">
+                            <span className="block text-emerald-400/80 text-[9px] font-bold uppercase tracking-wide mb-0.5">Your reply</span>
+                            {m.primary.draftBody}
+                          </div>
+                        )}
+
                         {/* the why */}
                         {m.why && <p className="mt-1.5 text-[11px] text-gray-500 leading-snug">{m.why}</p>}
 
