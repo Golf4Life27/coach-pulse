@@ -26,6 +26,7 @@ import {
   buildConveyor,
   type ActionItemRow,
   type BroCardRow,
+  type ConveyorItem,
   type PriorityRow,
   type ProposalRow,
 } from "@/lib/conveyor/model";
@@ -66,6 +67,7 @@ export default function MaverickDock() {
   const [actionItems, setActionItems] = useState<ActionItemRow[]>([]);
   const [priorities, setPriorities] = useState<PriorityRow[]>([]);
   const [broCards, setBroCards] = useState<BroCardRow[]>([]);
+  const [contractItems, setContractItems] = useState<ConveyorItem[]>([]);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [editingKey, setEditingKey] = useState<string | null>(null);
@@ -86,6 +88,7 @@ export default function MaverickDock() {
     if (s.proposals) setProposals(s.proposals);
     if (s.actionItems) setActionItems(s.actionItems);
     if (s.priorities) setPriorities(s.priorities);
+    if (s.contractItems) setContractItems(s.contractItems);
     setNowMs(Date.now());
   }, []);
 
@@ -109,9 +112,9 @@ export default function MaverickDock() {
   }, [loadFast, loadBrief]);
 
   const moves = useMemo(() => {
-    const { items } = buildConveyor({ proposals, actionItems, priorities, broCards }, new Date(nowMs).toISOString());
+    const { items } = buildConveyor({ proposals, actionItems, priorities, broCards, contractItems }, new Date(nowMs).toISOString());
     return narrateConveyor(items, new Date(nowMs).toISOString());
-  }, [proposals, actionItems, priorities, broCards, nowMs]);
+  }, [proposals, actionItems, priorities, broCards, contractItems, nowMs]);
 
   const urgentCount = moves.filter((m) => m.urgency >= 3).length;
   const top = moves[0] ?? null;

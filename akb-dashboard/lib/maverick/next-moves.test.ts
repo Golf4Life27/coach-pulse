@@ -155,4 +155,20 @@ describe("narrateMove / narrateConveyor", () => {
     expect(m.urgency).toBe(4);
     expect(m.tone).toBe("overdue");
   });
+
+  it("a back-half contract item uses its own crafted message as the headline (no generic 2B line, no duplicate why)", () => {
+    const m = narrateMove(
+      item({
+        source: "contract",
+        type: "2B",
+        reasoning: "Earnest money due Jul 16 — voice-verify the wire landed, then mark EMD received.",
+        actions: [{ kind: "open", href: "/pipeline/recX", label: "Confirm EMD" }],
+      }),
+      NOW,
+    );
+    expect(m.headline).toMatch(/earnest money due jul 16/i);
+    expect(m.headline).not.toMatch(/money's on the table/i); // not the generic 2B line
+    expect(m.why).toBe(""); // suppressed — headline already carries it
+    expect(m.primary).toEqual({ kind: "open", href: "/pipeline/recX", label: "Confirm EMD" });
+  });
 });

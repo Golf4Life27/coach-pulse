@@ -29,11 +29,15 @@ import {
 } from "@/lib/conveyor/model";
 import { fetchFastSources, fetchBriefCards } from "@/lib/conveyor/sources";
 
+// Back-half contract-lifecycle items are already ConveyorItem-shaped; the feed
+// just passes them into buildConveyor alongside the mapped sources.
+
 export default function ConveyorFeed() {
   const [proposals, setProposals] = useState<ProposalRow[]>([]);
   const [actionItems, setActionItems] = useState<ActionItemRow[]>([]);
   const [priorities, setPriorities] = useState<PriorityRow[]>([]);
   const [broCards, setBroCards] = useState<BroCardRow[]>([]);
+  const [contractItems, setContractItems] = useState<ConveyorItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [briefLoading, setBriefLoading] = useState(true);
   const [busy, setBusy] = useState<Set<string>>(new Set());
@@ -49,6 +53,7 @@ export default function ConveyorFeed() {
     if (s.proposals) setProposals(s.proposals);
     if (s.actionItems) setActionItems(s.actionItems);
     if (s.priorities) setPriorities(s.priorities);
+    if (s.contractItems) setContractItems(s.contractItems);
     setNowMs(Date.now());
     setLoading(false);
   }, []);
@@ -73,8 +78,8 @@ export default function ConveyorFeed() {
   }, [loadFast, loadBrief]);
 
   const { items, hidden } = useMemo(
-    () => buildConveyor({ proposals, actionItems, priorities, broCards }, new Date(nowMs).toISOString()),
-    [proposals, actionItems, priorities, broCards, nowMs],
+    () => buildConveyor({ proposals, actionItems, priorities, broCards, contractItems }, new Date(nowMs).toISOString()),
+    [proposals, actionItems, priorities, broCards, contractItems, nowMs],
   );
 
   const removeItem = useCallback((item: ConveyorItem) => {
