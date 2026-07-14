@@ -85,6 +85,18 @@ dropping to zero is a regression, not a quiet day.
 ID, the codebase wins (proven 5/26 cleanup commit). Add a row to
 this file recording the canonical mapping if it has ever drifted.
 
+**Two-map rule (2026-07-14, Mayfield counter miss):** `lib/airtable.ts`
+holds TWO Listing field maps — `LISTING_FIELDS` (fld-ID keyed; used by the
+BULK readers `getListings`/`getActiveListingsForBrief`, i.e. every cron)
+and `LISTING_NAME_MAP` (name keyed; used by single-record `getListing`).
+A field added to only one map is silently NULL on the other read path.
+This has bitten twice (P1.1 `Rough_Opener_Amount`; 2026-07-14 the whole
+decision-math set + `Draft_Reply_Text/Meta` + `DD_Volley_State`, which
+dropped Mayfield's $27k counter from the backfill compute). **Every new
+Listing field goes in BOTH maps**; `lib/airtable-map-parity.test.ts`
+enforces parity for the machine-managed set — extend its list with each
+new field.
+
 ## 5. External services
 
 | Service | Identity |
