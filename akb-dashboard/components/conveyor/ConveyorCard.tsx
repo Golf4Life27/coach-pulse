@@ -109,6 +109,16 @@ export default function ConveyorCard({ item, nowMs, busy, onAction }: ConveyorCa
         </blockquote>
       )}
 
+      {/* The reply we're proposing — visible BEFORE Approve & Send, never
+          hidden behind Edit (operator 2026-07-14: "the Send action items need
+          to show me the draft you are proposing"). */}
+      {send && send.kind === "proposal_send" && !editing && (
+        <div className="mt-2 border-l-2 border-emerald-500/50 bg-emerald-950/25 rounded-r px-3 py-2 text-[13px] text-gray-100 leading-relaxed whitespace-pre-wrap">
+          <span className="block text-emerald-400/80 text-[10px] font-bold uppercase tracking-wide mb-0.5">Your reply</span>
+          {send.draftBody}
+        </div>
+      )}
+
       {/* One sentence, no more */}
       {item.reasoning && <p className="mt-2 text-xs text-gray-400 leading-relaxed">{item.reasoning}</p>}
 
