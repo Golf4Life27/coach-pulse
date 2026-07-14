@@ -46,6 +46,11 @@ export interface DealDraft {
   holdReason: string | null;
   generatedAt: string | null;
   proposalId: string | null;
+  /** The seller/agent inbound this reply answers — operator 2026-07-14:
+   *  "it should show the message we are replying to, otherwise I need to open
+   *  the deal card fully to see the context." Sourced from Draft_Reply_Meta's
+   *  inbound_excerpt; null when the mirror predates the field. */
+  inboundExcerpt: string | null;
 }
 
 export interface RankedLiveDeal {
@@ -102,6 +107,10 @@ export function dealDraftFromFields(text: string | null, metaRaw: string | null)
     const meta = JSON.parse(metaRaw) as Record<string, unknown>;
     const state = meta.state;
     if (state !== "queued" && state !== "hold") return null;
+    const inboundExcerpt =
+      typeof meta.inbound_excerpt === "string" && meta.inbound_excerpt.trim()
+        ? meta.inbound_excerpt.trim()
+        : null;
     return {
       state,
       text: state === "queued" ? ((text ?? "").trim() || null) : null,
@@ -110,6 +119,7 @@ export function dealDraftFromFields(text: string | null, metaRaw: string | null)
       holdReason: typeof meta.hold_reason === "string" ? meta.hold_reason : null,
       generatedAt: typeof meta.generated_at === "string" ? meta.generated_at : null,
       proposalId: typeof meta.proposal_id === "string" ? meta.proposal_id : null,
+      inboundExcerpt,
     };
   } catch {
     return null;

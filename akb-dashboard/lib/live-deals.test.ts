@@ -58,6 +58,29 @@ describe("recommended-reply drafts on the strip", () => {
     expect(d.draft?.proposalId).toBe("jarvis_reply-1");
   });
 
+  it("surfaces the inbound excerpt so the card shows what we're replying to", () => {
+    const [d] = rankLiveDeals([
+      row({
+        draftReplyText: "Bills get paid from proceeds at closing.",
+        draftReplyMeta: JSON.stringify({
+          state: "queued",
+          classification: "seller_costs",
+          channel: "sms",
+          inbound_excerpt: "Who covers the back taxes and water bill?",
+          proposal_id: "jarvis_reply-9",
+        }),
+      }),
+    ]);
+    expect(d.draft?.inboundExcerpt).toBe("Who covers the back taxes and water bill?");
+  });
+
+  it("inboundExcerpt is null when the meta predates the field (blockquote hides)", () => {
+    const [d] = rankLiveDeals([
+      row({ draftReplyText: "reply", draftReplyMeta: queuedMeta }),
+    ]);
+    expect(d.draft?.inboundExcerpt).toBeNull();
+  });
+
   it("a HOLD renders reason, no text; sent/dismissed render nothing", () => {
     const [held] = rankLiveDeals([
       row({

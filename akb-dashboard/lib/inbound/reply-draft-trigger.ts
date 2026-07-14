@@ -275,6 +275,7 @@ export async function buildInboundReplyDraft(args: {
           confidence: 0.9,
           channel,
           inbound_msg_id: inbound.msgId,
+          inbound_excerpt: inbound.body.slice(0, 160),
           hold_reason: ddHold ?? undefined,
         },
         proposal,

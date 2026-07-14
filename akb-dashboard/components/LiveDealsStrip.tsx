@@ -207,6 +207,15 @@ export default function LiveDealsStrip() {
                         <span className="font-bold text-emerald-400 uppercase tracking-wide">Reply ready</span>
                         <span>{d.draft.channel === "email" ? "✉️ email" : "💬 text"} · {d.draft.classification.replace(/_/g, " ")}</span>
                       </div>
+                      {/* The inbound this reply answers — operator 2026-07-14: show
+                          the message we're replying to so context is on the card,
+                          no need to open the full deal room. */}
+                      {d.draft.inboundExcerpt && (
+                        <blockquote className="border-l-2 border-sky-500/40 bg-sky-950/20 pl-3 pr-2 py-1.5 rounded-r text-[12px] text-sky-200/90 italic">
+                          <span className="not-italic text-sky-400/70 text-[9px] font-bold uppercase tracking-wide mr-1">They said</span>
+                          “{d.draft.inboundExcerpt}”
+                        </blockquote>
+                      )}
                       {isEditing ? (
                         <textarea
                           value={editText}
