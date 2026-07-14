@@ -41,7 +41,7 @@ export type ConveyorAction =
 export interface ConveyorItem {
   /** Unique key: `${source}:${id}`. */
   key: string;
-  source: "proposal" | "action_item" | "priority" | "brocard";
+  source: "proposal" | "action_item" | "priority" | "brocard" | "contract";
   type: ConveyorType;
   title: string;
   /** One-sentence reasoning — the card never renders more than this. */
@@ -406,6 +406,10 @@ export function buildConveyor(
     actionItems: ActionItemRow[];
     priorities: PriorityRow[];
     broCards: BroCardRow[];
+    /** Back-half contract-lifecycle items — already ConveyorItem-shaped by the
+     *  pure lib/contract-lifecycle model (they carry their own type/dollars/
+     *  deadline/actions). Optional so existing callers/tests are unaffected. */
+    contractItems?: ConveyorItem[];
   },
   nowIso: string,
 ): ConveyorBuildResult {
@@ -415,6 +419,7 @@ export function buildConveyor(
     ...input.actionItems.map(fromActionItem),
     ...input.priorities.map(fromPriority),
     ...input.broCards.map(fromBroCard),
+    ...(input.contractItems ?? []),
   ];
   return {
     items: rankConveyor(dedupeConveyor(items), nowIso),

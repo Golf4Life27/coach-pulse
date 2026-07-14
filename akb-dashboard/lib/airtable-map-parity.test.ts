@@ -30,6 +30,12 @@ const BOTH_PATH_PROPS = [
   "contractOfferPrice",
   "lastInboundAt",
   "lastOutboundAt",
+  // Back-half contract lifecycle (2026-07-14, the 3123 Sunbeam blind spot).
+  "contractExecutedAt",
+  "emdDueAt",
+  "emdReceived",
+  "optionDeadline",
+  "closeDate",
 ];
 
 describe("two-map rule: bulk (fld-ID) and single (name) reads see the same surface", () => {

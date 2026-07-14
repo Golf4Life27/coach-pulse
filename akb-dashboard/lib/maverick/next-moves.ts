@@ -160,12 +160,18 @@ export function narrateMove(item: ConveyorItem, nowIso: string): NextMove {
   const urgency = urgencyRank(item, nowIso);
   const primary = primaryOf(item);
   const clock = moveClock(item, nowIso);
+  // Back-half contract items carry their own crafted, specific imperative in
+  // `reasoning` ("Earnest money due Jul 16 — voice-verify the wire…"), so use
+  // THAT as the headline rather than the generic type-based line, and suppress
+  // the duplicate `why`.
+  const isContract = item.source === "contract";
+  const headline = isContract ? item.reasoning : moveHeadline(item, urgency, primary.kind);
   return {
     key: item.key,
     type: item.type,
     urgency,
-    headline: moveHeadline(item, urgency, primary.kind),
-    why: item.reasoning,
+    headline,
+    why: isContract ? "" : item.reasoning,
     clock: clock.text,
     tone: clock.tone,
     dollars: item.dollars,

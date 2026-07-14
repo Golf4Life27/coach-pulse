@@ -81,6 +81,15 @@ const LISTING_FIELDS: Record<string, string> = {
   // the deal-detail page; read by components/ScribeDealCommentary.tsx
   // to surface envelope status from briefing.external_signals.docusign.
   fldKPVG9qmbzxW5lK: "envelopeId",
+  // ── Back-half contract lifecycle (2026-07-14, the 3123 Sunbeam blind spot):
+  // the deadline fields that drive under_contract/dispo surfacing + clocks in
+  // the conveyor. Money/signature steps stay operator-gated (EMD is voice-
+  // verified). TWO-MAP: also in LISTING_NAME_MAP + the parity test.
+  fldSnAeUAn8cahN6R: "contractExecutedAt",
+  fldRbQ7I6pn9Iezvh: "emdDueAt",
+  fldUBxg2UHqZ3wvDS: "emdReceived",
+  fldNzqz8j4jU0mUCA: "optionDeadline",
+  fldMnnYbM9ThA779k: "closeDate",
   // ── Pre-Outreach Gate (orchestrator Gate 1) inputs
   fldif6WwcJeXZtJcX: "mlsStatus",
   fldrlbePeS9glaFQu: "propertyType",
@@ -241,6 +250,13 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "Price_Drop_Count": "priceDropCount",
   "Last_Verified": "lastVerified",
   "Pipeline_Stage": "pipelineStage",
+  // ── Back-half contract lifecycle (2026-07-14) — TWO-MAP twin of the fld-ID
+  // block above; parity enforced by lib/airtable-map-parity.test.ts.
+  "Contract_Executed_At": "contractExecutedAt",
+  "EMD_Due_At": "emdDueAt",
+  "EMD_Received": "emdReceived",
+  "Option_Deadline": "optionDeadline",
+  "Close_Date": "closeDate",
   "Rehab_Confidence_Score": "rehabConfidenceScore",
   "Agent_Prior_Outreach_Count": "agentPriorOutreachCount",
   "Est_Rehab": "estRehab",

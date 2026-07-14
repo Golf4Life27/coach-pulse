@@ -82,6 +82,15 @@ export interface Listing {
   // "Track in Scribe" on the deal-detail page. Drives the per-deal
   // ScribeDealCommentary lookup against external_signals.docusign.envelopes.
   envelopeId: string | null;
+  // ── Back-half contract lifecycle (2026-07-14, the 3123 Sunbeam blind spot).
+  // The deadline fields that drive under_contract/dispo surfacing + clocks in
+  // the conveyor. All operator-owned; money/signature steps stay operator-gated
+  // (EMD is voice-verified, never automated). ISO date strings (YYYY-MM-DD).
+  contractExecutedAt?: string | null;
+  emdDueAt?: string | null;
+  emdReceived?: boolean | null;
+  optionDeadline?: string | null;
+  closeDate?: string | null;
   // ── Pre-Outreach Gate inputs (added 5/13 for orchestrator Gate 1)
   mlsStatus?: string | null;
   propertyType?: string | null;

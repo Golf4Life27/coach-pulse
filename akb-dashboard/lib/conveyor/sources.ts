@@ -7,27 +7,32 @@
 // caller keeps its prior data (the feed never flickers to empty on one bad
 // poll) — preserving ConveyorFeed's original Promise.allSettled behavior.
 
-import type { ProposalRow, ActionItemRow, PriorityRow, BroCardRow } from "@/lib/conveyor/model";
+import type { ProposalRow, ActionItemRow, PriorityRow, BroCardRow, ConveyorItem } from "@/lib/conveyor/model";
 
 export interface FastSources {
   /** null = this source failed this poll; keep whatever you had. */
   proposals: ProposalRow[] | null;
   actionItems: ActionItemRow[] | null;
   priorities: PriorityRow[] | null;
+  /** Back-half contract-lifecycle items — already ConveyorItem-shaped. */
+  contractItems: ConveyorItem[] | null;
 }
 
-/** The three fast sources (Pending proposals, operator action items, curated
- *  priorities). Each resolves independently; a failure is null, not []. */
+/** The fast sources (Pending proposals, operator action items, curated
+ *  priorities, back-half contract lifecycle). Each resolves independently; a
+ *  failure is null, not [], so the caller keeps prior data (no empty flicker). */
 export async function fetchFastSources(): Promise<FastSources> {
-  const [p, a, pr] = await Promise.allSettled([
+  const [p, a, pr, cl] = await Promise.allSettled([
     fetch("/api/proposals").then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
     fetch("/api/operator-actions").then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
     fetch("/api/maverick/priorities", { cache: "no-store" }).then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
+    fetch("/api/contract-lifecycle", { cache: "no-store" }).then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
   ]);
   return {
     proposals: p.status === "fulfilled" && Array.isArray(p.value) ? (p.value as ProposalRow[]) : null,
     actionItems: a.status === "fulfilled" ? ((a.value.items as ActionItemRow[]) ?? []) : null,
     priorities: pr.status === "fulfilled" ? ((pr.value.actions as PriorityRow[]) ?? []) : null,
+    contractItems: cl.status === "fulfilled" ? ((cl.value.items as ConveyorItem[]) ?? []) : null,
   };
 }
 
