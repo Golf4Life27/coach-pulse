@@ -16,9 +16,11 @@ describe("computeRoughOpenerCeiling — value-anchored buy-box path (ARV + visio
   it("placeholder rehab when ARV present but no vision rehab", () => {
     const r = computeRoughOpenerCeiling({ realArvMedian: 100_000, arvPctMax: DETROIT });
     expect(r.source).toBe("rough_buybox_arv_placeholder_rehab");
-    // rehab = 100000 × 0.20 = 20000; ceiling = 64610 − 20000 − 5000 = 39610
-    expect(r.rehabUsed).toBe(20_000);
-    expect(r.ceiling).toBe(39_610);
+    // rehab = 100000 × 0.30 = 30000; ceiling = 64610 − 30000 − 5000 = 29610
+    // (0.20 → 0.30, operator 2026-07-16: sweep median of the 7 underwater
+    // deals' real rehab was 29% of ARV; 20% systematically under-booked.)
+    expect(r.rehabUsed).toBe(30_000);
+    expect(r.ceiling).toBe(29_610);
   });
   it("clamps to 0, never negative (deep rehab > buy-box ARV)", () => {
     const r = computeRoughOpenerCeiling({ realArvMedian: 50_000, estRehabMid: 60_000, arvPctMax: DETROIT });
@@ -54,7 +56,7 @@ describe("computeRoughOpenerCeiling — HOLD, never list-anchor (the catastrophe
   it("ARV + buy-box still wins — a real value basis prices the house", () => {
     const r = computeRoughOpenerCeiling({ realArvMedian: 100_000, listPrice: 130_000, arvPctMax: DETROIT });
     expect(r.source).toBe("rough_buybox_arv_placeholder_rehab"); // value path, not a hold
-    expect(r.ceiling).toBe(39_610);
+    expect(r.ceiling).toBe(29_610); // 0.30 placeholder (2026-07-16)
   });
   it("no inputs at all → HOLD", () => {
     const r = computeRoughOpenerCeiling({});
@@ -64,7 +66,7 @@ describe("computeRoughOpenerCeiling — HOLD, never list-anchor (the catastrophe
 });
 
 describe("constants", () => {
-  it("rehab placeholder fraction is 0.20", () => {
-    expect(ROUGH_REHAB_PCT_OF_ARV).toBe(0.20);
+  it("rehab placeholder fraction is 0.30 (operator 2026-07-16, sweep-backed)", () => {
+    expect(ROUGH_REHAB_PCT_OF_ARV).toBe(0.30);
   });
 });

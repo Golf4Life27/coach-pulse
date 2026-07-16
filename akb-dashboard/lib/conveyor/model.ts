@@ -137,6 +137,9 @@ export const DECISION_PROPOSAL_TYPES: ReadonlySet<string> = new Set([
   "jarvis_reply",
   "h2_opener_hold",
   "frontier_retire",
+  // Post-vision park (2026-07-16): a sent-opener deal went underwater when the
+  // real rehab landed — the operator rules it (pass / re-verify / creative).
+  "underwater_review",
 ]);
 export const REPLY_PROPOSAL_MAX_AGE_DAYS = 10;
 export const DECISION_PROPOSAL_MAX_AGE_DAYS = 14;
@@ -221,7 +224,9 @@ export function fromProposal(p: ProposalRow): ConveyorItem {
   const sms = parseSendSms(p.actionPayload);
   const posted = p.createdTime ?? null;
   const isReply = p.proposalType === "jarvis_reply";
-  const isHold = p.proposalType === "h2_opener_hold";
+  // Rulings that need the deal room (an "Approve" would dispatch nothing and
+  // lie): pricer holds AND post-vision underwater reviews.
+  const isHold = p.proposalType === "h2_opener_hold" || p.proposalType === "underwater_review";
   const href = p.recordId && p.recordId.startsWith("rec") ? `/pipeline/${p.recordId}` : null;
   const deadlineAt =
     type === "2A"
@@ -257,9 +262,11 @@ export function fromProposal(p: ProposalRow): ConveyorItem {
         ];
   // Holds get a plain-English preface — the raw reasoning is pricer
   // internals ("rough ceiling null (hold_no_value_basis) × anchor ?").
-  const reasoning = isHold
-    ? `Pricer HOLD — no autonomous text will fire on this record. Rule it: re-source and re-run, route to the creative lane, or kill. (${firstSentence(p.reasoning)})`
-    : firstSentence(p.reasoning);
+  // Underwater reviews carry their own crafted sentence from the park.
+  const reasoning =
+    p.proposalType === "h2_opener_hold"
+      ? `Pricer HOLD — no autonomous text will fire on this record. Rule it: re-source and re-run, route to the creative lane, or kill. (${firstSentence(p.reasoning)})`
+      : firstSentence(p.reasoning);
   return {
     key: `proposal:${p.id}`,
     source: "proposal",

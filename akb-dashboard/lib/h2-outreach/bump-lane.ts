@@ -110,6 +110,15 @@ export function bumpVerdict(
   if (l.sourceVersion !== SOURCE_VERSION_V2) return skip("not_v2");
   if (l.doNotText === true) return skip("do_not_text");
   if (!normalizePhone(l.agentPhone)) return skip("no_valid_phone");
+  // POST-VISION PARK (operator 2026-07-16): once decision-math has run and
+  // the spread is negative — the real rehab revealed the sent opener is above
+  // what a buyer pays — stop chasing. No bump ever rides a dead-on-arrival
+  // number (the Mayfield/Cheyenne class: placeholder rehab looked light, the
+  // vision pass said gut job). The operator can still work it by hand; the
+  // machine stops spending touches on it.
+  if (typeof l.dealSpread === "number" && Number.isFinite(l.dealSpread) && l.dealSpread < 0) {
+    return skip("parked_underwater");
+  }
   // ANY inbound ever → the thread is conversational; the reply/classifier
   // lane owns it. Silent threads only.
   if (l.lastInboundAt && l.lastInboundAt.trim() !== "") return skip("has_inbound");

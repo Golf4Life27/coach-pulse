@@ -11,6 +11,7 @@ import {
   dedupeConveyor,
   buildConveyor,
   urgencyRank,
+  filterDecisionProposals,
   type ProposalRow,
 } from "./model";
 
@@ -241,5 +242,30 @@ describe("dedupe + buildConveyor", () => {
     expect(items.map((i) => i.key)).toEqual(["proposal:recFRESH000000001"]);
     expect(hidden.stale).toBe(2);
     expect(hidden.machineWork).toBe(0);
+  });
+});
+
+// ── underwater_review (post-vision park, 2026-07-16) ───────────────────────
+describe("underwater_review renders as a decision, not machine-work", () => {
+  const row = {
+    id: "recProposalUW1",
+    proposalType: "underwater_review",
+    recordId: "recDEAL123456789A",
+    recordAddress: "2208 Mayfield Ave SW",
+    reasoning: "Deal went underwater when the math got real: spread -$14,608 (buyer ceiling $12,392 vs current price $27,000). An offer is already out — rule it: pass, re-verify condition, or route creative.",
+    actionPayload: "{}",
+    createdTime: "2026-07-16T00:00:00.000Z",
+  };
+  it("passes the machine-work gate (decision-grade)", () => {
+    const gate = filterDecisionProposals([row], "2026-07-16T12:00:00.000Z");
+    expect(gate.kept).toHaveLength(1);
+    expect(gate.machineWorkHidden).toBe(0);
+  });
+  it("maps to a 2C ruling with Open-deal primary (no lying Approve)", () => {
+    const item = fromProposal(row);
+    expect(item.type).toBe("2C");
+    expect(item.actions[0]).toMatchObject({ kind: "open", label: "Open deal" });
+    expect(item.reasoning).toMatch(/underwater/i);
+    expect(item.reasoning).not.toMatch(/Pricer HOLD/); // carries its own sentence
   });
 });

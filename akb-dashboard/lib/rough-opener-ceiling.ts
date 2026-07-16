@@ -41,10 +41,14 @@ import { DEFAULT_WHOLESALE_FEE } from "@/lib/pre-contract-math";
 
 /** Placeholder rehab band center when ARV is present but no vision rehab
  *  exists yet — a conservative fraction of ARV. Opener-only; the precise
- *  lane never uses it. Env-tunable. */
+ *  lane never uses it. Env-tunable.
+ *  0.20 → 0.30 (operator 2026-07-16): the 7-deal underwater sweep showed
+ *  actual vision rehab ran 19–57% of ARV (median 29%) — the 20% placeholder
+ *  systematically under-booked rehab on heavy stock and opened conversations
+ *  that could never close (2208 Mayfield at 57%, 9360 Cheyenne at 49%). */
 export const ROUGH_REHAB_PCT_OF_ARV = (() => {
   const raw = Number(process.env.ROUGH_REHAB_PCT_OF_ARV);
-  return Number.isFinite(raw) && raw > 0 && raw < 1 ? raw : 0.20;
+  return Number.isFinite(raw) && raw > 0 && raw < 1 ? raw : 0.30;
 })();
 
 export type RoughCeilingSource =

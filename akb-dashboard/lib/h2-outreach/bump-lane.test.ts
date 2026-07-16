@@ -273,3 +273,17 @@ describe("partitionReverifyBatch", () => {
     expect(noBump.bumpTaken).toBe(0);
   });
 });
+
+// ── POST-VISION PARK (operator 2026-07-16) ─────────────────────────────────
+describe("bumpVerdict — parked_underwater (no bump rides a dead number)", () => {
+  it("a negative stored Deal_Spread parks the record — no bump", () => {
+    const v = bumpVerdict(texted({ dealSpread: -14_608 }), NOW);
+    expect(v.due).toBe(false);
+    expect(v.reason).toBe("parked_underwater");
+  });
+  it("zero, positive, or missing spread does not park", () => {
+    expect(bumpVerdict(texted({ dealSpread: 0 }), NOW).reason).not.toBe("parked_underwater");
+    expect(bumpVerdict(texted({ dealSpread: 12_500 }), NOW).reason).not.toBe("parked_underwater");
+    expect(bumpVerdict(texted({ dealSpread: null }), NOW).reason).not.toBe("parked_underwater");
+  });
+});
