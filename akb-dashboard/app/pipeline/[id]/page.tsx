@@ -18,6 +18,7 @@ import AppraiserBuyerIntelligencePanel from "@/components/AppraiserBuyerIntellig
 import RelatedDealsRecall from "@/components/RelatedDealsRecall";
 import ScribeDealCommentary from "@/components/ScribeDealCommentary";
 import PricingSanityRail from "@/components/PricingSanityRail";
+import PreContractGate from "@/components/PreContractGate";
 import type { DealContext } from "@/types/jarvis";
 
 function cleanPhone(phone: string): string {
@@ -350,6 +351,13 @@ export default function DealWorkspace() {
           <div className="text-gray-300 font-bold text-lg leading-tight">{listing.listPrice != null ? formatCurrency(listing.listPrice) : "—"}</div>
         </div>
       </div>
+
+      {/* PRE-CONTRACT GATE (2026-07-16) — the red/amber/green stop surface
+          before you contract or wire: underwritten? priced within the ceiling
+          for your chosen exit? DD done? market fresh? Exit-aware, waivable,
+          never a hard block. Closes the Sunbeam hole (contracted at NEEDS_DATA,
+          0/12 DD, a 65%-of-fantasy-list price). */}
+      <PreContractGate recordId={listing.id} />
 
       {/* DECISION CARD (decision-math build, 2026-07-13) — the 15-second
           go/no-go: verdict badge, stat row, price waterfall, all-in meter,
