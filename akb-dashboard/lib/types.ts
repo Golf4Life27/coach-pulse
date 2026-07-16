@@ -91,6 +91,11 @@ export interface Listing {
   emdReceived?: boolean | null;
   optionDeadline?: string | null;
   closeDate?: string | null;
+  // ── Pre-contract gate (2026-07-16) — operator inputs the gate reads.
+  //   exitStrategy: cash_flip | wholesale | rental | creative (picks the ceiling).
+  //   preContractWaivers: JSON map of waived check id → eyes-open reason.
+  exitStrategy?: string | null;
+  preContractWaivers?: string | null;
   // ── Pre-Outreach Gate inputs (added 5/13 for orchestrator Gate 1)
   mlsStatus?: string | null;
   propertyType?: string | null;

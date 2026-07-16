@@ -90,6 +90,11 @@ const LISTING_FIELDS: Record<string, string> = {
   fldUBxg2UHqZ3wvDS: "emdReceived",
   fldNzqz8j4jU0mUCA: "optionDeadline",
   fldMnnYbM9ThA779k: "closeDate",
+  // ── Pre-contract gate (2026-07-16, the Sunbeam-contracted-at-NEEDS_DATA
+  // failure): operator inputs the gate reads. Exit picks the price ceiling;
+  // waivers are eyes-open overrides. TWO-MAP: also in LISTING_NAME_MAP + parity.
+  fldBi5e0X6lUs7YPd: "exitStrategy",
+  fldbLKV9zX4MQeCHH: "preContractWaivers",
   // ── Pre-Outreach Gate (orchestrator Gate 1) inputs
   fldif6WwcJeXZtJcX: "mlsStatus",
   fldrlbePeS9glaFQu: "propertyType",
@@ -257,6 +262,9 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "EMD_Received": "emdReceived",
   "Option_Deadline": "optionDeadline",
   "Close_Date": "closeDate",
+  // Pre-contract gate (2026-07-16) — TWO-MAP twin; parity-enforced.
+  "Exit_Strategy": "exitStrategy",
+  "Pre_Contract_Waivers": "preContractWaivers",
   "Rehab_Confidence_Score": "rehabConfidenceScore",
   "Agent_Prior_Outreach_Count": "agentPriorOutreachCount",
   "Est_Rehab": "estRehab",
