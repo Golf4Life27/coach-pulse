@@ -256,3 +256,92 @@ describe("priceOpener — genuine hold", () => {
     expect(r.confidence).toBe("NONE");
   });
 });
+
+// ── MAO BOUND (Hole D, operator 2026-07-16) ────────────────────────────────
+// The opener can NEVER exceed the flip-lane seller offer (0.70×ARV − rehab −
+// closing − fee). Before this, the 85%-of-list cap + a loose buy-box let the
+// FIRST text sit above the operator's own maximum — all 7 deals in the
+// underwater sweep, incl. 3557 Forest Manor: opened $97,665 against a $78,886
+// MAO. The regression cases below use those real numbers.
+describe("priceOpener — MAO bound (the first offer never sits above your MAO)", () => {
+  it("Forest Manor regression: anchored opener above the 70%-rule offer is BOUNDED to it", () => {
+    // ARV 189,655 / vision rehab 36,881 / fee 15,000. Flip: basis 132,758.5,
+    // closing 1,991, mao 93,886 (= the stored Buyer_Ceiling), offer 78,886.
+    const r = priceOpener({
+      listPrice: 114_900,
+      realArvMedian: 189_655,
+      estRehabMid: 36_881,
+      arvPctMax: 0.75,
+      wholesaleFee: 15_000,
+      anchorPct: 0.90,
+      arvConfidence: "STRONG",
+    });
+    expect(r.maoBound).toBe(78_886);
+    expect(r.boundedToMao).toBe(true);
+    expect(r.opener).toBe(78_886); // NOT the $97,665 that actually went out
+    expect(r.cappedToList).toBe(false); // 85%×114,900=97,665 never reached
+    expect(r.detail).toMatch(/BOUNDED to MAO/);
+  });
+
+  it("the 85%-of-list cap can only LOWER a MAO-bounded opener, never raise it", () => {
+    // Mayfield-shaped: tiny list vs big ARV — the cap bites BELOW the bound.
+    const r = priceOpener({
+      listPrice: 29_900,
+      realArvMedian: 102_846,
+      arvPctMax: 0.75, // placeholder rehab path (no vision yet)
+      anchorPct: 0.90,
+      arvConfidence: "STRONG",
+    });
+    expect(r.opener).not.toBeNull();
+    expect(r.opener!).toBeLessThanOrEqual(r.maoBound!);
+    expect(r.opener!).toBeLessThanOrEqual(Math.floor(29_900 * 0.85));
+  });
+
+  it("with the REAL gut-job rehab, Mayfield never opens (sub-floor → HOLD)", () => {
+    // ARV 102,846 / vision rehab 58,520 → flip offer 7,392 < floor $10k.
+    const r = priceOpener({
+      listPrice: 29_900,
+      realArvMedian: 102_846,
+      estRehabMid: 58_520,
+      arvPctMax: 0.75,
+      anchorPct: 0.90,
+      arvConfidence: "STRONG",
+    });
+    expect(r.opener).toBeNull();
+    expect(r.basis).toBe("hold_no_value_basis");
+    expect(r.flooredToFallback).toBe(true);
+  });
+
+  it("flip no_deal (offer ≤ 0) → HOLD, flagged as a rental/creative candidate", () => {
+    // Cheyenne real numbers at a $15k fee: offer = 14,439 − 15,000 < 0.
+    const r = priceOpener({
+      listPrice: 49_999,
+      realArvMedian: 73_827,
+      estRehabMid: 36_465,
+      arvPctMax: 0.75,
+      wholesaleFee: 15_000,
+      anchorPct: 0.90,
+      arvConfidence: "STRONG",
+    });
+    expect(r.opener).toBeNull();
+    expect(r.detail).toMatch(/does not pencil as a flip/i);
+    expect(r.detail).toMatch(/rental\/creative/i);
+  });
+
+  it("an opener already under the MAO bound passes through unchanged", () => {
+    // Conservative buy-box (Detroit 0.6461) → anchored opener sits below the
+    // 70%-rule offer; the bound records but does not bite.
+    const r = priceOpener({
+      listPrice: 88_500,
+      realArvMedian: 137_456,
+      estRehabMid: 27_491,
+      arvPctMax: 0.6461,
+      anchorPct: 0.90,
+      arvConfidence: "STRONG",
+    });
+    expect(r.opener).not.toBeNull();
+    expect(r.boundedToMao).toBe(false);
+    expect(r.maoBound).not.toBeNull();
+    expect(r.opener!).toBeLessThanOrEqual(r.maoBound!);
+  });
+});

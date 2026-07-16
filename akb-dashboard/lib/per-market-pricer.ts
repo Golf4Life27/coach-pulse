@@ -35,6 +35,8 @@ import {
   type RoughCeilingResult,
 } from "@/lib/rough-opener-ceiling";
 import { anchoredOpenerGate } from "@/lib/h2-outreach/your-mao-opener-gate";
+import { computeFlipOffer } from "@/lib/pricing/mao-flip";
+import { DEFAULT_WHOLESALE_FEE } from "@/lib/pre-contract-math";
 
 // ── GUARDS (Maverick 2026-06-14, full-437 dry-run outlier review) ──
 // The full-437 dry-run exposed holes the old door-opener guarded. These
@@ -147,6 +149,13 @@ export interface PricerResult {
   /** NEVER-OVER-LIST CAP (Hole A): the value-anchored opener exceeded list and
    *  was clamped down to a fraction of list (safe — only bites when ARV≫list). */
   cappedToList: boolean;
+  /** MAO BOUND (Hole D, operator 2026-07-16): the flip-lane seller offer
+   *  (0.70×ARV − rehab − closing − fee) computed from the SAME ARV/rehab this
+   *  opener used. The opener NEVER exceeds it — the first offer can never sit
+   *  above your maximum. Null only on a hold. */
+  maoBound: number | null;
+  /** True when the anchored opener exceeded maoBound and was clamped to it. */
+  boundedToMao: boolean;
   detail: string;
 }
 
@@ -174,6 +183,8 @@ function holdResult(
     flagReseed: extra?.flagReseed ?? false,
     flooredToFallback: extra?.flooredToFallback ?? false,
     cappedToList: false,
+    maoBound: null,
+    boundedToMao: false,
     detail,
   };
 }
@@ -221,17 +232,37 @@ export function priceOpener(input: PricerInput): PricerResult {
       : input.arvConfidence === "THIN" ? "THIN"
       : "STORED";
 
+    // ── GUARD: MAO BOUND (Hole D, operator 2026-07-16) ── the opener can
+    // NEVER exceed the flip-lane seller offer (0.70×ARV − rehab − closing −
+    // fee) computed from the SAME ARV/rehab the ceiling used. Before this,
+    // the opener rode a looser market buy-box and an 85%-of-LIST clamp, so
+    // the FIRST text could sit ABOVE your own maximum (all 7 underwater
+    // deals — Forest Manor opened $97,665 against a $78,886 MAO). One
+    // formula, cold-touch through contract: lib/pricing/mao-flip.
+    const fee = pos(input.wholesaleFee) ? input.wholesaleFee : DEFAULT_WHOLESALE_FEE;
+    const flip = computeFlipOffer({ arv: trustedArv, rehab: rough.rehabUsed, assignmentFee: fee });
+    if (flip.status === "no_deal" || flip.offer == null || flip.offer <= 0) {
+      return holdResult(
+        rough.source,
+        `does not pencil as a flip — MAO bound ≤ $0 (0.70×ARV $${(trustedArv ?? 0).toLocaleString()} − rehab $${(rough.rehabUsed ?? 0).toLocaleString()} − closing − fee $${fee.toLocaleString()}). ` +
+          `HELD for operator review (rental/creative lane candidate; never list-anchored)`,
+      );
+    }
+    const maoBound = flip.offer;
+
     if (gate.ok && gate.opener != null) {
+      const boundedToMao = gate.opener > maoBound;
+      const opener = boundedToMao ? maoBound : gate.opener;
       // ── GUARD: LOW-OPENER FLOOR (Hole B) ── a tiny-but-positive ceiling
       // yields a broken-looking micro-opener. Below max(PCT×list, USD) → HOLD
       // for operator review instead of sending it (and instead of the retired
       // list-fraction rail).
       if (list != null) {
         const floor = minOfferFloor(list);
-        if (gate.opener < floor) {
+        if (opener < floor) {
           return holdResult(
             rough.source,
-            `buy-box opener $${gate.opener.toLocaleString()} below floor $${Math.round(floor).toLocaleString()} ` +
+            `buy-box opener $${opener.toLocaleString()} below floor $${Math.round(floor).toLocaleString()} ` +
               `(max ${Math.round(LOW_OPENER_FLOOR_PCT_OF_LIST * 100)}%×list, $${LOW_OPENER_FLOOR_USD.toLocaleString()}) — ` +
               `micro-opener suppressed, HELD for operator review`,
             { flooredToFallback: true },
@@ -240,7 +271,7 @@ export function priceOpener(input: PricerInput): PricerResult {
       }
       return applyOverListCap(
         {
-          opener: gate.opener,
+          opener,
           basis: "arv_buybox",
           confidence,
           ceiling: rough.ceiling,
@@ -252,7 +283,13 @@ export function priceOpener(input: PricerInput): PricerResult {
           flagReseed: false,
           flooredToFallback: false,
           cappedToList: false,
-          detail: `${gate.detail} [${confidence}] (${rough.detail})`,
+          maoBound,
+          boundedToMao,
+          detail:
+            `${gate.detail} [${confidence}] (${rough.detail})` +
+            (boundedToMao
+              ? ` | BOUNDED to MAO $${maoBound.toLocaleString()} (anchored opener $${gate.opener.toLocaleString()} exceeded the flip-lane max — the first offer never sits above your MAO)`
+              : ` | MAO bound $${maoBound.toLocaleString()} ok`),
         },
         list,
       );

@@ -33,7 +33,13 @@ const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
 export type ParkReason =
   | "no_arv"
   | "math_fails_floor"
-  | "listing_changed_mid_negotiation";
+  | "listing_changed_mid_negotiation"
+  /** Post-vision park (operator 2026-07-16): the real rehab landed and the
+   *  deal went underwater AFTER an opener was already sent — a live
+   *  negotiation is riding a number no buyer pays. Operator rules it:
+   *  pass, re-verify condition, or route creative. Renders as a 2C decision
+   *  (underwater_review is in the conveyor's DECISION_PROPOSAL_TYPES). */
+  | "underwater_post_vision";
 
 export type DisposeReason = "listing_off_market";
 
@@ -86,12 +92,14 @@ const PROPOSAL_TYPE_BY_PARK_REASON: Record<ParkReason, string> = {
   no_arv: "surface_stale",
   math_fails_floor: "flag_price_drop",
   listing_changed_mid_negotiation: "surface_stale",
+  underwater_post_vision: "underwater_review",
 };
 
 const PARK_TITLE_PREFIX: Record<ParkReason, string> = {
   no_arv: "CMA needed",
   math_fails_floor: "Math fails floor — watch for price cut",
   listing_changed_mid_negotiation: "Listing status changed mid-negotiation",
+  underwater_post_vision: "Went UNDERWATER post-vision — pass, re-verify, or go creative",
 };
 
 function getProposalsTableId(): string | null {
