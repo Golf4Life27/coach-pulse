@@ -58,7 +58,7 @@ function parseWaivers(raw: unknown): Record<string, string> {
 }
 
 async function gateFor(recordId: string) {
-  const l = (await getListing(recordId)) as Record<string, unknown> | null;
+  const l = (await getListing(recordId, { fresh: true })) as Record<string, unknown> | null;
   if (!l) return null;
   const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
   const dd = parseDdProgress(l.ddChecklist);
