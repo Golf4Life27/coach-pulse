@@ -415,3 +415,20 @@ describe("meta-commentary validator (the leaked-reasoning draft)", () => {
     expect(validateReplyDraft("Happy to answer any questions the seller has.", CTX).ok).toBe(true);
   });
 });
+
+describe("placeholder guard — scaffolding never reaches a Send button (2026-07-16)", () => {
+  it("holds the verbatim 1122 West Ave leak", () => {
+    const v = validateReplyDraft("Alex Balog, AKB Solutions LLC — alex@akbsolutions.com, (insert phone). Ready when the GAR agreement is.", ctx({ classification: "unknown" }));
+    expect(v.ok).toBe(false);
+    expect(v.holdReason).toBe("draft_contains_placeholder");
+  });
+  it("holds bracketed/TBD/underscore template holes", () => {
+    for (const bad of ["Call me at [phone number]", "My attorney is TBD for now", "Wire to account ____"]) {
+      expect(validateReplyDraft(bad, ctx({ classification: "unknown" })).ok).toBe(false);
+    }
+  });
+  it("normal replies with real contact info pass", () => {
+    const v = validateReplyDraft("Here you go: Alex Balog, (815) 556-9965, Alex@akb-properties.com. Send the agreement over.", ctx({ classification: "unknown", stickyOfferUsd: null }));
+    expect(v.ok).toBe(true);
+  });
+});

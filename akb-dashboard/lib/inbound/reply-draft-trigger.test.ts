@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildInboundReplyDraft, type DraftTriggerListing } from "./reply-draft-trigger";
+import { buildInboundReplyDraft, detectsSellerDebt, type DraftTriggerListing } from "./reply-draft-trigger";
 import type { GeneratedReply } from "@/lib/recommended-reply";
 
 const LISTING: DraftTriggerListing = {
@@ -50,7 +50,7 @@ describe("buildInboundReplyDraft — SMS (quo-sync path)", () => {
       notes: "prior thread…",
       inbound: { msgId: "ACsms123", body: COSTS, toPhoneE164: "+13135551212" },
       channel: "sms",
-      deps: { generate: stubGenerate("Happy to walk you through it, Dana."), nowMs: 1_000 },
+      deps: { generate: stubGenerate("Happy to walk you through it, Dana."), ddLive: false, nowMs: 1_000 },
     });
     expect(res.skipped).toBeNull();
     expect(res.drafted).toBe(true);
@@ -76,7 +76,7 @@ describe("buildInboundReplyDraft — email (gmail-sync path)", () => {
         subject: "Re: 9360 Cheyenne",
       },
       channel: "email",
-      deps: { generate: stubGenerate("Those are paid from proceeds at closing through title."), nowMs: 2_000 },
+      deps: { generate: stubGenerate("Those are paid from proceeds at closing through title."), ddLive: false, nowMs: 2_000 },
     });
     expect(res.skipped).toBeNull();
     const payload = JSON.parse(res.proposal!.actionPayload);
@@ -138,7 +138,7 @@ describe("buildInboundReplyDraft — HOLD (refuse-and-surface)", () => {
       notes: "",
       inbound: { msgId: "ACsmsHOLD", body: COSTS, toPhoneE164: "+13135551212" },
       channel: "sms",
-      deps: { generate: stubGenerate(null, "draft_invented_number ($99,000 with no stamped offer on record)"), nowMs: 6_000 },
+      deps: { generate: stubGenerate(null, "draft_invented_number ($99,000 with no stamped offer on record)"), ddLive: false, nowMs: 6_000 },
     });
     expect(res.skipped).toBeNull();
     expect(res.drafted).toBe(false);
@@ -151,16 +151,31 @@ describe("buildInboundReplyDraft — HOLD (refuse-and-surface)", () => {
 });
 
 describe("buildInboundReplyDraft — B2 DD-volley (watched-first)", () => {
-  it("DD off (default) → normal recommended reply, no DD state", async () => {
+  it("DD kill switch (ddLive false) → normal recommended reply, no DD state", async () => {
     const res = await buildInboundReplyDraft({
       listing: LISTING,
       notes: "",
       inbound: { msgId: "ACa", body: COSTS, toPhoneE164: "+13135551212" },
       channel: "sms",
-      deps: { generate: stubGenerate("normal reply"), nowMs: 1_000 },
+      deps: { generate: stubGenerate("normal reply"), ddLive: false, nowMs: 1_000 },
     });
     expect(res.draftText).toBe("normal reply");
     expect(res.extraFields).toBeUndefined();
+  });
+
+  it("DD volley is LIVE BY DEFAULT (2026-07-16) — only DD_VOLLEY_LIVE=false disables", async () => {
+    // No ddLive injected, no env set in tests → the default path runs the
+    // volley: seller_costs opens with the payoff question, generate not called.
+    const res = await buildInboundReplyDraft({
+      listing: LISTING,
+      notes: "",
+      inbound: { msgId: "ACdefault", body: COSTS, toPhoneE164: "+13135551212" },
+      channel: "sms",
+      deps: { generate: NEVER, nowMs: 1_000, nowIso: "2026-07-16T02:00:00.000Z" },
+    });
+    expect(res.drafted).toBe(true);
+    expect(res.draftText).toMatch(/still owed/i);
+    expect(res.extraFields?.DD_Volley_State).toBeTruthy();
   });
 
   it("DD on + engagement → the DD question IS the draft (generate never called)", async () => {
@@ -254,5 +269,20 @@ describe("buildInboundReplyDraft — closer → dismissed (no Send button, no HO
     expect(res.draftMeta?.state).toBe("dismissed");
     // The mirror carries the msg id, so this inbound is never re-processed.
     expect(res.draftMeta?.inbound_msg_id).toBe("ACcloser");
+  });
+});
+
+describe("detectsSellerDebt — the creative-lane signal (exit auto-sort)", () => {
+  it("catches the Mount Gilead disclosure verbatim", () => {
+    expect(detectsSellerDebt("Thank you for the offer, but she has second mortgage The least I can accept is 210.")).toBe(true);
+  });
+  it("catches payoff / owes / behind-on-payments shapes", () => {
+    expect(detectsSellerDebt("The payoff amount is around 180k")).toBe(true);
+    expect(detectsSellerDebt("He owes about $95,000 on it")).toBe(true);
+    expect(detectsSellerDebt("She's behind on payments right now")).toBe(true);
+  });
+  it("plain negotiation talk does not trigger it", () => {
+    expect(detectsSellerDebt("Seller countered at 66,500")).toBe(false);
+    expect(detectsSellerDebt("Too low, need you closer to asking")).toBe(false);
   });
 });

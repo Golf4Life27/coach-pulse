@@ -135,6 +135,37 @@ export default function DecisionCard({
             <span aria-hidden>{v.icon}</span>
             {v.label}
           </span>
+          {/* Exit auto-sort (2026-07-16): the machine's suggested close lane —
+              which game this deal is. The record's persisted Suggested_Exit
+              (e.g. a seller-debt disclosure) wins over the live compute when
+              the compute can't say (unknown). */}
+          {(() => {
+            const lane =
+              d.suggestedExit !== "unknown"
+                ? d.suggestedExit
+                : ((listing.suggestedExit as string | null) ?? "unknown");
+            if (lane === "unknown") return null;
+            const style: Record<string, string> = {
+              wholesale: "bg-emerald-950/60 text-emerald-300 border-emerald-500/40",
+              rental: "bg-sky-950/60 text-sky-300 border-sky-500/40",
+              creative_candidate: "bg-purple-950/60 text-purple-300 border-purple-500/40",
+              dead: "bg-red-950/60 text-red-300 border-red-500/40",
+            };
+            const label: Record<string, string> = {
+              wholesale: "🏷 wholesale",
+              rental: "🏠 rental",
+              creative_candidate: "🔄 creative / takeover",
+              dead: "☠ no exit",
+            };
+            return (
+              <span
+                className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] font-bold ${style[lane] ?? ""}`}
+                title="Machine-suggested exit lane (auto-sort). Your Exit_Strategy ruling on the pre-contract gate is the final call."
+              >
+                {label[lane] ?? lane}
+              </span>
+            );
+          })()}
           <span className="text-[10px] text-gray-500">
             conf {d.confidence}
             {d.ceilingLane ? ` · ${d.ceilingLane === "flip" ? "flip exit" : "landlord exit"}` : ""}

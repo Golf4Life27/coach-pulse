@@ -39,11 +39,13 @@ import {
   serializeVolleyState,
 } from "@/lib/dd-volley-machine";
 
-/** B2 DD-volley wiring is watched-first: dormant until the operator creates
- *  the DD_Volley_State field (done) AND sets DD_VOLLEY_LIVE=true. Off ⇒ the
- *  trigger behaves exactly as the #103 recommended-reply path. */
+/** B2 DD-volley — LIVE BY DEFAULT (operator 2026-07-16: "automate the capture
+ *  of more DD materials… unleash a competent system"). The watched-first
+ *  gestation (field created, guardrails unit-tested, #110/#111) is complete.
+ *  DD_VOLLEY_LIVE=false is the kill switch — set it to fall back to the plain
+ *  recommended-reply path with zero deploy. */
 export function isDDVolleyLive(): boolean {
-  return process.env.DD_VOLLEY_LIVE === "true";
+  return process.env.DD_VOLLEY_LIVE !== "false";
 }
 
 export interface DraftTriggerListing {
@@ -125,6 +127,21 @@ export interface DraftTriggerDeps {
 
 function skip(reason: DraftSkipReason, classification: string): DraftTriggerResult {
   return { drafted: false, skipped: reason, classification, holdReason: null, draftText: "", draftMeta: null, proposal: null };
+}
+
+// SELLER-DEBT DISCLOSURE (exit auto-sort, operator 2026-07-16): an agent
+// volunteering the seller's loan situation ("she has a second mortgage…
+// least I can accept is 210") is the classic creative/mortgage-takeover
+// signal — flip math can't see it because it lives in the WORDS, not the
+// numbers. Detecting it here tags Suggested_Exit=creative_candidate at
+// capture so the deal sorts into the right lane the moment it's knowable
+// (3531 Mount Gilead was hand-sorted; this automates that read).
+const SELLER_DEBT_RE =
+  /\b(?:second|2nd) mortgage\b|\bmortgage (?:balance|payoff)\b|\bloan (?:balance|payoff)\b|\bpayoff (?:amount|is|of)\b|\bowes? (?:about |around |roughly )?\$?\d|\bbehind on (?:the )?(?:payments?|mortgage)\b|\bunderwater on\b|\bstill owes\b/i;
+
+/** Pure: does this inbound disclose seller debt (the creative-lane signal)? */
+export function detectsSellerDebt(body: string): boolean {
+  return SELLER_DEBT_RE.test(body ?? "");
 }
 
 /** Build the 2A action payload for either channel. Shared by the normal
@@ -214,6 +231,11 @@ export async function buildInboundReplyDraft(args: {
     return skip("pending_proposal", triage.classification);
   }
 
+  // Seller-debt disclosure → tag the creative lane at capture (exit auto-sort).
+  const debtFields: Record<string, unknown> | undefined = detectsSellerDebt(inbound.body)
+    ? { Suggested_Exit: "creative_candidate" }
+    : undefined;
+
   // ── B2 DD-VOLLEY (watched-first) ───────────────────────────────────────────
   // When live, an engagement runs a bounded DD question volley BEFORE any
   // number move: the DD question BECOMES the draft, each seller answer is
@@ -279,7 +301,7 @@ export async function buildInboundReplyDraft(args: {
           hold_reason: ddHold ?? undefined,
         },
         proposal,
-        extraFields: { DD_Volley_State: serializeVolleyState(action.state) },
+        extraFields: { DD_Volley_State: serializeVolleyState(action.state), ...debtFields },
         notesAppend: ddNotesAppend,
       };
     }
@@ -320,7 +342,7 @@ export async function buildInboundReplyDraft(args: {
       draftText: "",
       draftMeta: gen.meta,
       proposal: null,
-      extraFields: ddExtraFields,
+      extraFields: ddExtraFields || debtFields ? { ...ddExtraFields, ...debtFields } : undefined,
       notesAppend: ddNotesAppend,
     };
   }
@@ -345,7 +367,7 @@ export async function buildInboundReplyDraft(args: {
     draftText: gen.draft ?? "",
     draftMeta: gen.meta,
     proposal,
-    extraFields: ddExtraFields,
+    extraFields: ddExtraFields || debtFields ? { ...ddExtraFields, ...debtFields } : undefined,
     notesAppend: ddNotesAppend,
   };
 }

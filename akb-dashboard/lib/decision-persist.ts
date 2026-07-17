@@ -96,6 +96,13 @@ export async function persistDecisionMath(
     Decision_Inputs_Hash: result.inputsHash,
     Underwrite_Confidence: result.confidence,
   };
+  // EXIT AUTO-SORT (2026-07-16): persist the machine's lane. An "unknown"
+  // never clobbers a real signal already on the record (e.g. the seller-debt
+  // detector's creative_candidate on an un-underwritten deal).
+  const priorExit = (listing as { suggestedExit?: string | null }).suggestedExit ?? null;
+  if (!(result.suggestedExit === "unknown" && priorExit && priorExit !== "unknown")) {
+    fields["Suggested_Exit"] = result.suggestedExit;
+  }
   if (opts.latestCounterUsd != null && Number.isFinite(opts.latestCounterUsd) && opts.latestCounterUsd > 0) {
     fields["Latest_Counter_Usd"] = Math.round(opts.latestCounterUsd);
   }
