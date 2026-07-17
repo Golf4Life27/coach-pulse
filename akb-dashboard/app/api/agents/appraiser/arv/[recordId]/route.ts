@@ -143,6 +143,7 @@ export async function GET(
   // ── Run the existing ARV math ───────────────────────────────────
   const arv = computeArvIntelligence(comps, {
     zip: listing.zip,
+    address: listing.address, // subject self-exclusion — never its own comp
     beds: listing.bedrooms,
     baths: listing.bathrooms,
     sqft: listing.buildingSqFt,

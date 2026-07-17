@@ -81,6 +81,7 @@ export async function GET(
   // the comp cluster represents as-is. See lib/arv-intelligence.ts.
   const arv = computeArvIntelligence(comps, {
     zip: listing.zip,
+    address: listing.address, // subject self-exclusion — never its own comp
     beds: listing.bedrooms,
     baths: listing.bathrooms,
     sqft: listing.buildingSqFt,
