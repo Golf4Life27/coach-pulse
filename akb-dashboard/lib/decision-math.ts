@@ -77,10 +77,21 @@ export interface DecisionRecordInputs {
   /** Landlord lane (V2.1) numbers when underwritten. */
   yourMaoV21: number | null | undefined;
   investorMaoV21: number | null | undefined;
+  /** RentCast rent estimate — feeds the exit auto-sort's income screen only
+   *  (NOT the inputs hash; a rent drift never forces a recompute wave). */
+  estimatedMonthlyRent?: number | null | undefined;
 }
+
+/** EXIT AUTO-SORT (operator 2026-07-16: "deals should auto sort into the
+ *  right lane… when I don't know which type of close they need, it trips me
+ *  up"). The machine's SUGGESTION of the close type — distinct from the
+ *  operator-owned Exit_Strategy ruling. */
+export type SuggestedExit = "wholesale" | "rental" | "creative_candidate" | "dead" | "unknown";
 
 export interface DecisionMathResult {
   verdict: DecisionVerdict;
+  /** The machine's exit-lane sort (see SuggestedExit). */
+  suggestedExit: SuggestedExit;
   /** One-line, card-ready reason (what's missing / what broke the deal /
    *  what clears). Never empty. */
   reason: string;
@@ -134,6 +145,7 @@ export function decisionInputsFromListing(
     wholesaleFeeTarget: l.wholesaleFeeTarget ?? null,
     yourMaoV21: l.yourMao ?? null,
     investorMaoV21: l.investorMao ?? null,
+    estimatedMonthlyRent: l.estimatedMonthlyRent ?? null,
   };
 }
 
@@ -197,9 +209,50 @@ export function decisionInputsHash(inputs: DecisionRecordInputs): string {
   return (h >>> 0).toString(16);
 }
 
-/** THE verdict. Precedence: NEEDS_DATA (can't compute) → HOLD_LOW_CONF
- *  (could compute, shouldn't trust) → PASS / GO / TIGHT (the margin call). */
+/** Income screen for the exit sort: rent ≥ this fraction of the current price
+ *  (~the "1% rule" with slack) marks a flip-dead deal as a creative/rental
+ *  candidate instead of dead. Env-tunable. */
+export const CREATIVE_RENT_TO_PRICE_MIN = (() => {
+  const raw = Number(process.env.CREATIVE_RENT_TO_PRICE_MIN);
+  return Number.isFinite(raw) && raw > 0 && raw < 0.05 ? raw : 0.009;
+})();
+
+/** Pure: the exit-lane sort. Conservative — it only labels what the math
+ *  actually supports; un-underwritten deals stay "unknown" (never sorted on
+ *  guesses) until the numbers land or a debt-disclosure signal upgrades them
+ *  (see reply-draft-trigger's seller-debt detector). */
+export function suggestExitLane(
+  core: Pick<DecisionMathResult, "verdict" | "ceilingLane" | "currentPrice">,
+  inputs: Pick<DecisionRecordInputs, "estimatedMonthlyRent">,
+): SuggestedExit {
+  if (core.verdict === "GO" || core.verdict === "TIGHT") {
+    return core.ceilingLane === "landlord" ? "rental" : "wholesale";
+  }
+  if (core.verdict === "PASS") {
+    const rent = inputs.estimatedMonthlyRent;
+    if (
+      rent != null && Number.isFinite(rent) && rent > 0 &&
+      core.currentPrice != null && core.currentPrice > 0 &&
+      rent / core.currentPrice >= CREATIVE_RENT_TO_PRICE_MIN
+    ) {
+      // Flip-dead but income-strong — the Mount Gilead shape: the seller's
+      // number can't work as a flip, but the property carries its own debt.
+      return "creative_candidate";
+    }
+    return "dead";
+  }
+  return "unknown"; // NEEDS_DATA / HOLD_LOW_CONF — never sort untrusted math
+}
+
+/** THE verdict + the exit sort. */
 export function computeDecisionMath(inputs: DecisionRecordInputs): DecisionMathResult {
+  const core = computeVerdictCore(inputs);
+  return { ...core, suggestedExit: suggestExitLane(core, inputs) };
+}
+
+/** Precedence: NEEDS_DATA (can't compute) → HOLD_LOW_CONF
+ *  (could compute, shouldn't trust) → PASS / GO / TIGHT (the margin call). */
+function computeVerdictCore(inputs: DecisionRecordInputs): Omit<DecisionMathResult, "suggestedExit"> {
   const fee = usable(inputs.wholesaleFeeTarget) ? Math.round(inputs.wholesaleFeeTarget) : SPREAD_TARGET_USD;
   const { price: currentPrice, source: priceSource } = resolveCurrentPrice(inputs);
   const confidence = rollupConfidence(inputs.arvConfidence, inputs.rehabConfidenceScore);

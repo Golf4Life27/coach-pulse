@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   computeDecisionMath,
+  suggestExitLane,
   decisionInputsHash,
   resolveCurrentPrice,
   rollupConfidence,
@@ -199,5 +200,33 @@ describe("inputs hash — ±$5 recompute tolerance (doctrine standard 1)", () =>
   it("a fresh counter changes the hash (verdict must refresh)", () => {
     const h0 = decisionInputsHash(UW);
     expect(decisionInputsHash({ ...UW, latestCounterUsd: 27_000 })).not.toBe(h0);
+  });
+});
+
+// ── EXIT AUTO-SORT (2026-07-16) ─────────────────────────────────────────────
+describe("suggestExitLane — every deal lands labeled with its close type", () => {
+  it("GO/TIGHT on the flip lane → wholesale; landlord lane → rental", () => {
+    expect(suggestExitLane({ verdict: "GO", ceilingLane: "flip", currentPrice: 80_000 }, {})).toBe("wholesale");
+    expect(suggestExitLane({ verdict: "TIGHT", ceilingLane: "flip", currentPrice: 80_000 }, {})).toBe("wholesale");
+    expect(suggestExitLane({ verdict: "GO", ceilingLane: "landlord", currentPrice: 80_000 }, {})).toBe("rental");
+  });
+  it("PASS + strong rent (≥0.9% of price) → creative_candidate; weak rent → dead", () => {
+    expect(suggestExitLane({ verdict: "PASS", ceilingLane: "flip", currentPrice: 150_000 }, { estimatedMonthlyRent: 2_420 })).toBe("creative_candidate");
+    expect(suggestExitLane({ verdict: "PASS", ceilingLane: "flip", currentPrice: 150_000 }, { estimatedMonthlyRent: 900 })).toBe("dead");
+    expect(suggestExitLane({ verdict: "PASS", ceilingLane: "flip", currentPrice: 150_000 }, {})).toBe("dead");
+  });
+  it("NEEDS_DATA / HOLD_LOW_CONF → unknown (never sort untrusted math)", () => {
+    expect(suggestExitLane({ verdict: "NEEDS_DATA", ceilingLane: null, currentPrice: null }, { estimatedMonthlyRent: 5_000 })).toBe("unknown");
+    expect(suggestExitLane({ verdict: "HOLD_LOW_CONF", ceilingLane: "flip", currentPrice: 50_000 }, { estimatedMonthlyRent: 5_000 })).toBe("unknown");
+  });
+  it("computeDecisionMath carries the lane end-to-end", () => {
+    const r = computeDecisionMath({
+      arv: 190_000, arvConfidence: "HIGH", rehabMid: 36_881, rehabConfidenceScore: 90,
+      contractOfferPrice: 75_000, latestCounterUsd: null, roughOpenerAmount: null,
+      outreachOfferPrice: null, listPrice: 150_000, wholesaleFeeTarget: 15_000,
+      yourMaoV21: null, investorMaoV21: null, estimatedMonthlyRent: null,
+    });
+    expect(r.verdict).toBe("GO");
+    expect(r.suggestedExit).toBe("wholesale");
   });
 });

@@ -2,6 +2,7 @@ import { Listing, Deal, Buyer, ProspectiveBuyer } from "./types";
 import { auditWriteDrift, type FieldDrift } from "./airtable-verify";
 import { audit } from "./audit-log";
 import { SOURCE_VERSION_FIELD_ID, SOURCE_VERSION_FIELD_NAME, SOURCE_VERSION_V2 } from "./source-version";
+import { deadFlipDraftDismissal, terminalStatusInFields } from "./draft-dismissal";
 
 const AIRTABLE_PAT = process.env.AIRTABLE_PAT!;
 const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
@@ -95,6 +96,8 @@ const LISTING_FIELDS: Record<string, string> = {
   // waivers are eyes-open overrides. TWO-MAP: also in LISTING_NAME_MAP + parity.
   fldBi5e0X6lUs7YPd: "exitStrategy",
   fldbLKV9zX4MQeCHH: "preContractWaivers",
+  // Exit auto-sort (2026-07-16): the machine's suggested close lane.
+  fldC3VIsmBxBGQRMW: "suggestedExit",
   // ── Pre-Outreach Gate (orchestrator Gate 1) inputs
   fldif6WwcJeXZtJcX: "mlsStatus",
   fldrlbePeS9glaFQu: "propertyType",
@@ -265,6 +268,7 @@ const LISTING_NAME_MAP: Record<string, string> = {
   // Pre-contract gate (2026-07-16) — TWO-MAP twin; parity-enforced.
   "Exit_Strategy": "exitStrategy",
   "Pre_Contract_Waivers": "preContractWaivers",
+  "Suggested_Exit": "suggestedExit",
   "Rehab_Confidence_Score": "rehabConfidenceScore",
   "Agent_Prior_Outreach_Count": "agentPriorOutreachCount",
   "Est_Rehab": "estRehab",
@@ -890,6 +894,24 @@ export async function updateListingRecord(
   recordId: string,
   fields: Record<string, unknown>
 ): Promise<FieldDrift[]> {
+  // Dead-deal draft dismissal (2026-07-16, the Sunbeam EMD-promise hazard):
+  // every terminal status flip funnels through here, so this ONE hook covers
+  // all flip sites, present and future. A queued/held draft never survives a
+  // deal's death — no Send button on a corpse. Best-effort: a meta-read
+  // failure never blocks the flip itself.
+  if (terminalStatusInFields(fields)) {
+    try {
+      const current = await getListing(recordId);
+      const dismissal = deadFlipDraftDismissal(
+        fields,
+        (current as { draftReplyMeta?: string | null } | null)?.draftReplyMeta ?? null,
+        new Date().toISOString(),
+      );
+      if (dismissal) fields = { ...fields, ...dismissal };
+    } catch {
+      /* flip proceeds; the stale-draft hazard is logged by drift verification */
+    }
+  }
   const drift = await patchAndVerify({
     tableId: LISTINGS_TABLE,
     tableName: "Listings_V1",

@@ -239,6 +239,13 @@ function matchesSticky(amount: number, stickyUsd: number): boolean {
 const META_COMMENTARY_RE =
   /\bno reply (?:is )?(?:needed|required)\b|\bif a draft is required\b|\bconversation[- ]closer\b|\bover-?communicat|\bwould be redundant\b|\bdoes not (?:need|require|warrant) a (?:reply|response)\b|\bas an ai\b|\bi (?:would|will) not (?:draft|recommend)\b/i;
 
+// Unfilled placeholders / fabricated contact details leaking into a sendable
+// draft (2026-07-16: a queued 1122 West Ave draft carried "(insert phone)" and
+// an invented email domain). A draft with a template hole is not a message —
+// HOLD for the operator, never send scaffolding to a counterparty.
+const PLACEHOLDER_RE =
+  /\((?:insert|your|add|enter|fill in)\b[^)]*\)|\[(?:insert|your|add|enter|fill in|name|phone|email|address|amount|number|date)\b[^\]]*\]|\b(?:insert|fill in) (?:your |the )?(?:phone|email|name|address|number|amount)\b|\bTBD\b|\bXXX+\b|\b__+\b/i;
+
 export function validateReplyDraft(draft: string, ctx: ReplyDraftContext): DraftValidation {
   const text = (draft ?? "").trim();
   if (!text) return { ok: false, holdReason: "generation_failed_empty" };
@@ -247,6 +254,9 @@ export function validateReplyDraft(draft: string, ctx: ReplyDraftContext): Draft
   }
   if (META_COMMENTARY_RE.test(text)) {
     return { ok: false, holdReason: "generation_meta_commentary" };
+  }
+  if (PLACEHOLDER_RE.test(text)) {
+    return { ok: false, holdReason: "draft_contains_placeholder" };
   }
 
   // G4 — disclosure acknowledgment is never the machine's to draft.

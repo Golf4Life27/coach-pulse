@@ -39,6 +39,7 @@ const BOTH_PATH_PROPS = [
   // Pre-contract gate (2026-07-16).
   "exitStrategy",
   "preContractWaivers",
+  "suggestedExit",
 ];
 
 describe("two-map rule: bulk (fld-ID) and single (name) reads see the same surface", () => {

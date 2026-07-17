@@ -96,6 +96,8 @@ export interface Listing {
   //   preContractWaivers: JSON map of waived check id → eyes-open reason.
   exitStrategy?: string | null;
   preContractWaivers?: string | null;
+  /** Machine-suggested close lane (exit auto-sort, 2026-07-16). */
+  suggestedExit?: string | null;
   // ── Pre-Outreach Gate inputs (added 5/13 for orchestrator Gate 1)
   mlsStatus?: string | null;
   propertyType?: string | null;
