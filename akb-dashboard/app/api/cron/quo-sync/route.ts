@@ -63,7 +63,12 @@ async function handle(req: Request) {
 
   const url = new URL(req.url);
   const limit = Math.max(1, Math.min(100, parseInt(url.searchParams.get("limit") ?? String(DEFAULT_LIMIT), 10) || DEFAULT_LIMIT));
-  const hoursBack = Math.max(1, Math.min(168, parseInt(url.searchParams.get("hours_back") ?? String(DEFAULT_HOURS_BACK), 10) || DEFAULT_HOURS_BACK));
+  // Clamp raised 168→336 (2026-07-17, the 7714 E Canfield miss): messages
+  // dropped during the pre-fix capture gap were sliding past the 7-day
+  // reach of any sync. The daily deep pass (vercel.json, hours_back=336)
+  // needs two weeks of reach to flush that backlog; ingest is idempotent
+  // by message id, so re-scanning old windows is free.
+  const hoursBack = Math.max(1, Math.min(336, parseInt(url.searchParams.get("hours_back") ?? String(DEFAULT_HOURS_BACK), 10) || DEFAULT_HOURS_BACK));
   const sinceMinutes = hoursBack * 60;
 
   // Source population — same active-population getter the stale-triage cron uses.

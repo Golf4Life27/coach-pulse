@@ -58,6 +58,7 @@ describe("autoAckStaticSkip — the no-I/O gate order", () => {
     live: true,
     classification: "interest",
     body: AUTO_ACK_TEMPLATE,
+    inboundBody: "Yes, very interested — send over the proof of funds.",
     toE164: "+13135551234",
     doNotText: false,
   };
@@ -90,7 +91,51 @@ describe("autoAckStaticSkip — the no-I/O gate order", () => {
 
   it("enforces order: not_live wins even when other preconditions also fail", () => {
     expect(
-      autoAckStaticSkip({ live: false, classification: "counter", body: "$50k", toE164: "", doNotText: true }),
+      autoAckStaticSkip({ live: false, classification: "counter", body: "$50k", inboundBody: "no", toE164: "", doNotText: true }),
     ).toBe("not_live");
+  });
+
+  // ── The 3226 Cloverhurst regression (2026-07-17) ────────────────────────
+  // "It's a fast no at $156K. The sellers aren't interested in low ball
+  // offers." was classified INTEREST (0.9) and this module sent "glad
+  // there's interest". The vetoes fact-check the RAW inbound so a classifier
+  // miss can never reach the send again.
+  it("VETO: the verbatim Cloverhurst rejection never gets an interest ack, even classified interest", () => {
+    expect(
+      autoAckStaticSkip({
+        ...ok,
+        inboundBody: "Hi Alex! It's a fast no at $156K. The sellers aren't interested in low ball offers.",
+      }),
+    ).toBe("inbound_contains_no_language");
+  });
+
+  it("VETO: no-language in any phrasing blocks the ack", () => {
+    for (const body of [
+      "We aren't interested.",
+      "Seller isn't really interested in that",
+      "There is no interest in any lowball offers.",
+      "That's a hard no from the seller",
+      "It's a pass for us",
+      "not for sale anymore",
+      "no thanks",
+    ]) {
+      expect(autoAckStaticSkip({ ...ok, inboundBody: body })).toBe("inbound_contains_no_language");
+    }
+  });
+
+  it("VETO: a priced reply is a negotiation — humans only, never a canned ack", () => {
+    for (const body of [
+      "Sure, can you do $150,000?",
+      "Seller wants 185k",
+      "We are at 210,000 firm",
+    ]) {
+      expect(autoAckStaticSkip({ ...ok, inboundBody: body })).toBe("inbound_contains_price");
+    }
+  });
+
+  it("a genuinely warm, number-free inbound still acks", () => {
+    expect(
+      autoAckStaticSkip({ ...ok, inboundBody: "Yes! The seller would love a cash offer. Send the details." }),
+    ).toBeNull();
   });
 });

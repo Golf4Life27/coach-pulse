@@ -32,7 +32,7 @@
 
 import { NextResponse } from "next/server";
 import { getListings, getListing, updateListingRecord } from "@/lib/airtable";
-import { sendMessageWithId, getMessageStatus } from "@/lib/quo";
+import { sendMessageWithId, getMessageStatus, getMessagesForParticipant } from "@/lib/quo";
 import { audit } from "@/lib/audit-log";
 import { checkOfferOverList } from "@/lib/outreach-economics";
 import { readSendCapConfig, resolveCoverage, applySendCap } from "@/lib/outreach/send-cap";
@@ -53,6 +53,8 @@ import {
   extractStickyOffer,
   buildBumpMessage,
   buildBumpSentNote,
+  threadInboundTruth,
+  buildBumpAbortedNote,
 } from "@/lib/h2-outreach/bump-lane";
 import { evaluateSendWindow, type WorkingHoursMeta } from "@/lib/h2-working-hours";
 import { listSeededZips } from "@/lib/buyer-median-store";
@@ -74,6 +76,10 @@ const dispatchClaimKey = (recordId: string, attempt: number) =>
 
 const POLL_ATTEMPTS = Number(process.env.H2_CRON_POLL_ATTEMPTS ?? "6");
 const POLL_DELAY_MS = Number(process.env.H2_CRON_POLL_DELAY_MS ?? "5000");
+
+/** Thread-truth lookback: 90 days — the whole life of a v2 thread (matches
+ *  lib/quo's 300-message page ceiling). One Quo GET per planned live bump. */
+const THREAD_TRUTH_LOOKBACK_MIN = 90 * 24 * 60;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -254,6 +260,7 @@ async function handle(req: Request): Promise<Response> {
     unconfirmed: 0,
     delivery_quarantined: 0,
     stale_state_skipped: 0,
+    thread_truth_aborted: 0,
   };
 
   const lockEnabled = !dryRun && kvConfigured();
@@ -344,6 +351,57 @@ async function handle(req: Request): Promise<Response> {
         continue;
       }
 
+      // ── THREAD TRUTH (2026-07-17, the 7714 E Canfield miss): our record
+      // can be blind — a capture gap left two agent counters uningested, the
+      // record read "silent", and this lane bumped into a live conversation
+      // until the agent asked "Are you not getting my texts?". So ask Quo
+      // DIRECTLY: ANY incoming message in this thread disqualifies a
+      // robo-bump, no matter what Airtable says. On a hit, heal the record
+      // from thread truth (the deep sync ingests the message properly).
+      // Fail CLOSED on a Quo error — a skipped bump costs nothing; a bump
+      // over a human reply costs the relationship.
+      const existingNotes = fresh.notes ?? byId.get(p.recordId)?.notes ?? null;
+      let truth: ReturnType<typeof threadInboundTruth>;
+      try {
+        const threadMsgs = await getMessagesForParticipant(p.toE164, THREAD_TRUTH_LOOKBACK_MIN);
+        truth = threadInboundTruth(threadMsgs);
+      } catch (err) {
+        row.error = `quo_thread_truth_unavailable: ${String(err).slice(0, 120)}`;
+        summary.errors++;
+        if (claimAcquired) await kvProd.del(claimKey).catch(() => {});
+        processed.push(row);
+        continue;
+      }
+      if (truth.hasInbound) {
+        row.error = "thread_has_inbound: bump aborted, record healed from Quo thread truth";
+        summary.thread_truth_aborted++;
+        try {
+          await updateListingRecord(p.recordId, {
+            Outreach_Status: "Response Received",
+            Last_Inbound_At: truth.lastInboundAt ?? iso,
+            Verification_Notes: buildBumpAbortedNote(existingNotes, iso, truth.lastInboundAt, truth.lastInboundBody),
+          });
+          row.airtable_updated = true;
+        } catch (err) {
+          row.error += ` (heal write failed: ${String(err).slice(0, 100)})`;
+        }
+        await audit({
+          agent: "crier",
+          event: "h2_bump_thread_truth_abort",
+          status: "confirmed_success",
+          recordId: p.recordId,
+          inputSummary: { phone_masked: `…${p.toE164.slice(-4)}`, attempt: p.attempt },
+          outputSummary: {
+            inbound_at: truth.lastInboundAt,
+            inbound_excerpt: truth.lastInboundBody?.slice(0, 140) ?? null,
+            healed: row.airtable_updated,
+          },
+        });
+        if (claimAcquired) await kvProd.del(claimKey).catch(() => {});
+        processed.push(row);
+        continue;
+      }
+
       // ── >85%-of-list rail vs the CURRENT list price. A list cut deep
       // enough to trip it means the sticky number is now over-rich for the
       // market — a human decision, not a robo-bump.
@@ -393,7 +451,6 @@ async function handle(req: Request): Promise<Response> {
       }
       row.confirmed_status = confirmedStatus;
 
-      const existingNotes = fresh.notes ?? byId.get(p.recordId)?.notes ?? null;
       if (delivered) {
         // Status stays "Texted" — the thread is still awaiting its FIRST
         // reply; the bump position lives in Follow_Up_Count + the stamp.

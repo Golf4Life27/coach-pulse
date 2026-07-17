@@ -39,6 +39,21 @@ export const AUTO_ACK_TEMPLATE =
 
 const AUTO_ACK_TTL_S = 30 * 24 * 3600; // 30 days — "max one per thread ever"
 
+// ── Independent inbound vetoes (2026-07-17, the 3226 Cloverhurst lesson) ──
+// The classifier said "interest" (0.9) on "It's a fast no at $156K. The
+// sellers aren't interested in low ball offers." and this module cheerfully
+// sent "glad there's interest". Classification is an OPINION; these vetoes
+// are a fact-check this module runs on the raw inbound itself, so a
+// classifier miss can never again put words of enthusiasm in the operator's
+// mouth on a message that says no:
+//   - NO-LANGUAGE: any negated-interest / no-shape / lowball phrasing.
+//   - PRICE CONTENT: a reply carrying a number is a negotiation, and
+//     negotiations get a human, never a canned template. Over-matching
+//     (e.g. a year) is fine — the cost of a skipped ack is zero.
+export const ACK_NO_LANGUAGE_RE =
+  /\b(?:isn'?t|aren'?t|ain'?t|wasn'?t|weren'?t|not|never|no longer)\s+(?:\w+\s+)?interested\b|\bno\s+interest\b|\b(?:fast|hard|quick|firm|definite)\s+no\b|\bno\s+at\s+\$?\d|\b(?:it|that)'?s\s+a\s+(?:no|pass)\b|\blow[\s-]?ball|\bnot\s+for\s+sale\b|\bno\s+thanks?\b|\bstop\b/i;
+export const ACK_PRICE_CONTENT_RE = /\$\s*\d|\b\d{1,3}[.,]?\d{3}\b|\b\d{2,4}\s*k\b/i;
+
 export function autoAckClaimKey(recordId: string): string {
   return `auto_ack:${recordId}`;
 }
@@ -57,11 +72,16 @@ export function autoAckStaticSkip(input: {
   live: boolean;
   classification: string;
   body: string;
+  /** The RAW inbound that triggered this ack — fact-checked by the vetoes
+   *  regardless of what the classifier concluded. */
+  inboundBody: string;
   toE164: string;
   doNotText: boolean;
 }): string | null {
   if (!input.live) return "not_live";
   if (input.classification !== "interest") return "not_interest";
+  if (ACK_NO_LANGUAGE_RE.test(input.inboundBody)) return "inbound_contains_no_language";
+  if (ACK_PRICE_CONTENT_RE.test(input.inboundBody)) return "inbound_contains_price";
   if (!isNumberFreeBody(input.body)) return "template_contains_numbers";
   if (!input.toE164) return "no_phone";
   if (input.doNotText) return "do_not_text";
@@ -75,6 +95,9 @@ export interface AutoAckInput {
   doNotText: boolean;
   /** triage.classification — this module acts ONLY on "interest". */
   classification: string;
+  /** The raw inbound body — the no-language / price vetoes fact-check it
+   *  independently of the classification. */
+  inboundBody: string;
   address?: string | null;
 }
 
@@ -109,6 +132,7 @@ export async function sendAutoAck(input: AutoAckInput): Promise<AutoAckResult> {
     live: autoAckLive(),
     classification: input.classification,
     body,
+    inboundBody: input.inboundBody,
     toE164: input.toE164,
     doNotText: input.doNotText,
   });

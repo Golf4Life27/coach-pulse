@@ -175,6 +175,58 @@ export function liveThreadPhoneIndex(listings: Listing[]): Set<string> {
   return index;
 }
 
+// ── Send-time thread truth (2026-07-17, the 7714 E Canfield miss) ────────
+//
+// Airtable state is a CACHE of the thread, not the thread. Two agent
+// counters ("Youll need to double it") were never captured during a
+// quo-sync gap, so the record still read "Texted, silent" and this lane
+// bumped the same number into a live conversation — twice — until the agent
+// asked "Are you not getting my texts?". The route therefore asks Quo
+// DIRECTLY before every live send: ANY incoming message in the thread means
+// it is conversational and belongs to the reply lane, never to this one —
+// regardless of what our own records say.
+
+export interface ThreadInboundTruth {
+  hasInbound: boolean;
+  /** Newest incoming message's timestamp / body (for record healing). */
+  lastInboundAt: string | null;
+  lastInboundBody: string | null;
+}
+
+/** Pure: scan a Quo message page for incoming traffic. Bot autoreplies and
+ *  opt-out echoes COUNT — any human-side phone activity disqualifies a
+ *  robo-bump (over-abort is free; the reply lane's echo-stripper sorts it). */
+export function threadInboundTruth(
+  messages: Array<{ direction: string; createdAt: string; body: string }>,
+): ThreadInboundTruth {
+  let lastAt: string | null = null;
+  let lastBody: string | null = null;
+  for (const m of messages) {
+    if (m.direction !== "incoming") continue;
+    if (lastAt == null || m.createdAt > lastAt) {
+      lastAt = m.createdAt;
+      lastBody = m.body ?? "";
+    }
+  }
+  return { hasInbound: lastAt != null, lastInboundAt: lastAt, lastInboundBody: lastBody };
+}
+
+/** The healing note appended when a bump is aborted on thread truth — the
+ *  record was blind and the thread knew better. Documents what Quo showed so
+ *  the deep sync's proper ingest has a visible anchor. */
+export function buildBumpAbortedNote(
+  existing: string | null,
+  iso: string,
+  inboundAt: string | null,
+  inboundExcerpt: string | null,
+): string {
+  const line =
+    `[bump aborted ${iso}] Quo thread shows an inbound${inboundAt ? ` at ${inboundAt}` : ""} this record never captured` +
+    `${inboundExcerpt ? `: "${inboundExcerpt.slice(0, 140)}"` : ""} — record healed from thread truth (status → Response Received); reply lane owns this thread.`;
+  const prior = existing ?? "";
+  return prior ? `${prior}\n\n${line}` : line;
+}
+
 // ── Message copy ─────────────────────────────────────────────────────────
 
 /** Compose the bump SMS. Same relief-framed register as the locked first-touch
