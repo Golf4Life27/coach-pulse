@@ -17,6 +17,7 @@
 // paid-API budget guard.
 
 import type { Listing } from "@/lib/types";
+import { arvStampTrusted } from "@/lib/arv-epoch";
 
 /** Engaged = a live negotiation. The reply justified the credit spend. */
 export const ENGAGED_STATUSES: ReadonlySet<string> = new Set([
@@ -38,6 +39,9 @@ export function underwriteFresh(
 ): boolean {
   const raw = l.arvValidatedAt;
   if (!raw) return false;
+  // Epoch gate: a stamp from before the sold-comps-only engine (#126) is
+  // contaminated output, not a fresh underwrite — re-run it.
+  if (!arvStampTrusted(raw)) return false;
   const t = Date.parse(raw);
   if (!Number.isFinite(t)) return false;
   return now.getTime() - t <= maxAgeDays * 86_400_000;
@@ -67,6 +71,9 @@ export function inNeedsDataBackoff(
   backoffHours: number = NEEDS_DATA_RETRY_BACKOFF_H,
 ): boolean {
   if (l.decisionVerdict !== "NEEDS_DATA" || !l.decisionComputedAt) return false;
+  // A NEEDS_DATA computed before the engine epoch was judged on contaminated
+  // inputs — it must not gate the fixed engine's first attempt.
+  if (!arvStampTrusted(l.decisionComputedAt)) return false;
   const computed = Date.parse(l.decisionComputedAt);
   if (!Number.isFinite(computed)) return false;
   if (now.getTime() - computed > backoffHours * 3_600_000) return false; // backoff expired

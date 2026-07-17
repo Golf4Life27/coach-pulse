@@ -31,6 +31,7 @@ import {
   computeMaoRange,
   pickCalibratedRehab,
 } from "@/lib/appraiser/mao-range";
+import { arvPersistFields } from "@/lib/appraiser/arv-write";
 import { getMarketForListing } from "@/lib/markets/registry";
 import { audit } from "@/lib/audit-log";
 import {
@@ -194,23 +195,17 @@ export async function GET(
   });
 
   // ── Airtable write (skippable) ──────────────────────────────────
-  // Same discipline as the Pricing Agent: only write fields with a
-  // real computed value. Don't overwrite existing data with null.
+  // EVERY completed compute persists — a real band, or honest emptiness
+  // (nulls + comp count + exclusion receipts + stamp). A null arv_mid from
+  // a successful run means "no sold comps exist", and leaving a prior
+  // (possibly fabricated) number standing would be worse than no number.
+  // Failures (RentCast error, missing listing) returned early above and
+  // write nothing. See lib/appraiser/arv-write.ts.
   const nowIso = new Date().toISOString();
   let airtableError: string | null = null;
-  if (!skipWrite && arv.arv_mid != null) {
-    const fieldsToWrite: Record<string, unknown> = {
-      Real_ARV_Low: arv.arv_low,
-      Real_ARV_High: arv.arv_high,
-      Real_ARV_Median: arv.arv_mid,
-      ARV_Confidence: confidence,
-      ARV_Comp_Count: arv.comp_count_used,
-      ARV_Comp_Avg_PrSqFt: arv.avg_per_sqft,
-      ARV_Comp_Details_JSON: JSON.stringify(arv.comps_used).slice(0, 95_000),
-      ARV_Validated_At: nowIso,
-    };
+  if (!skipWrite) {
     try {
-      await updateListingRecord(recordId, fieldsToWrite);
+      await updateListingRecord(recordId, arvPersistFields(arv, confidence, nowIso));
     } catch (err) {
       airtableError = err instanceof Error ? err.message : String(err);
     }
@@ -243,7 +238,7 @@ export async function GET(
       landlord_mao: range.dual_track?.landlord_mao ?? null,
       rehab_source: rehabPick.source,
       manual_review: manualReview,
-      airtable_write: !skipWrite && arv.arv_mid != null,
+      airtable_write: !skipWrite,
       airtable_error: airtableError,
       duration_ms: Date.now() - t0,
     },
@@ -276,7 +271,7 @@ export async function GET(
     source_comps: arv.comps_used,
     audit: {
       validated_at: nowIso,
-      airtable_write: !skipWrite && arv.arv_mid != null,
+      airtable_write: !skipWrite,
       airtable_error: airtableError,
       duration_ms: Date.now() - t0,
     },
