@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import {
   selectEngagedUnderwriteTargets,
   underwriteFresh,
@@ -8,6 +8,16 @@ import {
 import type { Listing } from "@/lib/types";
 
 const NOW = new Date("2026-07-13T02:00:00Z");
+
+// These fixtures predate the sold-comps-only ARV epoch (#126). Pin the epoch
+// before them so the freshness-window semantics under test are undisturbed;
+// the epoch-gate behavior itself is covered in its own describe below.
+beforeAll(() => {
+  process.env.ARV_ENGINE_EPOCH = "2026-01-01T00:00:00.000Z";
+});
+afterAll(() => {
+  delete process.env.ARV_ENGINE_EPOCH;
+});
 
 function deal(o: Partial<Listing> = {}): Listing {
   return {
@@ -139,5 +149,63 @@ describe("inNeedsDataBackoff (queue-starvation fix, decision-math build)", () =>
     });
     const ids = selectEngagedUnderwriteTargets([backedOff, reEngaged], NOW).map((t) => t.id);
     expect(ids).toEqual(["recREENGAGED"]);
+  });
+});
+
+// ── ARV engine epoch (#126 remediation) ───────────────────────────────────
+// 185 of 197 stamped ARVs were produced by the pre-fix engine (asking prices
+// as solds, subject comping against itself). The stamp's AGE relative to the
+// epoch — not hand-edits to 185 records — is what invalidates them: pre-epoch
+// stamps read as "never underwritten" and the cron re-runs the record.
+describe("ARV engine epoch invalidation", () => {
+  const EPOCH = "2026-07-12T00:00:00.000Z"; // between the fixtures below
+  beforeAll(() => {
+    process.env.ARV_ENGINE_EPOCH = EPOCH;
+  });
+  afterAll(() => {
+    process.env.ARV_ENGINE_EPOCH = "2026-01-01T00:00:00.000Z"; // restore file-level pin
+  });
+
+  it("a stamp from before the epoch is NOT fresh even inside the 14d window", () => {
+    // 2026-07-11 is 2 days before NOW — well inside 14d — but pre-epoch.
+    expect(underwriteFresh({ arvValidatedAt: "2026-07-11T00:00:00Z" }, NOW)).toBe(false);
+    // Post-epoch stamp of the same recency is fresh.
+    expect(underwriteFresh({ arvValidatedAt: "2026-07-12T06:00:00Z" }, NOW)).toBe(true);
+  });
+
+  it("selection re-targets a contaminated-stamp record (the 1122 West Ave class)", () => {
+    const ids = selectEngagedUnderwriteTargets(
+      [deal({ id: "recCONTAMINATED", arvValidatedAt: "2026-07-11T12:00:00Z" })],
+      NOW,
+    ).map((t) => t.id);
+    expect(ids).toEqual(["recCONTAMINATED"]);
+  });
+
+  it("a pre-epoch NEEDS_DATA never gates the fixed engine's first attempt", () => {
+    // Same shape as the active-backoff case above, but computed pre-epoch:
+    // that verdict was judged on contaminated inputs — no backoff.
+    expect(
+      inNeedsDataBackoff(
+        {
+          decisionVerdict: "NEEDS_DATA",
+          decisionComputedAt: "2026-07-11T23:00:00Z", // pre-epoch, <20h before NOW... irrelevant: pre-epoch
+          lastInboundAt: "2026-07-11T20:00:00Z",
+          lastOutboundAt: null,
+        },
+        new Date("2026-07-12T02:00:00Z"),
+      ),
+    ).toBe(false);
+    // Post-epoch verdict with the same geometry still backs off.
+    expect(
+      inNeedsDataBackoff(
+        {
+          decisionVerdict: "NEEDS_DATA",
+          decisionComputedAt: "2026-07-12T23:00:00Z",
+          lastInboundAt: "2026-07-12T20:00:00Z",
+          lastOutboundAt: null,
+        },
+        NOW,
+      ),
+    ).toBe(true);
   });
 });

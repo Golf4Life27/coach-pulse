@@ -26,6 +26,8 @@
 //
 // PURE. The route supplies KV state and does the I/O.
 
+import { arvStampTrusted } from "@/lib/arv-epoch";
+
 export const DEFAULT_STABLE_REHAB_DELTA_USD = 5;
 export const DEFAULT_LEG_FAILURE_CAP = 5;
 export const STABLE_FLAG_TTL_S = 30 * 86_400;
@@ -86,8 +88,14 @@ export function planLegs(input: PlanLegsInput): RecordLegPlan {
   const cap = input.failureCap ?? DEFAULT_LEG_FAILURE_CAP;
   if (input.force) return { arv: "run", rehab: "run", rent: "run" };
 
+  // Epoch gate (#126 remediation): only a stamp from the sold-comps-only
+  // engine counts as done. A pre-epoch stamp is contaminated output — the
+  // leg re-runs so the fixed engine replaces the fiction. Loop safety: the
+  // fixed ARV route stamps on EVERY successful compute, including zero-comp
+  // results (which land as LOW → the manual_review_low_arv eligibility gate
+  // takes the record out of the sweep), so a re-run always terminates.
   const arv: LegPlan =
-    input.arvValidatedAt != null
+    arvStampTrusted(input.arvValidatedAt)
       ? "skip_done"
       : input.failures.arv >= cap
         ? "skip_failure_capped"

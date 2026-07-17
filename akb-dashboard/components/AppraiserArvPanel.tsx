@@ -55,6 +55,10 @@ interface ParsedComp {
   bathrooms?: number | null;
   cluster?: string;
   formatted_address?: string | null;
+  /** Present on receipts persisted from an honest-empty compute — the
+   *  named reason each comp was refused (subject_property,
+   *  active_listing_not_sold, …). */
+  excluded_reason?: string;
 }
 
 // Lookup URLs for one-click comp verification. Zillow's homes search and
@@ -104,6 +108,77 @@ const CONFIDENCE_STYLES: Record<NonNullable<Listing["arvConfidence"]>, { border:
   LOW: { border: "border-orange-700", text: "text-orange-400" },
 };
 
+function CompsTable({ comps }: { comps: ParsedComp[] }) {
+  const showReason = comps.some((c) => c.excluded_reason);
+  return (
+    <div className="mt-2 max-h-[300px] overflow-y-auto">
+      <table className="w-full text-[10px]">
+        <thead className="text-gray-500">
+          <tr className="border-b border-[#30363d]">
+            <th className="text-left pb-1 pr-2">Address</th>
+            <th className="text-left pb-1 pr-2">Price</th>
+            <th className="text-left pb-1 pr-2">SqFt</th>
+            <th className="text-left pb-1 pr-2">$/sqft</th>
+            <th className="text-left pb-1 pr-2">Dist</th>
+            <th className="text-left pb-1 pr-2">Sold</th>
+            {showReason && <th className="text-left pb-1 pr-2">Refused because</th>}
+            <th className="text-left pb-1">Verify</th>
+          </tr>
+        </thead>
+        <tbody className="text-gray-300">
+          {comps.slice(0, 25).map((c, i) => {
+            const addr = c.formatted_address ?? null;
+            return (
+              <tr key={i} className="border-b border-[#21262d]">
+                <td className="py-1 pr-2 text-gray-200">
+                  {addr ?? <span className="text-gray-600 italic">address pending</span>}
+                </td>
+                <td className="py-1 pr-2 font-mono">{formatCurrency(c.price)}</td>
+                <td className="py-1 pr-2">{c.sqft ?? "—"}</td>
+                <td className="py-1 pr-2 font-mono">${c.per_sqft?.toFixed(0) ?? "—"}</td>
+                <td className="py-1 pr-2">{c.distance != null ? `${c.distance.toFixed(2)}mi` : "—"}</td>
+                <td className="py-1 pr-2 text-gray-500">{c.sale_date?.slice(0, 10) ?? "—"}</td>
+                {showReason && (
+                  <td className="py-1 pr-2 text-orange-300">{c.excluded_reason ?? "—"}</td>
+                )}
+                <td className="py-1">
+                  {addr ? (
+                    <span className="flex gap-1.5">
+                      <a
+                        href={zillowLookupUrl(addr)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-400 hover:text-blue-300 underline"
+                        title={`Look up ${addr} on Zillow`}
+                      >
+                        Z
+                      </a>
+                      <a
+                        href={redfinLookupUrl(addr)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-red-400 hover:text-red-300 underline"
+                        title={`Look up ${addr} on Redfin (via Google site search)`}
+                      >
+                        R
+                      </a>
+                    </span>
+                  ) : (
+                    <span className="text-gray-700">—</span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {comps.length > 25 && (
+        <p className="text-[10px] text-gray-600 mt-1">+{comps.length - 25} more truncated</p>
+      )}
+    </div>
+  );
+}
+
 function TestArtifactBanner({ reason }: { reason: string | null }) {
   return (
     <div className="bg-amber-950/40 border border-amber-700/60 rounded px-2 py-1.5 space-y-0.5">
@@ -123,7 +198,13 @@ export default function AppraiserArvPanel({ recordId, listing }: AppraiserArvPan
   const [showComps, setShowComps] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const hasArv = listing.realArvMedian != null && listing.arvValidatedAt != null;
+  // Three data states (post-#126 honest-empty writes):
+  //   never computed  — no stamp at all → "Run ARV".
+  //   computed, EMPTY — stamped but no median: the engine ran and found NO
+  //                     sold comps. The refusal receipts are the result.
+  //   computed, real  — stamped with a median → the full panel.
+  const stamped = listing.arvValidatedAt != null;
+  const hasArv = listing.realArvMedian != null && stamped;
   const testArtifact = isTestArtifact(recordId);
   const testArtifactNote = testArtifactReason(recordId);
   const confidence = listing.arvConfidence ?? null;
@@ -165,7 +246,7 @@ export default function AppraiserArvPanel({ recordId, listing }: AppraiserArvPan
     }
   };
 
-  if (!hasArv) {
+  if (!stamped) {
     return (
       <div className="bg-[#1c2128] rounded-lg border border-[#30363d] p-3 space-y-2">
         {testArtifact && <TestArtifactBanner reason={testArtifactNote} />}
@@ -181,6 +262,42 @@ export default function AppraiserArvPanel({ recordId, listing }: AppraiserArvPan
         >
           {running ? "Running… (10-20s)" : "Run ARV"}
         </button>
+        {error && <p className="text-[10px] text-red-400">{error}</p>}
+      </div>
+    );
+  }
+
+  if (!hasArv) {
+    // Honest emptiness: the engine RAN and refused every candidate comp —
+    // asking prices and the subject itself never enter the ARV basis. This
+    // is a completed result, not a failure; the receipts say why.
+    return (
+      <div className="bg-[#1c2128] rounded-lg border border-orange-700 p-3 space-y-2">
+        {testArtifact && <TestArtifactBanner reason={testArtifactNote} />}
+        <div className="flex items-center justify-between">
+          <h3 className="text-[10px] font-bold text-orange-400 uppercase tracking-wider">
+            Appraiser — no sold comps
+          </h3>
+          <button
+            type="button"
+            onClick={runArv}
+            disabled={running}
+            className="text-[10px] text-gray-500 hover:text-gray-300 disabled:opacity-50"
+          >
+            {running ? "Re-running…" : "Re-run"}
+          </button>
+        </div>
+        <p className="text-[11px] text-orange-200/90 leading-snug">
+          The comp engine found no renovated SOLD comps for this property — every
+          candidate was refused (asking prices and the subject itself are never
+          ARV evidence). There is no honest ARV to show, which beats a wrong one.
+          Underwrite manually or wait for a nearby sale to record.
+        </p>
+        <div className="flex items-center justify-between text-[10px] text-gray-500">
+          <span>{comps.length} candidate{comps.length === 1 ? "" : "s"} refused</span>
+          <span>Checked {formatAge(listing.arvValidatedAt)}</span>
+        </div>
+        {comps.length > 0 && <CompsTable comps={comps} />}
         {error && <p className="text-[10px] text-red-400">{error}</p>}
       </div>
     );
@@ -241,69 +358,7 @@ export default function AppraiserArvPanel({ recordId, listing }: AppraiserArvPan
           >
             {showComps ? "▴ Hide" : "▾ Show"} {comps.length} comps
           </button>
-          {showComps && (
-            <div className="mt-2 max-h-[300px] overflow-y-auto">
-              <table className="w-full text-[10px]">
-                <thead className="text-gray-500">
-                  <tr className="border-b border-[#30363d]">
-                    <th className="text-left pb-1 pr-2">Address</th>
-                    <th className="text-left pb-1 pr-2">Price</th>
-                    <th className="text-left pb-1 pr-2">SqFt</th>
-                    <th className="text-left pb-1 pr-2">$/sqft</th>
-                    <th className="text-left pb-1 pr-2">Dist</th>
-                    <th className="text-left pb-1 pr-2">Sold</th>
-                    <th className="text-left pb-1">Verify</th>
-                  </tr>
-                </thead>
-                <tbody className="text-gray-300">
-                  {comps.slice(0, 25).map((c, i) => {
-                    const addr = c.formatted_address ?? null;
-                    return (
-                      <tr key={i} className="border-b border-[#21262d]">
-                        <td className="py-1 pr-2 text-gray-200">
-                          {addr ?? <span className="text-gray-600 italic">address pending</span>}
-                        </td>
-                        <td className="py-1 pr-2 font-mono">{formatCurrency(c.price)}</td>
-                        <td className="py-1 pr-2">{c.sqft ?? "—"}</td>
-                        <td className="py-1 pr-2 font-mono">${c.per_sqft?.toFixed(0) ?? "—"}</td>
-                        <td className="py-1 pr-2">{c.distance != null ? `${c.distance.toFixed(2)}mi` : "—"}</td>
-                        <td className="py-1 pr-2 text-gray-500">{c.sale_date?.slice(0, 10) ?? "—"}</td>
-                        <td className="py-1">
-                          {addr ? (
-                            <span className="flex gap-1.5">
-                              <a
-                                href={zillowLookupUrl(addr)}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-blue-400 hover:text-blue-300 underline"
-                                title={`Look up ${addr} on Zillow`}
-                              >
-                                Z
-                              </a>
-                              <a
-                                href={redfinLookupUrl(addr)}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-red-400 hover:text-red-300 underline"
-                                title={`Look up ${addr} on Redfin (via Google site search)`}
-                              >
-                                R
-                              </a>
-                            </span>
-                          ) : (
-                            <span className="text-gray-700">—</span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-              {comps.length > 25 && (
-                <p className="text-[10px] text-gray-600 mt-1">+{comps.length - 25} more truncated</p>
-              )}
-            </div>
-          )}
+          {showComps && <CompsTable comps={comps} />}
         </div>
       )}
       {error && <p className="text-[10px] text-red-400">{error}</p>}

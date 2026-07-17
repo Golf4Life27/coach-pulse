@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import {
   readsAgree,
   planLegs,
@@ -7,6 +7,16 @@ import {
   DEFAULT_LEG_FAILURE_CAP,
   type PlanLegsInput,
 } from "./p2-done-gate";
+
+// Fixtures predate the sold-comps-only ARV epoch (#126) — pin the epoch
+// before them so the done-gate semantics under test are undisturbed. The
+// epoch gate itself is covered in its own describe below.
+beforeAll(() => {
+  process.env.ARV_ENGINE_EPOCH = "2026-01-01T00:00:00.000Z";
+});
+afterAll(() => {
+  delete process.env.ARV_ENGINE_EPOCH;
+});
 
 function input(overrides: Partial<PlanLegsInput> = {}): PlanLegsInput {
   return {
@@ -86,6 +96,41 @@ describe("planLegs", () => {
       }),
     );
     expect(p).toEqual({ arv: "run", rehab: "run", rent: "run" });
+  });
+
+  it("an unparseable ARV stamp is not 'done' — the leg re-runs", () => {
+    expect(planLegs(input({ arvValidatedAt: "garbage" })).arv).toBe("run");
+  });
+});
+
+// ── ARV engine epoch (#126 remediation) ───────────────────────────────────
+describe("planLegs — ARV epoch invalidation", () => {
+  const EPOCH = "2026-07-17T15:40:00.000Z";
+  beforeAll(() => {
+    process.env.ARV_ENGINE_EPOCH = EPOCH;
+  });
+  afterAll(() => {
+    process.env.ARV_ENGINE_EPOCH = "2026-01-01T00:00:00.000Z"; // restore file-level pin
+  });
+
+  it("a pre-epoch ARV stamp is contaminated output — the leg re-runs; rehab/rent gates unchanged", () => {
+    const p = planLegs(
+      input({ arvValidatedAt: "2026-07-17T14:45:32Z", estimatedMonthlyRent: 1830, rehabStable: true }),
+    );
+    // The 1122 West Ave record's exact shape: pre-epoch ARV stamp, rent
+    // present, rehab stable → ONLY the ARV leg re-buys its call.
+    expect(p).toEqual({ arv: "run", rehab: "skip_stable", rent: "skip_done" });
+  });
+
+  it("a post-epoch stamp is done", () => {
+    expect(planLegs(input({ arvValidatedAt: "2026-07-17T16:00:00Z" })).arv).toBe("skip_done");
+  });
+
+  it("failure cap still benches a pre-epoch record (no infinite re-burn on errors)", () => {
+    const p = planLegs(
+      input({ arvValidatedAt: "2026-07-17T14:45:32Z", failures: { arv: DEFAULT_LEG_FAILURE_CAP, rehab: 0, rent: 0 } }),
+    );
+    expect(p.arv).toBe("skip_failure_capped");
   });
 });
 
