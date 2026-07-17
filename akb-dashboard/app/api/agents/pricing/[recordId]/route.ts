@@ -173,6 +173,7 @@ export async function GET(
       });
       const result = computeArvIntelligence(comps, {
         zip: listing.zip,
+        address: listing.address, // subject self-exclusion — never its own comp
         beds: listing.bedrooms,
         baths: listing.bathrooms,
         sqft: listing.buildingSqFt,

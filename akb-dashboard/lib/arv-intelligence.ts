@@ -49,6 +49,10 @@ import { median as medianOf } from "./rentcast";
 
 export interface ArvSubject {
   zip: string;
+  /** Street address of the subject — when present, any comp at the same
+   *  address is excluded (a property is never its own comp; the 1122 West
+   *  Ave contamination averaged the subject's OWN asking price into its ARV). */
+  address?: string | null;
   beds?: number | null;
   baths?: number | null;
   sqft?: number | null;
@@ -181,14 +185,42 @@ export interface ArvIntelligenceOptions {
   filterOverride?: ArvFilterOverride;
 }
 
+/** Street-line address normalization for subject-vs-comp identity: take the
+ *  segment before the first comma, lowercase, strip punctuation, collapse
+ *  whitespace. "1122 West Ave SW, Atlanta, GA 30315" ≡ "1122 west ave sw". */
+export function normalizeStreetLine(addr: string | null | undefined): string | null {
+  if (!addr || typeof addr !== "string") return null;
+  const line = addr.split(",")[0];
+  const norm = line
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return norm || null;
+}
+
 function applyBasicFilters(
   raw: RentCastSaleComp[],
   subject: ArvSubject,
   cfg: CompFilters,
 ): FilterStage[] {
   const cutoffMs = Date.now() - cfg.max_age_days * 24 * 60 * 60_000;
+  const subjectStreet = normalizeStreetLine(subject.address);
 
   return raw.map<FilterStage>((c) => {
+    // A property is never its own comp — RentCast's AVM comparables include
+    // the subject's own listing (distance ≈ 0), and 1122 West Ave's asking
+    // price fed its own "ARV". Checked FIRST so the receipt names the real
+    // reason regardless of what other filters would also catch.
+    if (subjectStreet != null && normalizeStreetLine(c.formattedAddress) === subjectStreet) {
+      return { comp: c, excluded_reason: "subject_property" };
+    }
+    // ARV = renovated SOLD comps only (doctrine). Post rentcast fix, a null
+    // saleDate MEANS active listing — an asking price, not a market-cleared
+    // value. Asking prices never enter the ARV basis.
+    if (c.saleDate == null) {
+      return { comp: c, excluded_reason: "active_listing_not_sold" };
+    }
     if (c.price == null || c.price <= 0) {
       return { comp: c, excluded_reason: "no_price" };
     }

@@ -254,9 +254,16 @@ export async function getSaleComparables(
     distance: (c.distance as number) ?? null,
     daysOnMarket: (c.daysOnMarket as number) ?? null,
     removedDate: (c.removedDate as string) ?? null,
+    // HONEST DATES ONLY (2026-07-17, the 1122 West Ave contamination): a
+    // comp's saleDate is a real sale date, or the removedDate (the listing
+    // actually left the market — a historical event), or NULL. The old
+    // lastSeenDate fallback stamped ACTIVE listings with "the crawler saw
+    // this ad today" and every active ask masqueraded as a same-day sale —
+    // three asking prices (one of them the SUBJECT itself) averaged into a
+    // $244,690 "ARV". null saleDate now MEANS active listing, and the ARV
+    // filter excludes it from the value basis.
     saleDate:
       (c.saleDate as string) ??
-      (c.lastSeenDate as string) ??
       (c.removedDate as string) ??
       null,
     formattedAddress:

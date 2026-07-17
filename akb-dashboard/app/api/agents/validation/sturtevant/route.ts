@@ -122,6 +122,7 @@ export async function GET(req: Request) {
       });
       arvResult = computeArvIntelligence(comps, {
         ...subject,
+        address: vcase.address, // subject self-exclusion — never its own comp
         condition_target: "renovated", // agent default
         rehab_mid: rehabResult?.rehab_mid ?? null,
       });

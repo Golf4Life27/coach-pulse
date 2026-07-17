@@ -282,6 +282,7 @@ export async function runAutoSeed(subject: RepresentativeSubject): Promise<AutoS
     comps,
     {
       zip,
+      address: subject.address, // representative subject — never its own comp
       beds: subject.bedrooms ?? null,
       baths: subject.bathrooms ?? null,
       sqft: subject.squareFootage ?? null,
