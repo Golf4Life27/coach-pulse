@@ -33,6 +33,51 @@ describe("classifyReply", () => {
     expect(classifyReply("the price is $185,000").classification).toBe("interest");
   });
 
+  // ── 2026-07-17 regressions: the machine talked past two humans ──────────
+
+  it("NEGATED INTEREST (3226 Cloverhurst): 'aren't interested' is a soft-no, never interest", () => {
+    // Verbatim — this classified INTEREST (0.9) and triggered a "glad
+    // there's interest" auto-ack. The bare \binterested\b pattern matched
+    // inside the negation.
+    const cloverhurst = classifyReply(
+      "Hi Alex! It's a fast no at $156K. The sellers aren't interested in low ball offers.",
+    );
+    expect(cloverhurst.classification).toBe("soft_no");
+    // The follow-up correction, verbatim:
+    expect(
+      classifyReply(
+        "You misread my text. There is no interest in any lowball offers. If you all aren't submitting an offer that is at or close to the listing price my clients are not interested. Thank you.",
+      ).classification,
+    ).toBe("soft_no");
+    // Other negation shapes:
+    expect(classifyReply("Seller isn't interested").classification).toBe("soft_no");
+    expect(classifyReply("we are no longer interested").classification).toBe("soft_no");
+    expect(classifyReply("that's a hard no").classification).toBe("soft_no");
+    expect(classifyReply("It's a no for now").classification).toBe("soft_no");
+    expect(classifyReply("quit lowballing us").classification).toBe("soft_no");
+    // The un-negated forms still read as interest:
+    expect(classifyReply("The seller is interested, call me").classification).toBe("interest");
+  });
+
+  it("negated-interest routes as a PRICING decision when lowball/price language is present", () => {
+    const t = triageSellerReply(
+      "Hi Alex! It's a fast no at $156K. The sellers aren't interested in low ball offers.",
+      "Texted",
+    );
+    expect(t.classification).toBe("soft_no");
+    expect(t.decisionKind).toBe("pricing");
+    expect(t.suggestedReply).toBeTruthy(); // 2A re-engagement draft, operator-approved
+  });
+
+  it("MULTIPLIER COUNTER (7714 E Canfield): 'double it' is a counter with no $ token", () => {
+    // Verbatim — both fell to UNKNOWN and the thread kept getting robo-bumped.
+    expect(classifyReply("Youll need to double it").classification).toBe("counter");
+    expect(
+      classifyReply("I said you would have to double it. Im not sure how or why you would think my client would accept that.").classification,
+    ).toBe("counter");
+    expect(classifyReply("you'd have to double your offer").classification).toBe("counter");
+  });
+
   it("interest patterns", () => {
     expect(classifyReply("yes send me the offer").classification).toBe("interest");
     expect(classifyReply("can you send proof of funds?").classification).toBe("interest");

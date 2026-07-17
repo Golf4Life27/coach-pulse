@@ -322,6 +322,7 @@ export async function GET(req: Request) {
               state: listing.state ?? null,
               doNotText: listing.doNotText === true,
               classification: triage.classification,
+              inboundBody: inbound.body,
               address: listing.address ?? null,
             });
             autoAckResults.push({ recordId: listing.id, sent: ak.sent, reason: ak.reason });

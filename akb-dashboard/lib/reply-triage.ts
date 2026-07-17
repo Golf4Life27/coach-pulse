@@ -122,11 +122,23 @@ const SOFT_NO_PATTERNS = [
   /\btoo low\b/i,
   /\bfirm at\b/i,
   /\bnot at (?:that|this) price\b/i,
+  // Negated interest + "no"-shapes (2026-07-17, the 3226 Cloverhurst miss):
+  // "It's a fast no at $156K. The sellers aren't interested in low ball
+  // offers." sailed past "not interested" (contraction) and landed on
+  // INTEREST via the bare \binterested\b pattern below — the auto-ack then
+  // thanked the agent for their interest. Negation outranks the noun it
+  // negates, always; these run BEFORE the interest list by construction.
+  /\b(?:isn'?t|aren'?t|ain'?t|wasn'?t|weren'?t|no longer)\s+(?:\w+\s+)?interested\b/i,
+  /\bno\s+interest\b/i,
+  /\b(?:fast|hard|quick|firm|definite)\s+no\b/i,
+  /\bno\s+at\s+\$?\d/i,
+  /\b(?:it|that)'?s\s+a\s+(?:no|pass)\b/i,
+  /\blow[\s-]?ball/i,
 ];
 
 /** The soft-no subset whose real message is "your NUMBER is wrong", not
  *  "go away" — routed as a pricing decision. */
-const PRICE_OBJECTION_RE = /\btoo low\b|\bfirm at\b|\bnot at (?:that|this) price\b/i;
+const PRICE_OBJECTION_RE = /\btoo low\b|\bfirm at\b|\bnot at (?:that|this) price\b|\blow[\s-]?ball|\bno\s+at\s+\$?\d/i;
 
 /** Seller-cost / lien / commission questions — the money-STRUCTURE class.
  *  The seller isn't objecting to the price; they're asking who pays what.
@@ -258,6 +270,15 @@ export function classifyReply(body: string): {
   // contains zero deal content and must never draft an acknowledgment.
   for (const pat of DISCLOSURE_PATTERNS) {
     if (pat.test(trimmed)) return { classification: "disclosure_step", matchedPattern: pat.source };
+  }
+
+  // A multiplier counter carries its number implicitly — "you'll need to
+  // double it" IS a price (2× the sticky offer) with no $ token. The 7714
+  // E Canfield anchor (2026-07-17): "Youll need to double it" fell to
+  // UNKNOWN and the thread kept getting robo-bumped at the old number.
+  const mult = /\b(?:double|triple)\s+(?:it|that|the\s+(?:offer|price|number)|your\s+(?:offer|number))\b/i;
+  if (mult.test(trimmed)) {
+    return { classification: "counter", matchedPattern: mult.source };
   }
 
   // A counter (price token + counter language) outranks seller_costs — "I

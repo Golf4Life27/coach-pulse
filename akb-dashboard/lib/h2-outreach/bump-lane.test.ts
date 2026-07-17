@@ -287,3 +287,58 @@ describe("bumpVerdict — parked_underwater (no bump rides a dead number)", () =
     expect(bumpVerdict(texted({ dealSpread: null }), NOW).reason).not.toBe("parked_underwater");
   });
 });
+
+// ── SEND-TIME THREAD TRUTH (2026-07-17, the 7714 E Canfield miss) ──────────
+import { threadInboundTruth, buildBumpAbortedNote } from "./bump-lane";
+
+describe("threadInboundTruth — Quo is the thread, Airtable is a cache", () => {
+  const out = (at: string) => ({ direction: "outgoing", createdAt: at, body: "our opener" });
+  const inc = (at: string, body: string) => ({ direction: "incoming", createdAt: at, body });
+
+  it("all-outgoing thread → no inbound (bump allowed)", () => {
+    const t = threadInboundTruth([out("2026-07-09T19:45:54Z"), out("2026-07-12T20:15:48Z")]);
+    expect(t.hasInbound).toBe(false);
+    expect(t.lastInboundAt).toBeNull();
+  });
+
+  it("ANY incoming message disqualifies — and the NEWEST one is surfaced for healing", () => {
+    // The Canfield shape: opener → uncaptured counter → bump → uncaptured
+    // correction → bump. The truth check would have stopped bump 1.
+    const t = threadInboundTruth([
+      out("2026-07-09T19:45:54Z"),
+      inc("2026-07-10T14:00:00Z", "Youll need to double it"),
+      out("2026-07-12T20:15:48Z"),
+      inc("2026-07-12T21:00:00Z", "I said you would have to double it."),
+    ]);
+    expect(t.hasInbound).toBe(true);
+    expect(t.lastInboundAt).toBe("2026-07-12T21:00:00Z");
+    expect(t.lastInboundBody).toBe("I said you would have to double it.");
+  });
+
+  it("an empty-body incoming still counts (human-side activity is human-side activity)", () => {
+    const t = threadInboundTruth([inc("2026-07-10T14:00:00Z", "")]);
+    expect(t.hasInbound).toBe(true);
+  });
+
+  it("empty thread → no inbound", () => {
+    expect(threadInboundTruth([]).hasInbound).toBe(false);
+  });
+});
+
+describe("buildBumpAbortedNote", () => {
+  it("documents what Quo showed and appends without disturbing existing notes", () => {
+    const prior = "[H2 sent 2026-07-09T19:45:54Z] Quo msg AC1: Hi Michael... $63,750 ...";
+    const note = buildBumpAbortedNote(prior, "2026-07-17T20:15:00Z", "2026-07-12T21:00:00Z", "I said you would have to double it.");
+    expect(note.startsWith(prior)).toBe(true);
+    expect(note).toContain("bump aborted 2026-07-17T20:15:00Z");
+    expect(note).toContain("I said you would have to double it.");
+    expect(note).toContain("Response Received");
+    // The sticky-stamp grammar is untouched — extractStickyOffer still reads the stamp.
+    expect(extractStickyOffer(note)?.offer).toBe(63_750);
+  });
+
+  it("no existing notes → the abort line stands alone", () => {
+    const note = buildBumpAbortedNote(null, "2026-07-17T20:15:00Z", null, null);
+    expect(note).toContain("bump aborted");
+  });
+});

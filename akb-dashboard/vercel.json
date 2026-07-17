@@ -93,6 +93,10 @@
       "schedule": "20 * * * *"
     },
     {
+      "path": "/api/cron/quo-sync?limit=40&hours_back=336",
+      "schedule": "10 4 * * *"
+    },
+    {
       "path": "/api/cron/gmail-sync?limit=40&hours_back=48",
       "schedule": "40 * * * *"
     },
