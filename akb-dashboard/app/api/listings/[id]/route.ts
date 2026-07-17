@@ -15,7 +15,10 @@ export async function GET(
     return NextResponse.json({ error: "Invalid record id", id }, { status: 400 });
   }
   try {
-    const listing = await getListing(id);
+    // fresh: the deal room is the operator's live working surface — a 60s
+    // stale copy after an underwrite/write reads as "the button did nothing"
+    // (1122 West Ave, 2026-07-17). One record, one Airtable GET; always live.
+    const listing = await getListing(id, { fresh: true });
     if (!listing) {
       console.log(`[listings/id] Record ${id} not found`);
       return NextResponse.json({ error: "Not found", id }, { status: 404 });

@@ -685,10 +685,21 @@ export async function getActiveVerificationUrlCoverage(): Promise<VerificationUr
   return { activeTotal, withUrl, withoutUrl, coveragePct };
 }
 
-export async function getListing(id: string): Promise<Listing | null> {
+export async function getListing(
+  id: string,
+  opts: { fresh?: boolean } = {},
+): Promise<Listing | null> {
   const cacheKey = `listing:${id}`;
-  const cached = getCached<Listing>(cacheKey);
-  if (cached) return cached;
+  // fresh: bypass the 60s in-memory cache. Needed by the deal room's
+  // single-record API — updateListingRecord busts the cache only on the
+  // lambda instance that performed the write, so a post-underwrite refresh
+  // served by a DIFFERENT instance returned the pre-write record and the
+  // Decision Card showed "no numbers" while Airtable held them (1122 West
+  // Ave, 2026-07-17). The cache still refills for burst protection.
+  if (!opts.fresh) {
+    const cached = getCached<Listing>(cacheKey);
+    if (cached) return cached;
+  }
 
   // Single-record GET without returnFieldsByFieldId (Airtable returns 422
   // with that param on single-record endpoints). Returns field names instead.
