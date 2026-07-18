@@ -375,6 +375,13 @@ export async function getSaleComparables(
     shape,
   );
   const compBody = await compRes.text();
+  if (compRes.status === 404) {
+    // RentCast 404s on NO-RESULTS for property lookups — that is an honest
+    // "zero parcels here", not an infrastructure failure. Return empty so
+    // the ARV lands honest-empty with receipts instead of erroring the leg
+    // (and feeding the loop-breaker / failure-rate alarms with non-failures).
+    return [];
+  }
   if (!compRes.ok) {
     throw new Error(`RentCast properties ${compRes.status}: ${compBody.slice(0, 300)}`);
   }
