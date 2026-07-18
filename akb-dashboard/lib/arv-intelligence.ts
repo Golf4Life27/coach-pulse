@@ -216,10 +216,12 @@ function applyBasicFilters(
       return { comp: c, excluded_reason: "subject_property" };
     }
     // ARV = renovated SOLD comps only (doctrine). Post rentcast fix, a null
-    // saleDate MEANS active listing — an asking price, not a market-cleared
-    // value. Asking prices never enter the ARV basis.
+    // saleDate MEANS no recorded sale — an active OR delisted listing, i.e.
+    // an asking price, not a market-cleared value. Asks never enter the
+    // ARV basis regardless of listing state (the Fortress lesson: a
+    // delisted-and-relisted ask is still an ask).
     if (c.saleDate == null) {
-      return { comp: c, excluded_reason: "active_listing_not_sold" };
+      return { comp: c, excluded_reason: "no_recorded_sale" };
     }
     if (c.price == null || c.price <= 0) {
       return { comp: c, excluded_reason: "no_price" };

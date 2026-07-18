@@ -254,18 +254,17 @@ export async function getSaleComparables(
     distance: (c.distance as number) ?? null,
     daysOnMarket: (c.daysOnMarket as number) ?? null,
     removedDate: (c.removedDate as string) ?? null,
-    // HONEST DATES ONLY (2026-07-17, the 1122 West Ave contamination): a
-    // comp's saleDate is a real sale date, or the removedDate (the listing
-    // actually left the market — a historical event), or NULL. The old
-    // lastSeenDate fallback stamped ACTIVE listings with "the crawler saw
-    // this ad today" and every active ask masqueraded as a same-day sale —
-    // three asking prices (one of them the SUBJECT itself) averaged into a
-    // $244,690 "ARV". null saleDate now MEANS active listing, and the ARV
-    // filter excludes it from the value basis.
-    saleDate:
-      (c.saleDate as string) ??
-      (c.removedDate as string) ??
-      null,
+    // RECORDED SALES ONLY (tightened 2026-07-18, the 1097 Fortress lesson):
+    // saleDate is RentCast's sale record or NULL — nothing else. The first
+    // fix (2026-07-17) removed the lastSeenDate fallback that let ACTIVE
+    // asks masquerade as same-day sales (the $244,690 1122 West Ave
+    // fiction), but kept removedDate as sale-ish — and a DELISTED ask is
+    // still an ask: Fortress (never sold since 2020, delisted 5/2 and
+    // relisted at $267,500) priced 1122 West at $294,602 through that hole.
+    // A delisting is a historical event about MARKETING, not about value.
+    // null saleDate now MEANS "no recorded sale", and the ARV filter
+    // excludes it from the value basis.
+    saleDate: (c.saleDate as string) ?? null,
     formattedAddress:
       (c.formattedAddress as string) ??
       buildFallbackAddress(c) ??

@@ -117,7 +117,7 @@ describe("computeArvIntelligence — subject + active-listing exclusion", () => 
     expect(r.comps_used[0].formatted_address).toBe("1097 Fortress Ave SW, Atlanta, GA 30315");
     const reasons = new Map(r.comps_excluded.map((c) => [c.formatted_address, c.excluded_reason]));
     expect(reasons.get("1122 West Ave SW, Atlanta, GA 30315")).toBe("subject_property");
-    expect(reasons.get("1048 Garibaldi St SW, Atlanta, GA 30310")).toBe("active_listing_not_sold");
+    expect(reasons.get("1048 Garibaldi St SW, Atlanta, GA 30310")).toBe("no_recorded_sale");
   });
 
   it("ARV derives from the sold $/sqft alone — the $244k fiction is dead", () => {
@@ -148,7 +148,7 @@ describe("computeArvIntelligence — subject + active-listing exclusion", () => 
     // the subject's address is treated as an ordinary comp. Actives still die.
     expect(r.comp_count_used).toBe(2);
     const reasons = r.comps_excluded.map((c) => c.excluded_reason);
-    expect(reasons).toContain("active_listing_not_sold");
+    expect(reasons).toContain("no_recorded_sale");
     expect(reasons).not.toContain("subject_property");
   });
 });
