@@ -200,13 +200,123 @@ export async function getAvmValue(
   };
 }
 
-// RentCast doesn't publish a standalone /avm/sale-comparables endpoint;
-// comparables are embedded in the /avm/value response. Earlier code hit
-// /avm/sale-comparables which 404'd, and silently coerced the 404 to []
-// — exactly the swallowed-error pattern the Positive Confirmation
-// Principle (Rule 5) forbids. Now we call /avm/value, throw on non-2xx
-// (caller surfaces to UI/audit), and let a zero-length comparables list
-// be visible as a yellow flag, not invisible success.
+// ── Recorded-sale comps from PROPERTY RECORDS (rebuilt 2026-07-18) ───────
+//
+// THE DISCOVERY: /avm/value "comparables" are LISTING records — asking
+// prices in various lifecycle states (active / delisted / relisted). They
+// carry NO recorded-sale field at all. Every prior "sold comp" this system
+// displayed was an ask wearing a fabricated or borrowed date: lastSeenDate
+// (the $244,690 1122 West fiction), then removedDate (the $294,602
+// Fortress delisted-ask). When #130 demanded recorded sales only, the AVM
+// feed honestly returned zero across the entire fleet — 25/25 re-runs
+// empty. The feed was the lie, not the filter.
+//
+// THE REBUILD: comps now come from RentCast PROPERTY records (public-record
+// deed data: lastSalePrice / lastSaleDate, plus the per-property history
+// map). Two paid calls per pull: (1) subject lookup for coordinates,
+// (2) radius query for nearby parcels. Only parcels with a recorded sale
+// map to comps — price IS the recorded sale price, saleDate IS the deed
+// date. Parcels with no sale history are parcels, not refused comps.
+// Same signature, same return type: every caller (appraiser, pricing,
+// seeds, gates, validation) migrates at once and none can ever price off
+// a listing ask again.
+
+const EARTH_RADIUS_MILES = 3958.8;
+
+/** Pure: great-circle distance in miles. */
+export function haversineMiles(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const rad = (d: number) => (d * Math.PI) / 180;
+  const dLat = rad(lat2 - lat1);
+  const dLng = rad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(rad(lat1)) * Math.cos(rad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * EARTH_RADIUS_MILES * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+/** Pure: newest recorded Sale event from a property record. Prefers the
+ *  top-level lastSalePrice/lastSaleDate; falls back to scanning the
+ *  history map for Sale events (some records carry only history). Null
+ *  when the parcel has no recorded sale — it is not a comp. */
+export function newestRecordedSale(
+  rec: Record<string, unknown>,
+): { price: number; date: string } | null {
+  const topPrice = rec.lastSalePrice as number | undefined;
+  const topDate = rec.lastSaleDate as string | undefined;
+  let best: { price: number; date: string } | null =
+    typeof topPrice === "number" && topPrice > 0 && typeof topDate === "string" && topDate
+      ? { price: topPrice, date: topDate }
+      : null;
+  const history = rec.history as Record<string, Record<string, unknown>> | undefined;
+  if (history && typeof history === "object") {
+    for (const ev of Object.values(history)) {
+      if (!ev || typeof ev !== "object") continue;
+      if ((ev.event as string)?.toLowerCase() !== "sale") continue;
+      const price = ev.price as number | undefined;
+      const date = (ev.date as string) ?? null;
+      if (typeof price !== "number" || price <= 0 || !date) continue;
+      if (!best || date > best.date) best = { price, date };
+    }
+  }
+  return best;
+}
+
+/** Pure: map one property record to a comp — or null when it carries no
+ *  recorded sale. Distance from subject coordinates when both known. */
+export function mapPropertyRecordToComp(
+  rec: Record<string, unknown>,
+  subjectLat: number | null,
+  subjectLng: number | null,
+): RentCastSaleComp | null {
+  const sale = newestRecordedSale(rec);
+  if (!sale) return null;
+  const lat = rec.latitude as number | undefined;
+  const lng = rec.longitude as number | undefined;
+  const distance =
+    subjectLat != null && subjectLng != null && typeof lat === "number" && typeof lng === "number"
+      ? Number(haversineMiles(subjectLat, subjectLng, lat, lng).toFixed(4))
+      : null;
+  return {
+    price: sale.price,
+    squareFootage: (rec.squareFootage as number) ?? null,
+    bedrooms: (rec.bedrooms as number) ?? null,
+    bathrooms: (rec.bathrooms as number) ?? null,
+    yearBuilt: (rec.yearBuilt as number) ?? null,
+    distance,
+    daysOnMarket: null,
+    removedDate: null,
+    saleDate: sale.date,
+    formattedAddress:
+      (rec.formattedAddress as string) ??
+      buildFallbackAddress(rec) ??
+      null,
+  };
+}
+
+function parsePropertiesBody(status: number, bodyText: string): Array<Record<string, unknown>> {
+  let data: unknown;
+  try {
+    data = JSON.parse(bodyText);
+  } catch {
+    throw new Error(`RentCast properties ${status}: non-JSON body (${bodyText.slice(0, 200)})`);
+  }
+  if (Array.isArray(data)) return data as Array<Record<string, unknown>>;
+  if (data && typeof data === "object") {
+    const obj = data as Record<string, unknown>;
+    if (Array.isArray(obj.properties)) return obj.properties as Array<Record<string, unknown>>;
+    if (Array.isArray(obj.data)) return obj.data as Array<Record<string, unknown>>;
+    // A single-record response (address-exact lookup) arrives as one object.
+    if (obj.id != null || obj.formattedAddress != null) return [obj];
+  }
+  return [];
+}
+
+/** Recorded-sale comps for a subject. Two paid calls: subject lookup
+ *  (coordinates) + radius pull (nearby parcels). Falls back to a ZIP-wide
+ *  pull (distance unknown) when the subject isn't in RentCast's parcel
+ *  index. Throws on non-2xx so callers surface failures (Positive
+ *  Confirmation Principle) — an empty array means "no parcels with
+ *  recorded sales", visibly, never a swallowed error. */
 export async function getSaleComparables(
   input: AvmInput,
   recordId?: string,
@@ -215,61 +325,66 @@ export async function getSaleComparables(
   if (!RENTCAST_API_KEY) {
     throw new Error("RENTCAST_API_KEY not set");
   }
-  const url = `${BASE}/avm/value?${buildAvmParams(input, widen).toString()}`;
-  const res = await paidFetch(
-    "avm/value",
-    url,
-    { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" },
+  const headers = { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" as const };
+  const shape = { address: input.address, city: input.city, state: input.state, zip: input.zip, recordId: recordId ?? null };
+
+  // 1 — subject parcel (coordinates). A miss is survivable: ZIP fallback.
+  let subjectLat: number | null = null;
+  let subjectLng: number | null = null;
+  const subjParams = new URLSearchParams({
+    address: `${input.address}, ${input.city}, ${input.state}, ${input.zip}`,
+  });
+  const subjRes = await paidFetch(
+    "properties/subject",
+    `${BASE}/properties?${subjParams.toString()}`,
+    headers,
     recordId,
-    { address: input.address, city: input.city, state: input.state, zip: input.zip, recordId: recordId ?? null },
+    shape,
   );
-
-  const bodyText = await res.text();
-  let data: Record<string, unknown>;
-  try {
-    data = JSON.parse(bodyText) as Record<string, unknown>;
-  } catch {
-    throw new Error(
-      `RentCast avm/value ${res.status}: non-JSON body (${bodyText.slice(0, 200)})`,
-    );
+  const subjBody = await subjRes.text();
+  if (subjRes.ok) {
+    const subj = parsePropertiesBody(subjRes.status, subjBody)[0];
+    if (subj && typeof subj.latitude === "number" && typeof subj.longitude === "number") {
+      subjectLat = subj.latitude;
+      subjectLng = subj.longitude;
+    }
   }
 
-  if (!res.ok) {
-    // 404 == "property not found in RentCast index" — a real signal, not
-    // success. Propagate so caller can surface it.
-    throw new Error(
-      `RentCast avm/value ${res.status}: ${JSON.stringify(data)}`,
-    );
+  // 2 — nearby parcels. Radius when we have coordinates; ZIP-wide otherwise.
+  const radius = widen?.maxRadius ?? 0.6; // filters clip at max_distance_miles
+  const limit = widen?.compCount != null ? 200 : 100;
+  const compParams =
+    subjectLat != null && subjectLng != null
+      ? new URLSearchParams({
+          latitude: String(subjectLat),
+          longitude: String(subjectLng),
+          radius: String(radius),
+          limit: String(limit),
+          propertyType: "Single Family",
+        })
+      : new URLSearchParams({
+          zipCode: input.zip,
+          limit: String(limit),
+          propertyType: "Single Family",
+        });
+  const compRes = await paidFetch(
+    "properties/comps",
+    `${BASE}/properties?${compParams.toString()}`,
+    headers,
+    recordId,
+    shape,
+  );
+  const compBody = await compRes.text();
+  if (!compRes.ok) {
+    throw new Error(`RentCast properties ${compRes.status}: ${compBody.slice(0, 300)}`);
   }
-
-  const raw = Array.isArray(data.comparables)
-    ? (data.comparables as Array<Record<string, unknown>>)
-    : [];
-  return raw.map((c) => ({
-    price: (c.price as number) ?? null,
-    squareFootage: (c.squareFootage as number) ?? null,
-    bedrooms: (c.bedrooms as number) ?? null,
-    bathrooms: (c.bathrooms as number) ?? null,
-    yearBuilt: (c.yearBuilt as number) ?? null,
-    distance: (c.distance as number) ?? null,
-    daysOnMarket: (c.daysOnMarket as number) ?? null,
-    removedDate: (c.removedDate as string) ?? null,
-    // RECORDED SALES ONLY (tightened 2026-07-18, the 1097 Fortress lesson):
-    // saleDate is RentCast's sale record or NULL — nothing else. The first
-    // fix (2026-07-17) removed the lastSeenDate fallback that let ACTIVE
-    // asks masquerade as same-day sales (the $244,690 1122 West Ave
-    // fiction), but kept removedDate as sale-ish — and a DELISTED ask is
-    // still an ask: Fortress (never sold since 2020, delisted 5/2 and
-    // relisted at $267,500) priced 1122 West at $294,602 through that hole.
-    // A delisting is a historical event about MARKETING, not about value.
-    // null saleDate now MEANS "no recorded sale", and the ARV filter
-    // excludes it from the value basis.
-    saleDate: (c.saleDate as string) ?? null,
-    formattedAddress:
-      (c.formattedAddress as string) ??
-      buildFallbackAddress(c) ??
-      null,
-  }));
+  const records = parsePropertiesBody(compRes.status, compBody);
+  const comps: RentCastSaleComp[] = [];
+  for (const rec of records) {
+    const comp = mapPropertyRecordToComp(rec, subjectLat, subjectLng);
+    if (comp) comps.push(comp);
+  }
+  return comps;
 }
 
 // RentCast normally returns formattedAddress on every comparable, but a
