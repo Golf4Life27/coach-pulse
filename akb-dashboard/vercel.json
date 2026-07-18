@@ -170,6 +170,10 @@
     },
     {
       "path": "/api/cron/auto-underwrite-engaged?apply=1&limit=4",
+      "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/auto-underwrite-engaged?apply=1&limit=4",
       "schedule": "25 2 * * *"
     },
     {
