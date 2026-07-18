@@ -44,8 +44,8 @@ describe("arvPersistFields", () => {
     // The 1122 West Ave shape post-fix: all three comps excluded by name.
     const excluded = [
       comp({ price: 129_999, sale_date: null, formatted_address: "1122 West Ave SW, Atlanta, GA 30315", excluded_reason: "subject_property" }),
-      comp({ price: 319_900, sale_date: null, formatted_address: "1048 Garibaldi St SW, Atlanta, GA 30310", excluded_reason: "active_listing_not_sold" }),
-      comp({ price: 267_500, sale_date: null, formatted_address: "1097 Fortress Ave SW, Atlanta, GA 30315", excluded_reason: "active_listing_not_sold" }),
+      comp({ price: 319_900, sale_date: null, formatted_address: "1048 Garibaldi St SW, Atlanta, GA 30310", excluded_reason: "no_recorded_sale" }),
+      comp({ price: 267_500, sale_date: null, formatted_address: "1097 Fortress Ave SW, Atlanta, GA 30315", excluded_reason: "no_recorded_sale" }),
     ];
     const f = arvPersistFields(
       {
@@ -72,8 +72,8 @@ describe("arvPersistFields", () => {
     const receipts = JSON.parse(f.ARV_Comp_Details_JSON as string) as ArvCompUsed[];
     expect(receipts.map((r) => r.excluded_reason)).toEqual([
       "subject_property",
-      "active_listing_not_sold",
-      "active_listing_not_sold",
+      "no_recorded_sale",
+      "no_recorded_sale",
     ]);
   });
 

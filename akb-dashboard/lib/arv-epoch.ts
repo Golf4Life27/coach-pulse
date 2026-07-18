@@ -14,11 +14,14 @@
 // crons re-run every record through the fixed engine on their own schedule,
 // hottest deals first. Zero record edits; the system heals itself.
 
-/** The moment the sold-comps-only ARV engine (#126) was live in production.
- *  Stamps at or after this instant came from the fixed engine. Env-overridable
- *  (ARV_ENGINE_EPOCH, ISO 8601) so a future engine revision can advance the
- *  boundary without a code change. */
-export const ARV_SOLD_COMPS_EPOCH_ISO = "2026-07-17T15:40:00.000Z";
+/** The moment the CURRENT ARV engine was live in production. Stamps at or
+ *  after this instant came from it. Env-overridable (ARV_ENGINE_EPOCH,
+ *  ISO 8601). ADVANCED 2026-07-18: the recorded-sales-only tightening
+ *  (removedDate no longer counts as a sale — the 1097 Fortress delisted-ask
+ *  hole) re-invalidates every stamp from the 07-17 engine so the crons
+ *  re-verify them under the stricter rule. This is the designed mechanism:
+ *  each engine revision advances the boundary and the fleet re-runs itself. */
+export const ARV_SOLD_COMPS_EPOCH_ISO = "2026-07-18T13:50:00.000Z";
 
 function epochMs(): number {
   const raw = process.env.ARV_ENGINE_EPOCH;
