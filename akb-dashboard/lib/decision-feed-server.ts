@@ -13,6 +13,8 @@ import {
 } from "@/lib/conveyor/model";
 import { rankOperatorActions, readOperatorActions } from "@/lib/maverick/operator-actions";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
+import { getListings } from "@/lib/airtable";
+import { filterLiveReplyProposals } from "@/lib/draft-dismissal";
 
 const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
 const ACTION_ITEMS_TABLE = "tblZRunAe5OaMTRCM";
@@ -48,11 +50,26 @@ async function fetchPendingProposals(): Promise<ProposalRow[]> {
         reasoning: (f.Reasoning as string) ?? "",
         actionPayload: (f.Suggested_Action_Payload as string) ?? "{}",
         createdTime: rec.createdTime ?? null,
+        proposalKey: (f.Proposal_ID as string) ?? null,
       });
     }
     offset = data.offset;
   } while (offset);
-  return out;
+
+  // LIVE-DRAFT GATE (2026-07-18, the Canfield two-drafts mess): the crons'
+  // conveyor must never escalate a reply draft the record no longer points
+  // at. Fail toward hiding on a listings-read failure — same posture as
+  // /api/proposals.
+  try {
+    const listings = await getListings();
+    const metaByRecordId = new Map<string, string | null | undefined>(
+      listings.map((l) => [l.id, (l as { draftReplyMeta?: string | null }).draftReplyMeta]),
+    );
+    return filterLiveReplyProposals(out, metaByRecordId);
+  } catch (err) {
+    console.error("[decision-feed] live-draft gate listings read failed — withholding reply proposals:", err);
+    return out.filter((p) => p.proposalType !== "jarvis_reply");
+  }
 }
 
 async function fetchOpenActionItems(): Promise<ActionItemRow[]> {

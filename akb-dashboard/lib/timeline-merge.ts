@@ -98,10 +98,24 @@ function dedupNorm(s: string): string {
 
 function findDuplicate(entry: { body: string; direction: string }, existing: TimelineEntry[]): TimelineEntry | null {
   if (entry.body.length < 10) return null;
-  const snippet = dedupNorm(entry.body).slice(0, 40);
+  const eNorm = dedupNorm(entry.body);
+  const snippet = eNorm.slice(0, 40);
   if (snippet.length < 10) return null;
   const dir = entry.direction === "in" ? "in" : "out";
-  return existing.find((e) => e.direction === dir && dedupNorm(e.body).includes(snippet)) ?? null;
+  // SYMMETRIC containment (2026-07-18, the Canfield double-bubble): notes
+  // entries can carry prefixes/markers AROUND the same message the live
+  // bubble shows bare ("Phone: +1734… Body: Are you not getting my
+  // texts?"), so a one-way "does existing contain my head?" check misses.
+  // Either direction of containment marks the pair as the same message.
+  return (
+    existing.find((e) => {
+      if (e.direction !== dir) return false;
+      const xNorm = dedupNorm(e.body);
+      if (xNorm.includes(snippet)) return true;
+      const xSnippet = xNorm.slice(0, 40);
+      return xSnippet.length >= 10 && eNorm.includes(xSnippet);
+    }) ?? null
+  );
 }
 
 function isDuplicate(entry: { body: string; direction: string }, existing: TimelineEntry[]): boolean {

@@ -1,4 +1,5 @@
-import { getListing, updateListingRecord } from "@/lib/airtable";
+import { getListing, getListings, updateListingRecord } from "@/lib/airtable";
+import { filterLiveReplyProposals } from "@/lib/draft-dismissal";
 import { parseSendEmailPayload, parseSendSmsPayload, sendApprovedReply } from "@/lib/approve-send";
 import { parseFrontierRetirePayload } from "@/lib/crawler/frontier-governor";
 import { retireZip } from "@/lib/zip-registry";
@@ -76,6 +77,9 @@ export interface Proposal {
   snoozeUntil: string | null;
   /** Airtable record creation time — drives the conveyor's waiting clock. */
   createdTime: string | null;
+  /** Agent_Proposals.Proposal_ID — the live-draft gate matches it against
+   *  the record's Draft_Reply_Meta.proposal_id. */
+  proposalKey: string | null;
 }
 
 export async function GET() {
@@ -128,21 +132,41 @@ export async function GET() {
           status: (f.Status as string) ?? "Pending",
           snoozeUntil,
           createdTime: (rec.createdTime as string) ?? null,
+          proposalKey: (f.Proposal_ID as string) ?? null,
         });
       }
       offset = data.offset;
     } while (offset);
 
+    // LIVE-DRAFT GATE (2026-07-18, the Canfield two-drafts mess): a
+    // jarvis_reply proposal renders only while the record's Draft_Reply_Meta
+    // still points at it (queued/hold + matching proposal_id). A replaced,
+    // dismissed, or dead-deal draft leaves its proposal row Pending in
+    // Airtable — history, not a send button. Fail toward hiding: if the
+    // listings read fails, reply proposals are withheld this response rather
+    // than risk surfacing a stale draft as "ready to fire".
+    let gated = allProposals;
+    try {
+      const listings = await getListings();
+      const metaByRecordId = new Map<string, string | null | undefined>(
+        listings.map((l) => [l.id, (l as { draftReplyMeta?: string | null }).draftReplyMeta]),
+      );
+      gated = filterLiveReplyProposals(allProposals, metaByRecordId);
+    } catch (err) {
+      console.error("[proposals] live-draft gate listings read failed — withholding reply proposals:", err);
+      gated = allProposals.filter((p) => p.proposalType !== "jarvis_reply");
+    }
+
     // jarvis_reply (a live seller waiting on a reply) always outranks
     // housekeeping proposals — the operator's decision surface leads with
     // revenue (operator 2026-07-08 queue-hygiene mandate).
-    allProposals.sort((a, b) => {
+    gated.sort((a, b) => {
       const ap = a.proposalType === "jarvis_reply" ? 0 : 1;
       const bp = b.proposalType === "jarvis_reply" ? 0 : 1;
       return ap - bp;
     });
 
-    return Response.json(allProposals);
+    return Response.json(gated);
   } catch (err) {
     console.error("[proposals] Error:", err);
     return Response.json(

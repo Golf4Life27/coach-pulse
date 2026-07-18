@@ -110,9 +110,16 @@ export async function GET(
     // Timestamp fixups (2026-07-11 Ivy Bend): prefer the embedded sync
     // metadata ts= (the carrier's message time); null fabricated pre-2015
     // parses so true chronological order holds.
+    // Order matters: fixNoteTimestamp READS the sync marker (ts=…), so it
+    // runs first; then the marker is stripped so BOTH the merge engine's
+    // dedupe and the rendered bubble see the bare message. Before this
+    // (2026-07-18 Canfield double-bubble), dedupe compared the RAW note —
+    // marker/prefix included — missed the live Quo copy, and the thread
+    // showed every deep-synced inbound twice.
     const notesEntries = (listing.notes ? parseConversation(listing.notes) : []).map((e) => ({
       ...e,
       timestamp: fixNoteTimestamp({ text: e.text, timestamp: e.timestamp }),
+      text: stripSyncMarkers(e.text),
     }));
 
     // Single merge engine: texts + Gmail + notes, deduped, attributed, and
