@@ -450,3 +450,24 @@ describe("mergeTimeline — notes/live dedup (Duane Covert duplicate, 2026-07-13
     expect(inbound[0].propertyMatch).toEqual({ recordId: "recTarget", confidence: 1.0 });
   });
 });
+
+// ── SYMMETRIC dedupe (2026-07-18, the Canfield double-bubble) ──────────────
+import { mergeTimeline as mergeTL } from "./timeline-merge";
+
+describe("mergeTimeline — prefixed notes dedupe against live bubbles", () => {
+  const opts = { recordId: "recA", targetAddress: "7714 E Canfield St", targetPrices: [], agentName: "Michael" };
+  const quo = [{ id: "m1", from: "+17347093339", to: "+1", body: "Are you not getting my texts?", direction: "incoming" as const, createdAt: "2026-07-17T20:18:27Z" }];
+
+  it("a notes copy carrying a prefix around the same message is ONE bubble, not two", () => {
+    const notes = [{ type: "inbound" as const, text: "Phone: +17347093339. Body: Are you not getting my texts?", timestamp: "2026-07-17T20:18:27Z" }];
+    const { timeline } = mergeTL(quo, [], notes, opts);
+    expect(timeline.filter((e) => e.direction === "in")).toHaveLength(1);
+    expect(timeline[0].channel).toBe("sms"); // the live copy wins
+  });
+
+  it("distinct messages still both render", () => {
+    const notes = [{ type: "inbound" as const, text: "Youll need to double it", timestamp: "2026-07-10T14:00:00Z" }];
+    const { timeline } = mergeTL(quo, [], notes, opts);
+    expect(timeline.filter((e) => e.direction === "in")).toHaveLength(2);
+  });
+});

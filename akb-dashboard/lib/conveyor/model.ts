@@ -116,6 +116,10 @@ export interface ProposalRow {
   reasoning: string;
   actionPayload: string;
   createdTime?: string | null;
+  /** Agent_Proposals.Proposal_ID — matched against the record's
+   *  Draft_Reply_Meta.proposal_id by the live-draft gate (a jarvis_reply
+   *  row the record no longer points at is history, never a card). */
+  proposalKey?: string | null;
 }
 
 // ── Machine-work gate (operator 2026-07-11, on seeing 116 Act Now items:
