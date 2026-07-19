@@ -22,7 +22,8 @@
 // The gating decision is pure (decideAutoSeed) for tests; runAutoSeed
 // composes the existing I/O (RentCast comps → ARV intel → seed store).
 
-import { getSaleComparables, type CompPullWiden } from "@/lib/rentcast";
+import { type CompPullWiden } from "@/lib/rentcast";
+import { getSoldComps } from "@/lib/comps/sold-comps";
 import { computeArvIntelligence, type ArvFilterOverride } from "@/lib/arv-intelligence";
 import { getRestrictedStates } from "@/lib/markets/registry";
 import {
@@ -253,7 +254,7 @@ export async function runAutoSeed(subject: RepresentativeSubject): Promise<AutoS
   try {
     // WIDE pull: one /avm/value call with compCount/maxRadius/daysOld set so a
     // thin-market ZIP gathers enough sales for a stable cluster (cost-neutral).
-    comps = await getSaleComparables(
+    comps = await getSoldComps(
       {
         address: subject.address,
         city: subject.city,

@@ -11,7 +11,7 @@
 
 import { NextResponse } from "next/server";
 import { getListing, updateListingRecord } from "@/lib/airtable";
-import { getSaleComparables } from "@/lib/rentcast";
+import { getSoldComps } from "@/lib/comps/sold-comps";
 import { computeArvIntelligence } from "@/lib/arv-intelligence";
 import { computeDualTrackPricing } from "@/lib/pricing-math";
 import { audit } from "@/lib/audit-log";
@@ -59,7 +59,7 @@ export async function GET(
 
   let comps;
   try {
-    comps = await getSaleComparables({
+    comps = await getSoldComps({
       address: listing.address,
       city: listing.city,
       state,
