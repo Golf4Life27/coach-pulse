@@ -23,24 +23,27 @@ describe("arvStampTrusted", () => {
     expect(arvStampTrusted("2026-07-18T14:00:00Z")).toBe(false);
     expect(arvStampTrusted("2026-07-18T19:00:00Z")).toBe(false);
     expect(arvStampTrusted("2026-07-19T04:00:00Z")).toBe(false);
+    // County-deed-era stamps (pre-ATTOM-promotion): RentCast was still the
+    // non-registry source, so those bands re-verify under the new routing.
+    expect(arvStampTrusted("2026-07-19T17:00:00Z")).toBe(false);
     expect(arvStampTrusted("2026-06-01T00:00:00Z")).toBe(false);
   });
 
   it("stamps at or after the epoch come from the current engine → trusted", () => {
     expect(arvStampTrusted(ARV_SOLD_COMPS_EPOCH_ISO)).toBe(true);
-    expect(arvStampTrusted("2026-07-19T17:00:00Z")).toBe(true);
+    expect(arvStampTrusted("2026-07-20T06:00:00Z")).toBe(true);
     expect(arvStampTrusted("2027-01-01T00:00:00Z")).toBe(true);
   });
 
   it("ARV_ENGINE_EPOCH env advances the boundary without a code change", () => {
     process.env.ARV_ENGINE_EPOCH = "2027-03-01T00:00:00Z";
-    expect(arvStampTrusted("2026-07-19T17:00:00Z")).toBe(false);
+    expect(arvStampTrusted("2026-07-20T06:00:00Z")).toBe(false);
     expect(arvStampTrusted("2027-03-02T00:00:00Z")).toBe(true);
   });
 
   it("an unparseable env override falls back to the built-in epoch", () => {
     process.env.ARV_ENGINE_EPOCH = "yesterday-ish";
-    expect(arvStampTrusted("2026-07-19T17:00:00Z")).toBe(true);
-    expect(arvStampTrusted("2026-07-18T10:25:00Z")).toBe(false);
+    expect(arvStampTrusted("2026-07-20T06:00:00Z")).toBe(true);
+    expect(arvStampTrusted("2026-07-19T17:00:00Z")).toBe(false);
   });
 });
