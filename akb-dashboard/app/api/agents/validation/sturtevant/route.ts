@@ -13,7 +13,8 @@
 // Airtable writes, no outreach.
 
 import { NextResponse } from "next/server";
-import { getSaleComparables, getRentEstimate } from "@/lib/rentcast";
+import { getRentEstimate } from "@/lib/rentcast";
+import { getSoldComps } from "@/lib/comps/sold-comps";
 import { computeArvIntelligence } from "@/lib/arv-intelligence";
 import { callRehabVision } from "@/lib/rehab-calibration";
 import { collectPhotos } from "@/lib/photo-sources";
@@ -111,7 +112,7 @@ export async function GET(req: Request) {
     arvError = "RENTCAST_API_KEY not set — Phase 4A skipped";
   } else {
     try {
-      const comps = await getSaleComparables({
+      const comps = await getSoldComps({
         address: vcase.address,
         city: vcase.city,
         state: vcase.state,

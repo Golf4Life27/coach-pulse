@@ -15,8 +15,8 @@
 import {
   getAvmValue,
   getRentEstimate,
-  getSaleComparables,
 } from "@/lib/rentcast";
+import { getSoldComps } from "@/lib/comps/sold-comps";
 import type {
   ValuationContribution,
   RentContribution,
@@ -106,7 +106,7 @@ export async function hydrateValuation(
       // Fall back to the dedicated parser (same /avm/value endpoint, but it
       // re-fetches; only do so if the embedded array was absent).
       try {
-        const comps = await getSaleComparables(input);
+        const comps = await getSoldComps(input);
         creditsSpent += 1;
         result.comps = { comps, source: "rentcast" };
       } catch (err) {

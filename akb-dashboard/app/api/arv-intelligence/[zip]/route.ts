@@ -15,7 +15,7 @@
 // falls back to the as-is mirror.
 
 import { NextResponse } from "next/server";
-import { getSaleComparables } from "@/lib/rentcast";
+import { getSoldComps } from "@/lib/comps/sold-comps";
 import { computeArvIntelligence } from "@/lib/arv-intelligence";
 import { audit } from "@/lib/audit-log";
 
@@ -77,7 +77,7 @@ export async function GET(
 
   let comps;
   try {
-    comps = await getSaleComparables({
+    comps = await getSoldComps({
       address,
       city,
       state,

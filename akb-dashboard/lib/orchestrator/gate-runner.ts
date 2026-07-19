@@ -23,7 +23,7 @@ import { normalizeAddressKey } from "@/lib/crawler/intake-filter";
 import { audit, readRecentFromKv, type AuditEntry } from "@/lib/audit-log";
 import { getMessagesForParticipant } from "@/lib/quo";
 import { getThreadsForEmail } from "@/lib/gmail";
-import { getSaleComparables } from "@/lib/rentcast";
+import { getSoldComps } from "@/lib/comps/sold-comps";
 import type {
   CheckFn,
   CheckResult,
@@ -269,7 +269,7 @@ async function fetchSource(
       if (!listing?.address || !listing?.city || !listing?.state || !listing?.zip) {
         throw new Error("listing missing address parts — can't fetch RentCast CMA");
       }
-      return await getSaleComparables({
+      return await getSoldComps({
         address: listing.address,
         city: listing.city,
         state: listing.state,

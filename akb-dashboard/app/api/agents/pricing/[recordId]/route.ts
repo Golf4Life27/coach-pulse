@@ -40,7 +40,8 @@
 
 import { NextResponse } from "next/server";
 import { getListing, updateListingRecord } from "@/lib/airtable";
-import { getSaleComparables, getRentEstimate } from "@/lib/rentcast";
+import { getRentEstimate } from "@/lib/rentcast";
+import { getSoldComps } from "@/lib/comps/sold-comps";
 import { computeArvIntelligence } from "@/lib/arv-intelligence";
 import { callRehabVision } from "@/lib/rehab-calibration";
 import { computeDualTrackPricing } from "@/lib/pricing-math";
@@ -162,7 +163,7 @@ export async function GET(
     phase4a = { ok: false, result: null, error: "RENTCAST_API_KEY not set" };
   } else {
     try {
-      const comps = await getSaleComparables({
+      const comps = await getSoldComps({
         address: listing.address,
         city: listing.city,
         state: listing.state,
