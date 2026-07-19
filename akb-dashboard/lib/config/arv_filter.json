@@ -1,10 +1,10 @@
 {
-  "$schema_note": "Comp-filter heuristics for Phase 4A (ARV Intelligence). Bible v3 §9.2 mandates \"reject distressed/cash/LLC sales,\" but RentCast doesn't expose buyer entity. These knobs approximate \"renovated retail comps\" via $/sqft floor relative to ZIP median + recency + similarity gates. max_age_days 90->180 per operator ruling 2026-07-18 (68% of recorded-sales-only re-runs landed no-sold-comps under 90d; a 5-month-old sale is still a real sale). Standing escalation, pre-authorized: if the honest-empty rate stays above ~50% under 180d after the fleet re-verifies, widen to 365.",
+  "$schema_note": "Comp-filter heuristics for Phase 4A (ARV Intelligence). Bible v3 §9.2 mandates \"reject distressed/cash/LLC sales,\" but RentCast doesn't expose buyer entity. These knobs approximate \"renovated retail comps\" via $/sqft floor relative to ZIP median + recency + similarity gates. max_age_days 180->365 per the operator's pre-authorized escalation (ruling 2026-07-18: move to 180 for sure, if no significant jump then move to 1 year). Measured 2026-07-19 on the deed-record feed: 180d still starved every re-run — receipts show real recorded sales at 2012-2022 vintages, nothing inside 180d in these markets. Widened BEFORE the throttled fleet re-verify so each record runs once under the final window (single-pass RentCast spend).",
   "last_updated": "2026-07-18",
   "source": "Bible v3 §9.2 + Crawler Roadmap §K (filters) + Phase 4A working assumption + operator recency ruling 2026-07-18",
   "version": 2,
   "comp_filters": {
-    "max_age_days": 180,
+    "max_age_days": 365,
     "max_distance_miles": 0.5,
     "sqft_ratio_min": 0.8,
     "sqft_ratio_max": 1.2,

@@ -16,12 +16,12 @@
 
 /** The moment the CURRENT ARV engine was live in production. Stamps at or
  *  after this instant came from it. Env-overridable (ARV_ENGINE_EPOCH,
- *  ISO 8601). ADVANCED 2026-07-18: the recorded-sales-only tightening
+ *  ISO 8601). ADVANCED 2026-07-19: the operator-pre-authorized 365d recency window (each prior advance: lastSeenDate kill 07-17, removedDate kill 07-18 AM, deed-record feed 07-18 PM)
  *  (removedDate no longer counts as a sale — the 1097 Fortress delisted-ask
  *  hole) re-invalidates every stamp from the 07-17 engine so the crons
  *  re-verify them under the stricter rule. This is the designed mechanism:
  *  each engine revision advances the boundary and the fleet re-runs itself. */
-export const ARV_SOLD_COMPS_EPOCH_ISO = "2026-07-18T18:05:00.000Z";
+export const ARV_SOLD_COMPS_EPOCH_ISO = "2026-07-19T03:15:00.000Z";
 
 function epochMs(): number {
   const raw = process.env.ARV_ENGINE_EPOCH;
