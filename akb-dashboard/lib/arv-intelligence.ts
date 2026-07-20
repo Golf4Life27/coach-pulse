@@ -199,6 +199,46 @@ export function normalizeStreetLine(addr: string | null | undefined): string | n
   return norm || null;
 }
 
+/** County registries double-record deeds — the same conveyance re-recorded
+ *  days apart (2431 Parker, Detroit: recorded 2025-07-22 AND 2025-07-25 at
+ *  $380,000, feeding 7714 E Canfield's band twice on 2026-07-20 — 2 of its
+ *  "3 comps" were one sale). Same street line + same price with sale dates
+ *  inside this window = ONE sale. Genuinely re-sold properties re-trade at
+ *  different prices or far apart in time, so both survive. */
+export const DEED_DUP_WINDOW_DAYS = 30;
+
+/** Pure: collapse double-recorded deed rows, keeping the LATEST recording.
+ *  Rows without address/price/date can't be proven duplicates and are kept. */
+export function dedupeDoubleRecordedDeeds(
+  raw: RentCastSaleComp[],
+): { comps: RentCastSaleComp[]; droppedNotes: string[] } {
+  const sorted = [...raw].sort((a, b) => (b.saleDate ?? "").localeCompare(a.saleDate ?? ""));
+  const kept: RentCastSaleComp[] = [];
+  const keptByKey = new Map<string, RentCastSaleComp>();
+  const droppedNotes: string[] = [];
+  for (const c of sorted) {
+    const street = normalizeStreetLine(c.formattedAddress);
+    if (street == null || c.price == null || !c.saleDate) {
+      kept.push(c);
+      continue;
+    }
+    const key = `${street}|${c.price}`;
+    const prior = keptByKey.get(key);
+    if (prior?.saleDate) {
+      const gapDays = Math.abs(Date.parse(prior.saleDate) - Date.parse(c.saleDate)) / 86_400_000;
+      if (Number.isFinite(gapDays) && gapDays <= DEED_DUP_WINDOW_DAYS) {
+        droppedNotes.push(
+          `${c.formattedAddress} @ $${c.price.toLocaleString()} (${c.saleDate.slice(0, 10)} duplicate of ${prior.saleDate.slice(0, 10)})`,
+        );
+        continue;
+      }
+    }
+    keptByKey.set(key, c);
+    kept.push(c);
+  }
+  return { comps: kept, droppedNotes };
+}
+
 function applyBasicFilters(
   raw: RentCastSaleComp[],
   subject: ArvSubject,
@@ -423,7 +463,16 @@ export function computeArvIntelligence(
     `Market ${uplift.market}: data_state_default=${uplift.data_state_default}, uplift multiplier ${uplift.multiplier}×. condition_target=${condition_target_resolved}.`,
   );
 
-  const stage1 = applyBasicFilters(raw, subject, cf);
+  // One sale is one comp: collapse double-recorded deed rows BEFORE any
+  // filter sees them, and name the collapsed rows in the receipts.
+  const dedup = dedupeDoubleRecordedDeeds(raw);
+  if (dedup.droppedNotes.length > 0) {
+    notes.push(
+      `Collapsed ${dedup.droppedNotes.length} double-recorded deed row(s) (same address+price ≤${DEED_DUP_WINDOW_DAYS}d apart): ${dedup.droppedNotes.join("; ")}.`,
+    );
+  }
+
+  const stage1 = applyBasicFilters(dedup.comps, subject, cf);
 
   // Bimodal detection runs BEFORE the distressed_proxy ceiling — if the
   // upper cluster is what we want (renovated retail) we don't want the

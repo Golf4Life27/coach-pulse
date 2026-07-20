@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { computeArvIntelligence, normalizeStreetLine } from "./arv-intelligence";
+import {
+  computeArvIntelligence,
+  dedupeDoubleRecordedDeeds,
+  normalizeStreetLine,
+} from "./arv-intelligence";
 import type { RentCastSaleComp } from "./rentcast";
 
 // A sale 10 days ago — inside both the default 90d window and the widened 365d.
@@ -25,7 +29,14 @@ describe("computeArvIntelligence — per-call filter override (seed widen)", () 
   const subject = { zip: "48205", beds: 3, baths: 2, sqft: 1_000, condition_target: "as_is" };
   // Three near comps + one 1.4mi-away comp (beyond the default 1.0mi clip —
   // widened from 0.5mi per the 2026-07-20 operator distance ruling).
-  const raw = [comp(), comp(), comp(), comp({ distance: 1.4, formattedAddress: "far" })];
+  // Distinct addresses: identical address+price+date rows are collapsed by
+  // the double-recorded-deed dedupe, as they would be in production.
+  const raw = [
+    comp({ formattedAddress: "1 Near St" }),
+    comp({ formattedAddress: "2 Near St" }),
+    comp({ formattedAddress: "3 Near St" }),
+    comp({ distance: 1.4, formattedAddress: "far" }),
+  ];
 
   it("default filters clip the 1.4mi comp (1.0mi max)", () => {
     const r = computeArvIntelligence(raw, subject);
@@ -151,5 +162,67 @@ describe("computeArvIntelligence — subject + active-listing exclusion", () => 
     const reasons = r.comps_excluded.map((c) => c.excluded_reason);
     expect(reasons).toContain("no_recorded_sale");
     expect(reasons).not.toContain("subject_property");
+  });
+});
+
+describe("dedupeDoubleRecordedDeeds — one sale is one comp", () => {
+  // Verbatim from 7714 E Canfield's 2026-07-20 receipts: 2431 Parker's deed
+  // recorded twice, three days apart, same price — 2 of the band's "3 comps".
+  const parker = (date: string): RentCastSaleComp =>
+    comp({ formattedAddress: "2431 PARKER, Detroit, MI, 48214", price: 380_000, saleDate: date });
+
+  it("collapses the double-recorded deed, keeping the latest recording", () => {
+    const { comps, droppedNotes } = dedupeDoubleRecordedDeeds([
+      parker("2025-07-22T00:00:00.000Z"),
+      parker("2025-07-25T00:00:00.000Z"),
+      comp({ formattedAddress: "3466 FISCHER, Detroit, MI, 48214", price: 462_500 }),
+    ]);
+    expect(comps).toHaveLength(2);
+    expect(comps.find((c) => c.formattedAddress?.includes("PARKER"))!.saleDate).toBe(
+      "2025-07-25T00:00:00.000Z",
+    );
+    expect(droppedNotes).toHaveLength(1);
+    expect(droppedNotes[0]).toContain("2431 PARKER");
+  });
+
+  it("a genuine re-sale (same price, far apart) survives; different prices survive", () => {
+    const farApart = dedupeDoubleRecordedDeeds([
+      parker("2025-01-10T00:00:00.000Z"),
+      parker("2025-07-25T00:00:00.000Z"),
+    ]);
+    expect(farApart.comps).toHaveLength(2);
+    const differentPrice = dedupeDoubleRecordedDeeds([
+      parker("2025-07-22T00:00:00.000Z"),
+      comp({ formattedAddress: "2431 PARKER, Detroit, MI, 48214", price: 395_000, saleDate: "2025-07-25T00:00:00.000Z" }),
+    ]);
+    expect(differentPrice.comps).toHaveLength(2);
+  });
+
+  it("rows without address/price/date can't be proven duplicates — kept", () => {
+    const { comps } = dedupeDoubleRecordedDeeds([
+      comp({ formattedAddress: null, price: 100_000 }),
+      comp({ formattedAddress: null, price: 100_000 }),
+      comp({ formattedAddress: "1 X ST", price: null }),
+    ]);
+    expect(comps).toHaveLength(3);
+  });
+
+  it("the engine collapses dupes before band math and names them in the notes", () => {
+    const subject = { zip: "48214", beds: 3, baths: 2, sqft: 1_000, condition_target: "as_is" };
+    // psf uniform (~$150) and sqft inside the 0.8-1.2 ratio gate so no
+    // other filter muddies the count — this test isolates the dedupe.
+    const dup = (date: string) =>
+      comp({ formattedAddress: "2431 PARKER, Detroit, MI, 48214", price: 165_000, squareFootage: 1_100, saleDate: date });
+    const r = computeArvIntelligence(
+      [
+        dup("2025-07-22T00:00:00.000Z"),
+        dup("2025-07-25T00:00:00.000Z"),
+        comp({ formattedAddress: "3466 FISCHER, Detroit, MI, 48214" }),
+        comp({ formattedAddress: "1 ELSEWHERE ST" }),
+      ],
+      subject,
+    );
+    expect(r.comp_count_used).toBe(3);
+    expect(r.methodology_notes.join(" ")).toContain("double-recorded");
   });
 });
