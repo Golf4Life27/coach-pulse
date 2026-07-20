@@ -95,6 +95,11 @@ export default function DealWorkspace() {
   // Message ids whose full (uncleaned) email body is expanded (P1.3).
   const [rawShown, setRawShown] = useState<Set<string>>(new Set());
   const [convoLoading, setConvoLoading] = useState(false);
+  // A failed conversation fetch is an ERROR state, never an empty thread —
+  // the pre-2026-07-20 silent-null rendered a 504 as "No conversation
+  // history. Send a text to start", which caused a duplicate opener.
+  const [convoError, setConvoError] = useState<string | null>(null);
+  const [convoDegraded, setConvoDegraded] = useState<string[]>([]);
   // Comms integrity + sourced numbers (from /api/conversations/[id]).
   const [captureGaps, setCaptureGaps] = useState<CaptureGap[]>([]);
   const [numbers, setNumbers] = useState<ConvoNumbers | null>(null);
@@ -139,13 +144,18 @@ export default function DealWorkspace() {
     if (!rid) return;
     setConvoLoading(true);
     fetch(`/api/conversations/${rid}`)
-      .then((r) => r.ok ? r.json() : null)
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then((data) => {
+        setConvoError(null);
         if (data?.messages) setConvoMessages(data.messages);
         if (data?.integrity) setCaptureGaps(data.integrity.gaps ?? []);
         if (data?.numbers) setNumbers(data.numbers);
+        setConvoDegraded(Array.isArray(data?.degraded) ? data.degraded : []);
       })
-      .catch(() => {})
+      .catch((err: unknown) => setConvoError(err instanceof Error ? err.message : String(err)))
       .finally(() => setConvoLoading(false));
   }, [params?.id]);
 
@@ -609,8 +619,24 @@ export default function DealWorkspace() {
             {convoLoading && convoMessages.length === 0 && (
               <div className="text-gray-500 text-sm animate-pulse text-center py-8">Loading messages...</div>
             )}
-            {!convoLoading && convoMessages.length === 0 && (
+            {!convoLoading && convoError && convoMessages.length === 0 && (
+              <div className="text-center py-8 space-y-2">
+                <div className="text-amber-400 text-sm font-bold">Couldn&apos;t load the conversation ({convoError}).</div>
+                <div className="text-gray-500 text-xs">
+                  This does NOT mean the thread is empty — do not re-send openers off this screen.
+                </div>
+                <button type="button" onClick={fetchConversation} className="text-xs bg-[#30363d] hover:bg-[#3d444d] text-gray-200 px-3 py-1.5 rounded">
+                  Retry
+                </button>
+              </div>
+            )}
+            {!convoLoading && !convoError && convoMessages.length === 0 && (
               <div className="text-gray-500 text-sm text-center py-8">No conversation history. Send a text to start.</div>
+            )}
+            {convoDegraded.length > 0 && (
+              <div className="mb-2 text-[11px] text-amber-400 bg-amber-950/30 border border-amber-500/30 rounded px-2 py-1">
+                Partial thread: {convoDegraded.join(" + ")} source{convoDegraded.length > 1 ? "s" : ""} timed out — messages may be missing. Refresh to retry.
+              </div>
             )}
             <div className="space-y-3">
               {convoMessages.map((msg) => {
