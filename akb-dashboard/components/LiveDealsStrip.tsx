@@ -264,11 +264,30 @@ export default function LiveDealsStrip() {
                       </div>
                     </>
                   ) : (
-                    <div className="flex items-center gap-2 text-[11px]">
-                      <span className="font-bold text-amber-400 uppercase tracking-wide text-[10px]">Held</span>
-                      <span className="text-gray-400">
-                        No auto-draft — {(d.draft.holdReason ?? "needs your judgment").replace(/_/g, " ")}. Open the deal to reply yourself.
-                      </span>
+                    // A HELD draft is the machine refusing to auto-answer —
+                    // the heaviest decision on the board. It renders with the
+                    // same weight as a reply card, never as a footnote
+                    // (operator 2026-07-20: the $27k Mayfield counter was a
+                    // one-line whisper under a courtesy "Thanks!" card).
+                    <div className="rounded-lg border border-amber-500/40 bg-amber-950/30 p-3 space-y-2">
+                      {d.draft.inboundExcerpt && (
+                        <div className="text-xs text-gray-300">
+                          <span className="text-amber-400 font-bold text-[10px] uppercase tracking-wide mr-2">They said</span>
+                          &ldquo;{d.draft.inboundExcerpt}&rdquo;
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="font-bold text-amber-400 uppercase tracking-wide text-[10px]">Held — your judgment</span>
+                        <span className="text-amber-200/80">
+                          {(d.draft.holdReason ?? "needs your judgment").replace(/_/g, " ")}
+                        </span>
+                      </div>
+                      <Link
+                        href={d.href}
+                        className="block w-full min-h-[44px] rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-sm font-bold transition-colors text-center leading-[44px]"
+                      >
+                        Open deal to reply
+                      </Link>
                     </div>
                   )}
                 </div>
