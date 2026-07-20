@@ -12,6 +12,8 @@ import DecisionCard from "@/components/DecisionCard";
 import DealFilePanel from "@/components/DealFilePanel";
 import PreEmdGatePanel from "@/components/PreEmdGatePanel";
 import OfferReadinessPanel from "@/components/OfferReadinessPanel";
+import SellerBasisCard from "@/components/SellerBasisCard";
+import DealDocsDropCard from "@/components/DealDocsDropCard";
 import AppraiserArvPanel from "@/components/AppraiserArvPanel";
 import AppraiserRehabPanel from "@/components/AppraiserRehabPanel";
 import AppraiserBuyerIntelligencePanel from "@/components/AppraiserBuyerIntelligencePanel";
@@ -554,6 +556,14 @@ export default function DealWorkspace() {
               </div>
             )}
           </div>
+
+          {/* Seller Basis — who owns it, what they paid, what they owe.
+              Decodes the seller's floor BEFORE the first offer (the Canfield
+              "double it" lesson, 2026-07-20). */}
+          <SellerBasisCard recordId={listing.id} />
+
+          {/* Deal Docs — drop InvestorBase CSV / CMA PDF; evidence parses in. */}
+          <DealDocsDropCard recordId={listing.id} />
 
           <div className="bg-[#1c2128] rounded-lg border border-[#30363d] p-4">
             <h3 className="text-sm font-bold text-gray-300 uppercase tracking-wider mb-2">DD Checklist ({checked.size}/{ALL_DD_ITEMS.length})</h3>
