@@ -110,7 +110,10 @@ export async function getAttomSaleComps(
 ): Promise<RentCastSaleComp[]> {
   const key = process.env.ATTOM_API_KEY;
   if (!key) throw new Error("ATTOM_API_KEY not set");
-  const radius = opts.radiusMiles ?? 0.6;
+  // Pull deliberately wider than the ARV distance filter (1.0mi per the
+  // 2026-07-20 operator ruling) so the receipts SHOW near-misses instead
+  // of silently not fetching them. Same flat-cost call either way.
+  const radius = opts.radiusMiles ?? 1.2;
   const since = opts.sinceIsoDate ?? new Date(Date.now() - 400 * 86_400_000).toISOString().slice(0, 10);
   const p = new URLSearchParams({
     latitude: String(subjectLat),

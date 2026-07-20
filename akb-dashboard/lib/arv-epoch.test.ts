@@ -26,6 +26,9 @@ describe("arvStampTrusted", () => {
     // County-deed-era stamps (pre-ATTOM-promotion): RentCast was still the
     // non-registry source, so those bands re-verify under the new routing.
     expect(arvStampTrusted("2026-07-19T17:00:00Z")).toBe(false);
+    // ATTOM-era 0.5mi-window stamps (the 02:25Z tick: Puritan MED/3) —
+    // superseded by the 1.0mi distance ruling, re-verify once more.
+    expect(arvStampTrusted("2026-07-20T02:26:13.888Z")).toBe(false);
     expect(arvStampTrusted("2026-06-01T00:00:00Z")).toBe(false);
   });
 

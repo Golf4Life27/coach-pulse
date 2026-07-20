@@ -23,10 +23,11 @@ function comp(over: Partial<RentCastSaleComp> = {}): RentCastSaleComp {
 
 describe("computeArvIntelligence — per-call filter override (seed widen)", () => {
   const subject = { zip: "48205", beds: 3, baths: 2, sqft: 1_000, condition_target: "as_is" };
-  // Three near comps + one 1.0mi-away comp (beyond the default 0.5mi clip).
-  const raw = [comp(), comp(), comp(), comp({ distance: 1.0, formattedAddress: "far" })];
+  // Three near comps + one 1.4mi-away comp (beyond the default 1.0mi clip —
+  // widened from 0.5mi per the 2026-07-20 operator distance ruling).
+  const raw = [comp(), comp(), comp(), comp({ distance: 1.4, formattedAddress: "far" })];
 
-  it("default filters clip the 1.0mi comp (0.5mi max)", () => {
+  it("default filters clip the 1.4mi comp (1.0mi max)", () => {
     const r = computeArvIntelligence(raw, subject);
     expect(r.comp_count_used).toBe(3);
   });
