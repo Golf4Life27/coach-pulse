@@ -22,10 +22,11 @@
  *  sales days old vs the vendor's ~9-12mo lag) · 07-20 ATTOM /sale/snapshot
  *  promoted to primary for non-registry markets (benchmark 37/8/19/45
  *  qualifying comps vs RentCast's 1/0/1/0; RentCast demoted to audited
- *  last resort). Each advance re-invalidates every earlier stamp and the
- *  crons re-verify the fleet on their own schedule — the designed
- *  engine-revision mechanism. */
-export const ARV_SOLD_COMPS_EPOCH_ISO = "2026-07-20T01:10:00.000Z";
+ *  last resort) · 07-20 1.0mi distance window per operator ruling
+ *  (Cleveland receipts; pull radii widened to match). Each advance
+ *  re-invalidates every earlier stamp and the crons re-verify the fleet
+ *  on their own schedule — the designed engine-revision mechanism. */
+export const ARV_SOLD_COMPS_EPOCH_ISO = "2026-07-20T04:10:00.000Z";
 
 function epochMs(): number {
   const raw = process.env.ARV_ENGINE_EPOCH;

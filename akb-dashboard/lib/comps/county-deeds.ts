@@ -105,11 +105,13 @@ export function countyDeedSourceFor(
   );
 }
 
-/** ~0.8mi window in degrees (lat; lng widened for Detroit's latitude). The
- *  ARV filter clips at max_distance_miles — the pull is deliberately wider
- *  so the receipts SHOW near-misses instead of silently not fetching them. */
-export const PULL_LAT_DEG = 0.0125;
-export const PULL_LNG_DEG = 0.017;
+/** ~1.2mi window in degrees (lat; lng widened for the registry latitudes,
+ *  Detroit 42.4°/Cleveland 41.5°). The ARV filter clips at
+ *  max_distance_miles (1.0mi per the 2026-07-20 operator ruling) — the
+ *  pull is deliberately wider so the receipts SHOW near-misses instead of
+ *  silently not fetching them. */
+export const PULL_LAT_DEG = 0.0175;
+export const PULL_LNG_DEG = 0.024;
 
 export interface DeedSaleRow {
   parcel_id?: string | null;

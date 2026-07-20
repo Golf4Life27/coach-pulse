@@ -6,7 +6,7 @@
 //
 // READ-ONLY: no Airtable writes, no ARV stamps — pure evidence comparison.
 // Per source and subject: comp count, newest sale date (the freshness
-// question), qualifying count (≤0.5mi AND ≤365d), and the top rows so the
+// question), qualifying count (production filter: ≤1.0mi AND ≤365d), and
 // operator can eyeball the receipts. Errors are surfaced verbatim —
 // an ATTOM entitlement failure is an ANSWER, not a blank.
 //
@@ -14,6 +14,7 @@
 // RentCast + ATTOM bill per hit; the gauntlet is 5 subjects × ~3 calls).
 
 import { NextResponse } from "next/server";
+import arvFilter from "@/lib/config/arv_filter.json";
 import { getSaleComparables, type RentCastSaleComp } from "@/lib/rentcast";
 import { countyDeedSourceFor, getCountyDeedComps, censusGeocode } from "@/lib/comps/county-deeds";
 import { getAttomSaleComps } from "@/lib/comps/attom-sales";
@@ -39,22 +40,28 @@ const GAUNTLET = [
   { address: "2208 Mayfield Ave SW", city: "Birmingham", state: "AL", zip: "35211" },
 ];
 
+/** The production ARV filter's distance/recency gates — the benchmark's
+ *  "qualifying" metric follows them so receipts predict band inputs
+ *  (1.0mi/365d since the 2026-07-20 operator distance ruling). */
+const QUAL_MI = arvFilter.comp_filters.max_distance_miles;
+const QUAL_DAYS = arvFilter.comp_filters.max_age_days;
+
 interface SourceReport {
   comps: number;
   newest_sale: string | null;
-  qualifying_05mi_365d: number;
+  qualifying: number;
   top: Array<{ addr: string | null; price: number | null; sold: string | null; mi: number | null; sqft: number | null }>;
   error: string | null;
 }
 
 function summarize(comps: RentCastSaleComp[]): Omit<SourceReport, "error"> {
-  const cutoff = new Date(Date.now() - 365 * 86_400_000).toISOString();
+  const cutoff = new Date(Date.now() - QUAL_DAYS * 86_400_000).toISOString();
   const sorted = [...comps].sort((a, b) => (b.saleDate ?? "").localeCompare(a.saleDate ?? ""));
   return {
     comps: comps.length,
     newest_sale: sorted[0]?.saleDate?.slice(0, 10) ?? null,
-    qualifying_05mi_365d: comps.filter(
-      (c) => (c.saleDate ?? "") >= cutoff && (c.distance == null || c.distance <= 0.5),
+    qualifying: comps.filter(
+      (c) => (c.saleDate ?? "") >= cutoff && (c.distance == null || c.distance <= QUAL_MI),
     ).length,
     top: sorted.slice(0, 5).map((c) => ({
       addr: c.formattedAddress ?? null,
@@ -70,7 +77,7 @@ async function runSource(fn: () => Promise<RentCastSaleComp[]>): Promise<SourceR
   try {
     return { ...summarize(await fn()), error: null };
   } catch (err) {
-    return { comps: 0, newest_sale: null, qualifying_05mi_365d: 0, top: [], error: String(err).slice(0, 300) };
+    return { comps: 0, newest_sale: null, qualifying: 0, top: [], error: String(err).slice(0, 300) };
   }
 }
 
@@ -121,7 +128,7 @@ export async function GET(req: Request) {
       runSource(() => getSaleComparables(s)),
       geo
         ? runSource(() => getAttomSaleComps(geo!.lat, geo!.lng))
-        : Promise.resolve({ comps: 0, newest_sale: null, qualifying_05mi_365d: 0, top: [], error: geoError ?? "subject not geocodable" } as SourceReport),
+        : Promise.resolve({ comps: 0, newest_sale: null, qualifying: 0, top: [], error: geoError ?? "subject not geocodable" } as SourceReport),
     ]);
 
     results.push({
@@ -136,7 +143,7 @@ export async function GET(req: Request) {
 
   return NextResponse.json({
     ran_at: new Date().toISOString(),
-    note: "Benchmark only — no ARV writes. qualifying = sale ≤365d AND ≤0.5mi (unknown distance passes). Promotion per market is an operator ruling.",
+    note: `Benchmark only — no ARV writes. qualifying = sale ≤${QUAL_DAYS}d AND ≤${QUAL_MI}mi, the production ARV filter (unknown distance passes). Promotion per market is an operator ruling.`,
     results,
   });
 }
