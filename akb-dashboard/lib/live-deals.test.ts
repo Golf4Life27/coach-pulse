@@ -164,3 +164,72 @@ describe("rankLiveDeals", () => {
     expect(rankLiveDeals([row({ contractPrice: 130_000, ceiling: 120_000 })])[0].headroom).toBe(-10_000);
   });
 });
+
+describe("decision weight — critical decisions rank above courtesy chatter (operator 2026-07-20)", () => {
+  // The Mayland/Mayfield inversion, verbatim: a fresher courtesy "Thanks!"
+  // queued draft outranked a day-older $27k counter the guardrails HELD.
+  const courtesyMeta = JSON.stringify({
+    state: "queued",
+    classification: "unknown",
+    channel: "sms",
+    inbound_excerpt: "Thanks!",
+    proposal_id: "jarvis_reply-courtesy",
+  });
+  const heldCounterMeta = JSON.stringify({
+    state: "hold",
+    classification: "seller_costs",
+    channel: "email",
+    inbound_excerpt: "willing to meet you at $27,000",
+    hold_reason: "draft_exceeds_ceiling ($27,000 > $19,500)",
+    proposal_id: "jarvis_reply-mayfield",
+  });
+  const actionableMeta = JSON.stringify({
+    state: "queued",
+    classification: "counter",
+    channel: "sms",
+    inbound_excerpt: "Might consider $100000-$115000",
+    proposal_id: "jarvis_reply-counter",
+  });
+
+  it("a HELD counter outranks a fresher courtesy reply", () => {
+    const ranked = rankLiveDeals([
+      row({
+        id: "recMAYLAND0000001",
+        address: "1150 Mayland Cir SW",
+        status: "Response Received",
+        lastInboundAt: "2026-07-14T20:00:00Z", // fresher
+        draftReplyText: "Still here if anything shifts.",
+        draftReplyMeta: courtesyMeta,
+      }),
+      row({
+        id: "recMAYFIELD000001",
+        address: "2208 Mayfield Ave SW",
+        status: "Response Received",
+        lastInboundAt: "2026-07-13T20:00:00Z", // a day older
+        draftReplyMeta: heldCounterMeta,
+      }),
+    ]);
+    expect(ranked[0].id).toBe("recMAYFIELD000001");
+  });
+
+  it("money-critical statuses lead even without drafts; actionable queued beats courtesy", () => {
+    const ranked = rankLiveDeals([
+      row({ id: "recCOURTESY000001", status: "Response Received", lastInboundAt: "2026-07-16T20:00:00Z", draftReplyText: "ok", draftReplyMeta: courtesyMeta }),
+      row({ id: "recACTIONABLE0001", status: "Response Received", lastInboundAt: "2026-07-14T20:00:00Z", draftReplyText: "counter text", draftReplyMeta: actionableMeta }),
+      row({ id: "recCOUNTERRECV001", status: "Counter Received", lastInboundAt: "2026-07-12T20:00:00Z" }),
+    ]);
+    expect(ranked.map((d) => d.id)).toEqual([
+      "recCOUNTERRECV001", // weight 0: money-critical status
+      "recACTIONABLE0001", // weight 1: negotiation-bearing queued draft
+      "recCOURTESY000001", // weight 2: courtesy chatter, despite freshest inbound
+    ]);
+  });
+
+  it("recency still breaks ties inside a tier", () => {
+    const ranked = rankLiveDeals([
+      row({ id: "recOLDHOLD0000001", status: "Response Received", lastInboundAt: "2026-07-10T20:00:00Z", draftReplyMeta: heldCounterMeta }),
+      row({ id: "recNEWHOLD0000001", status: "Response Received", lastInboundAt: "2026-07-15T20:00:00Z", draftReplyMeta: heldCounterMeta }),
+    ]);
+    expect(ranked[0].id).toBe("recNEWHOLD0000001");
+  });
+});

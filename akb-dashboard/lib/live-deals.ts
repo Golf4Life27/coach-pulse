@@ -135,6 +135,32 @@ const STATUS_HEAT: Record<string, number> = {
   "Response Received": 3,
 };
 
+/** Draft classifications that carry negotiation content — a seller number,
+ *  interest, a process step — vs courtesy/unknown chatter. */
+const ACTIONABLE_CLASSIFICATIONS = new Set(["counter", "interest", "seller_costs", "offer_format"]);
+
+/** Decision weight — operator 2026-07-20 ("why aren't my critical decisions
+ *  at the top of Act Now?"): a $27k counter the guardrails HELD was ranked
+ *  below a courtesy "Thanks!" closer because both were needs-you at the
+ *  same status heat and the closer's inbound was a day fresher. Recency is
+ *  a tiebreaker, not a ranking. Lower = heavier:
+ *    0 — money-critical: Offer Accepted / Counter Received states, and any
+ *        HELD draft (the machine refusing to auto-answer IS the strongest
+ *        "operator judgment required" signal — ceiling-exceeded counters
+ *        live here regardless of their status label).
+ *    1 — queued draft carrying negotiation content (counter/interest/
+ *        seller_costs/offer_format).
+ *    2 — courtesy/unknown queued drafts and everything else. */
+export function decisionWeight(
+  status: string,
+  draft: { state: string; classification: string } | null,
+): 0 | 1 | 2 {
+  if (status === "Offer Accepted" || status === "Counter Received") return 0;
+  if (draft?.state === "hold") return 0;
+  if (draft?.state === "queued" && ACTIONABLE_CLASSIFICATIONS.has(draft.classification)) return 1;
+  return 2;
+}
+
 /** Pure: shape + rank the live-deal set. Ordering:
  *   1. ball in your court first (needs a reply — a queued draft counts),
  *   2. then deal heat (Offer Accepted > Counter > Negotiating > Response),
@@ -168,6 +194,9 @@ export function rankLiveDeals(rows: LiveDealRow[]): RankedLiveDeal[] {
 
   return deals.sort((a, b) => {
     if (a.needsYou !== b.needsYou) return a.needsYou ? -1 : 1;
+    const wa = decisionWeight(a.status, a.draft);
+    const wb = decisionWeight(b.status, b.draft);
+    if (wa !== wb) return wa - wb;
     const ha = STATUS_HEAT[a.status] ?? 9;
     const hb = STATUS_HEAT[b.status] ?? 9;
     if (ha !== hb) return ha - hb;
