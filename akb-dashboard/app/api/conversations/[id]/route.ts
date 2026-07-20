@@ -1,4 +1,5 @@
 import { getListing, getListings } from "@/lib/airtable";
+import { withBudget } from "@/lib/async-budget";
 import { getThreadVerified } from "@/lib/quo";
 import { getThreadsForEmail } from "@/lib/gmail";
 import { parseConversation } from "@/lib/notes";
@@ -10,7 +11,10 @@ import { fixNoteTimestamp, stripSyncMarkers } from "@/lib/timeline-fixups";
 import { cleanEmailBody } from "@/lib/email-clean";
 
 export const runtime = "nodejs";
-export const maxDuration = 30;
+// 60s belt over the parallel per-source budgets (9-12s each) — the
+// pre-2026-07-20 sequential fetch chain proved 30s wasn't enough on
+// multi-listing agents (Canfield 504).
+export const maxDuration = 60;
 
 interface UnifiedMessage {
   id: string;
@@ -50,60 +54,67 @@ export async function GET(
       return Response.json({ error: "Listing not found" }, { status: 404 });
     }
 
+    // THE SOURCES RUN IN PARALLEL, EACH UNDER A TIME BUDGET (2026-07-20,
+    // the Canfield empty-thread 504): sequential fetches summed past the
+    // 30s lambda ceiling on a multi-listing agent with phone + email on
+    // file, the route 504'd, and the panel rendered the failure as an empty
+    // thread. Now one slow source degrades — flagged in `degraded`, never
+    // silent — and the sources that answered still render. Notes are local
+    // to the record and always survive.
+    const degraded: string[] = [];
+    const ENGAGED = new Set(["Negotiating", "Response Received", "Counter Received", "Offer Accepted"]);
+
     // Sibling listings (same Agent_Phone) so each cross-channel message is
     // attributed to a specific property — keeps THIS property's thread clean
-    // when an agent holds several listings.
-    let siblings: SiblingRecord[] = [];
-    // Sole-engaged tie-break input (685 Bolton, 2026-07-13): when THIS record
-    // is the phone's only live-money deal, signal-less messages render here
-    // instead of vanishing from every thread.
-    let targetSoleEngaged = false;
-    const ENGAGED = new Set(["Negotiating", "Response Received", "Counter Received", "Offer Accepted"]);
-    if (listing.agentPhone) {
-      try {
-        const all = await getListings();
-        const target = cleanPhone(listing.agentPhone);
-        const siblingListings = all.filter(
-          (l) => l.id !== id && l.agentPhone && cleanPhone(l.agentPhone) === target,
-        );
-        siblings = siblingListings.map((l) => ({
+    // when an agent holds several listings. Sole-engaged tie-break (685
+    // Bolton, 2026-07-13): when THIS record is the phone's only live-money
+    // deal, signal-less messages render here instead of vanishing.
+    const siblingLookup = async (): Promise<{ siblings: SiblingRecord[]; targetSoleEngaged: boolean }> => {
+      if (!listing.agentPhone) return { siblings: [], targetSoleEngaged: false };
+      const all = await getListings();
+      const target = cleanPhone(listing.agentPhone);
+      const siblingListings = all.filter(
+        (l) => l.id !== id && l.agentPhone && cleanPhone(l.agentPhone) === target,
+      );
+      return {
+        siblings: siblingListings.map((l) => ({
           recordId: l.id,
           address: l.address,
           candidatePrices: [l.listPrice, l.outreachOfferPrice ?? null].filter(
             (n): n is number => typeof n === "number" && n > 0,
           ),
-        }));
-        targetSoleEngaged =
+        })),
+        targetSoleEngaged:
           ENGAGED.has(listing.outreachStatus ?? "") &&
-          !siblingListings.some((l) => ENGAGED.has(l.outreachStatus ?? ""));
-      } catch (err) {
-        console.error(`[conversations] Sibling lookup failed for ${id}:`, err);
-      }
-    }
+          !siblingListings.some((l) => ENGAGED.has(l.outreachStatus ?? "")),
+      };
+    };
 
-    // 1. Texts — RELIABLE read path (wire #3): verify each message by id.
-    let quoMessages: Awaited<ReturnType<typeof getThreadVerified>>["messages"] = [];
-    if (listing.agentPhone && process.env.QUO_API_KEY) {
-      try {
-        const phone = cleanPhone(listing.agentPhone);
-        const thread = await getThreadVerified(phone, 60 * 24 * 90, 60); // 90 days
-        quoMessages = thread.messages;
-      } catch (err) {
-        console.error(`[conversations] Quo error for ${id}:`, err);
-      }
-    }
-
-    // 2. Gmail — live email thread with the agent (returns [] if Gmail not
-    // configured). Wire #4: email now threads INTO the conversation, not just
-    // status signals.
-    let gmailMessages: Awaited<ReturnType<typeof getThreadsForEmail>> = [];
-    if (listing.agentEmail) {
-      try {
-        gmailMessages = await getThreadsForEmail(listing.agentEmail);
-      } catch (err) {
-        console.error(`[conversations] Gmail error for ${id}:`, err);
-      }
-    }
+    const [siblingResult, quoMessages, gmailMessages] = await Promise.all([
+      withBudget(siblingLookup(), 9_000, { siblings: [], targetSoleEngaged: false }, "attribution", degraded),
+      // 1. Texts — RELIABLE read path (wire #3): verify each message by id.
+      listing.agentPhone && process.env.QUO_API_KEY
+        ? withBudget(
+            getThreadVerified(cleanPhone(listing.agentPhone), 60 * 24 * 90, 60).then((t) => t.messages), // 90 days
+            12_000,
+            [] as Awaited<ReturnType<typeof getThreadVerified>>["messages"],
+            "texts",
+            degraded,
+          )
+        : Promise.resolve([] as Awaited<ReturnType<typeof getThreadVerified>>["messages"]),
+      // 2. Gmail — live email thread with the agent (returns [] if Gmail not
+      // configured). Wire #4: email threads INTO the conversation.
+      listing.agentEmail
+        ? withBudget(
+            getThreadsForEmail(listing.agentEmail),
+            12_000,
+            [] as Awaited<ReturnType<typeof getThreadsForEmail>>,
+            "email",
+            degraded,
+          )
+        : Promise.resolve([] as Awaited<ReturnType<typeof getThreadsForEmail>>),
+    ]);
+    const { siblings, targetSoleEngaged } = siblingResult;
 
     // 3. Notes — emails/SMS/manual entries already logged to the record
     // (durable backstop; deduped against the live pulls by the merge engine).
@@ -217,6 +228,9 @@ export async function GET(
       notesCount: messages.filter((m) => m.source === "notes").length,
       messages,
       integrity,
+      // Sources that timed out or failed this request — the panel surfaces
+      // these so a degraded pull never masquerades as an empty thread.
+      degraded: [...new Set(degraded)],
       // NUMBERS RAIL (sourced only — INVARIANTS §1/§3): the delivery-stamped
       // offer parsed from the [H2 sent …] stamp (the number the agent
       // actually received; fields drift, stamps don't), the operator's
