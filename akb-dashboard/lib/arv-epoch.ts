@@ -23,10 +23,13 @@
  *  promoted to primary for non-registry markets (benchmark 37/8/19/45
  *  qualifying comps vs RentCast's 1/0/1/0; RentCast demoted to audited
  *  last resort) · 07-20 1.0mi distance window per operator ruling
- *  (Cleveland receipts; pull radii widened to match). Each advance
- *  re-invalidates every earlier stamp and the crons re-verify the fleet
- *  on their own schedule — the designed engine-revision mechanism. */
-export const ARV_SOLD_COMPS_EPOCH_ISO = "2026-07-20T04:10:00.000Z";
+ *  (Cleveland receipts; pull radii widened to match) · 07-20 beds-exact
+ *  OFF per operator ruling (sqft ratio already bounds similarity; the
+ *  filter was culling beds-carrying ATTOM comps while passing bed-less
+ *  county comps). Each advance re-invalidates every earlier stamp and
+ *  the crons re-verify the fleet on their own schedule — the designed
+ *  engine-revision mechanism. */
+export const ARV_SOLD_COMPS_EPOCH_ISO = "2026-07-20T05:00:00.000Z";
 
 function epochMs(): number {
   const raw = process.env.ARV_ENGINE_EPOCH;

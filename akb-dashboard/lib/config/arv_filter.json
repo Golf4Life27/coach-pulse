@@ -1,14 +1,15 @@
 {
   "$schema_note": "Comp-filter heuristics for Phase 4A (ARV Intelligence). Bible v3 §9.2 mandates \"reject distressed/cash/LLC sales,\" but RentCast doesn't expose buyer entity. These knobs approximate \"renovated retail comps\" via $/sqft floor relative to ZIP median + recency + similarity gates. max_age_days 180->365 per the operator's pre-authorized escalation (ruling 2026-07-18). max_distance_miles 0.5->1.0 per operator ruling 2026-07-20 (Cleveland receipts: 1122 West Ave sat at 2 comps — one short of MED — under the 0.5mi ring; the ZIP-median distressed clip + bimodal detection remain the neighborhood-crossing guards). Widened BEFORE the fleet re-verify so each record runs once under the final window (single-pass paid-call spend).",
   "last_updated": "2026-07-20",
-  "source": "Bible v3 §9.2 + Crawler Roadmap §K (filters) + Phase 4A working assumption + operator recency ruling 2026-07-18 + operator distance ruling 2026-07-20",
-  "version": 3,
+  "source": "Bible v3 §9.2 + Crawler Roadmap §K (filters) + Phase 4A working assumption + operator recency ruling 2026-07-18 + operator distance + beds rulings 2026-07-20",
+  "version": 4,
   "comp_filters": {
+    "_beds_note": "beds_exact off per operator ruling 2026-07-20: the sqft ratio already bounds similarity, and beds-exact was asymmetric across sources — null-beds county deed comps passed while beds-carrying ATTOM comps got culled. Evidence density is the scarce resource.",
     "max_age_days": 365,
     "max_distance_miles": 1.0,
     "sqft_ratio_min": 0.8,
     "sqft_ratio_max": 1.2,
-    "beds_exact_match_required": true,
+    "beds_exact_match_required": false,
     "min_comps_for_high_confidence": 5,
     "min_comps_for_med_confidence": 3
   },
