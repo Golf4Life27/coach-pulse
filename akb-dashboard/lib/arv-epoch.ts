@@ -26,10 +26,12 @@
  *  (Cleveland receipts; pull radii widened to match) · 07-20 beds-exact
  *  OFF per operator ruling (sqft ratio already bounds similarity; the
  *  filter was culling beds-carrying ATTOM comps while passing bed-less
- *  county comps). Each advance re-invalidates every earlier stamp and
- *  the crons re-verify the fleet on their own schedule — the designed
- *  engine-revision mechanism. */
-export const ARV_SOLD_COMPS_EPOCH_ISO = "2026-07-20T05:00:00.000Z";
+ *  county comps) · 07-20 PM double-recorded-deed dedupe (2431 Parker
+ *  recorded twice 3 days apart fed Canfield's band as 2 of its "3"
+ *  comps — one sale is one comp). Each advance re-invalidates every
+ *  earlier stamp and the crons re-verify the fleet on their own
+ *  schedule — the designed engine-revision mechanism. */
+export const ARV_SOLD_COMPS_EPOCH_ISO = "2026-07-20T17:15:00.000Z";
 
 function epochMs(): number {
   const raw = process.env.ARV_ENGINE_EPOCH;
