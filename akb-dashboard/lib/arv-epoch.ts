@@ -19,10 +19,13 @@
  *  ISO 8601). Advance lineage: 07-17 lastSeenDate kill · 07-18 AM
  *  removedDate kill · 07-18 PM deed-record feed · 07-19 AM 365d window ·
  *  07-19 PM county-deed source live for Detroit (open government ledger,
- *  sales days old vs the vendor's ~9-12mo lag). Each advance re-invalidates
- *  every earlier stamp and the crons re-verify the fleet on their own
- *  schedule — the designed engine-revision mechanism. */
-export const ARV_SOLD_COMPS_EPOCH_ISO = "2026-07-19T16:15:00.000Z";
+ *  sales days old vs the vendor's ~9-12mo lag) · 07-20 ATTOM /sale/snapshot
+ *  promoted to primary for non-registry markets (benchmark 37/8/19/45
+ *  qualifying comps vs RentCast's 1/0/1/0; RentCast demoted to audited
+ *  last resort). Each advance re-invalidates every earlier stamp and the
+ *  crons re-verify the fleet on their own schedule — the designed
+ *  engine-revision mechanism. */
+export const ARV_SOLD_COMPS_EPOCH_ISO = "2026-07-20T01:10:00.000Z";
 
 function epochMs(): number {
   const raw = process.env.ARV_ENGINE_EPOCH;

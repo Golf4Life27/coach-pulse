@@ -10,9 +10,10 @@
 //
 // GATES: Execution_Path = Auto Proceed (past the intake math gate — never
 // raw intake), freshness dedupe (skip records priced <14d ago), NEEDS_DATA
-// retry backoff (a failed attempt doesn't starve the queue), and a RentCast
-// 24h HARD CEILING (protects the 1,000/mo vendor cap; per-shape runaway is
-// enforced downstream by the RentCast loop-breaker). Bounded per run.
+// retry backoff (a failed attempt doesn't starve the queue), and a paid-call
+// 24h HARD CEILING (RentCast + ATTOM — protects the vendor caps; per-shape
+// runaway is enforced downstream by the paid-call loop-breaker). Bounded
+// per run.
 //
 // BUDGET-GATE FIX (2026-07-13 decision-math build): this run was originally
 // gated on resolveSeedBudget — the $25/day FRONTIER-SEEDING throttle — which
@@ -20,9 +21,10 @@
 // lane never processed a single target (14:25Z run: 200 OK, zero sub-calls;
 // Mayfield/716 8th/Bennett all blank). Engaged deals are the MONEY lane —
 // the reply justified the spend (2026-06-10 ruling) — and an engaged
-// underwrite is not a seed. The gate is now a hard 24h RentCast-call ceiling
-// (RENTCAST_24H_HARD_CEILING, default 150) + the per-run limit: worst case
-// ~20 calls/run, 2 scheduled runs/day.
+// underwrite is not a seed. The gate is now a hard 24h paid-call ceiling
+// (RENTCAST_24H_HARD_CEILING, default 150 — counts RentCast + ATTOM since
+// the 2026-07-20 promotion moved comp billing to ATTOM) + the per-run
+// limit: worst case ~20 calls/run, 2 scheduled runs/day.
 //
 // EVERY TARGET NOW PERSISTS A DECISION: on underwrite success the decision
 // math lands (Buyer_Ceiling / Deal_Spread / verdict); on ARV failure the
@@ -63,9 +65,13 @@ const MAX_LIMIT = 10;
 // ceiling math for every target beats full math for one.
 const PER_TARGET_BUDGET_MS = 60_000;
 
-/** Hard 24h RentCast-call ceiling for this lane to run (protects the
- *  1,000/mo vendor cap without starving the money lane on the seed budget). */
-export function rentcast24hHardCeiling(): number {
+/** Hard 24h paid-call ceiling for this lane to run (protects the vendor
+ *  caps without starving the money lane on the seed budget). Since the
+ *  ATTOM promotion (2026-07-20) comp pulls bill ATTOM, not RentCast, so
+ *  the guard counts BOTH sources — otherwise the lane's only whole-run
+ *  spend bound would never see its own comp calls. Env name kept for
+ *  the already-deployed Vercel setting. */
+export function paidCalls24hHardCeiling(): number {
   const raw = Number(process.env.RENTCAST_24H_HARD_CEILING);
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 150;
 }
@@ -124,33 +130,41 @@ export async function GET(req: Request) {
     });
   }
 
-  // Hard 24h RentCast ceiling — the engaged lane's only whole-run guard
-  // (see BUDGET-GATE FIX header). Fail-open on an unreadable meter: this
-  // lane is bounded (limit × ~5 calls) and the loop-breaker still guards
-  // per-shape runaway, so a monitoring outage must not stall live deals.
-  const ceiling = rentcast24hHardCeiling();
+  // Hard 24h paid-call ceiling (RentCast + ATTOM) — the engaged lane's
+  // only whole-run guard (see BUDGET-GATE FIX header). Fail-open on an
+  // unreadable meter: this lane is bounded (limit × ~5 calls) and the
+  // loop-breaker guards per-shape runaway on BOTH vendors, so a
+  // monitoring outage must not stall live deals.
+  const ceiling = paidCalls24hHardCeiling();
   let rentcast24h: number | null = null;
+  let attom24h: number | null = null;
+  let paid24h: number | null = null;
   try {
     const entries = await readRecentFromKv(5000);
-    rentcast24h = countCallsBySource24h(entries, now).rentcast;
+    const counts = countCallsBySource24h(entries, now);
+    rentcast24h = counts.rentcast;
+    attom24h = counts.attom;
+    paid24h = counts.rentcast + counts.attom;
   } catch {
-    rentcast24h = null;
+    paid24h = null;
   }
-  if (rentcast24h != null && rentcast24h >= ceiling) {
+  if (paid24h != null && paid24h >= ceiling) {
     await audit({
       agent: "appraiser",
       event: "auto_underwrite_engaged_budget_skip",
       status: "confirmed_success",
-      inputSummary: { engaged_stale_total: targets.length, rentcast_24h: rentcast24h, ceiling },
-      outputSummary: { skipped: true, reason: "rentcast_24h_hard_ceiling" },
+      inputSummary: { engaged_stale_total: targets.length, rentcast_24h: rentcast24h, attom_24h: attom24h, paid_24h: paid24h, ceiling },
+      outputSummary: { skipped: true, reason: "paid_calls_24h_hard_ceiling" },
       decision: "skip_budget",
     });
     return NextResponse.json({
       ok: true,
       mode: "apply",
       skipped: true,
-      reason: "rentcast_24h_hard_ceiling",
+      reason: "paid_calls_24h_hard_ceiling",
       rentcast_24h: rentcast24h,
+      attom_24h: attom24h,
+      paid_24h: paid24h,
       ceiling,
       engaged_stale_total: targets.length,
       duration_ms: Date.now() - t0,

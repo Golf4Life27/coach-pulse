@@ -1,22 +1,31 @@
-// ATTOM sold-comp source — BENCHMARK LANE ONLY until it earns promotion.
-// @agent: appraiser
+// ATTOM sold-comp source — PROMOTED 2026-07-19 by operator ruling on
+// benchmark evidence. @agent: appraiser
 //
-// Operator supplied a fresh ATTOM_API_KEY (2026-07-19) to run in parallel
-// against the county ledger and RentCast property records. This module maps
-// ATTOM /sale/snapshot rows into the same RentCastSaleComp shape so the
-// three sources are compared apples-to-apples: freshness (newest sale
-// date), coverage (qualifying comps), and price agreement. It is wired to
-// the comp-benchmark endpoint, NOT to production ARV routing — promotion
-// per market only happens on benchmark evidence, by operator ruling.
+// Ran the benchmark lane first (operator-supplied ATTOM_API_KEY,
+// 2026-07-19): 37/8/19/45 qualifying comps (≤365d, ≤0.5mi) across Atlanta
+// West Ave, Highland Park Puritan, Atlanta Boulder Park, and Birmingham
+// Mayfield vs RentCast's 1/0/1/0. This module maps ATTOM /sale/snapshot
+// rows into the same RentCastSaleComp shape the ARV engine already filters.
+// It now serves production routing via lib/comps/sold-comps.ts: primary
+// wherever no county deed ledger is authoritative, infra-failure fallback
+// where one is. The benchmark endpoint keeps using it for comparisons.
 //
-// Entitlement is unproven (key tier unknown): a 401/403 here is a REAL
-// answer the benchmark surfaces, never a silent empty.
+// A 401/403 here is a REAL answer the caller surfaces, never a silent
+// empty — thrown errors are what route the caller to the vendor path.
 
 import { auditPaidCall } from "@/lib/spend/audit-paid-call";
+import {
+  checkLoopBreaker,
+  recordCallError,
+  recordCallOutcome,
+} from "@/lib/rentcast/failure-loop-breaker";
 import type { RentCastSaleComp } from "@/lib/rentcast";
 import { haversineMiles } from "@/lib/rentcast";
 
 const ATTOM_BASE = "https://api.gateway.attomdata.com/propertyapi/v1.0.0";
+/** Breaker shape-key endpoint — distinct from every RentCast endpoint so
+ *  counters never collide across vendors. */
+const BREAKER_ENDPOINT = "attom:sale/snapshot";
 
 /** Loose shape of an ATTOM /sale/snapshot record — mapped permissively
  *  (their schema nests hard and varies by entitlement tier). */
@@ -45,6 +54,12 @@ function dig(obj: unknown, ...path: string[]): unknown {
   return cur;
 }
 
+/** Sub-$10k recorded "sales" are nominal deed transfers (quit-claims,
+ *  family conveyances — the $4,542 and $4,000 benchmark rows), not market
+ *  evidence. They never reach band math; the distressed-proxy ZIP-median
+ *  clip stays as the downstream filter for real-but-distressed prices. */
+export const ATTOM_MIN_SALE_PRICE = 10_000;
+
 /** Pure: one ATTOM sale record → the engine's comp shape, or null when it
  *  carries no usable recorded sale. */
 export function attomSaleToComp(
@@ -57,7 +72,7 @@ export function attomSaleToComp(
     str(dig(rec, "sale", "salesearchdate")) ??
     str(dig(rec, "sale", "saleTransDate")) ??
     str(dig(rec, "sale", "amount", "salerecdate"));
-  if (!price || !date) return null;
+  if (!price || price < ATTOM_MIN_SALE_PRICE || !date) return null;
   const iso = `${date.slice(0, 10)}T00:00:00.000Z`;
   if (!/^\d{4}-\d{2}-\d{2}T/.test(iso)) return null;
   const lat = coord(dig(rec, "location", "latitude"));
@@ -106,6 +121,31 @@ export async function getAttomSaleComps(
     propertytype: "SFR",
   });
   const url = `${ATTOM_BASE}/sale/snapshot?${p.toString()}`;
+
+  // Failure-loop breaker (same P0 class as the RentCast one, now that this
+  // is a production source): shape = the subject's point, so a stable
+  // failure (entitlement 401, unindexed area, outage) stops billing after
+  // the trip threshold instead of re-burning on every cron tick. The
+  // thrown short-circuit routes the caller to its fallback.
+  const shape = {
+    address: `${subjectLat.toFixed(5)},${subjectLng.toFixed(5)}`,
+    recordId: opts.recordId ?? null,
+  };
+  const pre = await checkLoopBreaker(BREAKER_ENDPOINT, shape);
+  if (pre.tripped) {
+    await auditPaidCall({
+      source: "attom",
+      endpoint: "sale/snapshot",
+      http: 599,
+      ms: 0,
+      recordId: opts.recordId,
+      error: `loop_breaker_tripped (count=${pre.count}, last_status=${pre.lastStatus})`,
+    });
+    throw new Error(
+      `ATTOM sale/snapshot loop breaker tripped (count=${pre.count}, last_status=${pre.lastStatus}) — short-circuited, no spend`,
+    );
+  }
+
   const t0 = Date.now();
   let res: Response;
   try {
@@ -115,6 +155,7 @@ export async function getAttomSaleComps(
     });
   } catch (err) {
     await auditPaidCall({ source: "attom", endpoint: "sale/snapshot", http: -1, ms: Date.now() - t0, recordId: opts.recordId, error: String(err) });
+    await recordCallError(BREAKER_ENDPOINT, shape, "attom");
     throw err;
   }
   const body = await res.text();
@@ -129,9 +170,17 @@ export async function getAttomSaleComps(
   // ATTOM answers "no records in this window" with a 400/SuccessWithoutResult
   // shape — an honest zero, not a failure.
   if (!res.ok) {
-    if (body.includes("SuccessWithoutResult")) return [];
+    if (body.includes("SuccessWithoutResult")) {
+      // An answered call, not a failure: the breaker must NEVER trip on
+      // honest zeros (a tripped breaker would route to staler sources and
+      // paper over a real "no recent sales"). Recorded as success.
+      await recordCallOutcome(BREAKER_ENDPOINT, shape, 200, "attom");
+      return [];
+    }
+    await recordCallOutcome(BREAKER_ENDPOINT, shape, res.status, "attom");
     throw new Error(`ATTOM sale/snapshot ${res.status}: ${body.slice(0, 200)}`);
   }
+  await recordCallOutcome(BREAKER_ENDPOINT, shape, res.status, "attom");
   let data: Record<string, unknown>;
   try {
     data = JSON.parse(body) as Record<string, unknown>;

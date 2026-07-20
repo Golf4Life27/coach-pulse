@@ -20,9 +20,17 @@
 // KV-backed when configured; in-memory fallback otherwise (per-lambda,
 // which is enough to catch a within-instance loop). Fails OPEN on KV
 // errors — a monitoring outage must not block legitimate calls.
+//
+// 2026-07-20 (ATTOM promotion): the breaker now guards BOTH billed comp
+// sources. Shape keys already include the endpoint, so ATTOM
+// ("attom:sale/snapshot") and RentCast shapes never collide; the optional
+// `source` arg labels the trip alert honestly per vendor.
 
 import { audit } from "@/lib/audit-log";
+import type { PaidApiSource } from "@/lib/spend/audit-paid-call";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
+
+const SOURCE_LABEL: Record<PaidApiSource, string> = { rentcast: "RentCast", attom: "ATTOM" };
 
 /** Consecutive failures of the same call shape before the breaker trips.
  *  Three is enough to absorb a transient network/origin blip without
@@ -177,6 +185,7 @@ export async function recordCallOutcome(
   endpoint: string,
   params: Parameters<typeof callShapeKey>[1],
   httpStatus: number,
+  source: PaidApiSource = "rentcast",
 ): Promise<BreakerState> {
   const key = callShapeKey(endpoint, params);
 
@@ -213,7 +222,7 @@ export async function recordCallOutcome(
     next.alertedAt = next.lastAt;
     await audit({
       agent: "appraiser",
-      event: "rentcast_loop_tripped",
+      event: `${source}_loop_tripped`,
       status: "confirmed_failure",
       recordId: params.recordId ?? undefined,
       inputSummary: {
@@ -231,7 +240,7 @@ export async function recordCallOutcome(
         stable_not_found: stableNotFound,
         cooldown_s: ttlS,
       },
-      error: `RentCast loop breaker tripped after ${nextCount} consecutive HTTP ${httpStatus} on ${endpoint} for ${params.address ?? params.recordId ?? "unknown shape"}${stableNotFound ? ` — STABLE 404 (not in index), parked ${Math.round(ttlS / 3600)}h` : ""}. Subsequent calls short-circuit until a success clears the counter.`,
+      error: `${SOURCE_LABEL[source]} loop breaker tripped after ${nextCount} consecutive HTTP ${httpStatus} on ${endpoint} for ${params.address ?? params.recordId ?? "unknown shape"}${stableNotFound ? ` — STABLE 404 (not in index), parked ${Math.round(ttlS / 3600)}h` : ""}. Subsequent calls short-circuit until a success clears the counter.`,
     });
   }
 
@@ -245,8 +254,9 @@ export async function recordCallOutcome(
 export async function recordCallError(
   endpoint: string,
   params: Parameters<typeof callShapeKey>[1],
+  source: PaidApiSource = "rentcast",
 ): Promise<BreakerState> {
-  return recordCallOutcome(endpoint, params, -1);
+  return recordCallOutcome(endpoint, params, -1, source);
 }
 
 /** Test-only: clear the in-memory ring between cases. */
