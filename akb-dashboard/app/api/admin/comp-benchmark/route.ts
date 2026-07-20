@@ -102,7 +102,10 @@ export async function GET(req: Request) {
 
   const results = [];
   for (const s of subjects) {
-    const countySource = countyDeedSourceFor(s.city, s.state);
+    // Benchmark exercises UNPROMOTED county sources too — that's how a
+    // candidate (e.g. Cuyahoga) earns its receipts before the operator
+    // rules on promotion. Production routing only sees promoted sources.
+    const countySource = countyDeedSourceFor(s.city, s.state, { includeUnpromoted: true });
     let geo: { lat: number; lng: number } | null = null;
     let geoError: string | null = null;
     try {
@@ -124,6 +127,8 @@ export async function GET(req: Request) {
     results.push({
       subject: `${s.address}, ${s.city}, ${s.state} ${s.zip}`,
       county_ledger: county,
+      county_market: countySource?.market ?? null,
+      county_promoted: countySource?.promoted ?? null,
       rentcast_deeds: rentcast,
       attom_sales: attom,
     });

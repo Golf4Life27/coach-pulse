@@ -28,6 +28,8 @@ const DETROIT_SOURCE = {
   market: "detroit",
   cities: ["detroit"],
   state: "MI",
+  kind: "detroit_assessor" as const,
+  promoted: true,
   salesUrl: "https://example.test/sales",
   parcelsUrl: "https://example.test/parcels",
   salesWhere: "1=1",
