@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   countyDeedSourceFor,
   deedRowToComp,
+  cuyahogaFeatureToComp,
   COUNTY_DEED_SOURCES,
   type ParcelRow,
 } from "./county-deeds";
@@ -20,6 +21,18 @@ describe("countyDeedSourceFor — registry routing", () => {
     expect(countyDeedSourceFor("Atlanta", "GA")).toBeNull();
     expect(countyDeedSourceFor(null, "MI")).toBeNull();
     expect(countyDeedSourceFor("Detroit", null)).toBeNull();
+  });
+
+  it("UNPROMOTED sources never route production — benchmark lane only", () => {
+    // Cuyahoga ships unpromoted (feed lags ~11 weeks vs Detroit's 3 days;
+    // promotion is an operator ruling on benchmark receipts).
+    expect(countyDeedSourceFor("Cleveland", "OH")).toBeNull();
+    expect(countyDeedSourceFor("Cleveland", "OH", { includeUnpromoted: true })?.market).toBe("cuyahoga");
+    expect(countyDeedSourceFor("East Cleveland", "OH", { includeUnpromoted: true })?.market).toBe("cuyahoga");
+    // Promoted sources are unaffected by the flag.
+    expect(countyDeedSourceFor("Detroit", "MI", { includeUnpromoted: true })?.market).toBe("detroit");
+    // Outside the registry stays outside.
+    expect(countyDeedSourceFor("Columbus", "OH", { includeUnpromoted: true })).toBeNull();
   });
 });
 
@@ -84,5 +97,61 @@ describe("deedRowToComp — the courthouse row becomes engine fuel", () => {
       DETROIT,
     );
     expect(c!.distance).toBeNull();
+  });
+});
+
+describe("cuyahogaFeatureToComp — the Fiscal Hub row becomes engine fuel", () => {
+  // Verbatim shape from the live 2026-07-20 query (Glenville window):
+  // structure data rides the sale row — no parcel join, and unlike
+  // Detroit's ledger it carries beds/baths.
+  const thornwood = {
+    attributes: {
+      PARCEL_ID: "105-24-057",
+      PCL_ADDR_FULL: "11603 THORNWOOD AVE CLEVELAND, OH 44108",
+      SALE_AMOUNT: 26_500,
+      SALE_DATE: Date.UTC(2026, 3, 28),
+      TOTAL_RES_LIV_AREA: 1_066,
+      RES_BEDROOMS: 3,
+      RES_BATHS: 1,
+      MIN_AGE: 1920, // county schema misnames it; verified to be YEAR BUILT
+    },
+    centroid: { x: -81.60479, y: 41.52878 },
+  };
+
+  it("maps a real warranty-deed sale: recorded price, deed date, on-row structure", () => {
+    const c = cuyahogaFeatureToComp(thornwood, 41.53, -81.62);
+    expect(c).not.toBeNull();
+    expect(c!.price).toBe(26_500);
+    expect(c!.saleDate).toBe("2026-04-28T00:00:00.000Z");
+    expect(c!.squareFootage).toBe(1_066);
+    expect(c!.bedrooms).toBe(3);
+    expect(c!.bathrooms).toBe(1);
+    expect(c!.yearBuilt).toBe(1920);
+    expect(c!.distance).toBeGreaterThan(0.5);
+    expect(c!.distance).toBeLessThan(1.1);
+    expect(c!.formattedAddress).toBe("11603 THORNWOOD AVE CLEVELAND, OH 44108");
+  });
+
+  it("unusable rows (no price / no date) map to nothing", () => {
+    expect(cuyahogaFeatureToComp({ attributes: { SALE_DATE: Date.UTC(2026, 3, 28) } }, null, null)).toBeNull();
+    expect(cuyahogaFeatureToComp({ attributes: { SALE_AMOUNT: 0, SALE_DATE: Date.UTC(2026, 3, 28) } }, null, null)).toBeNull();
+    expect(cuyahogaFeatureToComp({ attributes: { SALE_AMOUNT: 50_000 } }, null, null)).toBeNull();
+  });
+
+  it("garbage MIN_AGE (a real age, zero, future year) → yearBuilt null", () => {
+    const base = { SALE_AMOUNT: 50_000, SALE_DATE: Date.UTC(2026, 3, 28) };
+    expect(cuyahogaFeatureToComp({ attributes: { ...base, MIN_AGE: 105 } }, null, null)!.yearBuilt).toBeNull();
+    expect(cuyahogaFeatureToComp({ attributes: { ...base, MIN_AGE: 0 } }, null, null)!.yearBuilt).toBeNull();
+    expect(cuyahogaFeatureToComp({ attributes: { ...base, MIN_AGE: 2093 } }, null, null)!.yearBuilt).toBeNull();
+  });
+
+  it("no centroid → distance null; empty address → null (unknowns stay unknown)", () => {
+    const c = cuyahogaFeatureToComp(
+      { attributes: { SALE_AMOUNT: 40_000, SALE_DATE: Date.UTC(2026, 2, 2), PCL_ADDR_FULL: "  " } },
+      41.5,
+      -81.6,
+    );
+    expect(c!.distance).toBeNull();
+    expect(c!.formattedAddress).toBeNull();
   });
 });

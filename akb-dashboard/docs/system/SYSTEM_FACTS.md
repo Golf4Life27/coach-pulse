@@ -1,8 +1,10 @@
 # System Facts — AKB Inevitable
 
 **Status:** authoritative. **Owner:** Alex Balog (operator).
-**Updated:** 2026-05-31.
-**Spine:** paired build_event `recpLB1yC1SaDTqff` (A1 commit cycle, 2026-05-31).
+**Updated:** 2026-07-20.
+**Spine:** paired build_event `recpLB1yC1SaDTqff` (A1 commit cycle, 2026-05-31);
+sold-comp routing facts paired with the ATTOM-promotion build_event
+`recZB4GZGZ2rPwWe9` and the Cuyahoga build_event of 2026-07-20.
 
 This is the canonical record of the load-bearing facts about the AKB
 Inevitable system. Every Claude session reads it first via
@@ -105,9 +107,29 @@ new field.
 | Quo outreach send line (Crier, agent-facing) | `+18155569965` / `PNLosBI6fh` (carrier registered; the 815 number) |
 | Quo Maverick alert line (operator-facing, FROM) | `+16302505865` / `PNMhSUQXFw` — `ALERT_FROM`. Maverick→Alex sends only; never the 815 outreach line (channel separation) |
 | Operator personal cell (urgent escalation, TO) | `+16302172539` — Alex's cell, NOT a Quo number. `MAVERICK_STAGE4_SMS_TARGET` default. The "system found a deal, act ASAP" reach path |
-| RentCast | monthly cap 1,000 calls, resets 1st of month UTC |
+| RentCast | monthly cap 1,000 calls, resets 1st of month UTC. **24h call ceiling is a TRAILING window**, not a midnight-UTC reset |
+| ATTOM | `ATTOM_API_KEY` in Vercel env (operator's own key). Behind the paid-call loop-breaker (`attom_loop_tripped`) and counted in the engaged lane's 24h ceiling |
 | Firecrawl | Standard tier, 50 concurrent browsers, `FIRECRAWL_MAX_CONCURRENT=20` default |
 | DocuSign | JWT path (Path A); MCP path is Claude-side, unreachable from Vercel |
+
+**Sold-comp routing (PR #140, 2026-07-20, epoch `2026-07-20T01:10:00Z`):**
+`lib/comps/sold-comps.ts` is the ONE faucet. County deed ledger where a
+PROMOTED registry source exists (Detroit — honest zero FINAL) → ATTOM
+`/sale/snapshot` (primary elsewhere; registry infra-failure fallback;
+honest zero FINAL; sub-$10k mapping floor) → RentCast property records
+(last resort on thrown ATTOM errors only, audited). Promotion per market
+is an operator ruling on benchmark receipts (`/api/admin/comp-benchmark`).
+
+**County registry freshness (why promotion is per-market):** Detroit
+assessor feed = deed transfers ~3 days old (registry-primary). Cuyahoga
+Fiscal GIS Hub "Parcel Sales 2021 to Present" = **~11 weeks stale**
+(verified 2026-07-20: newest sale 2026-04-30, last data edit 2026-06-09,
+~quarterly cadence) — built as `promoted: false`, benchmark lane only;
+Cleveland production stays ATTOM-primary pending operator ruling. Its
+rows DO carry sqft/beds/baths/year-built (richer than Detroit's ledger),
+and `MIN_AGE` actually holds YEAR BUILT. WAR deeds only: LIM rows carry
+per-parcel-stamped bulk portfolio prices (observed $4,315,716 × 3 parcels,
+2026-04-27).
 
 **DocuSign provisioning status:** envelope routes exist (Phase 5
 Scribe) but await JWT credentials in operator's DocuSign Admin
