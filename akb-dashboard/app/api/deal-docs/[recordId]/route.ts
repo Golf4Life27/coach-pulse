@@ -29,6 +29,7 @@ import {
   looksLikeInvestorBaseCsv,
   parseInvestorBaseCsv,
 } from "@/lib/deal-docs/investorbase-csv";
+import { importInvestorBaseBuyers, type BuyerImportResult } from "@/lib/buyer-intel/buyers-import";
 import { looksLikeCmaPdf, parseCmaText } from "@/lib/deal-docs/cma-pdf";
 import { audit } from "@/lib/audit-log";
 import {
@@ -40,7 +41,9 @@ import {
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+// 120s: the CSV branch also accumulates the buyer contacts into the Buyers
+// table (batched Airtable I/O) on top of the evidence parse.
+export const maxDuration = 120;
 
 const NOTES_FIELD = "fldwKGxZly6O8qyPu";
 const CMA_KV_TTL_S = 30 * 24 * 3600;
@@ -107,6 +110,18 @@ export async function POST(
         subjectSqft,
         appliedValue: applyEvidenceToSubject(e, subjectSqft),
       }));
+
+      // Accumulate the buyer CONTACTS into the durable Buyers table — every
+      // InvestorBase pull is a warm dispo list (operator "Go" 2026-07-20).
+      // Best-effort: an accumulation failure must NEVER lose the evidence
+      // parse or the note — the pricing lane is the primary job here.
+      let buyersAccumulated: BuyerImportResult | null = null;
+      try {
+        buyersAccumulated = await importInvestorBaseBuyers(text);
+      } catch {
+        buyersAccumulated = null;
+      }
+
       await appendNote(
         recordId,
         `[deal-docs ${nowIso}] InvestorBase export ingested (${file.name}): ${parsed.totalRows} buyers ` +
@@ -119,7 +134,10 @@ export async function POST(
                 `${e.appliedValue != null ? `$${e.appliedValue.toLocaleString()}` : "—"} (n=${e.n})`,
             )
             .join("; ") +
-          ". Values await operator stamp via the buyer-median panel.",
+          ". Values await operator stamp via the buyer-median panel." +
+          (buyersAccumulated
+            ? ` Dispo list: ${buyersAccumulated.created} new / ${buyersAccumulated.updated} updated buyers accumulated (${buyersAccumulated.skipped} no-contact skipped).`
+            : " Dispo-list accumulation failed (evidence unaffected)."),
       );
       await audit({
         agent: "appraiser",
@@ -131,14 +149,17 @@ export async function POST(
           evidence: Object.fromEntries(
             applied.map((e) => [e.track, { median_psf: e.medianPsf, applied_value: e.appliedValue, n: e.n }]),
           ),
+          buyers_accumulated: buyersAccumulated
+            ? { created: buyersAccumulated.created, updated: buyersAccumulated.updated, skipped: buyersAccumulated.skipped }
+            : null,
         },
       });
-      // Buyers returned for display; table import is a follow-up lane.
       return NextResponse.json({
         kind: "investorbase_csv",
         ...parsed,
         evidence: applied,
         subjectSqft,
+        buyersAccumulated,
         buyers: parsed.buyers.slice(0, 50),
       });
     }

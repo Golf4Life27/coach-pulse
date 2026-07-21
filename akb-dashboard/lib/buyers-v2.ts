@@ -170,6 +170,28 @@ export async function findBuyerByEmail(email: string): Promise<BuyerRecord | nul
   return list[0] ?? null;
 }
 
+/** Digits-only phone, US-normalized to 10 digits (drops a leading country
+ *  "1"). null for anything that can't be a real number — the identity key
+ *  for a no-email buyer, so junk must resolve to null, never a false match. */
+export function normalizePhone(raw: string | null | undefined): string | null {
+  const d = String(raw ?? "").replace(/\D/g, "");
+  if (d.length === 11 && d.startsWith("1")) return d.slice(1);
+  if (d.length === 10) return d;
+  if (d.length > 11) return d.slice(-10);
+  return null;
+}
+
+/** Dedup fallback for buyers with a phone but no email (the dispo lane keeps
+ *  them — operator ruling 2026-07-20). Matches the stored Phone_Primary,
+ *  which InvestorBase writes as bare digits. */
+export async function findBuyerByPhone(phone: string): Promise<BuyerRecord | null> {
+  const p = normalizePhone(phone);
+  if (!p) return null;
+  const formula = `{${BUYER_V2_FIELDS.Phone_Primary}}='${p}'`;
+  const list = await listBuyersV2({ filterByFormula: formula, maxRecords: 1 });
+  return list[0] ?? null;
+}
+
 export async function createBuyerV2(fields: Record<string, unknown>): Promise<string> {
   const url = `https://api.airtable.com/v0/${BASE_ID}/${BUYERS_TABLE}`;
   const res = await fetch(url, {
