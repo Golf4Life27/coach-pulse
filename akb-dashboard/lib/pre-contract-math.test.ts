@@ -84,8 +84,8 @@ describe("evaluatePreContractMath — pass / hold / block aggregation", () => {
     expect(r.cma.status).toBe("pass");
     expect(r.buyerMedian.status).toBe("pass");
     expect(r.mao.status).toBe("pass");
-    expect(r.investorMao).toBe(90_000);
-    expect(r.yourMao).toBe(85_000); // 90K − 5K default fee (Spine rec937cFJthvCZzBM)
+    expect(r.investorMao).toBe(120_000); // acquisition basis (ruled 2026-07-20): median IS the buyer's max
+    expect(r.yourMao).toBe(115_000); // 120K − 5K default fee (Spine rec937cFJthvCZzBM)
   });
 
   it("HOLD when CMA is missing", () => {
@@ -127,7 +127,7 @@ describe("evaluatePreContractMath — pass / hold / block aggregation", () => {
     expect(r.buyerMedian.reason).toContain("Buyer_Median absent");
   });
 
-  it("HOLD when Est_Rehab is missing (math can't compute)", () => {
+  it("Est_Rehab missing does NOT hold PC-27 — acquisition basis needs only Buyer_Median (ruled 2026-07-20)", () => {
     const r = evaluatePreContractMath({
       contractOfferPrice: 60_000,
       buyerMedian: 120_000,
@@ -135,16 +135,15 @@ describe("evaluatePreContractMath — pass / hold / block aggregation", () => {
       cmaValidatedAt: new Date(NOW.getTime() - 1 * 86_400_000).toISOString(),
       now: NOW,
     });
-    expect(r.status).toBe("hold");
-    expect(r.mao.status).toBe("hold");
-    expect(r.mao.reason).toContain("Est_Rehab");
+    expect(r.status).toBe("pass");
+    expect(r.mao.status).toBe("pass");
+    expect(r.investorMao).toBe(120_000);
   });
 
   it("BLOCK when contract > Your_MAO (decisive math failure)", () => {
     const r = evaluatePreContractMath({
-      contractOfferPrice: 100_000,
-      buyerMedian: 120_000,
-      estRehab: 30_000, // → investorMao 90K, yourMao 85K (5K default fee)
+      contractOfferPrice: 130_000,
+      buyerMedian: 120_000, // acquisition basis → investorMao 120K, yourMao 115K (5K default fee)
       cmaValidatedAt: new Date(NOW.getTime() - 1 * 86_400_000).toISOString(),
       now: NOW,
     });
@@ -156,8 +155,7 @@ describe("evaluatePreContractMath — pass / hold / block aggregation", () => {
   it("BLOCK when spread is negative (Your_MAO ≤ 0)", () => {
     const r = evaluatePreContractMath({
       contractOfferPrice: 50_000,
-      buyerMedian: 40_000,
-      estRehab: 20_000, // investorMao = 20K, yourMao = 5K
+      buyerMedian: 12_000, // acquisition basis: investorMao = 12K, yourMao = −3K
       wholesaleFee: 15_000,
       cmaValidatedAt: new Date(NOW.getTime() - 1 * 86_400_000).toISOString(),
       now: NOW,
@@ -168,8 +166,7 @@ describe("evaluatePreContractMath — pass / hold / block aggregation", () => {
   it("block wins over hold when math is decisively negative even if CMA is missing", () => {
     const r = evaluatePreContractMath({
       contractOfferPrice: 100_000,
-      buyerMedian: 50_000,
-      estRehab: 10_000, // investorMao=40K, yourMao=35K (5K default fee) → 100K > 35K
+      buyerMedian: 50_000, // acquisition basis: investorMao=50K, yourMao=45K (5K default fee) → 100K > 45K
       cmaValidatedAt: null, // CMA hold
       now: NOW,
     });
@@ -220,29 +217,27 @@ describe("INV-023 anchor: 23 Fields at $61,750 vs $45k top buyer → BLOCK (Spin
   it("blocks contract advancement (Your_MAO = $20K at the locked $5K fee)", () => {
     // 23 Fields Ave (rec1HTUqK0YEVb7uA): operator under contract at
     // $61,750. Top buyer pays $45K (the Buyer_Median from InvestorBase
-    // smart-match capped low). With $5K Wholesale_Fee (Spine
-    // rec937cFJthvCZzBM): Investor_MAO=$25K, Your_MAO=$20K.
-    // Contract $61,750 still wildly over → BLOCK.
+    // smart-match capped low). Acquisition basis (ruled 2026-07-20) with
+    // $5K Wholesale_Fee (Spine rec937cFJthvCZzBM): Investor_MAO=$45K,
+    // Your_MAO=$40K. Contract $61,750 still wildly over → BLOCK.
     const r = evaluatePreContractMath({
       contractOfferPrice: 61_750,
-      buyerMedian: 45_000, // top-buyer = Buyer_Median signal
-      estRehab: 20_000, // typical Memphis 38109 distress range
+      buyerMedian: 45_000, // top-buyer = Buyer_Median signal (their as-is buy)
       wholesaleFee: 5_000,
       cmaValidatedAt: new Date(NOW.getTime() - 2 * 86_400_000).toISOString(),
       now: NOW,
     });
     expect(r.status).toBe("block");
-    expect(r.investorMao).toBe(25_000); // 45K − 20K
-    expect(r.yourMao).toBe(20_000); // 25K − 5K
+    expect(r.investorMao).toBe(45_000); // acquisition basis: the median IS the buyer's max
+    expect(r.yourMao).toBe(40_000); // 45K − 5K
     expect(r.mao.status).toBe("block");
     expect(r.mao.reason).toContain("does not pass");
     expect(r.message).toContain("BLOCKED");
   });
 
-  it("blocks even at zero rehab and the new $5K fee — Your_MAO=$40K, contract $61,750 > $40K", () => {
-    // Sanity check: even if rehab were $0 and the fee is the new $5K
-    // default, Investor_MAO=$45K, Your_MAO=$40K. Contract $61,750 still
-    // exceeds Your_MAO → BLOCK.
+  it("blocks regardless of any rehab input — rehab does not enter the acquisition-basis math", () => {
+    // estRehab present or absent changes nothing: Investor_MAO=$45K,
+    // Your_MAO=$40K. Contract $61,750 still exceeds Your_MAO → BLOCK.
     const r = evaluatePreContractMath({
       contractOfferPrice: 61_750,
       buyerMedian: 45_000,
@@ -257,38 +252,35 @@ describe("INV-023 anchor: 23 Fields at $61,750 vs $45k top buyer → BLOCK (Spin
   });
 });
 
-describe("INV-023 anchor: 1219 E Highland Blvd 78210 → Investor_MAO ≈ $90K, Your_MAO=$85K at $5K fee", () => {
-  it("produces Investor_MAO=$90,000 / Your_MAO=$85,000 on the canonical $120K Buyer_Median + $30K rehab inputs", () => {
-    // Canonical from prior session work (Phase 4C.1 K.3 fixture):
-    //   $165K ARV + $1400/mo rent → landlord $135K beats flipper $90K.
-    // For the flipper track the Buyer_Median ≈ $120K (sold-comp median),
-    // Est_Rehab ≈ $30K. Wholesale_Fee = $5K (Spine rec937cFJthvCZzBM).
-    //   Investor_MAO = 120K − 30K = $90K
-    //   Your_MAO    = 90K − 5K   = $85K
+describe("INV-023 anchor: 1219 E Highland Blvd 78210 → acquisition basis at $5K fee", () => {
+  it("produces Investor_MAO=$120,000 / Your_MAO=$115,000 on the canonical $120K Buyer_Median (ruled 2026-07-20: rehab not subtracted)", () => {
+    // Canonical from prior session work (Phase 4C.1 K.3 fixture), updated
+    // to the ruled acquisition basis: the $120K Buyer_Median is what the
+    // buyer pays AS-IS, so it is the ceiling itself.
+    //   Investor_MAO = $120K
+    //   Your_MAO    = 120K − 5K = $115K   (Spine rec937cFJthvCZzBM fee)
     const r = evaluatePreContractMath({
       contractOfferPrice: 70_000,
       buyerMedian: 120_000,
-      estRehab: 30_000,
       wholesaleFee: 5_000,
       cmaValidatedAt: new Date(NOW.getTime() - 1 * 86_400_000).toISOString(),
       now: NOW,
     });
-    expect(r.investorMao).toBe(90_000);
-    expect(r.yourMao).toBe(85_000);
+    expect(r.investorMao).toBe(120_000);
+    expect(r.yourMao).toBe(115_000);
     expect(r.status).toBe("pass");
   });
 
-  it("still produces Investor_MAO=$90K / Your_MAO=$85K even when contract is missing (math is independent of contract)", () => {
+  it("still produces Investor_MAO=$120K / Your_MAO=$115K even when contract is missing (math is independent of contract)", () => {
     const r = evaluatePreContractMath({
       contractOfferPrice: null,
       buyerMedian: 120_000,
-      estRehab: 30_000,
       // No explicit wholesaleFee → uses DEFAULT ($5K) — exercises the constant.
       cmaValidatedAt: new Date(NOW.getTime() - 1 * 86_400_000).toISOString(),
       now: NOW,
     });
-    expect(r.investorMao).toBe(90_000);
-    expect(r.yourMao).toBe(85_000);
+    expect(r.investorMao).toBe(120_000);
+    expect(r.yourMao).toBe(115_000);
     expect(r.status).toBe("hold"); // contract missing → hold, but math is right
   });
 });

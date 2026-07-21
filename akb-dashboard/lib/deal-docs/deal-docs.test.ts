@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  applyEvidenceToSubject,
   parseInvestorBaseCsv,
   looksLikeInvestorBaseCsv,
 } from "./investorbase-csv";
@@ -18,32 +19,54 @@ const CSV = [
   'Dani Zuko Usa Llc,Carlos,Garbesi,landlord,Single Family Residence,3053106113,,,2533 Seyburn St,Detroit,MI,48214,3,1,1482,false,New,2026-03-26,75000,,0,1,0,Dani Zuko Usa Llc,,cg@x.com,2200 Hunt St,Detroit,MI,48207',
   // Nominal transfer — below the $10k evidence floor, excluded.
   'Jonathan D Koller,Jonathan,Koller,landlord,Single Family Residence,3144887132,,,4141 Mcdougall St,Detroit,MI,48207,3,2,2100,false,New,2025-11-13,5100,,0,3,11,Jonathan D Koller,,nk@x.com,4405 Grandy St,Detroit,MI,48207',
-  // Renovated-exit price — above the $250k cap, excluded from evidence.
+  // Flipper with a $264k renovated exit — the RESALE is out of band but the
+  // $150k PRIOR (their acquisition) is in-window/in-band evidence.
   'Sandra Willis,Sandra,Willis,flipper,Single Family Residence,8034049886,,,3104 Woods Cir,Detroit,MI,48207,4,2,1744,false,New,2026-01-12,264000,2025-02-25,150000,1,1,,Sandra Willis,sw@x.com,406 Alice Dr,Camden,SC,29020',
   // Stale — outside the 18-month window, excluded.
   'Flinch Inc,Justin,Galan,landlord,Single Family Residence,5599035929,,,6400 Seminole St,Detroit,MI,48213,4,3,3240,false,New,2021-07-08,300000,,0,1,175,Flinch Inc,,jg@x.com,6117 N Rolinda Ave,Fresno,CA,93723',
 ].join("\n");
 
-describe("parseInvestorBaseCsv — per-track as-is acquisition evidence, never blended", () => {
+describe("parseInvestorBaseCsv — acquisition-basis $/sqft evidence (ruled 2026-07-20), never blended", () => {
   it("sniffs the export format", () => {
     expect(looksLikeInvestorBaseCsv(HEADER)).toBe(true);
     expect(looksLikeInvestorBaseCsv("Address,Price,Beds")).toBe(false);
   });
 
-  it("computes flipper and landlord evidence separately with the window applied", () => {
+  it("THE TRAP: flipper acquisition = Prior Sale — Most Recent (their resale) never counts", () => {
+    const p = parseInvestorBaseCsv(CSV, NOW);
+    const max = p.buyers.find((b) => b.entityName === "Max Performance Llc")!;
+    expect(max.acquisitionPrice).toBe(29_200); // Prior, NOT the $45k resale
+    expect(max.resalePrice).toBe(45_000);
+    const sandra = p.buyers.find((b) => b.entityName === "Sandra Willis")!;
+    expect(sandra.acquisitionPrice).toBe(150_000); // her $264k exit is resale evidence only
+    const landlord = p.buyers.find((b) => b.entityName === "Dani Zuko Usa Llc")!;
+    expect(landlord.acquisitionPrice).toBe(75_000); // landlord holds: Most Recent IS the buy
+    expect(landlord.resalePrice).toBeNull();
+  });
+
+  it("computes per-track $/sqft medians with the window applied to the acquisition", () => {
     const p = parseInvestorBaseCsv(CSV, NOW);
     expect(p.totalRows).toBe(6);
     expect(p.flipperCount).toBe(3);
     expect(p.landlordCount).toBe(3);
     const flipper = p.evidence.find((e) => e.track === "flipper")!;
-    // 45k + 30k qualify; 264k (renovated exit) excluded.
-    expect(flipper.n).toBe(2);
-    expect(flipper.median).toBe(37_500);
+    // Acquisitions: 29,200/1471 + 13,200/1104 + 150,000/1744 all in window.
+    expect(flipper.n).toBe(3);
+    expect(flipper.medianPsf).toBeCloseTo(29_200 / 1471, 1);
+    expect(flipper.flatMedian).toBe(29_200);
     const landlord = p.evidence.find((e) => e.track === "landlord")!;
-    // 75k qualifies; $5.1k nominal + 2021 stale excluded.
+    // 75k/1482 qualifies; $5.1k nominal + 2021 stale excluded.
     expect(landlord.n).toBe(1);
-    expect(landlord.median).toBe(75_000);
-    expect(p.evidenceRows).toBe(3);
+    expect(landlord.medianPsf).toBeCloseTo(75_000 / 1482, 1);
+    expect(landlord.flatMedian).toBe(75_000);
+    expect(p.evidenceRows).toBe(4);
+  });
+
+  it("applyEvidenceToSubject: median $/sqft × subject sqft; null when either leg missing", () => {
+    const e = { track: "landlord" as const, n: 5, medianPsf: 40, minPsf: 20, maxPsf: 60, flatMedian: 50_000 };
+    expect(applyEvidenceToSubject(e, 1_170)).toBe(46_800); // 40 × 1,170
+    expect(applyEvidenceToSubject(e, null)).toBeNull(); // no subject sqft → no number
+    expect(applyEvidenceToSubject({ ...e, medianPsf: null }, 1_170)).toBeNull();
   });
 
   it("maps buyer contact fields for the dispo lane", () => {
@@ -52,6 +75,7 @@ describe("parseInvestorBaseCsv — per-track as-is acquisition evidence, never b
     expect(max.phone).toBe("3133332469");
     expect(max.email).toBe("shawn@x.com");
     expect(max.buyerType).toBe("flipper");
+    expect(max.sqft).toBe(1471);
   });
 });
 

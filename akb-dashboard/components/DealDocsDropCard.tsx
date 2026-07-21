@@ -2,10 +2,15 @@
 
 // DEAL DOCS — drop an InvestorBase CSV or PropStream CMA PDF; the system
 // does the reading (operator GO 2026-07-20, credential-free tier). The
-// per-track medians render with one-tap STAMP buttons that write through
+// per-track evidence renders with one-tap STAMP buttons that write through
 // the existing validated buyer-median endpoint — the operator's tap IS the
 // manual entry the 2026-06-08 hard rule requires; the arithmetic is what
 // got automated.
+//
+// RULED MODEL (2026-07-20, spine reczqg6SorHCL3PWb): evidence is the
+// buyer's as-is ACQUISITION (flipper=Prior Sale, landlord=Most Recent),
+// expressed $/sqft; the stamped dollar value = median $/sqft × the
+// SUBJECT's sqft. Flat medians are context only, never stamped.
 
 import { useCallback, useRef, useState } from "react";
 import { showToast } from "@/components/Toast";
@@ -13,10 +18,13 @@ import { showToast } from "@/components/Toast";
 interface TrackEvidence {
   track: "flipper" | "landlord";
   n: number;
-  median: number | null;
-  mean: number | null;
-  min: number | null;
-  max: number | null;
+  medianPsf: number | null;
+  minPsf: number | null;
+  maxPsf: number | null;
+  flatMedian: number | null;
+  subjectSqft: number | null;
+  /** medianPsf × subjectSqft — the value the Stamp writes. */
+  appliedValue: number | null;
 }
 
 interface CsvResult {
@@ -24,6 +32,7 @@ interface CsvResult {
   totalRows: number;
   flipperCount: number;
   landlordCount: number;
+  subjectSqft: number | null;
   evidence: TrackEvidence[];
 }
 
@@ -82,14 +91,16 @@ export default function DealDocsDropCard({ recordId }: { recordId: string }) {
 
   const stampMedian = useCallback(
     async (e: TrackEvidence) => {
-      if (e.median == null) return;
+      // Stamp the SUBJECT-APPLIED value (median $/sqft × subject sqft) —
+      // never the flat median (ruled model).
+      if (e.appliedValue == null) return;
       setStamping(e.track);
       try {
         const res = await fetch(`/api/deal/${recordId}/buyer-median`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            value: e.median,
+            value: e.appliedValue,
             source: "investorbase_manual",
             track: e.track,
             exportDate: new Date().toISOString().slice(0, 10),
@@ -101,7 +112,7 @@ export default function DealDocsDropCard({ recordId }: { recordId: string }) {
           showToast(`Stamp refused: ${body.message ?? body.error ?? res.status}`);
         } else {
           setStamped((prev) => new Set(prev).add(e.track));
-          showToast(`${e.track} median ${usd(e.median)} stamped (n=${e.n})`);
+          showToast(`${e.track} ${usd(e.appliedValue)} stamped ($${e.medianPsf}/sqft × ${e.subjectSqft} sqft, n=${e.n})`);
         }
       } catch (err) {
         showToast(`Stamp failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -144,18 +155,26 @@ export default function DealDocsDropCard({ recordId }: { recordId: string }) {
         <div className="space-y-2">
           <p className="text-gray-400">
             {result.totalRows} buyers · {result.flipperCount} flipper / {result.landlordCount} landlord
+            {result.subjectSqft != null && <span className="text-gray-500"> · subject {result.subjectSqft.toLocaleString()} sqft</span>}
           </p>
+          {result.subjectSqft == null && (
+            <p className="text-amber-400">
+              Subject sqft unknown — $/sqft evidence can&apos;t be applied. Fix the listing&apos;s sqft first.
+            </p>
+          )}
           {result.evidence.map((e) => (
             <div key={e.track} className="flex items-center justify-between bg-[#0d1117] border border-[#30363d] rounded px-2 py-1.5">
               <div>
-                <span className="text-gray-500 capitalize">{e.track} median</span>
+                <span className="text-gray-500 capitalize">{e.track} acquisition</span>
                 <p className="text-white font-medium">
-                  {usd(e.median)} <span className="text-gray-500">(n={e.n}, {usd(e.min)}–{usd(e.max)})</span>
+                  {e.medianPsf != null ? `$${e.medianPsf}/sqft` : "—"}
+                  {e.appliedValue != null && <> → {usd(e.appliedValue)}</>}{" "}
+                  <span className="text-gray-500">(n={e.n}{e.minPsf != null ? `, $${e.minPsf}–$${e.maxPsf}/sqft` : ""})</span>
                 </p>
               </div>
               <button
                 type="button"
-                disabled={e.median == null || stamping === e.track || stamped.has(e.track)}
+                disabled={e.appliedValue == null || stamping === e.track || stamped.has(e.track)}
                 onClick={() => void stampMedian(e)}
                 className="min-h-[36px] px-3 rounded bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white font-bold"
               >
@@ -164,8 +183,9 @@ export default function DealDocsDropCard({ recordId }: { recordId: string }) {
             </div>
           ))}
           <p className="text-[10px] text-gray-600">
-            Evidence window: purchases ≤18mo, $10k–$250k. Stamping writes the validated γ-path
-            (source=investorbase_manual + export date) — your tap is the ruling.
+            As-is acquisitions (flipper=Prior Sale, landlord=Most Recent), ≤18mo, $10k–$250k, as $/sqft ×
+            subject sqft. Stamping writes the validated γ-path (source=investorbase_manual + export date) —
+            your tap is the ruling.
           </p>
         </div>
       )}

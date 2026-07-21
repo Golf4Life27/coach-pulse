@@ -6,11 +6,15 @@
 // Credential-free tier of the automation ladder (operator GO 2026-07-20):
 // the operator keeps the 3-minute manual export (ToS-clean, no stored
 // portal passwords); everything after the drop is automated:
-//   CSV → per-track (flipper/landlord) as-is acquisition evidence. The
-//         medians are DISPLAYED with one-tap stamp buttons that write
-//         through the EXISTING validated γ-path — the 2026-06-08 hard rule
-//         (InvestorBase exports, operator-entered, export-date provenance)
-//         stays intact; we automate the arithmetic, not the ruling.
+//   CSV → per-track (flipper/landlord) as-is acquisition evidence under
+//         the RULED MODEL (2026-07-20, spine reczqg6SorHCL3PWb): flipper
+//         acquisition = Prior Sale (their Most Recent is the renovated
+//         resale — never counted), landlord = Most Recent; median $/sqft
+//         × the SUBJECT's sqft is the stamped dollar value. One-tap stamp
+//         buttons write through the EXISTING validated γ-path — the
+//         2026-06-08 hard rule (InvestorBase exports, operator-entered,
+//         export-date provenance) stays intact; we automate the
+//         arithmetic, not the ruling.
 //   PDF → the CMA summary numbers (comp avg, est value, seller's open
 //         mortgage, last sale). Owner + first-mortgage evidence hydrates
 //         Property_Intel (non-select fields only — the Conveyor 422 lesson);
@@ -21,6 +25,7 @@ import { NextResponse } from "next/server";
 import { getListing, updateListingRecord } from "@/lib/airtable";
 import { upsertPropertyIntel } from "@/lib/federation/property-intel-store";
 import {
+  applyEvidenceToSubject,
   looksLikeInvestorBaseCsv,
   parseInvestorBaseCsv,
 } from "@/lib/deal-docs/investorbase-csv";
@@ -94,27 +99,48 @@ export async function POST(
         return NextResponse.json({ error: "not_an_investorbase_export", detail: "header mismatch" }, { status: 422 });
       }
       const parsed = parseInvestorBaseCsv(text, Date.now());
+      // RULED MODEL: the stamped value is median acquisition $/sqft × the
+      // SUBJECT's sqft — a flat median negates size and is never stamped.
+      const subjectSqft = listing.buildingSqFt ?? null;
+      const applied = parsed.evidence.map((e) => ({
+        ...e,
+        subjectSqft,
+        appliedValue: applyEvidenceToSubject(e, subjectSqft),
+      }));
       await appendNote(
         recordId,
         `[deal-docs ${nowIso}] InvestorBase export ingested (${file.name}): ${parsed.totalRows} buyers ` +
-          `(${parsed.flipperCount} flipper / ${parsed.landlordCount} landlord). As-is acquisition evidence (18mo, $10k-$250k): ` +
-          parsed.evidence
-            .map((e) => `${e.track} median ${e.median != null ? `$${e.median.toLocaleString()}` : "—"} (n=${e.n})`)
+          `(${parsed.flipperCount} flipper / ${parsed.landlordCount} landlord). As-is ACQUISITION evidence ` +
+          `(flipper=Prior Sale, landlord=Most Recent; 18mo, $10k-$250k), $/sqft × subject ${subjectSqft ?? "?"} sqft: ` +
+          applied
+            .map(
+              (e) =>
+                `${e.track} ${e.medianPsf != null ? `$${e.medianPsf}/sqft` : "—"} → ` +
+                `${e.appliedValue != null ? `$${e.appliedValue.toLocaleString()}` : "—"} (n=${e.n})`,
+            )
             .join("; ") +
-          ". Medians await operator stamp via the buyer-median panel.",
+          ". Values await operator stamp via the buyer-median panel.",
       );
       await audit({
         agent: "appraiser",
         event: "deal_doc_ingested",
         status: "confirmed_success",
         recordId,
-        inputSummary: { kind: "investorbase_csv", file: file.name, rows: parsed.totalRows },
+        inputSummary: { kind: "investorbase_csv", file: file.name, rows: parsed.totalRows, subject_sqft: subjectSqft },
         outputSummary: {
-          evidence: Object.fromEntries(parsed.evidence.map((e) => [e.track, { median: e.median, n: e.n }])),
+          evidence: Object.fromEntries(
+            applied.map((e) => [e.track, { median_psf: e.medianPsf, applied_value: e.appliedValue, n: e.n }]),
+          ),
         },
       });
       // Buyers returned for display; table import is a follow-up lane.
-      return NextResponse.json({ kind: "investorbase_csv", ...parsed, buyers: parsed.buyers.slice(0, 50) });
+      return NextResponse.json({
+        kind: "investorbase_csv",
+        ...parsed,
+        evidence: applied,
+        subjectSqft,
+        buyers: parsed.buyers.slice(0, 50),
+      });
     }
 
     // ── PropStream CMA PDF ──────────────────────────────────────────────
