@@ -143,11 +143,11 @@ describe("defaultBuyerTrack — distressed as-is → landlord", () => {
   });
 });
 
-describe("computeTrackAwareMao — track decides rehab subtraction", () => {
-  it("flipper: subtracts rehab (renovated-resale basis)", () => {
-    const r = computeTrackAwareMao({ track: "flipper", buyerMedian: 150_000, estRehab: 28_518, wholesaleFee: 5_000 });
-    expect(r.investorMao).toBe(121_482); // 150,000 − 28,518
-    expect(r.yourMao).toBe(116_482); // − 5,000
+describe("computeTrackAwareMao — acquisition basis, both tracks (ruled 2026-07-20, spine reczqg6SorHCL3PWb)", () => {
+  it("flipper: acquisition basis — the median IS the buyer's as-is max, rehab NOT subtracted", () => {
+    const r = computeTrackAwareMao({ track: "flipper", buyerMedian: 42_500, estRehab: 28_518, wholesaleFee: 5_000 });
+    expect(r.investorMao).toBe(42_500); // median = as-is acquisition price
+    expect(r.yourMao).toBe(37_500); // − 5,000
   });
 
   it("landlord (as-is): does NOT subtract the flip rehab — Strathmoor $55k ceiling", () => {
@@ -163,9 +163,10 @@ describe("computeTrackAwareMao — track decides rehab subtraction", () => {
     expect(r.yourMao).toBe(50_000);
   });
 
-  it("flipper HOLDs when rehab missing (needs it for the renovated basis)", () => {
-    const r = computeTrackAwareMao({ track: "flipper", buyerMedian: 150_000, estRehab: null });
-    expect(r.yourMao).toBeNull();
+  it("flipper computes WITHOUT rehab — acquisition basis needs only the median", () => {
+    const r = computeTrackAwareMao({ track: "flipper", buyerMedian: 42_500, estRehab: null });
+    expect(r.investorMao).toBe(42_500);
+    expect(r.yourMao).toBe(37_500); // − default $5k fee
   });
 
   it("HOLDs when buyer median missing", () => {

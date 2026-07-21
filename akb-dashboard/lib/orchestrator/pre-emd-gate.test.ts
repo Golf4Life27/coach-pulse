@@ -45,10 +45,11 @@ describe("INV-023 Pre-EMD gate (Milestone 2)", () => {
     expect(r.blocked).toEqual(["DD-4"]);
     const dd4 = r.checks.find((c) => c.id === "DD-4")!;
     expect(dd4.status).toBe("BLOCKED");
-    // the literal 23 Fields numbers: $61,750 contract > $45,000 Your_MAO
+    // the literal 23 Fields numbers (acquisition basis, ruled 2026-07-20):
+    // $61,750 contract > $60,000 Your_MAO ($65k median − $5k fee)
     expect(dd4.reason).toContain("61,750");
-    expect(dd4.reason).toContain("45,000");
-    expect(dd4.examined.your_mao).toBe(45000);
+    expect(dd4.reason).toContain("60,000");
+    expect(dd4.examined.your_mao).toBe(60000);
   });
 
   it("Poteet 938 Avenue I → BLOCKED on un-validated ARV, missing rehab, absent buyer ceiling, unconfirmed assignment (+ more); only DD-8 passes", () => {

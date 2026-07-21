@@ -2,10 +2,19 @@
 // @agent: orchestrator
 //
 // The math that hard-blocks advancement into `Pipeline_Stage = under_contract`.
-// Per the V1 build authorization:
 //
-//   Investor_MAO = Buyer_Median − Est_Rehab
+// RULED MODEL (operator principle_amendment 2026-07-20, spine
+// reczqg6SorHCL3PWb) — the Buyer_Median is the track's as-is ACQUISITION
+// price ($/sqft × subject sqft), already what a cash buyer pays in as-is
+// condition, so rehab is NOT subtracted (double-count):
+//
+//   Investor_MAO = Buyer_Median            (acquisition basis)
 //   Your_MAO     = Investor_MAO − Wholesale_Fee
+//
+// (Supersedes the V1 "Buyer_Median − Est_Rehab", which assumed a
+// renovated-resale basis. The exported computeInvestorMao helper below
+// KEEPS the value−rehab shape — the V2.1 lanes feed it renovated-basis
+// values, where subtracting rehab is correct.)
 //
 // All three preconditions (CMA fresh, Buyer_Median present, MAO clean)
 // must be GREEN. Missing data → HOLD (data_missing). No override path.
@@ -31,8 +40,9 @@ export interface PreContractMathInputs {
   /** Buyer_Median from Property_Intel (INV-022). Per Decision Preconditions
    *  Rule 1 this is the V2.1 floor truth signal — NO theoretical fallback. */
   buyerMedian: number | null | undefined;
-  /** Est_Rehab in dollars (Phase 4B vision/manual). */
-  estRehab: number | null | undefined;
+  /** Est_Rehab in dollars (Phase 4B vision/manual). RETAINED for callers
+   *  but no longer enters PC-27 — acquisition basis (ruled 2026-07-20). */
+  estRehab?: number | null | undefined;
   /** Wholesale fee in dollars. Defaults to DEFAULT_WHOLESALE_FEE if omitted. */
   wholesaleFee?: number | null | undefined;
   /** ISO timestamp when the CMA was last validated (`arvValidatedAt`). */
@@ -130,10 +140,14 @@ export function evaluatePreContractMath(
   // PC-26: Buyer_Median present.
   const buyerMedian = evaluateBuyerMedian(inputs.buyerMedian);
 
-  // PC-27: MAO math.
-  const investorMao = computeInvestorMao(inputs.buyerMedian, inputs.estRehab);
+  // PC-27: MAO math — acquisition basis (ruled 2026-07-20): the median IS
+  // the buyer's as-is purchase price; rehab is NOT subtracted.
+  const investorMao =
+    inputs.buyerMedian != null && Number.isFinite(inputs.buyerMedian) && inputs.buyerMedian > 0
+      ? Math.round(inputs.buyerMedian)
+      : null;
   const yourMao = computeYourMao(investorMao, fee);
-  const mao = evaluateMao(inputs.contractOfferPrice, investorMao, yourMao, inputs.buyerMedian, inputs.estRehab, fee);
+  const mao = evaluateMao(inputs.contractOfferPrice, investorMao, yourMao, inputs.buyerMedian, fee);
 
   // Aggregate.
   let status: MathPreconditionStatus = "pass";
@@ -195,17 +209,14 @@ function evaluateMao(
   investorMao: number | null,
   yourMao: number | null,
   buyerMedian: number | null | undefined,
-  estRehab: number | null | undefined,
   wholesaleFee: number,
 ): MathPreconditionResult {
-  // Missing inputs first: math can't be computed at all.
+  // Missing inputs first: math can't be computed at all. (Acquisition
+  // basis: only Buyer_Median is required — rehab no longer enters PC-27.)
   if (investorMao == null || yourMao == null) {
-    const missing: string[] = [];
-    if (buyerMedian == null || !Number.isFinite(buyerMedian) || buyerMedian <= 0) missing.push("Buyer_Median");
-    if (estRehab == null || !Number.isFinite(estRehab) || estRehab < 0) missing.push("Est_Rehab");
     return {
       status: "hold",
-      reason: `MAO inputs incomplete (missing ${missing.join(" + ") || "Buyer_Median + Est_Rehab"}). Hydrate before advancing.`,
+      reason: "MAO inputs incomplete (missing Buyer_Median). Hydrate before advancing.",
     };
   }
 
@@ -222,7 +233,7 @@ function evaluateMao(
   if (yourMao <= 0) {
     return {
       status: "block",
-      reason: `Spread is negative — Investor_MAO=$${investorMao.toLocaleString()}, Your_MAO=$${yourMao.toLocaleString()} (Buyer_Median=$${(buyerMedian as number).toLocaleString()} − Est_Rehab=$${(estRehab as number).toLocaleString()} − Wholesale_Fee=$${wholesaleFee.toLocaleString()}). Deal math does not work.`,
+      reason: `Spread is negative — Investor_MAO=$${investorMao.toLocaleString()}, Your_MAO=$${yourMao.toLocaleString()} (Buyer_Median=$${(buyerMedian as number).toLocaleString()} − Wholesale_Fee=$${wholesaleFee.toLocaleString()}, acquisition basis). Deal math does not work.`,
     };
   }
   if (contractOfferPrice > yourMao) {

@@ -160,10 +160,12 @@ export function defaultBuyerTrack(input: {
 
 export interface TrackAwareMao {
   track: BuyerTrack;
-  /** Investor_MAO — the cash buyer's max. Flipper: median is a RENOVATED-
-   *  resale basis, so rehab is subtracted. Landlord: the as-is median is
-   *  ALREADY a purchase price for the as-is condition, so the flip rehab is
-   *  NOT subtracted again (that would double-count). */
+  /** Investor_MAO — the cash buyer's max. RULED MODEL (2026-07-20, spine
+   *  reczqg6SorHCL3PWb): the Buyer_Median is the track's as-is ACQUISITION
+   *  price (flipper=Prior Sale, landlord=Most Recent) — for BOTH tracks it
+   *  is ALREADY what that buyer pays in as-is condition, so rehab is NEVER
+   *  subtracted (the acquisition price already reflects the buyer's
+   *  rehab+margin; subtracting again double-counts). */
   investorMao: number | null;
   /** Your_MAO = Investor_MAO − Wholesale_Fee. */
   yourMao: number | null;
@@ -171,12 +173,14 @@ export interface TrackAwareMao {
   formula: string;
 }
 
-/** Pure: track-aware Buyer_Median → MAO. The track decides whether the flip
- *  rehab is subtracted (flipper: yes; landlord as-is: no). Never blends. */
+/** Pure: track-aware Buyer_Median → MAO. Both tracks are acquisition-basis
+ *  (ruled 2026-07-20): Investor_MAO = median; Your_MAO = median − fee.
+ *  estRehab is retained in the signature for callers but no longer enters
+ *  the math. Never blends. */
 export function computeTrackAwareMao(input: {
   track: BuyerTrack;
   buyerMedian: number | null | undefined;
-  estRehab: number | null | undefined;
+  estRehab?: number | null | undefined;
   wholesaleFee?: number | null | undefined;
 }): TrackAwareMao {
   const DEFAULT_FEE = 5_000;
@@ -192,27 +196,8 @@ export function computeTrackAwareMao(input: {
     return { track: input.track, investorMao: null, yourMao: null, wholesaleFeeUsed: fee, formula: "HOLD — Buyer_Median missing" };
   }
 
-  if (input.track === "flipper") {
-    const rehab =
-      typeof input.estRehab === "number" && Number.isFinite(input.estRehab) && input.estRehab >= 0
-        ? input.estRehab
-        : null;
-    if (rehab == null) {
-      return { track: input.track, investorMao: null, yourMao: null, wholesaleFeeUsed: fee, formula: "HOLD — flipper track needs Est_Rehab (renovated-resale basis)" };
-    }
-    const investorMao = Math.round(bm - rehab);
-    const yourMao = Math.round(investorMao - fee);
-    return {
-      track: input.track,
-      investorMao,
-      yourMao,
-      wholesaleFeeUsed: fee,
-      formula: `flipper: Investor_MAO = Buyer_Median $${bm.toLocaleString()} − Est_Rehab $${rehab.toLocaleString()} = $${investorMao.toLocaleString()}; Your_MAO = − fee $${fee.toLocaleString()} = $${yourMao.toLocaleString()}`,
-    };
-  }
-
-  // landlord (as-is): the median IS the buyer's as-is purchase price, so the
-  // flip rehab is NOT subtracted. Your_MAO = median − wholesale fee.
+  // Acquisition basis, BOTH tracks: the median IS the buyer's as-is
+  // purchase price. Rehab is not subtracted (double-count).
   const investorMao = Math.round(bm);
   const yourMao = Math.round(bm - fee);
   return {
@@ -220,6 +205,6 @@ export function computeTrackAwareMao(input: {
     investorMao,
     yourMao,
     wholesaleFeeUsed: fee,
-    formula: `landlord (as-is): Investor_MAO = Buyer_Median $${bm.toLocaleString()} (as-is purchase price, flip rehab NOT subtracted); Your_MAO = − fee $${fee.toLocaleString()} = $${yourMao.toLocaleString()}`,
+    formula: `${input.track} (as-is acquisition): Investor_MAO = Buyer_Median $${bm.toLocaleString()} (acquisition basis, rehab NOT subtracted); Your_MAO = − fee $${fee.toLocaleString()} = $${yourMao.toLocaleString()}`,
   };
 }
