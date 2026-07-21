@@ -27,6 +27,13 @@ interface TrackEvidence {
   appliedValue: number | null;
 }
 
+interface BuyersAccumulated {
+  total: number;
+  created: number;
+  updated: number;
+  skipped: number;
+}
+
 interface CsvResult {
   kind: "investorbase_csv";
   totalRows: number;
@@ -34,6 +41,7 @@ interface CsvResult {
   landlordCount: number;
   subjectSqft: number | null;
   evidence: TrackEvidence[];
+  buyersAccumulated: BuyersAccumulated | null;
 }
 
 interface CmaResult {
@@ -182,10 +190,22 @@ export default function DealDocsDropCard({ recordId }: { recordId: string }) {
               </button>
             </div>
           ))}
+          {result.buyersAccumulated && (
+            <div className="flex items-center gap-1.5 rounded bg-[#0d1117] border border-[#30363d] px-2 py-1.5 text-emerald-300">
+              <span aria-hidden>📇</span>
+              <span>
+                Dispo list: <span className="font-medium">{result.buyersAccumulated.created} new</span> ·{" "}
+                {result.buyersAccumulated.updated} updated
+                {result.buyersAccumulated.skipped > 0 && (
+                  <span className="text-gray-500"> · {result.buyersAccumulated.skipped} no-contact skipped</span>
+                )}
+              </span>
+            </div>
+          )}
           <p className="text-[10px] text-gray-600">
             As-is acquisitions (flipper=Prior Sale, landlord=Most Recent), ≤18mo, $10k–$250k, as $/sqft ×
             subject sqft. Stamping writes the validated γ-path (source=investorbase_manual + export date) —
-            your tap is the ruling.
+            your tap is the ruling. Every drop also files these buyers into your metro-segmented dispo list.
           </p>
         </div>
       )}
