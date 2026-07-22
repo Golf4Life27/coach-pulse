@@ -87,14 +87,20 @@ describe("classifyVerifiedListing", () => {
 describe("classifyVerifiedListing — renovation is a HARD VETO (2026-05-27 amendment)", () => {
   const noText = { hasConditionSignal: false, matchedDistressKeywords: [] as string[] };
 
-  it("DOM ≥ 60 alone no longer accepts → review (DOM is diagnostic only)", () => {
+  // SUPERSEDED 2026-07-22 (operator ruling: "distressed in some fashion,
+  // either by DOM or physically") — aged DOM / price cut accept again, at
+  // tier 8, strictly BELOW the hard vetoes. The veto tests above are the
+  // surviving guard from the 2026-05-27 amendment.
+  it("aged DOM alone accepts at tier 8 (2026-07-22 ruling; was diagnostic-only)", () => {
     const d = classifyVerifiedListing(fc(noText), { daysOnMarket: 500, priceReduced: false });
-    expect(d.outcome).toBe("review");
+    expect(d.outcome).toBe("accept");
+    if (d.outcome === "accept") expect(d.acceptBasis).toBe("aged_dom");
   });
 
-  it("price reduced alone no longer accepts → review (priceReduced is diagnostic only)", () => {
+  it("price cut alone accepts at tier 8 (2026-07-22 ruling; was diagnostic-only)", () => {
     const d = classifyVerifiedListing(fc(noText), { daysOnMarket: 5, priceReduced: true });
-    expect(d.outcome).toBe("review");
+    expect(d.outcome).toBe("accept");
+    if (d.outcome === "accept") expect(d.acceptBasis).toBe("price_cut");
   });
 
   it("text condition signal still accepts (the surviving distress accept)", () => {
@@ -240,5 +246,66 @@ describe("buildResolvedResult", () => {
     const r = buildResolvedResult("346 Modder Ave. Fully remodeled, renovated kitchen.", "https://x/346", "346 Modder Ave", 2, false);
     expect(r.resolved).toBe(true);
     expect(r.hasRenovatedLanguage).toBe(true);
+  });
+});
+
+// ── Tier-8 distress accepts (operator ruling 2026-07-22) ─────────────────
+// Price cut / aged DOM accept BELOW the hard vetoes. The Santa Anna guard
+// (2026-05-27, Spine rec6DhIgAIH50jkJT) must hold: a renovated turnkey with
+// screaming candidate-side distress signals still rejects.
+
+describe("classifyVerifiedListing — tier-8 distress accepts (DOM / price cut)", () => {
+  const clean = { hasConditionSignal: false, matchedDistressKeywords: [] };
+
+  it("SANTA ANNA PIN: renovated + priceReduced + DOM 177 → still hard reject", () => {
+    const d = classifyVerifiedListing(
+      fc({ ...clean, hasRenovatedLanguage: true }),
+      { daysOnMarket: 177, priceReduced: true },
+    );
+    expect(d).toEqual({ outcome: "reject", reason: "firecrawl_renovated" });
+  });
+
+  it("new construction + aged DOM → still hard reject", () => {
+    const d = classifyVerifiedListing(
+      fc({ ...clean, isNewConstruction: true }),
+      { daysOnMarket: 200, priceReduced: false },
+    );
+    expect(d).toEqual({ outcome: "reject", reason: "new_construction_excluded" });
+  });
+
+  it("clean copy + aged DOM (>= mark) → accept, basis aged_dom", () => {
+    const d = classifyVerifiedListing(fc(clean), { daysOnMarket: 120, priceReduced: false }, { domMark: 90 });
+    expect(d.outcome).toBe("accept");
+    if (d.outcome === "accept") expect(d.acceptBasis).toBe("aged_dom");
+  });
+
+  it("clean copy + price cut → accept, basis price_cut", () => {
+    const d = classifyVerifiedListing(fc(clean), { daysOnMarket: 12, priceReduced: true });
+    expect(d.outcome).toBe("accept");
+    if (d.outcome === "accept") expect(d.acceptBasis).toBe("price_cut");
+  });
+
+  it("clean copy + fresh DOM + no cut → still Review (no lowballing clean fresh listings)", () => {
+    const d = classifyVerifiedListing(fc(clean), { daysOnMarket: 30, priceReduced: false }, { domMark: 90 });
+    expect(d.outcome).toBe("review");
+    if (d.outcome === "review") expect(d.reason).toBe("condition_signal_missing_flagged");
+  });
+
+  it("condition-signal accept carries basis condition_signal (existing lane labeled)", () => {
+    const d = classifyVerifiedListing(fc(), { daysOnMarket: null, priceReduced: false });
+    expect(d.outcome).toBe("accept");
+    if (d.outcome === "accept") expect(d.acceptBasis).toBe("condition_signal");
+  });
+
+  it("sqft-mismatch armor still precedes the tier-8 accepts", () => {
+    const md = "346 Modder Ave. 2,400 sqft of space.";
+    const r = buildResolvedResult(md, "https://x/346", "346 Modder Ave", 1, false);
+    const d = classifyVerifiedListing(
+      { ...r, ...clean },
+      { daysOnMarket: 150, priceReduced: true },
+      { sourceSqft: 1200 },
+    );
+    expect(d.outcome).toBe("review");
+    if (d.outcome === "review") expect(d.reason).toBe("sqft_mismatch_flagged");
   });
 });
