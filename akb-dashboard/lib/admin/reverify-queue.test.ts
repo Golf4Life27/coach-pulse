@@ -5,7 +5,7 @@ import { planRequalification, requalWriteFields, buildRequalNote } from "./rever
 import type { VerifiedOutcome } from "@/lib/crawler/sources/firecrawl";
 
 const reject = (reason: string): VerifiedOutcome => ({ outcome: "reject", reason });
-const accept: VerifiedOutcome = { outcome: "accept", outreachStatus: "" };
+const accept: VerifiedOutcome = { outcome: "accept", outreachStatus: "", acceptBasis: "condition_signal" };
 const review: VerifiedOutcome = { outcome: "review", reason: "condition_signal_missing_flagged", outreachStatus: "Review" };
 
 describe("planRequalification", () => {

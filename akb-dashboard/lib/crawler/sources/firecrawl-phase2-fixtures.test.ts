@@ -216,12 +216,14 @@ const CASES: Case[] = [
 
 describe("Phase 2 fixtures — 78201 listings after the renovation hard-veto amendment", () => {
   for (const c of CASES) {
-    // Post-amendment (2026-05-27): a clean (non-renovated, active,
-    // non-wholesaler) listing accepts ONLY on a text condition signal. DOM /
-    // price cut are diagnostic now and no longer rescue a no-condition-copy
-    // listing — those route to review. Passing c.signals (incl. DOM 411 etc.)
-    // proves the dropped override does not change the outcome.
-    const expected = c.expect.condition ? "accept" : "review";
+    // 2026-07-22 operator ruling ("distressed by DOM or physically"): a
+    // clean (non-renovated, active, non-wholesaler) listing accepts on a
+    // text condition signal (tier 7) OR aged DOM / price cut (tier 8).
+    // Every fixture here carries DOM ≥ the 90 mark or a cut, so the clean
+    // ones ALL accept now; the hard-veto fixtures still reject above.
+    const distressed =
+      (c.signals.daysOnMarket ?? 0) >= 90 || c.signals.priceReduced === true;
+    const expected = c.expect.condition || distressed ? "accept" : "review";
     it(`${c.name} → ${expected}`, () => {
       const fc = verifyFromText(c.markdown);
       expect(fc.hasRenovatedLanguage).toBe(c.expect.renovated);

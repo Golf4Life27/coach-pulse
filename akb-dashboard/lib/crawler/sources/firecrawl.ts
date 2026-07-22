@@ -21,7 +21,7 @@
 // ⚠️ FIRECRAWL_API_KEY must be set in prod env (operator action) — the
 // adapter returns credentialed=false when absent.
 
-import { evaluateListingContent, extractScrapedSqft, crossCheckSqft } from "@/lib/crawler/intake-filter";
+import { evaluateListingContent, extractScrapedSqft, crossCheckSqft, INTAKE_DISTRESS_DOM_MARK } from "@/lib/crawler/intake-filter";
 import { scopeSubjectText, scopeStatusText } from "@/lib/crawler/sources/listing-text-scope";
 
 const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY;
@@ -605,41 +605,46 @@ export async function verifyListingByUrl(
 
 // ── Verified-listing classification (pure; testable decision logic) ─────
 //
-// Precedence (top to bottom), locked by operator amendment 2026-05-27
-// (Spine rec6DhIgAIH50jkJT):
+// Precedence (top to bottom). Veto tier locked by operator amendment
+// 2026-05-27 (Spine rec6DhIgAIH50jkJT); distress-accept tier restored BELOW
+// the vetoes by operator ruling 2026-07-22 ("they need to be distressed in
+// some fashion, either by DOM or physically"):
 //   1. infra errors / unresolved → reject (no usable page)
 //   2. inactive → reject
 //   3. NEW CONSTRUCTION → reject   ── HARD VETO
 //   4. wholesaler-excluded → reject
 //   5. RENOVATION language → reject   ── HARD VETO (same tier as #3)
-//   6. text condition signal → ACCEPT (genuine distress / motivation / as-is)
-//   7. else → SOFT "review" (writes Outreach_Status="Review" for spot-check).
+//   6. sqft cross-check mismatch → REVIEW (data armor before any accept)
+//   7. text condition signal → ACCEPT (physical distress / as-is copy)
+//   8. price cut OR aged DOM (≥ INTAKE_DISTRESS_DOM_MARK) → ACCEPT
+//   9. else → SOFT "review" (writes Outreach_Status="Review" for spot-check).
 //
-// new_construction and renovation are the SAME hard-veto tier: a 65%-of-list
-// cash offer on a turnkey / new build is always wrong, so NOTHING rescues
-// them. The earlier Phase-2 "multi-signal accept" (PR #10/#11) let DOM ≥ N or
-// a price cut OVERRIDE a renovation match — that override is REMOVED here. It
-// false-accepted 1138 Santa Anna (a fully-remodeled turnkey, "remodeled" +
-// priceReduced + DOM 177) which then got texted in the first live H2 fire.
-// The asymmetry is the whole reason: a false-reject of a maybe-distress
-// listing is recoverable; a false-accept of a turnkey wastes the offer and
-// damages the brand in a launch market.
-//
-// DOM / priceReduced (ListingDistressSignals) are DIAGNOSTIC ONLY now — the
-// cron still surfaces them for audit / review routing, but they are NEVER an
-// accept trigger and NEVER override a hard veto.
+// new_construction and renovation are the SAME hard-veto tier: a low cash
+// offer on a turnkey / new build is always wrong, so NOTHING rescues them.
+// The original Phase-2 bug let DOM/price-cut OVERRIDE a renovation match —
+// it false-accepted 1138 Santa Anna (fully-remodeled turnkey, "remodeled" +
+// priceReduced + DOM 177) which got texted in the first live H2 fire. The
+// 2026-05-27 fix removed the override but OVER-CORRECTED: it demoted DOM /
+// price-cut to diagnostic-only everywhere, so clean-copy aged listings
+// piled into Review purgatory (138 in the week of 2026-07-15 alone) and
+// first-touch supply starved at ~2/day. Tier 8 restores them as accept
+// triggers STRICTLY BELOW the vetoes — Santa Anna still rejects at tier 5
+// before DOM is ever consulted; the regression test pins this.
 
-/** Candidate-side signals (from RentCast). DIAGNOSTIC ONLY as of the
- *  2026-05-27 amendment — surfaced for audit, never an accept trigger and
- *  never an override of the renovation / new_construction hard vetoes. */
+/** Candidate-side signals (from RentCast). Consulted at tier 8 (accept on
+ *  price cut / aged DOM) — AFTER every hard veto, never an override
+ *  (operator ruling 2026-07-22; Santa Anna guard preserved). */
 export interface ListingDistressSignals {
   daysOnMarket: number | null;
   priceReduced: boolean;
 }
 
+/** Why an accept accepted — audit/log provenance for the funnel report. */
+export type AcceptBasis = "condition_signal" | "price_cut" | "aged_dom";
+
 export type VerifiedOutcome =
   | { outcome: "reject"; reason: string }
-  | { outcome: "accept"; outreachStatus: "" }
+  | { outcome: "accept"; outreachStatus: ""; acceptBasis: AcceptBasis }
   | {
       outcome: "review";
       reason: "condition_signal_missing_flagged" | "sqft_mismatch_flagged";
@@ -648,13 +653,14 @@ export type VerifiedOutcome =
 
 export function classifyVerifiedListing(
   fc: FirecrawlVerifyResult,
-  // Retained on the signature for audit parity and to regression-guard the
-  // removed override; deliberately NOT consulted (see precedence note above).
-  _signals: ListingDistressSignals = { daysOnMarket: null, priceReduced: false },
+  // Tier-8 distress-accept inputs (operator ruling 2026-07-22). Consulted
+  // ONLY after every hard veto has passed — see precedence note above.
+  signals: ListingDistressSignals = { daysOnMarket: null, priceReduced: false },
   // Data armor (operator 2026-07-03): the RentCast candidate's sqft, cross-
   // checked against the scraped page's stated sqft. Optional — absent, or
   // page states no sqft, behaves exactly as before (fail open).
-  opts: { sourceSqft?: number | null } = {},
+  // domMark: aged-DOM accept bar; defaults to the shared intake knob.
+  opts: { sourceSqft?: number | null; domMark?: number } = {},
 ): VerifiedOutcome {
   if (!fc.credentialed) return { outcome: "reject", reason: "firecrawl_not_configured" };
   if (fc.paymentRequired) return { outcome: "reject", reason: "firecrawl_payment_required" };
@@ -676,7 +682,16 @@ export function classifyVerifiedListing(
   if (sqft.mismatch) {
     return { outcome: "review", reason: "sqft_mismatch_flagged", outreachStatus: "Review" };
   }
-  // ── Distress accept: a genuine condition/motivation signal in the copy.
-  if (fc.hasConditionSignal) return { outcome: "accept", outreachStatus: "" };
+  // ── Distress accepts (every hard veto already passed above) ──
+  // Tier 7: physical distress / motivation in the listing copy.
+  if (fc.hasConditionSignal) return { outcome: "accept", outreachStatus: "", acceptBasis: "condition_signal" };
+  // Tier 8 (operator ruling 2026-07-22): a price capitulation or aged DOM is
+  // distress too. Strictly below the vetoes — this can never resurrect the
+  // Santa Anna override (a renovated/turnkey page rejected at tier 5).
+  if (signals.priceReduced === true) return { outcome: "accept", outreachStatus: "", acceptBasis: "price_cut" };
+  const domMark = opts.domMark ?? INTAKE_DISTRESS_DOM_MARK;
+  if (signals.daysOnMarket != null && signals.daysOnMarket >= domMark) {
+    return { outcome: "accept", outreachStatus: "", acceptBasis: "aged_dom" };
+  }
   return { outcome: "review", reason: "condition_signal_missing_flagged", outreachStatus: "Review" };
 }

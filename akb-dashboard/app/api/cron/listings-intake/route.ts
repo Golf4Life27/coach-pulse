@@ -1137,7 +1137,9 @@ export async function GET(req: Request) {
     // decision straight from Vercel logs without grep gymnastics.
     console.log(
       `[listings-intake][auto-promote] ${c.sourceId} accepted=${accepted} ` +
-      `promote=${promote} reason=${ap.reason ?? "-"} phone=${c.agentPhone ? "y" : "n"} state=${c.state ?? "?"}`,
+      `promote=${promote} reason=${ap.reason ?? "-"} ` +
+      `basis=${decision.outcome === "accept" ? decision.acceptBasis : "-"} ` +
+      `phone=${c.agentPhone ? "y" : "n"} state=${c.state ?? "?"}`,
     );
 
     if (dryRun) {

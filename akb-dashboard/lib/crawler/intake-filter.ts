@@ -64,7 +64,9 @@ const INTAKE_REQUIRE_DISTRESS = process.env.INTAKE_REQUIRE_DISTRESS !== "false";
 // INTAKE_DISTRESS_DOM_MARK: the aged-DOM bar. DEFAULT 90 (operator 2026-06-22)
 //   to align with A1's distress threshold (DOM/30 ≥ 3 ⇒ DOM ≥ 90) so intake
 //   doesn't source aged-but-sub-90 listings the distress score then rejects.
-const INTAKE_DISTRESS_DOM_MARK =
+//   Exported: the post-scrape classifier (firecrawl.classifyVerifiedListing)
+//   uses the SAME bar for its aged-DOM accept tier — one knob, no drift.
+export const INTAKE_DISTRESS_DOM_MARK =
   process.env.INTAKE_DISTRESS_DOM_MARK && /^\d+$/.test(process.env.INTAKE_DISTRESS_DOM_MARK)
     ? Number(process.env.INTAKE_DISTRESS_DOM_MARK)
     : 90;
