@@ -116,10 +116,6 @@ function toE164(phone: string): string {
   return `+${digits}`;
 }
 
-function roundToNearest250(n: number): number {
-  return Math.ceil(n / 250) * 250;
-}
-
 function formatOffer(offerAmount: number): string {
   return "$" + offerAmount.toLocaleString("en-US");
 }
@@ -193,15 +189,17 @@ function buildFollowUpText(
   attemptNumber: 1 | 2,
 ): { text: string; offerNum: number } | { text: null; reason: string } {
   const firstName = (l.agentName ?? "there").split(" ")[0] || "there";
-  // Sticky offer (Phase 20.2 v1.3) — prefer stored, fall back to 65%-of-
-  // list snapshot, refuse if neither.
-  const stored = typeof l.outreachOfferPrice === "number" && l.outreachOfferPrice > 0
+  // Sticky offer (INV-030 / INVARIANTS §3, tightened 2026-07-22): a
+  // re-engagement inherits ONLY the stored, delivery-stamped, value-anchored
+  // opener — never a recomputed number and never a fraction of list. The old
+  // 65%-of-list fallback here was the retired Blackmoor rail hiding in a live
+  // sender: a parked deal with no stored offer would get texted 0.65×list.
+  // Removed — no stored value-anchored offer → REFUSE (HOLD), never fabricate
+  // a list-anchored number into a parked deal.
+  const offerNum = typeof l.outreachOfferPrice === "number" && l.outreachOfferPrice > 0
     ? l.outreachOfferPrice : null;
-  const fromList = typeof l.listPrice === "number" && l.listPrice > 0
-    ? roundToNearest250(l.listPrice * 0.65) : null;
-  const offerNum = stored ?? fromList;
   if (offerNum == null) {
-    return { text: null, reason: "no_offer_basis_no_stored_no_listprice" };
+    return { text: null, reason: "no_stored_value_anchored_offer" };
   }
   const offer = formatOffer(offerNum);
   // Pending Alex-drafted copy in scripts/outreach/follow_up_attempt_*.md —
