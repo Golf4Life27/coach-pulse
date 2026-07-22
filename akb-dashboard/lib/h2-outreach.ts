@@ -229,29 +229,39 @@ export function firstNameOnly(agentName: string | null): string {
 /** Pure: compose the first-touch SMS body (spec §Step 3).
  *  Greets on FIRST NAME ONLY per the proven outreach rule (5/8/2026).
  *
- *  LOCKED COPY (operator 2026-06-30): the cash offer is framed as RELIEF +
- *  speed — "as-is, no repairs or cleanout", "close on your timeline", "off
- *  their hands and done". This SUPERSEDES the prior "Is the seller open to
- *  offers in that range?" close, which the operator killed for slapping the
- *  seller in the face with the lowball instead of offering them a way to close
- *  out the chapter. The offer number is already the defensible, value-anchored,
- *  $250-rounded, floor/cap-guarded figure (per-market-pricer + the send guards),
- *  so the copy never has to hedge ("open to offers in that range"). The street
- *  only is referenced ("on 1736 N Graham Ave") — the full RentCast address
- *  carries a redundant city/state/zip tail. */
+ *  LOCKED COPY (operator 2026-07-22 — RESTORES the 30%-reply-era template,
+ *  superseding the 2026-06-30 "relief/speed" reframe): the proven format the
+ *  operator sent hundreds of during his 30% reply rate —
+ *    "I am interested in your listing at {street} in {city}. I would like to
+ *     make a cash offer at {offer} with a quick close and no financing
+ *     contingencies. Is the seller open to offers in that range?"
+ *  The 2026-06-30 change (relief framing + "off their hands and done", and
+ *  killing the "open to offers in that range" question-close) drifted the copy
+ *  away from that proven structure; the operator is reverting to it verbatim.
+ *  The offer number is still the defensible, value-anchored, $250-rounded,
+ *  floor/cap-guarded figure (per-market-pricer + the send guards). The STREET
+ *  only is used (the full RentCast line carries a redundant state/zip tail);
+ *  city comes from the listing's own city field, falling back to the address'
+ *  second comma-field, and the "in {city}" clause is dropped when neither is
+ *  available. */
 export function buildH2Message(
   agentName: string | null,
   address: string,
   mao: number,
+  city?: string | null,
 ): string {
   const name = firstNameOnly(agentName);
   const offer = `$${Math.round(mao).toLocaleString("en-US")}`;
-  const street = address.split(",")[0].trim() || address;
+  const parts = address.split(",");
+  const street = parts[0].trim() || address;
+  const cityName = (city ?? "").trim() || (parts[1] ?? "").trim();
+  const listingClause = cityName
+    ? `I am interested in your listing at ${street} in ${cityName}.`
+    : `I am interested in your listing at ${street}.`;
   return (
-    `Hi ${name}, this is Alex with AKB Solutions. I'd like to make a cash ` +
-    `offer of ${offer} on ${street}. As-is, no repairs or cleanout, and we ` +
-    `close on your timeline. If the seller just wants this off their hands ` +
-    `and done, we're ready to move fast.`
+    `Hi ${name}, this is Alex with AKB Solutions. ${listingClause} ` +
+    `I would like to make a cash offer at ${offer} with a quick close and ` +
+    `no financing contingencies. Is the seller open to offers in that range?`
   );
 }
 
@@ -373,7 +383,7 @@ export function planQueue(
       ...base,
       route: "first_touch",
       toE164: e164,
-      message: buildH2Message(l.agentName, l.address, l.mao),
+      message: buildH2Message(l.agentName, l.address, l.mao, l.city),
     });
   }
 
