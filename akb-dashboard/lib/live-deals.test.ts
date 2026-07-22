@@ -233,3 +233,36 @@ describe("decision weight — critical decisions rank above courtesy chatter (op
     expect(ranked[0].id).toBe("recNEWHOLD0000001");
   });
 });
+
+describe("superseded-draft guard (operator 2026-07-22 — alert graduates after a reply)", () => {
+  const heldMeta = (generatedAt: string) =>
+    JSON.stringify({ state: "hold", classification: "unknown", channel: "sms", generated_at: generatedAt, hold_reason: "generation_failed" });
+
+  it("drops a draft once we've sent an outbound after it was generated", () => {
+    const [d] = rankLiveDeals([
+      row({
+        status: "Negotiating",
+        lastInboundAt: "2026-07-22T09:27:00Z",
+        // operator replied in the deal room AFTER the draft was generated
+        lastOutboundAt: "2026-07-22T16:29:00Z",
+        draftReplyText: "",
+        draftReplyMeta: heldMeta("2026-07-22T09:30:00Z"),
+      }),
+    ]);
+    expect(d.draft).toBeNull();          // stale draft suppressed
+    expect(d.needsYou).toBe(false);      // ball is now in their court, alert graduates
+  });
+
+  it("keeps a draft whose generated_at is newer than the last outbound", () => {
+    const [d] = rankLiveDeals([
+      row({
+        lastInboundAt: "2026-07-22T15:00:00Z",
+        lastOutboundAt: "2026-07-22T10:00:00Z",
+        draftReplyText: "",
+        draftReplyMeta: heldMeta("2026-07-22T15:05:00Z"), // fresh inbound → fresh draft, not yet answered
+      }),
+    ]);
+    expect(d.draft?.state).toBe("hold");
+    expect(d.needsYou).toBe(true);
+  });
+});

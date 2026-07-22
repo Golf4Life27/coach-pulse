@@ -184,13 +184,27 @@ export async function POST(req: Request) {
 
   // Stamp Last_Outbound_At only when we have positive confirmation.
   // Uncertain sends do NOT update outreach state — Principle §Rule 4.
+  //
+  // SUPERSEDE THE DRAFT MIRROR (operator 2026-07-22): an operator reply from
+  // the deal room answers whatever draft was pending on the record, so clear
+  // Draft_Reply_Text/Meta here. Before this, jarvis-send stamped the outbound
+  // but left the mirror queued/hold — so rankLiveDeals kept needsYou true via
+  // `draft != null` and the Act-Now alert never graduated after a reply. Per
+  // "Draft_Reply_Meta is the ONE live pointer" (lib/draft-dismissal), setting
+  // state to "sent" also retires the matching Pending jarvis_reply proposal.
   if (recordId && isSuccess) {
     try {
       await updateListingRecord(recordId, {
-        fldaK4lR5UNvycg11: new Date().toISOString(),
+        fldaK4lR5UNvycg11: new Date().toISOString(), // Last_Outbound_At
+        fld4r1a94Uv8tVy5k: "", // Draft_Reply_Text
+        fldlRrtCUBppUbQam: JSON.stringify({
+          state: "sent",
+          superseded_by: "operator_deal_room_reply",
+          sent_at: new Date().toISOString(),
+        }), // Draft_Reply_Meta
       });
     } catch (err) {
-      console.error("[jarvis-send] Last_Outbound_At stamp failed:", err);
+      console.error("[jarvis-send] Last_Outbound_At / draft-clear failed:", err);
     }
   }
 
