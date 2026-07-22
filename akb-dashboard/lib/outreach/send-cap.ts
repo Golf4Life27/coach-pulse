@@ -69,6 +69,40 @@ function norm5(zip: string | null | undefined): string | null {
   return d.length >= 5 ? d.slice(0, 5) : null;
 }
 
+// ── Cron-URL cap overrides (operator 2026-07-22 follow-up) ─────────────
+//
+// The per-run / per-zip caps were env-only, which left the 12/3 ramp
+// hostage to whatever H2_MAX_SENDS_PER_* values were installed in Vercel
+// during the 5/2 era (a stale env silently overrides new code defaults,
+// and no server-side path can read or edit Vercel env). These overrides
+// let the vercel.json cron URLs state their send pacing EXPLICITLY —
+// vercel.json is reviewed code, i.e. the same deliberate-code-change
+// channel the ceiling doctrine already trusts (precedent: h2's ?limit=,
+// intake's ?cap=). Clamped to the same hard ceilings as env — a query
+// string can never blast past 25/10 — and the daily send meter still
+// bounds the day at H2_DAILY_SEND_CAP regardless of any per-run value.
+// Precedence: query override > env > default. Invalid/absent → no-op.
+
+export function overrideSendCaps(
+  cfg: SendCapConfig,
+  overrides: { perRun?: string | null; perZip?: string | null },
+): SendCapConfig {
+  const parse = (raw: string | null | undefined, ceil: number): number | null => {
+    if (raw == null || raw.trim() === "") return null;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) return null;
+    return Math.min(ceil, Math.floor(n));
+  };
+  const perRun = parse(overrides.perRun, CEIL_MAX_PER_RUN);
+  const perZip = parse(overrides.perZip, CEIL_MAX_PER_ZIP);
+  if (perRun == null && perZip == null) return cfg;
+  return {
+    ...cfg,
+    maxPerRun: perRun ?? cfg.maxPerRun,
+    maxPerZip: perZip ?? cfg.maxPerZip,
+  };
+}
+
 // ── Daily send meter (operator /goal 2026-07-22) ───────────────────────
 //
 // The per-run caps alone stop bounding the day once the cron runs many

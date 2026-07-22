@@ -51,6 +51,7 @@ import {
   readSendCapConfig,
   resolveCoverage,
   applySendCap,
+  overrideSendCaps,
   readDailySendCap,
   dailySendMeterKey,
   governDailySends,
@@ -515,7 +516,13 @@ async function handle(req: Request): Promise<Response> {
   // the moment the system seeds it (intake -> seed-sweep -> covered), so
   // metros expand autonomously with zero env edits. Legacy allowlist mode
   // and unset-env fail-closed behavior are unchanged.
-  const rawCapCfg = readSendCapConfig();
+  // Cron-URL cap overrides (2026-07-22): vercel.json states the ramp's send
+  // pacing explicitly so a stale Vercel env from the 5/2 era can't silently
+  // undo it. Ceiling-clamped in overrideSendCaps; daily meter still rules.
+  const rawCapCfg = overrideSendCaps(readSendCapConfig(), {
+    perRun: url.searchParams.get("send_cap_per_run"),
+    perZip: url.searchParams.get("send_cap_per_zip"),
+  });
   // Coverage source = the ARV seed store (the pricer's actual value basis —
   // a ZIP prices iff it carries an ARV seed) UNIONED with the legacy
   // buyer-median set (Detroit era) so neither store's drift can dark a

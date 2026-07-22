@@ -25,27 +25,27 @@
       "schedule": "*/10 * * * *"
     },
     {
-      "path": "/api/cron/h2-outreach?dry_run=false&limit=25",
+      "path": "/api/cron/h2-outreach?dry_run=false&limit=25&send_cap_per_run=20&send_cap_per_zip=5",
       "schedule": "0 15 * * *"
     },
     {
-      "path": "/api/cron/h2-outreach?dry_run=false&limit=25",
+      "path": "/api/cron/h2-outreach?dry_run=false&limit=25&send_cap_per_run=20&send_cap_per_zip=5",
       "schedule": "30 16 * * *"
     },
     {
-      "path": "/api/cron/h2-outreach?dry_run=false&limit=25",
+      "path": "/api/cron/h2-outreach?dry_run=false&limit=25&send_cap_per_run=20&send_cap_per_zip=5",
       "schedule": "30 17 * * *"
     },
     {
-      "path": "/api/cron/h2-outreach?dry_run=false&limit=25",
+      "path": "/api/cron/h2-outreach?dry_run=false&limit=25&send_cap_per_run=20&send_cap_per_zip=5",
       "schedule": "45 19 * * *"
     },
     {
-      "path": "/api/cron/h2-outreach?dry_run=false&limit=25",
+      "path": "/api/cron/h2-outreach?dry_run=false&limit=25&send_cap_per_run=20&send_cap_per_zip=5",
       "schedule": "30 21 * * *"
     },
     {
-      "path": "/api/cron/h2-outreach?dry_run=false&limit=25",
+      "path": "/api/cron/h2-outreach?dry_run=false&limit=25&send_cap_per_run=20&send_cap_per_zip=5",
       "schedule": "45 23 * * *"
     },
     {
@@ -209,11 +209,11 @@
       "schedule": "40 5 * * *"
     },
     {
-      "path": "/api/cron/h2-outreach?dry_run=false&limit=25",
+      "path": "/api/cron/h2-outreach?dry_run=false&limit=25&send_cap_per_run=20&send_cap_per_zip=5",
       "schedule": "30 18 * * *"
     },
     {
-      "path": "/api/cron/h2-outreach?dry_run=false&limit=25",
+      "path": "/api/cron/h2-outreach?dry_run=false&limit=25&send_cap_per_run=20&send_cap_per_zip=5",
       "schedule": "30 22 * * *"
     },
     {

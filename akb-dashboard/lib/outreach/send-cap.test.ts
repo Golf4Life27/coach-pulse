@@ -159,3 +159,40 @@ describe("governDailySends", () => {
     expect(v.meterReadable).toBe(false);
   });
 });
+
+// ── Cron-URL cap overrides (2026-07-22 follow-up) ──────────────────────
+
+import { overrideSendCaps } from "./send-cap";
+
+describe("overrideSendCaps — vercel.json states the pacing, stale env can't undo it", () => {
+  const envCfg = () =>
+    ({ maxPerRun: 5, maxPerZip: 2, coveredZips: new Set<string>(), coverageMode: "allowlist" as const });
+
+  it("query overrides beat a stale 5/2 env config", () => {
+    const c = overrideSendCaps(envCfg(), { perRun: "12", perZip: "3" });
+    expect(c.maxPerRun).toBe(12);
+    expect(c.maxPerZip).toBe(3);
+  });
+
+  it("clamps to the hard ceilings — a query string can never blast", () => {
+    const c = overrideSendCaps(envCfg(), { perRun: "9999", perZip: "500" });
+    expect(c.maxPerRun).toBe(25);
+    expect(c.maxPerZip).toBe(10);
+  });
+
+  it("absent / invalid values are a no-op (env keeps ruling)", () => {
+    expect(overrideSendCaps(envCfg(), {})).toEqual(envCfg());
+    expect(overrideSendCaps(envCfg(), { perRun: null, perZip: "" })).toEqual(envCfg());
+    expect(overrideSendCaps(envCfg(), { perRun: "junk", perZip: "-4" })).toEqual(envCfg());
+  });
+
+  it("overrides apply independently (perRun alone leaves perZip)", () => {
+    const c = overrideSendCaps(envCfg(), { perRun: "12" });
+    expect(c.maxPerRun).toBe(12);
+    expect(c.maxPerZip).toBe(2);
+  });
+
+  it("can also tune DOWN (0 is a valid emergency choke)", () => {
+    expect(overrideSendCaps(envCfg(), { perRun: "0" }).maxPerRun).toBe(0);
+  });
+});
