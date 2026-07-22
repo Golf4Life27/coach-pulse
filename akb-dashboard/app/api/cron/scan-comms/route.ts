@@ -15,6 +15,7 @@ import { sendReplyAlert, type ReplyAlertInput } from "@/lib/reply-alert";
 import { sendAutoClose } from "@/lib/auto-close";
 import { sendAutoAck } from "@/lib/auto-ack";
 import { detectOptOut, applyOptOut } from "@/lib/outreach/opt-out";
+import { selectThreadListing } from "@/lib/conversation-thread";
 import { resolveAlertNumbers } from "@/lib/outreach-economics";
 
 export const runtime = "nodejs";
@@ -240,7 +241,17 @@ export async function GET(req: Request) {
           continue; // SUPPRESS the close + proposals for an opt-out; move to next phone.
         }
 
-        for (const listing of matchedListings) {
+        // FAN-OUT FIX (operator 2026-07-22): a multi-listing agent's phone is
+        // ONE SMS thread. The inbound belongs to the ACTIVE thread — the deal
+        // we most recently texted this agent about — not to every listing he
+        // reps. Drafting/alerting on all of them spawned a duplicate Act-Now
+        // alert on the wrong property (Gharian Carver: reply about Gilchrist
+        // fanned an alert onto Fielding). Property-specific handling below
+        // targets the ONE thread listing; the number-level opt-out above stays
+        // fanned across all matched listings.
+        const threadListing = selectThreadListing(matchedListings);
+        const replyTargets = threadListing ? [threadListing] : [];
+        for (const listing of replyTargets) {
           matched++;
 
           if (existingPending.has(`${listing.id}:jarvis_reply`)) continue;

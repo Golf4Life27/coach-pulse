@@ -40,6 +40,7 @@ import {
   readAuthHeaders,
 } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
+import { selectThreadListing } from "@/lib/conversation-thread";
 import type { Listing } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -142,7 +143,15 @@ export async function GET(req: Request) {
     const mostRecentInboundAt = genuineInbounds[0]?.createdAt ?? null;
     const mostRecentOutboundAt = outbounds[0]?.createdAt ?? null;
 
-    for (const listing of phoneToListings.get(phone) ?? []) {
+    // THREAD ATTRIBUTION (operator 2026-07-22, sibling of the scan-comms
+    // fan-out): a shared agent phone is ONE SMS thread. The phone's most-recent
+    // inbound/outbound belongs to the ACTIVE thread — the deal we last texted —
+    // not to every listing the agent reps. Stamping the phone's fresh inbound
+    // onto all of them resurrected the wrong property as a false "Your move"
+    // (Fielding lighting up from the Gilchrist thread). Reconcile the one thread
+    // listing; the others keep their own (correctly older) timestamps.
+    const threadListing = selectThreadListing(phoneToListings.get(phone) ?? []);
+    for (const listing of threadListing ? [threadListing] : []) {
       listingsConsidered++;
       const priorIn = listing.lastInboundAt ?? null;
       const priorOut = listing.lastOutboundAt ?? null;

@@ -173,7 +173,20 @@ export function rankLiveDeals(rows: LiveDealRow[]): RankedLiveDeal[] {
     .map((r) => {
       const headroom =
         r.ceiling != null && r.contractPrice != null ? r.ceiling - r.contractPrice : null;
-      const draft = dealDraftFromFields(r.draftReplyText, r.draftReplyMeta);
+      let draft = dealDraftFromFields(r.draftReplyText, r.draftReplyMeta);
+      // SUPERSEDED-DRAFT GUARD (operator 2026-07-22): once we've sent an
+      // outbound AFTER the draft was generated, that draft is answered — the
+      // operator replied (in the deal room or via the card). The mirror should
+      // be cleared at the send site, but a read-layer guard makes the card
+      // graduate regardless of which send path fired (the deal-room reply via
+      // /api/jarvis-send used to stamp Last_Outbound_At without clearing the
+      // mirror, so the HELD alert lingered after a reply). A later outbound
+      // than the draft's generated_at ⇒ stale ⇒ drop it.
+      if (draft?.generatedAt && r.lastOutboundAt) {
+        const gen = Date.parse(draft.generatedAt);
+        const out = Date.parse(r.lastOutboundAt);
+        if (Number.isFinite(gen) && Number.isFinite(out) && out > gen) draft = null;
+      }
       return {
         id: r.id,
         street: street(r.address),
