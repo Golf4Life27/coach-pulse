@@ -47,7 +47,16 @@ import { getZipArvSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import { minOfferFloor } from "@/lib/per-market-pricer";
 import { getMarketForListing, openerArvPctMax } from "@/lib/markets/registry";
 import { resolveAnchorPct } from "@/lib/markets/anchor";
-import { readSendCapConfig, resolveCoverage, applySendCap } from "@/lib/outreach/send-cap";
+import {
+  readSendCapConfig,
+  resolveCoverage,
+  applySendCap,
+  overrideSendCaps,
+  readDailySendCap,
+  dailySendMeterKey,
+  governDailySends,
+  DAILY_SEND_METER_TTL_S,
+} from "@/lib/outreach/send-cap";
 import {
   authenticate,
   hasDashboardSession,
@@ -507,7 +516,13 @@ async function handle(req: Request): Promise<Response> {
   // the moment the system seeds it (intake -> seed-sweep -> covered), so
   // metros expand autonomously with zero env edits. Legacy allowlist mode
   // and unset-env fail-closed behavior are unchanged.
-  const rawCapCfg = readSendCapConfig();
+  // Cron-URL cap overrides (2026-07-22): vercel.json states the ramp's send
+  // pacing explicitly so a stale Vercel env from the 5/2 era can't silently
+  // undo it. Ceiling-clamped in overrideSendCaps; daily meter still rules.
+  const rawCapCfg = overrideSendCaps(readSendCapConfig(), {
+    perRun: url.searchParams.get("send_cap_per_run"),
+    perZip: url.searchParams.get("send_cap_per_zip"),
+  });
   // Coverage source = the ARV seed store (the pricer's actual value basis —
   // a ZIP prices iff it carries an ARV seed) UNIONED with the legacy
   // buyer-median set (Detroit era) so neither store's drift can dark a
@@ -520,7 +535,29 @@ async function handle(req: Request): Promise<Response> {
           ...(await listSeededZips()),
         ])
       : rawCapCfg;
-  const sendCap = applySendCap(plans, (p) => byId.get(p.recordId)?.zip ?? null, capCfg);
+  // ── Daily send governor (operator /goal 2026-07-22): with the multi-slot
+  // ramp, per-run caps pace the day but no longer bound it. A KV meter of
+  // live sends per UTC day clamps each run's per-run cap to the unspent
+  // daily allowance (default 100 = the operator's ruled supply target).
+  // Unreadable meter → per-run cap alone (mirrors the crawl meter contract),
+  // surfaced in the summary so a broken meter is never silent.
+  const dailyCap = readDailySendCap();
+  let sendsUsedToday: number | null = null;
+  if (kvConfigured()) {
+    try {
+      const raw = await kvProd.get(dailySendMeterKey(new Date()));
+      sendsUsedToday = raw == null ? 0 : Number(raw) || 0;
+    } catch {
+      sendsUsedToday = null;
+    }
+  }
+  const dailyVerdict = governDailySends({
+    maxPerRun: capCfg.maxPerRun,
+    dailyCap,
+    usedToday: sendsUsedToday,
+  });
+  const cappedCfg = { ...capCfg, maxPerRun: dailyVerdict.maxPerRunToday };
+  const sendCap = applySendCap(plans, (p) => byId.get(p.recordId)?.zip ?? null, cappedCfg);
   const dispatchPlans = dryRun ? plans : sendCap.allowed;
   const sendCapSummary = {
     enforced: !dryRun, // live dispatch is filtered; a dry run previews all + this projection
@@ -532,6 +569,14 @@ async function handle(req: Request): Promise<Response> {
       per_run_cap: sendCap.capped.filter((c) => c.reason === "per_run_cap").length,
     },
     config: sendCap.config,
+    daily: {
+      cap: dailyVerdict.dailyCap,
+      used_at_start: sendsUsedToday,
+      allowance_left: dailyVerdict.allowanceLeftToday,
+      meter_readable: dailyVerdict.meterReadable,
+      per_run_effective: dailyVerdict.maxPerRunToday,
+      reason: dailyVerdict.reason,
+    },
   };
 
   const startedAt = new Date(t0).toISOString();
@@ -824,6 +869,23 @@ async function handle(req: Request): Promise<Response> {
       }
     }
     processed.push(row);
+  }
+
+  // ── Daily send meter write-back: record this run's LIVE fires so the next
+  // slot's governor sees them. Advisory (non-atomic add — slots are spread
+  // across the day; the per-run cap bounds any race), mirrors the crawl
+  // meter. Counts every SMS actually dispatched to Quo, delivered or not —
+  // the meter bounds outbound volume, not delivery success.
+  const smsFiredCount = processed.filter((r) => r.sms_fired).length;
+  if (!dryRun && kvConfigured() && smsFiredCount > 0) {
+    try {
+      const key = dailySendMeterKey(new Date());
+      const cur = Number((await kvProd.get(key)) ?? 0) || 0;
+      await kvProd.setEx(key, String(cur + smsFiredCount), DAILY_SEND_METER_TTL_S);
+    } catch {
+      /* advisory meter — never blocks the run; unreadability is surfaced
+         on the READ side (sendCapSummary.daily.meter_readable) */
+    }
   }
 
   await audit({

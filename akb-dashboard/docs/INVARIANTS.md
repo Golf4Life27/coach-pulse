@@ -43,7 +43,18 @@ underwrite against.
   is the ZIP renovated `$/sqft` × subject sqft; with no trusted ARV basis the pricer
   returns `opener: null` and the record routes to operator review. Pricer guards
   (ARV-below-list distrust, sub-floor micro-opener, non-penciling buy-box) **HOLD**,
-  they do not fall to a list fraction. The only place a fraction of list survives is
+  they do not fall to a list fraction.
+  - **ARV-below-list is CONFIDENCE-AWARE** (operator principle amendment
+    2026-07-22, superseding the 2026-06-28 blanket hold): a **STRONG** seed
+    (≥5 tight renovated comps) with ARV < list SENDS the value-anchored
+    lowball — the seed is trusted, the *listing* is over-ARV (exactly the aged
+    tier-8 stock), and list price is structurally not an input to the formula.
+    Sent records carry the `over_arv_list` cohort tag (`Opener_Basis`
+    `arv_buybox_seed_over_arv_list`) so reply/conversion is trackable and the
+    amendment reversible on evidence. THIN/STORED/unlabeled ARVs below list
+    still HOLD + flag re-seed, and every downstream guard (micro-opener floor,
+    MAO bound, never-over-list clamp) applies unchanged.
+    `[enforced]` `lib/per-market-pricer.ts` ARV-sanity gate. The only place a fraction of list survives is
   the never-over-list *clamp* (`0.85 × list`, operator 2026-07-01 — set EQUAL to the
   `>85%-of-list` send rail `OFFER_OVER_LIST_BLOCK_PCT` and **floored** so a capped
   opener can never round up past it and get refused), which only ever lowers an already
@@ -103,6 +114,22 @@ These actions require an explicit human decision and do not happen autonomously:
   `app/api/cron/listings-intake/route.ts:827`.
   - **Known gap `[unknown]`:** the breaker + scope gate fail-OPEN on a KV/store
     outage; a fail-narrow allowlist fix was flagged 2026-06-09 — verify it shipped.
+- **Daily send meter (2026-07-22 volume ramp)** — total LIVE H2 sends per UTC day
+  are hard-bounded by `H2_DAILY_SEND_CAP` (default **100** = the operator's ruled
+  supply target; code ceiling 150 — env tunes DOWN only). Each run's per-run cap
+  is clamped to the unspent daily allowance via a KV meter; the meter increments
+  on every SMS actually dispatched. Added WITH the multi-slot ramp (8 h2 slots ×
+  per-run 12 default) precisely so slot count can never multiply into an unbounded
+  day. Unreadable meter → per-run cap alone (crawl-meter contract), surfaced in
+  the run summary — never silent.
+  `[enforced]` `lib/outreach/send-cap.ts` (`readDailySendCap`, `governDailySends`),
+  wired in `app/api/cron/h2-outreach/route.ts`.
+- **RentCast crawl budget governor (unchanged, restated)** — the intake belt's
+  daily ZIP spend derives from the plan (`computeDailyCrawlBudget`) and is metered
+  in KV; adding cron slots widens THROUGHPUT, never SPEND. The 2026-07-22 tiered
+  cadence (chewed/opener-HOLD ZIPs recrawl weekly/biweekly) reallocates that same
+  budget toward fresh metros — it does not raise it.
+  `[enforced]` `lib/crawler/frontier-governor.ts`, `lib/crawler/zip-rotation.ts`.
 
 ---
 

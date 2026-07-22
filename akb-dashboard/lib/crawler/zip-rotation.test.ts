@@ -253,3 +253,122 @@ describe("selectDueZips — 402-blocked ZIP stays due", () => {
     expect(r.dueTotal).toBe(0);
   });
 });
+
+// ── Tiered yield-aware cadence (chew-and-move-on, 2026-07-22) ──────────
+
+import {
+  recrawlCycleHours,
+  selectDueZipsTiered,
+  COOLING_CYCLE_HOURS,
+  CHEWED_CYCLE_HOURS,
+  OPENER_HOLD_CYCLE_HOURS,
+  CHEWED_STREAK_RUNS,
+  type ZipCadenceRow,
+} from "./zip-rotation";
+
+const T0 = new Date("2026-07-22T12:00:00Z");
+const hrsAgoT = (h: number) => new Date(T0.getTime() - h * 3_600_000).toISOString();
+
+function row(overrides: Partial<ZipCadenceRow> & { zip: string }): ZipCadenceRow {
+  return {
+    lastIngestedAt: null,
+    recordsIngested: null,
+    acceptRate: null,
+    zeroYieldStreak: null,
+    openerHold: false,
+    ...overrides,
+  };
+}
+
+describe("recrawlCycleHours — the cadence policy", () => {
+  it("producing ZIPs stay on the base cycle", () => {
+    expect(
+      recrawlCycleHours(row({ zip: "48205", lastIngestedAt: hrsAgoT(30), recordsIngested: 2, acceptRate: 0.07 }), 24),
+    ).toBe(24);
+    // accept-rate alone (records field lagging) also counts as producing
+    expect(
+      recrawlCycleHours(row({ zip: "48224", lastIngestedAt: hrsAgoT(30), recordsIngested: 0, acceptRate: 0.02 }), 24),
+    ).toBe(24);
+  });
+
+  it("zero-yield ZIPs cool to 72h, then chew to weekly after the streak", () => {
+    const cooling = row({ zip: "48219", lastIngestedAt: hrsAgoT(30), recordsIngested: 0, acceptRate: 0, zeroYieldStreak: 1 });
+    expect(recrawlCycleHours(cooling, 24)).toBe(COOLING_CYCLE_HOURS);
+    const chewed = row({ zip: "48219", lastIngestedAt: hrsAgoT(30), recordsIngested: 0, acceptRate: 0, zeroYieldStreak: CHEWED_STREAK_RUNS });
+    expect(recrawlCycleHours(chewed, 24)).toBe(CHEWED_CYCLE_HOURS);
+  });
+
+  it("opener-HOLD markets idle at the biweekly trickle regardless of yield", () => {
+    const tx = row({ zip: "78210", lastIngestedAt: hrsAgoT(30), recordsIngested: 3, acceptRate: 0.1, openerHold: true });
+    expect(recrawlCycleHours(tx, 24)).toBe(OPENER_HOLD_CYCLE_HOURS);
+  });
+
+  it("never-crawled ZIPs use the base cycle (always due anyway)", () => {
+    expect(recrawlCycleHours(row({ zip: "44105" }), 24)).toBe(24);
+  });
+
+  it("a base cycle longer than a tier's cycle wins (never shortens)", () => {
+    const cooling = row({ zip: "48219", lastIngestedAt: hrsAgoT(200), recordsIngested: 0, acceptRate: 0 });
+    expect(recrawlCycleHours(cooling, 96)).toBe(96);
+  });
+});
+
+describe("selectDueZipsTiered — fresh metros first, chewed metros later", () => {
+  it("never-crawled ZIPs win the scarce slots over stale producing ZIPs", () => {
+    const rows: ZipCadenceRow[] = [
+      row({ zip: "48205", lastIngestedAt: hrsAgoT(100), recordsIngested: 2, acceptRate: 0.05 }),
+      row({ zip: "44105" }), // fresh Cleveland — never crawled
+      row({ zip: "43204" }), // fresh Columbus — never crawled
+    ];
+    const r = selectDueZipsTiered(rows, 2, T0, 24);
+    expect(r.selected).toEqual(["43204", "44105"]); // never-crawled first, zip tie-break
+    expect(r.dueNeverCrawled).toBe(2);
+    expect(r.dueTotal).toBe(3);
+  });
+
+  it("a chewed ZIP inside its weekly window is NOT due; it returns when the window lapses", () => {
+    const chewed = row({
+      zip: "48236",
+      lastIngestedAt: hrsAgoT(100), // 100h ago: past 72h cooling, inside 168h chewed window
+      recordsIngested: 0,
+      acceptRate: 0,
+      zeroYieldStreak: CHEWED_STREAK_RUNS + 1,
+    });
+    const r1 = selectDueZipsTiered([chewed], 5, T0, 24);
+    expect(r1.selected).toEqual([]);
+    expect(r1.freshTotal).toBe(1);
+
+    const lapsed = { ...chewed, lastIngestedAt: hrsAgoT(CHEWED_CYCLE_HOURS + 1) };
+    const r2 = selectDueZipsTiered([lapsed], 5, T0, 24);
+    expect(r2.selected).toEqual(["48236"]);
+    expect(r2.dueByCadence.chewed).toBe(1);
+  });
+
+  it("opener-HOLD (TX) ZIPs only surface past the biweekly trickle", () => {
+    const tx = row({ zip: "78210", lastIngestedAt: hrsAgoT(200), openerHold: true });
+    expect(selectDueZipsTiered([tx], 5, T0, 24).selected).toEqual([]);
+    const lapsed = { ...tx, lastIngestedAt: hrsAgoT(OPENER_HOLD_CYCLE_HOURS + 1) };
+    const r = selectDueZipsTiered([lapsed], 5, T0, 24);
+    expect(r.selected).toEqual(["78210"]);
+    expect(r.dueByCadence.opener_hold).toBe(1);
+  });
+
+  it("producing ZIPs keep the base 24h cadence (chewed metros still trickle new DOM-gated inventory)", () => {
+    const producing = row({ zip: "48221", lastIngestedAt: hrsAgoT(25), recordsIngested: 3, acceptRate: 0.07 });
+    const r = selectDueZipsTiered([producing], 5, T0, 24);
+    expect(r.selected).toEqual(["48221"]);
+    expect(r.dueByCadence.base).toBe(1);
+  });
+
+  it("cap 0 → empty; malformed zips dropped; dedup keeps oldest stamp", () => {
+    const rows = [
+      row({ zip: "4820" }),
+      row({ zip: "48205", lastIngestedAt: hrsAgoT(30), recordsIngested: 1 }),
+      row({ zip: "48205", lastIngestedAt: null, recordsIngested: 1 }),
+    ];
+    expect(selectDueZipsTiered(rows, 0, T0, 24).selected).toEqual([]);
+    const r = selectDueZipsTiered(rows, 5, T0, 24);
+    expect(r.selected).toEqual(["48205"]);
+    expect(r.dueNeverCrawled).toBe(1); // the null (oldest) stamp won the dedup
+  });
+});

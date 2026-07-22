@@ -143,6 +143,12 @@ export interface PricerResult {
    *  guard is NOT flagged: the seed is trusted, the listing is just deep-
    *  discount (ARV≫list) or over-ARV (ARV<list). */
   flagReseed: boolean;
+  /** OVER-ARV LIST cohort tag (operator principle amendment 2026-07-22):
+   *  the STRONG-seed value-anchored opener was sent on a listing priced AT
+   *  or ABOVE its renovated ARV (ARV < list). The number is still fully
+   *  formula-derived — this flag only marks the cohort so reply/conversion
+   *  can be tracked and the amendment reversed if it proves noise. */
+  overArvList: boolean;
   /** LOW-OPENER FLOOR (Hole B): a buy-box opener fell below the floor and was
    *  HELD for operator review rather than sending a micro-number. */
   flooredToFallback: boolean;
@@ -181,6 +187,7 @@ function holdResult(
     anchorPct: null,
     arvDistrusted: extra?.arvDistrusted ?? false,
     flagReseed: extra?.flagReseed ?? false,
+    overArvList: false,
     flooredToFallback: extra?.flooredToFallback ?? false,
     cappedToList: false,
     maoBound: null,
@@ -197,22 +204,30 @@ export function priceOpener(input: PricerInput): PricerResult {
   const list = pos(input.listPrice) ? input.listPrice : null;
   const rawArv = pos(input.realArvMedian) ? input.realArvMedian : null;
 
-  // ── GUARD: ARV-SANITY GATE (Hole C) ── a renovated ARV below the asking
-  // price is implausible — it's as-is (wrong-basis) value. Distrust it and
-  // HOLD (we will NOT anchor to the list price). Flag re-seed when the ARV is
-  // low-confidence (a re-pull could fix it).
-  const arvDistrusted = rawArv != null && list != null && rawArv < list;
-  if (arvDistrusted && list != null) {
-    const reseedWorthy = input.arvConfidence !== "STRONG";
+  // ── GUARD: ARV-SANITY GATE (Hole C) — CONFIDENCE-AWARE ──
+  // (Operator principle amendment 2026-07-22, superseding the 2026-06-28
+  // blanket hold.) ARV < list has two distinct causes:
+  //   THIN/STORED/unlabeled ARV → probably a wrong-basis (as-is) value.
+  //     Distrust it and HOLD, flag re-seed. Unchanged.
+  //   STRONG seed (≥5 tight renovated comps) → the seed is trusted; the
+  //     LISTING is over-ARV — which is precisely why it aged into the
+  //     tier-8 funnel. The value-anchored opener SENDS (list price is not
+  //     an input to the formula, so the Blackmoor failure mode cannot
+  //     recur), tagged over_arv_list so the cohort's reply/conversion is
+  //     trackable and the amendment reversible on evidence.
+  // Production receipt for the amendment: 2026-07-22 dry run held 48/50 of
+  // the scanned send queue on this gate alone.
+  const arvBelowList = rawArv != null && list != null && rawArv < list;
+  const overArvList = arvBelowList && input.arvConfidence === "STRONG";
+  if (arvBelowList && list != null && !overArvList) {
     return holdResult(
       "hold_no_value_basis",
-      `renovated ARV $${rawArv!.toLocaleString()} < list $${list.toLocaleString()} — distrusted as wrong-basis (as-is) value; ` +
-        `HELD for operator review (never list-anchored)` +
-        (reseedWorthy ? `, flagged for re-seed` : ` (seed STRONG — listing looks over-ARV, not a bad seed; not re-seeded)`),
-      { arvDistrusted: true, flagReseed: reseedWorthy },
+      `renovated ARV $${rawArv!.toLocaleString()} < list $${list.toLocaleString()} — distrusted as wrong-basis (as-is) value ` +
+        `(confidence ${input.arvConfidence ?? "unlabeled"}); HELD for operator review (never list-anchored), flagged for re-seed`,
+      { arvDistrusted: true, flagReseed: true },
     );
   }
-  const trustedArv = arvDistrusted ? null : rawArv;
+  const trustedArv = rawArv;
 
   const rough = computeRoughOpenerCeiling({
     realArvMedian: trustedArv,
@@ -281,6 +296,7 @@ export function priceOpener(input: PricerInput): PricerResult {
           anchorPct: gate.anchorPct,
           arvDistrusted: false,
           flagReseed: false,
+          overArvList,
           flooredToFallback: false,
           cappedToList: false,
           maoBound,
@@ -289,7 +305,10 @@ export function priceOpener(input: PricerInput): PricerResult {
             `${gate.detail} [${confidence}] (${rough.detail})` +
             (boundedToMao
               ? ` | BOUNDED to MAO $${maoBound.toLocaleString()} (anchored opener $${gate.opener.toLocaleString()} exceeded the flip-lane max — the first offer never sits above your MAO)`
-              : ` | MAO bound $${maoBound.toLocaleString()} ok`),
+              : ` | MAO bound $${maoBound.toLocaleString()} ok`) +
+            (overArvList
+              ? ` | OVER_ARV_LIST cohort: STRONG seed ARV $${(rough.arvUsed ?? 0).toLocaleString()} < list $${(list ?? 0).toLocaleString()} — value-anchored lowball sent per 2026-07-22 amendment`
+              : ""),
         },
         list,
       );

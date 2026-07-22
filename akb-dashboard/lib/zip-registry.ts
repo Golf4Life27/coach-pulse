@@ -33,6 +33,7 @@ export const ZR = {
   avgListPrice: "fld9rI8eLezEgUnUm",
   recordsIngested30d: "fldTDRbvWlur4BRnk",
   saturationThreshold: "fldAbZeSBgbihf4wf",
+  belowThresholdStreak: "fldrRvTum8fEvIpvV",
   approvalRequestedAt: "fldRcbHsnUiDpDSRF",
   approvalNotifiedChannels: "fldVKgqMFoF3Sx5Ru",
   approvedBy: "fldmFfEGD0u5teM9e",
@@ -66,6 +67,10 @@ export interface ZipRegistryRow {
   avgListPrice: number | null;
   recordsIngested30d: number | null;
   saturationThreshold: number | null;
+  /** Consecutive zero-yield ingest runs (Below_Threshold_Streak_Days) —
+   *  maintained by the intake stats write-back; consumed by the tiered
+   *  recrawl cadence (lib/crawler/zip-rotation recrawlCycleHours). */
+  belowThresholdStreak: number | null;
   approvalRequestedAt: string | null;
   approvalNotifiedChannels: NotifyChannel[];
   approvedBy: string | null;
@@ -127,6 +132,8 @@ function mapRow(rec: { id: string; fields: Record<string, unknown> }): ZipRegist
       typeof f[ZR.recordsIngested30d] === "number" ? (f[ZR.recordsIngested30d] as number) : null,
     saturationThreshold:
       typeof f[ZR.saturationThreshold] === "number" ? (f[ZR.saturationThreshold] as number) : null,
+    belowThresholdStreak:
+      typeof f[ZR.belowThresholdStreak] === "number" ? (f[ZR.belowThresholdStreak] as number) : null,
     approvalRequestedAt: (f[ZR.approvalRequestedAt] as string) ?? null,
     approvalNotifiedChannels: channels,
     approvedBy: (f[ZR.approvedBy] as string) ?? null,
@@ -218,6 +225,47 @@ export async function promoteStagedZip(
   });
 }
 
+// Frontier auto-stage (expansion pipeline, 2026-07-22): create tier=staged
+// rows for new expansion-metro ZIPs. Staged rows do NOT crawl (intake targets
+// launch/active only) — they sit in the promotion queue until the weekly
+// frontier pass promotes them within sustainable budget capacity. The caller
+// (lib/crawler/frontier-stage) is responsible for filtering restricted states,
+// non-disclosure states, and ZIPs already in the registry.
+export async function createStagedZips(
+  rows: Array<{ zip: string; state: string; market: string; note: string }>,
+): Promise<number> {
+  if (rows.length === 0) return 0;
+  const pat = requirePat();
+  let created = 0;
+  // Airtable caps create at 10 records/request.
+  for (let i = 0; i < rows.length; i += 10) {
+    const batch = rows.slice(i, i + 10);
+    const res = await fetch(`https://api.airtable.com/v0/${BASE_ID}/${ZIP_REGISTRY_TABLE}`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${pat}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        records: batch.map((r) => ({
+          fields: {
+            [ZR.zip]: r.zip,
+            [ZR.state]: r.state,
+            [ZR.market]: r.market,
+            [ZR.marketTier]: "staged",
+            [ZR.wholesaleRestricted]: deriveWholesaleRestricted(r.state),
+            [ZR.memphisRequired]: deriveMemphisRequired(r.state),
+            [ZR.notes]: `[${new Date().toISOString()}] ${r.note}`,
+          },
+        })),
+        typecast: true,
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`ZIP_Registry create error ${res.status}: ${await res.text().catch(() => "")}`);
+    }
+    created += batch.length;
+  }
+  return created;
+}
+
 // Frontier retirement execution (#37 one-tap card): ZIP → paused, stamped.
 // ONLY fired by an operator-approved frontier_retire proposal — retirement
 // (coverage reduction) is never autonomous; this is the dispatch the
@@ -249,6 +297,10 @@ export interface ZipStatsUpdate {
   avgDom?: number | null;
   avgListPrice?: number | null;
   recordsIngested30d?: number | null;
+  /** Consecutive zero-yield ingest runs. 0 resets the streak (a producing
+   *  run); the caller computes prior+1 for a zero-yield run. Explicit 0 IS
+   *  written (unlike the nullable stats above) — resets must land. */
+  belowThresholdStreak?: number | null;
 }
 
 export async function updateZipStats(recordId: string, stats: ZipStatsUpdate): Promise<void> {
@@ -257,6 +309,7 @@ export async function updateZipStats(recordId: string, stats: ZipStatsUpdate): P
   if (stats.avgDom != null) fields[ZR.avgDom] = stats.avgDom;
   if (stats.avgListPrice != null) fields[ZR.avgListPrice] = stats.avgListPrice;
   if (stats.recordsIngested30d != null) fields[ZR.recordsIngested30d] = stats.recordsIngested30d;
+  if (stats.belowThresholdStreak != null) fields[ZR.belowThresholdStreak] = stats.belowThresholdStreak;
   await patchRow(recordId, fields);
 }
 

@@ -1,0 +1,31 @@
+{
+  "$schema_note": "Frontier expansion queue (chew-and-move-on, operator /goal 2026-07-22). Ordered list of disclosure-state, non-restricted metros with high distressed-SFR inventory. The weekly frontier-rotation pass STAGES ZIPs from here (tier=staged, no crawl spend) in config order — one metro chews through before the next opens — and promotes staged→launch strictly within the RentCast budget capacity the governor computes. Rails that CANNOT be bypassed by editing this file: restricted states (IL/MO/SC/NC/OK/ND) and non-disclosure states (TX/KS/MS/LA/...) are re-filtered in code at stage time AND at promote time; a ZIP already in ZIP_Registry is never re-staged. Deliberately excluded: Philadelphia (city wholesaler-license ordinance), New York metros (regulatory uncertainty — operator call), all non-disclosure states (opener cannot price them until a per-state comp source is proven). Operator-editable: reorder, remove, or append metros freely; ZIP lists are public-record city ZIPs skewed to the distressed housing stock of each metro.",
+  "version": 1,
+  "created": "2026-07-22",
+  "metros": [
+    { "id": "cleveland_oh_widen", "label": "Cleveland, OH (widen)", "state": "OH", "market": "Cleveland", "zips": ["44104", "44108", "44112", "44119", "44120", "44125", "44127", "44128"] },
+    { "id": "toledo_oh", "label": "Toledo, OH", "state": "OH", "market": "Toledo", "zips": ["43605", "43607", "43608", "43609", "43610", "43611", "43612"] },
+    { "id": "dayton_oh", "label": "Dayton, OH", "state": "OH", "market": "Dayton", "zips": ["45402", "45403", "45405", "45406", "45410", "45414", "45417", "45426"] },
+    { "id": "akron_oh", "label": "Akron, OH", "state": "OH", "market": "Akron", "zips": ["44301", "44305", "44306", "44307", "44310", "44314", "44320"] },
+    { "id": "youngstown_oh", "label": "Youngstown, OH", "state": "OH", "market": "Youngstown", "zips": ["44502", "44504", "44505", "44506", "44509", "44510", "44511"] },
+    { "id": "columbus_oh", "label": "Columbus, OH", "state": "OH", "market": "Columbus OH", "zips": ["43204", "43205", "43206", "43207", "43211", "43219", "43223", "43227", "43229", "43232"] },
+    { "id": "flint_mi", "label": "Flint, MI", "state": "MI", "market": "Flint", "zips": ["48503", "48504", "48505", "48506", "48507"] },
+    { "id": "saginaw_mi", "label": "Saginaw, MI", "state": "MI", "market": "Saginaw", "zips": ["48601", "48602", "48607"] },
+    { "id": "lansing_mi", "label": "Lansing, MI", "state": "MI", "market": "Lansing", "zips": ["48906", "48910", "48911", "48912", "48915"] },
+    { "id": "pontiac_mi", "label": "Pontiac, MI", "state": "MI", "market": "Pontiac", "zips": ["48340", "48341", "48342"] },
+    { "id": "gary_in", "label": "Gary, IN", "state": "IN", "market": "Gary", "zips": ["46402", "46403", "46404", "46406", "46407", "46408", "46409"] },
+    { "id": "fort_wayne_in", "label": "Fort Wayne, IN", "state": "IN", "market": "Fort Wayne", "zips": ["46803", "46806", "46807", "46808", "46816"] },
+    { "id": "south_bend_in", "label": "South Bend, IN", "state": "IN", "market": "South Bend", "zips": ["46613", "46615", "46616", "46619", "46628"] },
+    { "id": "macon_ga", "label": "Macon, GA", "state": "GA", "market": "Macon", "zips": ["31204", "31206", "31211", "31217"] },
+    { "id": "columbus_ga", "label": "Columbus, GA", "state": "GA", "market": "Columbus GA", "zips": ["31903", "31904", "31906", "31907"] },
+    { "id": "mobile_al", "label": "Mobile, AL", "state": "AL", "market": "Mobile", "zips": ["36605", "36606", "36607", "36610", "36617"] },
+    { "id": "montgomery_al", "label": "Montgomery, AL", "state": "AL", "market": "Montgomery", "zips": ["36104", "36105", "36107", "36108", "36110"] },
+    { "id": "chattanooga_tn", "label": "Chattanooga, TN", "state": "TN", "market": "Chattanooga", "zips": ["37404", "37406", "37407", "37410", "37411"] },
+    { "id": "knoxville_tn", "label": "Knoxville, TN", "state": "TN", "market": "Knoxville", "zips": ["37914", "37915", "37917", "37920", "37921"] },
+    { "id": "pittsburgh_pa", "label": "Pittsburgh, PA", "state": "PA", "market": "Pittsburgh", "zips": ["15204", "15206", "15208", "15210", "15212", "15214", "15221", "15235"] },
+    { "id": "erie_pa", "label": "Erie, PA", "state": "PA", "market": "Erie", "zips": ["16502", "16503", "16504", "16507", "16508", "16510"] },
+    { "id": "milwaukee_wi", "label": "Milwaukee, WI", "state": "WI", "market": "Milwaukee", "zips": ["53204", "53205", "53206", "53208", "53209", "53210", "53212", "53215", "53216", "53218"] },
+    { "id": "louisville_ky", "label": "Louisville, KY", "state": "KY", "market": "Louisville", "zips": ["40203", "40208", "40210", "40211", "40212", "40215", "40216", "40218"] },
+    { "id": "baltimore_md", "label": "Baltimore, MD", "state": "MD", "market": "Baltimore", "zips": ["21205", "21213", "21215", "21216", "21217", "21218", "21223", "21229"] }
+  ]
+}

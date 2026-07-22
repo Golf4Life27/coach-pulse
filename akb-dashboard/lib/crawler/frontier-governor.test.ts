@@ -142,3 +142,66 @@ describe("frontierDecisions", () => {
     expect(d.retireCandidates.map((c) => c.row.recordId)).toEqual(["recDead"]);
   });
 });
+
+// ── Cost-weighted capacity + paused exclusion (chew-and-move-on, 2026-07-22) ──
+
+import { zipDailyCallCost, TARGET_CYCLE_DAYS as CYCLE } from "./frontier-governor";
+
+describe("zipDailyCallCost", () => {
+  it("producing / cooling ZIPs cost the target-cycle rate (1/3)", () => {
+    expect(zipDailyCallCost(row({}))).toBeCloseTo(1 / 3);
+    expect(zipDailyCallCost(row({ recordsIngested30d: 0, acceptRate30d: 0 }))).toBeCloseTo(1 / 3);
+  });
+
+  it("chewed ZIPs (sustained zero yield) cost the weekly rate (1/7)", () => {
+    expect(
+      zipDailyCallCost(row({ recordsIngested30d: 0, acceptRate30d: 0, zeroYieldStreak: 3 })),
+    ).toBeCloseTo(1 / 7);
+  });
+
+  it("opener-HOLD ZIPs cost the biweekly trickle rate (1/14)", () => {
+    expect(zipDailyCallCost(row({ openerHold: true }))).toBeCloseTo(1 / 14);
+  });
+});
+
+describe("frontierDecisions — capacity unfreezes as metros are chewed", () => {
+  it("a chewed registry frees promotion capacity the flat model denied", () => {
+    // 90 eligible rows would freeze the old model (90 > 28×3 = 84).
+    // Here 60 of them are chewed (weekly) → cost 60/7 + 30/3 ≈ 18.6/day,
+    // leaving ~9.4 calls/day of headroom → 28 promotion seats.
+    const rows = [
+      ...Array.from({ length: 30 }, (_, i) => row({ recordId: `recP${i}`, zip: String(48200 + i) })),
+      ...Array.from({ length: 60 }, (_, i) =>
+        row({ recordId: `recC${i}`, zip: String(30000 + i), recordsIngested30d: 0, acceptRate30d: 0, zeroYieldStreak: 4 }),
+      ),
+      ...Array.from({ length: 40 }, (_, i) => row({ recordId: `recS${i}`, zip: String(44100 + i), marketTier: "staged" })),
+    ];
+    const d = frontierDecisions({ rows, dailyBudget: 28, now: JUL_11 });
+    expect(d.eligibleNow).toBe(90);
+    expect(d.currentDailyCost).toBeCloseTo(30 / 3 + 60 / 7, 1);
+    expect(d.capacityLeft).toBe(Math.floor((28 - (30 / 3 + 60 / 7)) * CYCLE));
+    expect(d.promote.length).toBe(d.capacityLeft);
+  });
+
+  it("paused-market rows neither crawl nor hold capacity seats", () => {
+    const rows = [
+      ...Array.from({ length: 6 }, (_, i) =>
+        row({ recordId: `recM${i}`, zip: String(38109 + i), pausedMarket: true }),
+      ),
+      row({ recordId: "recS1", zip: "44120", marketTier: "staged" }),
+    ];
+    const d = frontierDecisions({ rows, dailyBudget: 2, now: JUL_11 });
+    expect(d.eligibleNow).toBe(0);
+    expect(d.pausedExcluded).toBe(6);
+    expect(d.currentDailyCost).toBe(0);
+    expect(d.promote.map((r) => r.zip)).toEqual(["44120"]);
+  });
+
+  it("opener-HOLD TX cluster barely dents the budget", () => {
+    const rows = Array.from({ length: 21 }, (_, i) =>
+      row({ recordId: `recTX${i}`, zip: String(78200 + i), openerHold: true }),
+    );
+    const d = frontierDecisions({ rows, dailyBudget: 28, now: JUL_11 });
+    expect(d.currentDailyCost).toBeCloseTo(21 / 14, 1); // 1.5 calls/day, was 7/day flat
+  });
+});

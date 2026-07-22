@@ -16,12 +16,23 @@
 //
 // Pure. No I/O.
 
-const DEFAULT_MAX_PER_RUN = 5;
-const DEFAULT_MAX_PER_ZIP = 2;
+// Volume ramp (operator /goal 2026-07-22, deliberate code change per the
+// ceiling doctrine below): defaults lifted 5→12 per run and 2→3 per ZIP so
+// the multi-slot cron can reach the operator's 100/day supply target once
+// supply exists. The NEW daily send meter (below) hard-bounds the day at
+// H2_DAILY_SEND_CAP regardless of slot count — per-run caps pace the day,
+// the daily meter ends it.
+const DEFAULT_MAX_PER_RUN = 12;
+const DEFAULT_MAX_PER_ZIP = 3;
 // Hard ceilings — env can tune DOWN within these, never above (a larger ramp
 // is a deliberate code change, never an env typo).
 const CEIL_MAX_PER_RUN = 25;
 const CEIL_MAX_PER_ZIP = 10;
+// Daily send governor: default + hard ceiling for total live sends per UTC
+// day across ALL runs. 100 = the operator's ruled supply target (2026-07-22,
+// "100/day is a SUPPLY TARGET"); the ceiling bounds a fat-fingered env.
+const DEFAULT_DAILY_SEND_CAP = 100;
+const CEIL_DAILY_SEND_CAP = 150;
 
 export interface SendCapConfig {
   maxPerRun: number;
@@ -56,6 +67,102 @@ function norm5(zip: string | null | undefined): string | null {
   if (zip == null) return null;
   const d = String(zip).replace(/\D/g, "");
   return d.length >= 5 ? d.slice(0, 5) : null;
+}
+
+// ── Cron-URL cap overrides (operator 2026-07-22 follow-up) ─────────────
+//
+// The per-run / per-zip caps were env-only, which left the 12/3 ramp
+// hostage to whatever H2_MAX_SENDS_PER_* values were installed in Vercel
+// during the 5/2 era (a stale env silently overrides new code defaults,
+// and no server-side path can read or edit Vercel env). These overrides
+// let the vercel.json cron URLs state their send pacing EXPLICITLY —
+// vercel.json is reviewed code, i.e. the same deliberate-code-change
+// channel the ceiling doctrine already trusts (precedent: h2's ?limit=,
+// intake's ?cap=). Clamped to the same hard ceilings as env — a query
+// string can never blast past 25/10 — and the daily send meter still
+// bounds the day at H2_DAILY_SEND_CAP regardless of any per-run value.
+// Precedence: query override > env > default. Invalid/absent → no-op.
+
+export function overrideSendCaps(
+  cfg: SendCapConfig,
+  overrides: { perRun?: string | null; perZip?: string | null },
+): SendCapConfig {
+  const parse = (raw: string | null | undefined, ceil: number): number | null => {
+    if (raw == null || raw.trim() === "") return null;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) return null;
+    return Math.min(ceil, Math.floor(n));
+  };
+  const perRun = parse(overrides.perRun, CEIL_MAX_PER_RUN);
+  const perZip = parse(overrides.perZip, CEIL_MAX_PER_ZIP);
+  if (perRun == null && perZip == null) return cfg;
+  return {
+    ...cfg,
+    maxPerRun: perRun ?? cfg.maxPerRun,
+    maxPerZip: perZip ?? cfg.maxPerZip,
+  };
+}
+
+// ── Daily send meter (operator /goal 2026-07-22) ───────────────────────
+//
+// The per-run caps alone stop bounding the day once the cron runs many
+// slots — 8 slots × 25 (env ceiling) would be 200/day with no single
+// brake. This meter is that brake: a KV counter of live sends per UTC
+// day; each run's effective per-run cap is clamped to the unspent daily
+// allowance. Mirrors the crawl meter's contract (frontier-governor):
+// non-atomic add is acceptable (slots are hours apart; the per-run cap
+// is the hard per-invocation bound), and an UNREADABLE meter falls back
+// to the per-run cap alone rather than darking sends — but the route
+// AUDITS that fallback so a broken meter is visible, never silent.
+
+export function readDailySendCap(env: NodeJS.ProcessEnv = process.env): number {
+  return clampInt(env.H2_DAILY_SEND_CAP, DEFAULT_DAILY_SEND_CAP, CEIL_DAILY_SEND_CAP);
+}
+
+/** KV key for today's live-send meter (UTC date). 48h TTL = day + slack. */
+export function dailySendMeterKey(now: Date): string {
+  return `h2:outreach:sends:${now.toISOString().slice(0, 10)}`;
+}
+export const DAILY_SEND_METER_TTL_S = 172_800;
+
+export interface DailySendVerdict {
+  /** Effective per-run send cap after the daily clamp. */
+  maxPerRunToday: number;
+  allowanceLeftToday: number;
+  meterReadable: boolean;
+  dailyCap: number;
+  reason: string;
+}
+
+/** Pure: clamp a run's per-run send cap to the unspent share of the daily
+ *  allowance. usedToday = null → meter unreadable → per-run cap alone. */
+export function governDailySends(input: {
+  maxPerRun: number;
+  dailyCap: number;
+  usedToday: number | null;
+}): DailySendVerdict {
+  const perRun = Math.max(0, Math.floor(input.maxPerRun));
+  if (input.usedToday == null) {
+    return {
+      maxPerRunToday: perRun,
+      allowanceLeftToday: -1,
+      meterReadable: false,
+      dailyCap: input.dailyCap,
+      reason: "daily send meter unreadable — per-run cap only",
+    };
+  }
+  const left = Math.max(0, input.dailyCap - Math.max(0, input.usedToday));
+  const cap = Math.min(perRun, left);
+  return {
+    maxPerRunToday: cap,
+    allowanceLeftToday: left,
+    meterReadable: true,
+    dailyCap: input.dailyCap,
+    reason:
+      cap < perRun
+        ? `daily send cap clamp: ${left} of ${input.dailyCap} sends left today`
+        : `within daily cap: ${left} of ${input.dailyCap} sends left today`,
+  };
 }
 
 export function readSendCapConfig(env: NodeJS.ProcessEnv = process.env): SendCapConfig {

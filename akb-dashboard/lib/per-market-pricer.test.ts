@@ -220,19 +220,62 @@ describe("GUARD C — ARV-sanity gate (Hole C) — HOLDS a below-list ARV", () =
     expect(r.opener).toBeNull(); // was 77_350
   });
 
-  it("a STRONG seed below list is distrusted for pricing but NOT flagged for re-seed (over-ARV listing, good seed)", () => {
+  // ── 2026-07-22 principle amendment (supersedes the 2026-06-28 blanket
+  // hold): a STRONG seed below list SENDS the value-anchored lowball —
+  // the seed is trusted, the LISTING is over-ARV, which is exactly the
+  // aged tier-8 stock the funnel sources. Tagged over_arv_list so the
+  // cohort is trackable and the amendment reversible on evidence.
+  it("a STRONG seed below list SENDS the value-anchored opener, tagged over_arv_list (2026-07-22 amendment)", () => {
     const r = priceOpener({
-      listPrice: 119_000,
-      realArvMedian: 93_818,
-      estRehabMid: 34_425,
+      listPrice: 100_000,
+      realArvMedian: 95_000, // STRONG seed says renovated value < asking
+      estRehabMid: 15_000,
       arvPctMax: DETROIT_BUYBOX,
       anchorPct: 0.90,
       arvConfidence: "STRONG",
     });
-    expect(r.arvDistrusted).toBe(true);   // still HOLDS (never list-anchors)
-    expect(r.flagReseed).toBe(false);     // but the STRONG seed is trusted — listing is just over-ARV
-    expect(r.basis).toBe("hold_no_value_basis");
+    expect(r.basis).toBe("arv_buybox");
+    expect(r.overArvList).toBe(true);
+    expect(r.arvDistrusted).toBe(false); // seed trusted — listing is over-ARV
+    expect(r.flagReseed).toBe(false);
+    // Fully formula-derived: anchor × (ARV×buybox − rehab − fee), MAO-bounded.
+    expect(r.opener).not.toBeNull();
+    expect(r.opener!).toBeLessThan(100_000); // lowball, nowhere near list
+    expect(r.arvUsed).toBe(95_000);
+    expect(r.detail).toContain("OVER_ARV_LIST");
+  });
+
+  it("the amendment is STRONG-only: THIN and unlabeled ARVs below list still HOLD + re-seed", () => {
+    for (const conf of ["THIN", null] as const) {
+      const r = priceOpener({
+        listPrice: 119_000,
+        realArvMedian: 93_818,
+        estRehabMid: 34_425,
+        arvPctMax: DETROIT_BUYBOX,
+        anchorPct: 0.90,
+        arvConfidence: conf,
+      });
+      expect(r.basis).toBe("hold_no_value_basis");
+      expect(r.opener).toBeNull();
+      expect(r.arvDistrusted).toBe(true);
+      expect(r.flagReseed).toBe(true);
+      expect(r.overArvList).toBe(false);
+    }
+  });
+
+  it("over_arv_list openers still ride every downstream guard (micro-opener floor holds)", () => {
+    // STRONG seed far below list → ceiling pencils tiny → low-opener floor
+    // suppresses the micro-opener even though the sanity gate now passes.
+    const r = priceOpener({
+      listPrice: 200_000,
+      realArvMedian: 60_000, // 0.6461×60k − 18k rehab − 5k fee ≈ 15.8k ceiling
+      estRehabMid: 18_000,
+      arvPctMax: DETROIT_BUYBOX,
+      anchorPct: 0.90,
+      arvConfidence: "STRONG",
+    });
     expect(r.opener).toBeNull();
+    expect(r.basis).toBe("hold_no_value_basis");
   });
 
   it("an ARV at/above list is trusted (no distrust) → value-anchored opener", () => {

@@ -55,7 +55,7 @@ import { shouldAutoPromote, type AutoPromoteBlockReason } from "@/lib/crawler/au
 import { type BuyerTrack } from "@/lib/buyer-median-input";
 import { buildIntakeListingFields } from "@/lib/crawler/intake-fields";
 import { rentcastQuotaAllows, computeBurnRate } from "@/lib/maverick/rentcast-burn-rate";
-import { selectDueZips, type ZipDueResult } from "@/lib/crawler/zip-rotation";
+import { selectDueZipsTiered, type ZipDueResult } from "@/lib/crawler/zip-rotation";
 import {
   computeDailyCrawlBudget,
   governRunCap,
@@ -288,6 +288,7 @@ export async function GET(req: Request) {
     : ZIPS_PER_RUN;
   let zips: string[] = overrideZips;
   const zipToRecordId = new Map<string, string>();
+  const zipPriorStreak = new Map<string, number>();
   let zipSource: "override" | "registry" = "override";
   // Freshness-cursor selection diagnostic — populated for registry fires.
   let zipDue: ZipDueResult | null = null;
@@ -334,7 +335,11 @@ export async function GET(req: Request) {
         (r) => isActionableMarket({ state: r.state, city: r.market, zip: r.zip }).actionable,
       );
       pausedMarketExcluded = allRows.length - rows.length;
-      for (const r of rows) if (!zipToRecordId.has(r.zip)) zipToRecordId.set(r.zip, r.recordId);
+      for (const r of rows) {
+        if (!zipToRecordId.has(r.zip)) zipToRecordId.set(r.zip, r.recordId);
+        // Prior zero-yield streak — the write-back increments/resets it.
+        if (!zipPriorStreak.has(r.zip)) zipPriorStreak.set(r.zip, r.belowThresholdStreak ?? 0);
+      }
 
       // FRESHNESS CURSOR (2026-06-08 timeout fix). Pick the stalest DUE
       // ZIPs (null or last-ingested > ZIP_CYCLE_HOURS ago). Many small
@@ -347,8 +352,23 @@ export async function GET(req: Request) {
       const effectiveCap = Number.isFinite(capOverrideRaw) && capOverrideRaw > 0
         ? zipCap
         : runCap.zipCapThisRun;
-      zipDue = selectDueZips(
-        rows.map((r) => ({ zip: r.zip, lastIngestedAt: r.lastIngestedAt })),
+      // TIERED CADENCE (chew-and-move-on, 2026-07-22): each ZIP is due
+      // against the cycle it has EARNED — never-crawled ZIPs sweep first
+      // (fresh-metro backlog is the highest-yield crawl there is),
+      // producing ZIPs keep the base cycle, sustained-zero-yield "chewed"
+      // ZIPs decay to weekly, and opener-HOLD markets (non-disclosure TX
+      // etc.) idle at a biweekly trickle instead of eating daily budget on
+      // listings that cannot price → cannot send.
+      zipDue = selectDueZipsTiered(
+        rows.map((r) => ({
+          zip: r.zip,
+          lastIngestedAt: r.lastIngestedAt,
+          recordsIngested: r.recordsIngested30d,
+          acceptRate: r.acceptRate30d,
+          zeroYieldStreak: r.belowThresholdStreak,
+          openerHold:
+            openerArvPctMax(getMarketForListing({ state: r.state, zip: r.zip }), r.state) == null,
+        })),
         effectiveCap,
         new Date(),
         ZIP_CYCLE_HOURS,
@@ -1250,13 +1270,20 @@ export async function GET(req: Request) {
       const accepted = perZipAccepted.get(zip) ?? 0;
       const dom = perZipDom.get(zip);
       const price = perZipPrice.get(zip);
+      // Zero-yield streak (tiered cadence input): a run that ingested
+      // nothing AND accepted nothing extends the streak; any yield resets
+      // it. Drives the chewed-ZIP cadence decay (recrawlCycleHours).
+      const ingestedThisRun = perZipIngested.get(zip) ?? 0;
+      const zeroYieldRun = ingestedThisRun === 0 && accepted === 0;
+      const priorStreak = zipPriorStreak.get(zip) ?? 0;
       try {
         await updateZipStats(recordId, {
           lastIngestedAt: nowIso,
           acceptRate30d: considered > 0 ? accepted / considered : 0,
           avgDom: dom && dom.n > 0 ? Math.round(dom.sum / dom.n) : null,
           avgListPrice: price && price.n > 0 ? Math.round(price.sum / price.n) : null,
-          recordsIngested30d: perZipIngested.get(zip) ?? 0,
+          recordsIngested30d: ingestedThisRun,
+          belowThresholdStreak: zeroYieldRun ? priorStreak + 1 : 0,
         });
         registryWriteback.written++;
       } catch (err) {
