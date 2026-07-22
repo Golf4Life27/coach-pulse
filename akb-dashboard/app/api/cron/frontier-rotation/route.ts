@@ -23,13 +23,21 @@ import {
   readAuthHeaders,
 } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
-import { getAllRegistryRows, promoteStagedZip } from "@/lib/zip-registry";
+import { getAllRegistryRows, promoteStagedZip, createStagedZips } from "@/lib/zip-registry";
 import {
   computeDailyCrawlBudget,
   frontierDecisions,
   DEFAULT_RENTCAST_MONTHLY_PLAN,
   TARGET_CYCLE_DAYS,
 } from "@/lib/crawler/frontier-governor";
+import { decideStaging, targetStagedBacklog } from "@/lib/crawler/frontier-stage";
+import { isActionableMarket } from "@/lib/markets/actionable";
+import {
+  getMarketForListing,
+  getRestrictedStates,
+  openerArvPctMax,
+  NON_DISCLOSURE_STATES,
+} from "@/lib/markets/registry";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -85,6 +93,13 @@ export async function GET(req: Request) {
       lastIngestedAt: r.lastIngestedAt,
       recordsIngested30d: r.recordsIngested30d,
       acceptRate30d: r.acceptRate30d,
+      // Tiered-cadence inputs (chew-and-move-on, 2026-07-22): paused markets
+      // hold no capacity seats; opener-HOLD markets cost the trickle rate;
+      // the zero-yield streak drives the chewed discount.
+      pausedMarket: !isActionableMarket({ state: r.state, city: r.market, zip: r.zip }).actionable,
+      openerHold:
+        openerArvPctMax(getMarketForListing({ state: r.state, zip: r.zip }), r.state) == null,
+      zeroYieldStreak: r.belowThresholdStreak,
     })),
     dailyBudget: budget.dailyBudget,
     now,
@@ -95,6 +110,8 @@ export async function GET(req: Request) {
     eligible_now: decisions.eligibleNow,
     sustainable_zips: decisions.sustainableZips,
     capacity_left: decisions.capacityLeft,
+    current_daily_cost: decisions.currentDailyCost,
+    paused_excluded: decisions.pausedExcluded,
     target_cycle_days: TARGET_CYCLE_DAYS,
     daily_budget: budget.dailyBudget,
     budget_basis: budget.basis,
@@ -103,7 +120,29 @@ export async function GET(req: Request) {
   const promoted: Array<{ zip: string; recordId: string; error: string | null }> = [];
   const proposals = { attempted: 0, created: 0, error: null as string | null };
 
+  // ── Auto-stage (chew-and-move-on, 2026-07-22): keep the promotion queue
+  // fed from the expansion-metro config. Computed in BOTH modes so a dry
+  // run previews exactly what apply would stage; rows are only created on
+  // apply. Staged rows spend nothing — promotion capacity stays the gate.
+  const stagedBacklog = rows.filter((r) => (r.marketTier ?? "").trim() === "staged").length;
+  const staging = decideStaging({
+    existingZips: new Set(rows.map((r) => r.zip)),
+    restrictedStates: getRestrictedStates(),
+    nonDisclosureStates: NON_DISCLOSURE_STATES,
+    stagedBacklog,
+    targetBacklog: targetStagedBacklog(decisions.capacityLeft),
+    maxPerPass: 30,
+  });
+  const stagingResult = { attempted: staging.toStage.length, created: 0, error: null as string | null };
+
   if (apply) {
+    if (staging.toStage.length > 0) {
+      try {
+        stagingResult.created = await createStagedZips(staging.toStage);
+      } catch (err) {
+        stagingResult.error = err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200);
+      }
+    }
     // ── Promotion: staged → launch, within capacity ──────────────────
     const byId = new Map(rows.map((r) => [r.recordId, r] as const));
     for (const p of decisions.promote) {
@@ -186,6 +225,9 @@ export async function GET(req: Request) {
       promoted: promoted.filter((p) => !p.error).length,
       retire_candidates: decisions.retireCandidates.length,
       proposals_created: proposals.created,
+      staged_created: stagingResult.created,
+      staged_backlog: stagedBacklog,
+      staging_queue_exhausted: staging.queueExhausted,
     },
     ms: Date.now() - t0,
   });
@@ -199,6 +241,14 @@ export async function GET(req: Request) {
     promoted,
     retire_candidates: decisions.retireCandidates.map((c) => ({ zip: c.row.zip, reason: c.reason })),
     proposals,
+    staging: {
+      ...stagingResult,
+      staged_backlog_before: stagedBacklog,
+      to_stage: staging.toStage.map((s) => ({ zip: s.zip, market: s.market })),
+      metros_opened: staging.metrosOpened,
+      skipped: staging.skipped,
+      queue_exhausted: staging.queueExhausted,
+    },
     duration_ms: Date.now() - t0,
   });
 }

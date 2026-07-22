@@ -59,10 +59,10 @@ describe("applySendCap", () => {
 });
 
 describe("readSendCapConfig", () => {
-  it("defaults are tight (5 / 2) with an empty allowlist", () => {
+  it("defaults are the 2026-07-22 ramp (12 / 3) with an empty allowlist", () => {
     const c = readSendCapConfig({} as unknown as NodeJS.ProcessEnv);
-    expect(c.maxPerRun).toBe(5);
-    expect(c.maxPerZip).toBe(2);
+    expect(c.maxPerRun).toBe(12);
+    expect(c.maxPerZip).toBe(3);
     expect(c.coveredZips.size).toBe(0);
   });
 
@@ -77,10 +77,10 @@ describe("readSendCapConfig", () => {
     expect([...c.coveredZips].sort()).toEqual(["48205", "48213", "48227"]);
   });
 
-  it("a negative/garbage env falls back to the tight default", () => {
+  it("a negative/garbage env falls back to the default ramp", () => {
     const c = readSendCapConfig({ H2_MAX_SENDS_PER_RUN: "-3", H2_MAX_SENDS_PER_ZIP: "abc" } as unknown as NodeJS.ProcessEnv);
-    expect(c.maxPerRun).toBe(5);
-    expect(c.maxPerZip).toBe(2);
+    expect(c.maxPerRun).toBe(12);
+    expect(c.maxPerZip).toBe(3);
   });
 });
 
@@ -110,5 +110,52 @@ describe("auto coverage mode (UNLEASH ruling 2026-07-09)", () => {
     const auto = resolveCoverage(readSendCapConfig({ H2_COVERED_ZIPS: "auto" } as unknown as NodeJS.ProcessEnv), []);
     const d = applySendCap(plans("44105"), zipOf, auto);
     expect(d.allowed).toHaveLength(0);
+  });
+});
+
+// ── Daily send governor (operator /goal 2026-07-22) ────────────────────
+
+import { readDailySendCap, dailySendMeterKey, governDailySends } from "./send-cap";
+
+describe("readDailySendCap", () => {
+  it("defaults to the operator's 100/day supply target", () => {
+    expect(readDailySendCap({} as unknown as NodeJS.ProcessEnv)).toBe(100);
+  });
+  it("env tunes down freely but clamps at the 150 hard ceiling", () => {
+    expect(readDailySendCap({ H2_DAILY_SEND_CAP: "40" } as unknown as NodeJS.ProcessEnv)).toBe(40);
+    expect(readDailySendCap({ H2_DAILY_SEND_CAP: "9999" } as unknown as NodeJS.ProcessEnv)).toBe(150);
+    expect(readDailySendCap({ H2_DAILY_SEND_CAP: "junk" } as unknown as NodeJS.ProcessEnv)).toBe(100);
+  });
+});
+
+describe("dailySendMeterKey", () => {
+  it("keys by UTC date", () => {
+    expect(dailySendMeterKey(new Date("2026-07-22T18:00:00Z"))).toBe("h2:outreach:sends:2026-07-22");
+  });
+});
+
+describe("governDailySends", () => {
+  it("passes the per-run cap through with wide allowance", () => {
+    const v = governDailySends({ maxPerRun: 12, dailyCap: 100, usedToday: 10 });
+    expect(v.maxPerRunToday).toBe(12);
+    expect(v.allowanceLeftToday).toBe(90);
+    expect(v.meterReadable).toBe(true);
+  });
+
+  it("clamps the run to the unspent daily allowance", () => {
+    const v = governDailySends({ maxPerRun: 12, dailyCap: 100, usedToday: 95 });
+    expect(v.maxPerRunToday).toBe(5);
+  });
+
+  it("zeroes the run when the day is spent (the hard daily bound)", () => {
+    const v = governDailySends({ maxPerRun: 25, dailyCap: 100, usedToday: 100 });
+    expect(v.maxPerRunToday).toBe(0);
+    expect(v.allowanceLeftToday).toBe(0);
+  });
+
+  it("unreadable meter → per-run cap alone, flagged not silent", () => {
+    const v = governDailySends({ maxPerRun: 12, dailyCap: 100, usedToday: null });
+    expect(v.maxPerRunToday).toBe(12);
+    expect(v.meterReadable).toBe(false);
   });
 });

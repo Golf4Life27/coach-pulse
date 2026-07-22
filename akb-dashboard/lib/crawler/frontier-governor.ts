@@ -25,6 +25,8 @@
 //
 // PURE. No I/O — the intake route supplies the meter reading and clock.
 
+import { recrawlCycleHours } from "./zip-rotation";
+
 export const DEFAULT_RENTCAST_MONTHLY_PLAN = 1000;
 /** Daily paid calls held back for non-crawl uses (ZIP seed pulls, probes). */
 export const DEFAULT_DAILY_CRAWL_RESERVE = 3;
@@ -145,6 +147,38 @@ export interface FrontierZipRow {
   lastIngestedAt: string | null;
   recordsIngested30d: number | null;
   acceptRate30d: number | null;
+  /** Market paused at the contract layer (Memphis) — the intake belt already
+   *  skips these (isActionableMarket); the capacity math must too, or dead
+   *  rows hold seats fresh metros could use. Route-computed; defaults false. */
+  pausedMarket?: boolean;
+  /** Opener cannot price this market (non-disclosure TX etc.) — idles at the
+   *  biweekly trickle cadence, costing ~1/14th of a producing ZIP. */
+  openerHold?: boolean;
+  /** Consecutive zero-yield ingest runs (Below_Threshold_Streak_Days). */
+  zeroYieldStreak?: number | null;
+}
+
+/** Pure: a ZIP's crawl cost in RentCast calls/day under the tiered cadence
+ *  (lib/crawler/zip-rotation recrawlCycleHours). A producing ZIP at the
+ *  target 3-day rotation costs 1/3 call/day; a chewed ZIP on the weekly
+ *  cycle costs 1/7; an opener-HOLD ZIP on the biweekly trickle 1/14. This
+ *  is what lets the frontier EXPAND as metros get chewed: retired appetite
+ *  in old metros converts directly into promotion capacity for fresh ones. */
+export function zipDailyCallCost(row: FrontierZipRow, baseCycleHours = 24): number {
+  const cycleH = recrawlCycleHours(
+    {
+      zip: row.zip,
+      lastIngestedAt: row.lastIngestedAt,
+      recordsIngested: row.recordsIngested30d,
+      acceptRate: row.acceptRate30d,
+      zeroYieldStreak: row.zeroYieldStreak ?? null,
+      openerHold: row.openerHold === true,
+    },
+    baseCycleHours,
+  );
+  // Never cost a ZIP below the target rotation — the base cycle only marks
+  // eligibility; the sustainable rotation is TARGET_CYCLE_DAYS.
+  return 1 / Math.max(TARGET_CYCLE_DAYS, cycleH / 24);
 }
 
 export interface FrontierDecisions {
@@ -157,6 +191,11 @@ export interface FrontierDecisions {
   sustainableZips: number;
   eligibleNow: number;
   capacityLeft: number;
+  /** Summed calls/day the current eligible set actually costs under the
+   *  tiered cadence (chewed/held ZIPs cost fractions of a producing ZIP). */
+  currentDailyCost: number;
+  /** Eligible rows excluded because their market is paused (Memphis). */
+  pausedExcluded: number;
 }
 
 /** Pure: weekly promotion + retirement-candidate pass over the registry.
@@ -170,13 +209,25 @@ export function frontierDecisions(input: {
   rows: FrontierZipRow[];
   dailyBudget: number;
   now: Date;
+  baseCycleHours?: number;
 }): FrontierDecisions {
   const activeTiers = new Set(["launch", "active"]);
-  const eligible = input.rows.filter(
+  const activeRows = input.rows.filter(
     (r) => !r.wholesaleRestricted && activeTiers.has((r.marketTier ?? "").trim()),
   );
+  // Paused markets (Memphis) don't crawl — they must not hold capacity seats.
+  const eligible = activeRows.filter((r) => r.pausedMarket !== true);
+  const pausedExcluded = activeRows.length - eligible.length;
   const sustainableZips = Math.max(0, input.dailyBudget) * TARGET_CYCLE_DAYS;
-  const capacityLeft = Math.max(0, sustainableZips - eligible.length);
+  // Cost-weighted capacity (chew-and-move-on, 2026-07-22): the old flat
+  // `sustainable − count` model priced every ZIP at a 3-day recrawl forever,
+  // which froze promotion the moment the registry filled once. Under the
+  // tiered cadence a chewed/held ZIP costs 1/7 to 1/14 of a producing ZIP,
+  // so budget freed by chewed metros re-opens the frontier automatically.
+  const baseCycleHours = input.baseCycleHours ?? 24;
+  const currentDailyCost = eligible.reduce((sum, r) => sum + zipDailyCallCost(r, baseCycleHours), 0);
+  const headroom = Math.max(0, input.dailyBudget) - currentDailyCost;
+  const capacityLeft = Math.max(0, Math.floor(headroom * TARGET_CYCLE_DAYS));
 
   const staged = input.rows
     .filter((r) => !r.wholesaleRestricted && (r.marketTier ?? "").trim() === "staged")
@@ -205,6 +256,8 @@ export function frontierDecisions(input: {
     sustainableZips,
     eligibleNow: eligible.length,
     capacityLeft,
+    currentDailyCost: Math.round(currentDailyCost * 100) / 100,
+    pausedExcluded,
   };
 }
 

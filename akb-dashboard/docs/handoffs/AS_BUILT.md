@@ -414,6 +414,53 @@ conf 42, rehab_mid $51,183).
   (calls_avoided by vendor, legs_skipped, stable_marked); dry-run
   `eligible_sample` previews each record's `leg_plan`.
 
+## 8h. NEW 2026-07-22 — Outreach volume scaling: chew-and-move-on frontier + send ramp
+
+Operator /goal: raise outreach volume (1 send 7/21, 6 sends 7/22) while keeping
+every math safeguard. Root causes found: (a) ZIP_Registry frozen at 88 ZIPs / 9
+metros with ZERO staged rows — the #37 promotion machinery had nothing to promote;
+(b) the flat capacity model priced every ZIP at a 3-day recrawl forever, so the
+registry saturated its own budget and the frontier could never expand; (c) dead
+weight — 6 paused Memphis ZIPs held capacity seats and ~21 opener-HOLD TX ZIPs
+recrawled at full pace despite being unable to price/send; (d) intake env-clamped
+to ~30 crawls/day (3 slots × 10) below the budget governor's allowance; (e) send
+caps defaulted 5/run × 6 slots = 30/day ceiling against a ruled 100/day supply
+target.
+
+Shipped (all pure logic unit-tested; spend brakes unchanged or tightened):
+
+- **Tiered recrawl cadence** (`lib/crawler/zip-rotation.ts` `selectDueZipsTiered`,
+  `recrawlCycleHours`): never-crawled ZIPs sweep first (a fresh metro's standing
+  aged-DOM backlog is the highest-yield crawl there is); producing ZIPs keep the
+  base 24h eligibility; sustained-zero-yield "chewed" ZIPs decay 72h→168h via
+  `Below_Threshold_Streak_Days` (now maintained by the intake stats write-back);
+  opener-HOLD markets idle at 336h. Chew through, move on, come back later.
+- **Cost-weighted frontier capacity** (`lib/crawler/frontier-governor.ts`
+  `zipDailyCallCost`): a chewed ZIP costs 1/7 call/day, opener-HOLD 1/14, vs 1/3
+  producing — so budget freed by chewed metros converts directly into promotion
+  seats. Paused-market rows (Memphis) excluded from capacity entirely.
+- **Expansion auto-stage** (`lib/config/expansion-metros.json` +
+  `lib/crawler/frontier-stage.ts`): 24 curated disclosure-state distressed metros
+  (~150 ZIPs: OH/MI/IN/GA/AL/TN/PA/WI/KY/MD) feed tier=staged rows in config
+  order — one metro at a time — via the frontier-rotation cron (now 2×/week).
+  Restricted + non-disclosure states re-filtered in code; staged rows spend $0;
+  promotion stays budget-capacity-bounded. Philadelphia/NY deliberately excluded
+  (regulatory); config is operator-editable.
+- **Intake throughput** (vercel.json): 3→6 listings-intake slots + 2 seed-sweep
+  slots. The KV crawl meter + budget governor still bound daily RentCast spend —
+  slots widen throughput, never spend.
+- **Send ramp + NEW daily send brake** (`lib/outreach/send-cap.ts`): per-run
+  default 5→12, per-zip 2→3 (ceilings 25/10 unchanged); h2-outreach 6→8 slots,
+  queue-scan limit 10→25. NEW `H2_DAILY_SEND_CAP` KV meter (default 100 = the
+  ruled supply target, ceiling 150) clamps every run to the unspent daily
+  allowance — the day is bounded no matter how many slots fire. INVARIANTS §7
+  updated.
+
+Unchanged safeguards: value-anchored opener + all HOLD guards, never-over-list
+clamp ≤ send rail, distress-sourcing gate (tier-8 doctrine #151), Firecrawl
+breaker + hourly cap, RentCast quota gate, restricted-state exclusions, Memphis
+pause, H2 hard-disable master kill, per-record idempotency + run mutex.
+
 ## 9. Pointers
 
 - Hard rules / invariants: **[`docs/INVARIANTS.md`](../INVARIANTS.md)** — load every session.

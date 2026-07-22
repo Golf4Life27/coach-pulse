@@ -103,6 +103,22 @@ These actions require an explicit human decision and do not happen autonomously:
   `app/api/cron/listings-intake/route.ts:827`.
   - **Known gap `[unknown]`:** the breaker + scope gate fail-OPEN on a KV/store
     outage; a fail-narrow allowlist fix was flagged 2026-06-09 — verify it shipped.
+- **Daily send meter (2026-07-22 volume ramp)** — total LIVE H2 sends per UTC day
+  are hard-bounded by `H2_DAILY_SEND_CAP` (default **100** = the operator's ruled
+  supply target; code ceiling 150 — env tunes DOWN only). Each run's per-run cap
+  is clamped to the unspent daily allowance via a KV meter; the meter increments
+  on every SMS actually dispatched. Added WITH the multi-slot ramp (8 h2 slots ×
+  per-run 12 default) precisely so slot count can never multiply into an unbounded
+  day. Unreadable meter → per-run cap alone (crawl-meter contract), surfaced in
+  the run summary — never silent.
+  `[enforced]` `lib/outreach/send-cap.ts` (`readDailySendCap`, `governDailySends`),
+  wired in `app/api/cron/h2-outreach/route.ts`.
+- **RentCast crawl budget governor (unchanged, restated)** — the intake belt's
+  daily ZIP spend derives from the plan (`computeDailyCrawlBudget`) and is metered
+  in KV; adding cron slots widens THROUGHPUT, never SPEND. The 2026-07-22 tiered
+  cadence (chewed/opener-HOLD ZIPs recrawl weekly/biweekly) reallocates that same
+  budget toward fresh metros — it does not raise it.
+  `[enforced]` `lib/crawler/frontier-governor.ts`, `lib/crawler/zip-rotation.ts`.
 
 ---
 
