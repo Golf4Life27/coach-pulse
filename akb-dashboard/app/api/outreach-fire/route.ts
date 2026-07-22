@@ -1,69 +1,38 @@
-import { getListings, updateListingRecord } from "@/lib/airtable";
-import { sendMessage } from "@/lib/quo";
-import { evaluateSendWindow } from "@/lib/h2-working-hours";
-import { openerMaoGuard, resolveOpenerCeiling } from "@/lib/outreach-economics";
+// RETIRED SENDER (operator 2026-07-22). @agent: crier
+//
+// This route was a SECOND, parallel first-touch SMS sender that priced the
+// door-opener at a flat 65% of list price (`listPrice * 0.65`) — the exact
+// retired rail behind the Blackmoor $84.5k over-offer (INVARIANTS §2,
+// operator 2026-06-28). It survived the pricing-doctrine cleanup because it
+// lived off to the side of the guarded h2-outreach cron, still wired to a
+// one-click dashboard "Send N texts" button (components/OutreachPanel.tsx)
+// and armed under the SAME H2_OUTREACH_HARD_DISABLE flag — which is `false`
+// in production so the value-anchored cron can send. That left a list-anchored
+// sender live on the dashboard.
+//
+// Doctrine (pricing-doctrine skill; INVARIANTS §2; "one concept per surface"):
+// the value-anchored pricer is the SOLE producer of a sent number, and there
+// is exactly ONE sender — /api/cron/h2-outreach (value-anchored opener + the
+// full guard stack + send cap + daily send meter). Rather than reimplement the
+// pricer here (a second copy that would drift), this route is RETIRED: the
+// send path permanently refuses, independent of any env flag. The operator's
+// manual-fire need is served by the h2-outreach cron via the h2-send GitHub
+// Actions workflow (dry preview by default; live only with the send flags set).
+//
+// The badge-count GET is kept (the dashboard panel reads it) but no longer
+// computes any list-fraction price — it counts qualified records by the
+// non-pricing eligibility filters only.
+
+import { getListings } from "@/lib/airtable";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+export const maxDuration = 60;
 
-const F = {
-  outreachStatus: "fldGIgqwyCJg4uFyv",
-  lastOutboundAt: "fldaK4lR5UNvycg11",
-  lastOutreachDate: "fldbRrOW3IEoLtnFE",
-  notes: "fldwKGxZly6O8qyPu",
-};
-
-const THROTTLE_MS = 30_000;
-
-function toE164(phone: string): string {
-  const digits = phone.replace(/[^0-9]/g, "");
-  if (digits.length === 10) return `+1${digits}`;
-  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
-  return `+${digits}`;
-}
-
-function roundToNearest250(n: number): number {
-  return Math.ceil(n / 250) * 250;
-}
-
-function formatOffer(listPrice: number): string {
-  return "$" + roundToNearest250(listPrice * 0.65).toLocaleString("en-US");
-}
-
-function buildFirstContactText(agentName: string, address: string, offer: string): string {
-  const firstName = agentName.split(" ")[0] || "there";
-  return `Hi ${firstName}, this is Alex with AKB Solutions. I am interested in your listing at ${address}. I would like to make a cash offer at ${offer} with a quick close. Is the seller open to offers in that range?`;
-}
-
-function buildMultiListingText(agentName: string, address: string, offer: string): string {
-  const firstName = agentName.split(" ")[0] || "there";
-  return `Hi ${firstName}, this is Alex with AKB Solutions again. I see you also have the listing at ${address}. Would the seller be open to a cash offer of ${offer}? Same terms — quick close, no financing contingency. Thanks!`;
-}
-
-function appendNote(existing: string | null, newNote: string): string {
-  const today = new Date().toLocaleDateString("en-US", {
-    month: "numeric", day: "numeric", year: "2-digit",
-  });
-  const stamped = `${today} — [Outreach] ${newNote}`;
-  return existing ? `${existing}\n\n${stamped}` : stamped;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-interface FireResult {
-  recordId: string;
-  address: string;
-  agentName: string | null;
-  agentPhone: string;
-  offer: string;
-  status: "sent" | "failed" | "skipped";
-  error?: string;
-}
-
+/** Badge counts for the dashboard Outreach panel. NO pricing math — the
+ *  retired 65%-of-list threshold is gone; this counts records that clear the
+ *  non-pricing eligibility filters (the actual send + its guarded number are
+ *  owned by /api/cron/h2-outreach). */
 export async function GET() {
-  // Return counts for dashboard badges
   try {
     const listings = await getListings();
 
@@ -92,9 +61,7 @@ export async function GET() {
         l.address
       ) {
         const clean = l.agentPhone.replace(/[^0-9]/g, "").slice(-10);
-        if (!contactedPhones.has(clean) && roundToNearest250(l.listPrice * 0.65) >= 5000) {
-          newOutreach++;
-        }
+        if (!contactedPhones.has(clean)) newOutreach++;
       }
     }
 
@@ -104,304 +71,20 @@ export async function GET() {
   }
 }
 
-export async function POST(req: Request) {
-  // HARD KILL (2026-06-05) — see /api/cron/h2-outreach route header.
-  // Outreach is OFF until the phantom safety gates are fixed.
-  if (process.env.H2_OUTREACH_HARD_DISABLE !== "false") {
-    return Response.json(
-      {
-        error: "outreach_fire_hard_disabled",
-        reason:
-          "Sister sender to h2-outreach. Disabled in code after unauthorized send at 2026-06-05T15:30:27Z.",
-      },
-      { status: 503 },
-    );
-  }
-  if (!process.env.AIRTABLE_PAT) {
-    return Response.json({ error: "AIRTABLE_PAT not set" }, { status: 500 });
-  }
-  if (!process.env.QUO_API_KEY) {
-    return Response.json({ error: "QUO_API_KEY not set" }, { status: 500 });
-  }
-
-  let body: { maxSend?: number; dryRun?: boolean; multiListing?: boolean } = {};
-  try {
-    const text = await req.text();
-    if (text.trim()) body = JSON.parse(text);
-  } catch {
-    return Response.json({ error: "Invalid JSON" }, { status: 400 });
-  }
-
-  const maxSend = body.maxSend ?? 50;
-  const dryRun = body.dryRun ?? false;
-  const multiListing = body.multiListing ?? false;
-
-  try {
-    const listings = await getListings();
-
-    if (multiListing) {
-      return handleMultiListing(listings, maxSend, dryRun);
-    }
-
-    return handleNewOutreach(listings, maxSend, dryRun);
-  } catch (err) {
-    console.error("[outreach-fire] Error:", err);
-    return Response.json(
-      { error: "Outreach failed", detail: String(err) },
-      { status: 500 }
-    );
-  }
-}
-
-async function handleNewOutreach(
-  listings: Awaited<ReturnType<typeof getListings>>,
-  maxSend: number,
-  dryRun: boolean
-) {
-  const contactedPhones = new Set<string>();
-  for (const l of listings) {
-    if (l.agentPhone && l.outreachStatus) {
-      contactedPhones.add(l.agentPhone.replace(/[^0-9]/g, "").slice(-10));
-    }
-  }
-
-  const qualified = listings.filter((l) => {
-    if (l.executionPath !== "Auto Proceed") return false;
-    if (l.liveStatus !== "Active") return false;
-    if (l.outreachStatus) return false;
-    if (l.doNotText) return false;
-    if (!l.agentPhone) return false;
-    if (!l.listPrice || l.listPrice <= 0) return false;
-    if (!l.address) return false;
-    return true;
-  });
-
-  const toSend = qualified.slice(0, maxSend);
-  const results: FireResult[] = [];
-  let sent = 0;
-  let failed = 0;
-  let skipped = 0;
-  let multiQueued = 0;
-  const phoneSeen = new Set<string>();
-
-  for (const listing of toSend) {
-    const phone = toE164(listing.agentPhone!);
-    const cleanedPhone = phone.replace(/[^0-9]/g, "").slice(-10);
-    let offerNum = roundToNearest250(listing.listPrice! * 0.65);
-
-    // Opener-vs-MAO guard (priceable markets): the 65%-of-list door-opener
-    // must never exceed the deal's underwritten MAO. Cap to MAO, or skip+flag.
-    const ceiling = resolveOpenerCeiling(listing);
-    const guard = openerMaoGuard({ baseOpener: offerNum, mao: ceiling.mao, priceable: ceiling.priceable });
-    if (!guard.ok) {
-      results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer: formatOffer(listing.listPrice!), status: "skipped", error: guard.reason ?? "opener exceeds MAO" });
-      skipped++;
-      continue;
-    }
-    if (guard.capped && guard.opener != null) offerNum = guard.opener;
-
-    if (offerNum < 5000) {
-      results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer: formatOffer(listing.listPrice!), status: "skipped", error: "Offer below $5K floor" });
-      skipped++;
-      continue;
-    }
-
-    if (contactedPhones.has(cleanedPhone)) {
-      // Set Multi-Listing Queued instead of leaving blank
-      if (!dryRun) {
-        try {
-          await updateListingRecord(listing.id, {
-            [F.outreachStatus]: "Multi-Listing Queued",
-            [F.notes]: appendNote(listing.notes, `Agent already contacted on another property. Queued for multi-listing follow-up.`),
-          });
-          multiQueued++;
-        } catch { /* best-effort */ }
-      }
-      results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer: formatOffer(listing.listPrice!), status: "skipped", error: "Agent already contacted — queued for multi-listing" });
-      skipped++;
-      continue;
-    }
-
-    if (phoneSeen.has(cleanedPhone)) {
-      if (!dryRun) {
-        try {
-          await updateListingRecord(listing.id, {
-            [F.outreachStatus]: "Multi-Listing Queued",
-            [F.notes]: appendNote(listing.notes, `Same agent texted earlier in this batch. Queued for multi-listing follow-up.`),
-          });
-          multiQueued++;
-        } catch { /* best-effort */ }
-      }
-      results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer: formatOffer(listing.listPrice!), status: "skipped", error: "Batch dedup — queued for multi-listing" });
-      skipped++;
-      continue;
-    }
-    phoneSeen.add(cleanedPhone);
-
-    // Build the message offer from the GUARDED opener (offerNum), not a fresh
-    // 65%-of-list recompute — so a capped opener is what the seller sees.
-    const offer = "$" + offerNum.toLocaleString("en-US");
-    const message = buildFirstContactText(listing.agentName ?? "there", listing.address, offer);
-
-    // SAFETY GATE (item 0): hard quiet-hours floor — no SMS outside 8–20
-    // property-local. Non-disableable; checked just before the send.
-    const wh = evaluateSendWindow(listing.state ?? null);
-    if (!wh.inside) {
-      results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer, status: "skipped", error: `Outside send window (local_hour=${wh.meta.local_hour} tz=${wh.meta.timezone})` });
-      skipped++;
-      continue;
-    }
-
-    if (dryRun) {
-      results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer, status: "skipped", error: `Dry run — message: "${message}"` });
-      skipped++;
-      continue;
-    }
-
-    try {
-      await sendMessage(phone, message);
-
-      const now = new Date().toISOString();
-      // Per Phase 20.2 v1.3 amendment (5/18) + Checklist 11.4: capture
-      // Outreach_Offer_Price + List_Price_At_Send at H2 send time.
-      // Door-opener semantics: Outreach_Offer_Price = 65% List Price
-      // rounded to nearest $250. STICKY — never overwritten once set
-      // (gate below). List_Price_At_Send = list price at the moment of
-      // outreach (snapshot — survives subsequent price drops). The
-      // separate Contract_Offer_Price is written later by the Pricing
-      // Agent at negotiation/DD stage.
-      const outreachUpdate: Record<string, unknown> = {
-        [F.outreachStatus]: "Texted",
-        [F.lastOutboundAt]: now,
-        [F.lastOutreachDate]: now.split("T")[0],
-        [F.notes]: appendNote(listing.notes, `Sent initial offer to ${listing.agentName ?? "agent"} at ${phone}. Offer: ${offer}.`),
-        List_Price_At_Send: listing.listPrice!,
-      };
-      if (!listing.outreachOfferPrice || listing.outreachOfferPrice <= 0) {
-        outreachUpdate.Outreach_Offer_Price = offerNum;
-      }
-      await updateListingRecord(listing.id, outreachUpdate);
-
-      contactedPhones.add(cleanedPhone);
-      results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer, status: "sent" });
-      sent++;
-
-      if (sent < toSend.length) await sleep(THROTTLE_MS);
-    } catch (err) {
-      try {
-        await updateListingRecord(listing.id, {
-          [F.outreachStatus]: "Manual Review",
-          [F.notes]: appendNote(listing.notes, `Outreach failed: ${String(err)}`),
-        });
-      } catch { /* best-effort */ }
-      results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer, status: "failed", error: String(err) });
-      failed++;
-    }
-  }
-
-  return Response.json({
-    mode: "new",
-    totalQualified: qualified.length,
-    attempted: toSend.length,
-    sent, failed, skipped, multiQueued, dryRun,
-    throttleSeconds: THROTTLE_MS / 1000,
-    results,
-  });
-}
-
-async function handleMultiListing(
-  listings: Awaited<ReturnType<typeof getListings>>,
-  maxSend: number,
-  dryRun: boolean
-) {
-  const queued = listings.filter(
-    (l) => l.outreachStatus === "Multi-Listing Queued" && l.agentPhone && l.listPrice && l.address && !l.doNotText
+/** RETIRED — permanent refusal, independent of any env flag. The list-anchored
+ *  send path this route used to run is a pricing-doctrine violation; the single
+ *  value-anchored sender is /api/cron/h2-outreach. */
+export async function POST() {
+  return Response.json(
+    {
+      error: "outreach_fire_retired",
+      reason:
+        "Retired 2026-07-22: this sender priced the opener at 65% of list " +
+        "(the retired Blackmoor rail). The single value-anchored sender is " +
+        "/api/cron/h2-outreach — fire it via the h2-send GitHub Actions " +
+        "workflow (dry by default; live only with the send flags set).",
+      canonical_sender: "/api/cron/h2-outreach",
+    },
+    { status: 410 },
   );
-
-  const toSend = queued.slice(0, maxSend);
-  const results: FireResult[] = [];
-  let sent = 0;
-  let failed = 0;
-  let skipped = 0;
-
-  for (const listing of toSend) {
-    const phone = toE164(listing.agentPhone!);
-    let offerNum = roundToNearest250(listing.listPrice! * 0.65);
-
-    // Opener-vs-MAO guard (priceable markets): never offer above our MAO.
-    const ceiling = resolveOpenerCeiling(listing);
-    const guard = openerMaoGuard({ baseOpener: offerNum, mao: ceiling.mao, priceable: ceiling.priceable });
-    if (!guard.ok) {
-      results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer: formatOffer(listing.listPrice!), status: "skipped", error: guard.reason ?? "opener exceeds MAO" });
-      skipped++;
-      continue;
-    }
-    if (guard.capped && guard.opener != null) offerNum = guard.opener;
-
-    if (offerNum < 5000) {
-      results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer: formatOffer(listing.listPrice!), status: "skipped", error: "Offer below $5K floor" });
-      skipped++;
-      continue;
-    }
-
-    const offer = "$" + offerNum.toLocaleString("en-US");
-    const message = buildMultiListingText(listing.agentName ?? "there", listing.address, offer);
-
-    // SAFETY GATE (item 0): hard quiet-hours floor (same as the first loop).
-    const wh = evaluateSendWindow(listing.state ?? null);
-    if (!wh.inside) {
-      results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer, status: "skipped", error: `Outside send window (local_hour=${wh.meta.local_hour} tz=${wh.meta.timezone})` });
-      skipped++;
-      continue;
-    }
-
-    if (dryRun) {
-      results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer, status: "skipped", error: `Dry run — message: "${message}"` });
-      skipped++;
-      continue;
-    }
-
-    try {
-      await sendMessage(phone, message);
-
-      const now = new Date().toISOString();
-      // Same Outreach_Offer_Price + List_Price_At_Send capture as the
-      // new-outreach handler. Sticky — gate Outreach_Offer_Price write
-      // on absence of an existing value (Phase 20.2 v1.3).
-      const multiUpdate: Record<string, unknown> = {
-        [F.outreachStatus]: "Texted",
-        [F.lastOutboundAt]: now,
-        [F.lastOutreachDate]: now.split("T")[0],
-        [F.notes]: appendNote(listing.notes, `Sent multi-listing follow-up to ${listing.agentName ?? "agent"} at ${phone}. Offer: ${offer}.`),
-        List_Price_At_Send: listing.listPrice!,
-      };
-      if (!listing.outreachOfferPrice || listing.outreachOfferPrice <= 0) {
-        multiUpdate.Outreach_Offer_Price = offerNum;
-      }
-      await updateListingRecord(listing.id, multiUpdate);
-
-      results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer, status: "sent" });
-      sent++;
-
-      if (sent < toSend.length) await sleep(THROTTLE_MS);
-    } catch (err) {
-      try {
-        await updateListingRecord(listing.id, {
-          [F.outreachStatus]: "Manual Review",
-          [F.notes]: appendNote(listing.notes, `Multi-listing outreach failed: ${String(err)}`),
-        });
-      } catch { /* best-effort */ }
-      results.push({ recordId: listing.id, address: listing.address, agentName: listing.agentName, agentPhone: phone, offer, status: "failed", error: String(err) });
-      failed++;
-    }
-  }
-
-  return Response.json({
-    mode: "multi-listing",
-    totalQueued: queued.length,
-    attempted: toSend.length,
-    sent, failed, skipped, dryRun,
-    throttleSeconds: THROTTLE_MS / 1000,
-    results,
-  });
 }
