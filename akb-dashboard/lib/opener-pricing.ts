@@ -96,7 +96,8 @@ export function priceOpenerWithSeed(input: OpenerWithSeedInput): OpenerWithSeedR
   const basisLabel =
     result.cappedToList ? "capped_to_list"
     : result.basis === "hold_no_value_basis" ? "hold"
-    : arvSource === "seed_renovated" ? "arv_buybox_seed"
+    : arvSource === "seed_renovated"
+      ? (result.overArvList ? "arv_buybox_seed_over_arv_list" : "arv_buybox_seed")
     : "arv_buybox_stored";
 
   return { result, arvSource, arvUsed: arvForPricer, basisLabel };
