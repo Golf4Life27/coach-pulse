@@ -104,23 +104,31 @@ describe("planQueue — first_touch", () => {
     expect(p.toE164).toBe("+12105551234");
     expect(p.message).toContain("Hi Jane, this is Alex with AKB Solutions");
     expect(p.message).not.toContain("Jane Agent"); // first name only — 5/8 rule
-    expect(p.message).toContain("cash offer of $97,500 on 123 Main St.");
-    expect(p.message).toContain("off their hands and done, we're ready to move fast.");
-    expect(p.message).not.toContain("open to offers in that range"); // killed copy
+    // Restored 30%-reply-era template (operator 2026-07-22).
+    expect(p.message).toContain("I am interested in your listing at 123 Main St in");
+    expect(p.message).toContain("cash offer at $97,500 with a quick close and no financing contingencies");
+    expect(p.message).toContain("Is the seller open to offers in that range?");
+    expect(p.message).not.toContain("off their hands and done"); // retired 2026-06-30 copy
     expect(p.message).toContain("$97,500");
   });
   it("falls back to 'there' when agent name is blank", () => {
     const [p] = plan([listing({ agentName: "" })]);
     expect(p.message).toContain("Hi there, this is Alex");
   });
-  it("uses the STREET only — drops the redundant city/state/zip tail", () => {
-    // Real RentCast addresses carry city/state/zip; the locked reframe
-    // (2026-06-30) references the street only ("on 1138 Santa Anna"), never
-    // the full line — so no redundant city clause is even possible.
+  it("uses STREET + CITY but drops the state/zip tail (restored template)", () => {
+    // The proven format names the listing "at {street} in {city}" — the
+    // city is intentional (it's in the 30%-reply original); only the
+    // state/zip tail of the RentCast line is dropped.
     const [p] = plan([listing({ address: "1138 Santa Anna, San Antonio, TX 78201", city: "San Antonio" })]);
-    expect(p.message).toContain("on 1138 Santa Anna. As-is");
-    expect(p.message).not.toContain("San Antonio");
+    expect(p.message).toContain("your listing at 1138 Santa Anna in San Antonio.");
+    expect(p.message).not.toContain("TX 78201");
     expect(p.message).not.toContain("78201");
+  });
+
+  it("drops the ' in {city}' clause cleanly when no city is available", () => {
+    const m = buildH2Message("Sam", "9 Oak", 71250, null);
+    expect(m).toContain("your listing at 9 Oak. I would like to make");
+    expect(m).not.toContain(" in .");
   });
 });
 
