@@ -60,6 +60,20 @@ underwrite against.
   opener can never round up past it and get refused), which only ever lowers an already
   value-anchored opener. Keep the clamp ≤ the send rail. (`lib/per-market-pricer.ts`,
   `lib/rough-opener-ceiling.ts`).
+- `[enforced]` **PRE-SEND CORROBORATION GATE — allowlist, not blocklist** (operator
+  2026-07-23, reliability build). Even after every pricer guard passes, a computed
+  opener must be CORROBORATED by INDEPENDENT sanity signals to reach a seller; ANY red
+  flag → the record HOLDS for operator review. The default is **hold-and-ask on an
+  un-corroborated number**, not send-and-hope — so an un-anticipated pricing bug stops
+  and surfaces instead of texting a seller. Signals (all pure, independent of the
+  pricer's own math): **size_extrapolation** (subject sqft outside the seed's comp size
+  band — the 927 Avon $121k bug), **arv_implausible_vs_list** (renovated ARV > 2.5× list),
+  **psf_out_of_range** (renovated $/sqft outside $15–$600), **capped_untrusted_arv** (opener
+  only survived by clamping to list on a non-STRONG ARV — 110 Leathers / 868 N Main).
+  Thresholds env-tunable. `Opener_Basis` `hold_failed_corroboration` marks a gated HOLD.
+  `[enforced]` `lib/opener-sanity-gate.ts` (`corroborateOpener`), wired as the final
+  gate in `lib/opener-pricing.ts` (`priceOpenerWithSeed`) — the ONE choke point both the
+  live send path and the read-only dry-run share.
 
 ## 3. Sticky offers
 

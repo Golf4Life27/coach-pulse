@@ -235,6 +235,21 @@ export function seedCompSqftBand(seed: Pick<ZipArvSeed, "receiptsJson">): SeedCo
   return { min: Math.min(...sqfts), max: Math.max(...sqfts), count: sqfts.length };
 }
 
+/** Pure: the seed's comp-cluster filter quality ("clean" | "noisy" | ...) from
+ *  its stored receipts, or null when absent/unparseable. A "noisy" cluster that
+ *  was still labelled STRONG (STRONG is comp-COUNT only) is a data-quality
+ *  warning the corroboration gate reads. */
+export function seedFilterQuality(seed: Pick<ZipArvSeed, "receiptsJson">): string | null {
+  if (!seed.receiptsJson) return null;
+  try {
+    const parsed = JSON.parse(seed.receiptsJson) as { filter_quality?: unknown } | null;
+    const q = parsed?.filter_quality;
+    return typeof q === "string" && q.trim() !== "" ? q.trim().toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface SizeBandVerdict {
   /** True → the subject is so far outside the comp size band that the
    *  psf-derived ARV is a size extrapolation and must not be trusted. */

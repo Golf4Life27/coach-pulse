@@ -48,7 +48,7 @@ describe("priceOpenerWithSeed — source-swap", () => {
   });
 
   it("HOLDS a subject far outside the comp size band (927 Avon St repro — 2,605 sqft vs ~1,000 sqft comps)", () => {
-    // Before the guard this texted $121,250: 134/sqft × 2605 = 349k ARV, ×0.90
+    // Before the gate this texted $121,250: 134/sqft × 2605 = 349k ARV, ×0.90
     // anchor after a placeholder rehab. The subject is 2.1× the largest comp.
     const r = priceOpenerWithSeed({
       listPrice: 150_000,
@@ -60,9 +60,8 @@ describe("priceOpenerWithSeed — source-swap", () => {
     });
     expect(r.result.opener).toBeNull();
     expect(r.result.basis).toBe("hold_no_value_basis");
-    expect(r.basisLabel).toBe("hold_arv_size_extrapolation");
-    expect(r.arvUsed).toBeNull();
-    expect(r.arvSource).toBe("none");
+    expect(r.basisLabel).toBe("hold_failed_corroboration");
+    expect(r.corroborationFlags).toContain("size_extrapolation");
   });
 
   it("does NOT fall back to stored ARV when the seed is size-extrapolated — it HOLDS", () => {
@@ -72,7 +71,20 @@ describe("priceOpenerWithSeed — source-swap", () => {
       seed: seed({ zip: "44310", renovatedPerSqft: 134, confidence: "STRONG", receiptsJson: smallCompReceipts }),
     });
     expect(r.result.opener).toBeNull();
-    expect(r.basisLabel).toBe("hold_arv_size_extrapolation");
+    expect(r.basisLabel).toBe("hold_failed_corroboration");
+  });
+
+  it("HOLDS an opener that only survived by clamping to list on a non-STRONG ARV (868 N Main / capped class)", () => {
+    // A stored (contaminated) ARV so high the opener hits the 85%-of-list cap.
+    // capped_untrusted_arv → not a trusted deep discount → HOLD.
+    const r = priceOpenerWithSeed({
+      listPrice: 99_000, sqft: 1_200, storedArv: 400_000, storedArvConfidence: "MED",
+      arvPctMax: 0.70, anchorPct: 0.90, wholesaleFee: 5_000, seed: null,
+    });
+    expect(r.result.opener).toBeNull();
+    expect(r.basisLabel).toBe("hold_failed_corroboration");
+    expect(r.corroborationFlags).toContain("capped_untrusted_arv");
+    expect(r.corroborationFlags).toContain("arv_implausible_vs_list");
   });
 
   it("still prices a subject INSIDE the comp size band off the same seed", () => {
