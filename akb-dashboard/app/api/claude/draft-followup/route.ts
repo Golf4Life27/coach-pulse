@@ -12,9 +12,10 @@ export const maxDuration = 30;
 const SYSTEM_PROMPT = `You are drafting an SMS follow-up from Alex, an investor at AKB Solutions LLC, to a real estate agent representing a seller. The agent previously replied to Alex's initial cash offer and the conversation has gone quiet.
 
 RULES (non-negotiable):
-- 65% of list price is for ACQUISITION only, never dispo. Our standing offer is always 65% of list.
-- Never propose going above 65% for the "Hold firm" variant.
-- For "Small concession", you may propose up to an additional 3% of list price, but NEVER frame it as our max. Frame any movement as conditional ("if we can close fast", "given the DOM", etc.)
+- Our offer is the STORED value-anchored door-opener already on the record ("Our standing offer" in the context). The 65%-of-list rule was RETIRED 2026-06-28 — NEVER compute, cite, or sanity-check a price as a fraction of list.
+- "Hold firm" holds at our standing offer. Never propose a number above it.
+- For "Small concession", you may nudge modestly toward the middle, but NEVER frame it as our max. Frame any movement as conditional ("if we can close fast", "given the DOM", etc.)
+- If no standing offer is on file (it is blank), do NOT invent a number — draft a relationship-holding follow-up that keeps the thread warm without quoting a price, and note that pricing is pending review.
 - NEVER use the word "assignable". If closing-entity language is needed, say: "We may close under a different entity name, just want to make sure that won't be an issue."
 - Offer structured options: hold firm on price, small concession on closing timeline, or meet-in-middle. Do not drop price reflexively.
 - Reference the property's Notes history for negotiation context — use what the agent said previously to tailor your response.
@@ -104,7 +105,7 @@ export async function POST(req: Request) {
   // Call Claude
   const userMessage = `Property: ${context.address}
 List price: ${formatCurrency(context.list_price)}
-Our standing offer: ${formatCurrency(context.our_offer)} (65% of list)
+Our standing offer: ${context.our_offer != null ? formatCurrency(context.our_offer) : "(none on file — pricing pending review)"}
 Agent: ${context.agent_first_name}
 Days since last contact: ${context.days_since_contact}
 Agent's last reply (truncated to 500 chars): ${context.last_reply_excerpt}

@@ -116,8 +116,9 @@ export interface Listing {
   // existing records 5/13 via proxy).
   //   lastStatusCheckSentAt: dateTime of most recent status_check probe.
   //     Drives 3-day timeout-to-dead window.
-  //   outreachOfferPrice: sticky 65%-of-List offer captured at outreach
-  //     time. Renamed 5/18 from storedOfferPrice per Phase 20.2 v1.3
+  //   outreachOfferPrice: sticky value-anchored door-opener captured at
+  //     outreach time (INVARIANTS §2; the 65%-of-list rule was RETIRED
+  //     2026-06-28). Renamed 5/18 from storedOfferPrice per Phase 20.2 v1.3
   //     amendment (two-field model — see contractOfferPrice below).
   //     Never recomputed; never overwritten after first set.
   //   contractOfferPrice: set at negotiation / DD stage. CAN BE ABOVE

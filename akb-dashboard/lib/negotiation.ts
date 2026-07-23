@@ -13,13 +13,22 @@ const NEGOTIATION_FIELD_IDS = {
   outreachStatus: "fldGIgqwyCJg4uFyv",
   notes: "fldwKGxZly6O8qyPu",
   lastContacted: "fldbRrOW3IEoLtnFE",
+  // Stored value-anchored door-opener (INVARIANTS §2). roughOpenerAmount is
+  // the modern value-anchored number (anchor × (ARV×buybox − rehab − fee));
+  // outreachOfferPrice is the legacy slot for older deals. The 65%-of-list
+  // rule was RETIRED 2026-06-28 — we read the STORED opener, never recompute
+  // a fraction of list.
+  roughOpenerAmount: "fldiOvLQZaLpK7lTD",
+  outreachOfferPrice: "fldBFnL0HQJWahRov",
 };
 
 export interface NegotiationContext {
   recordId: string;
   address: string;
   list_price: number;
-  our_offer: number;
+  /** Stored value-anchored door-opener, or null when the record HOLDs (no
+   *  trusted opener on file). NEVER a freshly-computed fraction of list. */
+  our_offer: number | null;
   agent_first_name: string;
   agent_phone: string;
   days_since_contact: number;
@@ -61,7 +70,13 @@ export async function getNegotiationContext(
   }
 
   const listPrice = (fields[NEGOTIATION_FIELD_IDS.listPrice] as number) ?? 0;
-  const ourOffer = Math.round(listPrice * 0.65);
+  // Read the STORED value-anchored opener; never recompute from list price.
+  // Modern deals carry Rough_Opener_Amount; older ones the legacy
+  // Outreach_Offer_Price slot. Neither present ⇒ null (HOLD for operator).
+  const ourOffer =
+    (fields[NEGOTIATION_FIELD_IDS.roughOpenerAmount] as number | undefined) ??
+    (fields[NEGOTIATION_FIELD_IDS.outreachOfferPrice] as number | undefined) ??
+    null;
 
   const notes = (fields[NEGOTIATION_FIELD_IDS.notes] as string) ?? "";
   const paragraphs = notes.split("\n").filter((p) => p.trim());

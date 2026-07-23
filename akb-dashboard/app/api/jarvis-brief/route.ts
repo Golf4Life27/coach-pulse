@@ -543,7 +543,7 @@ PRINCIPAL HANDLING (when agentContext.isPrincipal is true):
 - Wholesale assignment language can be more direct.
 
 MULTIFAMILY COUNTER PRICING:
-- For multi-unit / non-SFR deals (4+ units, "plex" in address, or property type signals multifamily), do NOT default to the 65%-of-list rule when drafting a counter.
+- For multi-unit / non-SFR deals (4+ units, "plex" in address, or property type signals multifamily), never anchor a counter to a fraction of list price (the 65%-of-list rule was RETIRED 2026-06-28) — price off the income math below.
 - Compute: counter ≈ (Buyer's max acquisition based on cap-rate target) − $15K wholesale fee. Round to nearest $1K.
 - A reasonable buyer cap-rate target for 8-12% gross-rent multiplier markets: gross_rent_annual / 0.08–0.10.
 - If you cannot estimate gross rent, surface the deal as STALE_REENGAGEMENT asking for rent roll BEFORE proposing a counter.

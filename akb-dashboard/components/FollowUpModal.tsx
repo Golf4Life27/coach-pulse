@@ -12,7 +12,7 @@ interface Variant {
 interface Context {
   address: string;
   list_price: number;
-  our_offer: number;
+  our_offer: number | null;
   agent_first_name: string;
   days_since_contact: number;
   last_reply_excerpt: string;
@@ -96,9 +96,9 @@ export default function FollowUpModal({
               </p>
             </div>
             <div>
-              <span className="text-gray-500">Our Offer (65%)</span>
+              <span className="text-gray-500">Our Offer</span>
               <p className="text-emerald-400 font-medium">
-                {formatCurrency(context.our_offer)}
+                {context.our_offer != null ? formatCurrency(context.our_offer) : "—"}
               </p>
             </div>
             <div>
