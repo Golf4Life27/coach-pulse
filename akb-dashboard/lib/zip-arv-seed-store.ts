@@ -193,6 +193,85 @@ export function arvForSubjectFromSeed(seed: ZipArvSeed, sqft: number | null | un
   return Math.round(psf * sqft);
 }
 
+// ── SIZE-EXTRAPOLATION GUARD (bug 2026-07-23, 927 Avon St) ──────────────
+// A seed's renovated $/sqft is derived from its comp cluster's sizes. Applying
+// it LINEARLY to a subject far outside that size band overstates ARV badly:
+// $/sqft compresses as houses get bigger, so a psf from ~1,000 sqft comps
+// texted a $121,250 opener on a 2,605 sqft house worth ~$180k (44310 comps ran
+// 978–1,236 sqft — the subject was 2.1× the largest). psf × sqft has no size
+// guard, and no downstream rail caught it (ARV > list, so the ARV-sanity gate
+// never fired). This guard HOLDS such records for operator review instead of
+// autonomously sending an extrapolated number — doctrine-consistent: no trusted
+// basis → HOLD, never a fabricated send.
+
+/** Env-tunable size-band tolerance. A subject beyond max_comp × T (or below
+ *  min_comp ÷ T) is a size extrapolation the psf-derived ARV cannot support. */
+export const SEED_SIZE_BAND_TOLERANCE = (() => {
+  const raw = Number(process.env.SEED_SIZE_BAND_TOLERANCE);
+  return Number.isFinite(raw) && raw >= 1 ? raw : 1.5;
+})();
+
+export interface SeedCompSqftBand {
+  min: number;
+  max: number;
+  count: number;
+}
+
+/** Pure: the comp square-footage band from a seed's stored receipts. Null when
+ *  the receipts are absent/unparseable or carry no positive comp sqft (older
+ *  seeds without receipts simply aren't guarded — we never block on absence). */
+export function seedCompSqftBand(seed: Pick<ZipArvSeed, "receiptsJson">): SeedCompSqftBand | null {
+  if (!seed.receiptsJson) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(seed.receiptsJson);
+  } catch {
+    return null;
+  }
+  const comps = (parsed as { comps?: Array<{ sqft?: unknown }> } | null)?.comps;
+  if (!Array.isArray(comps)) return null;
+  const sqfts = comps.map((c) => Number(c?.sqft)).filter((s) => Number.isFinite(s) && s > 0);
+  if (sqfts.length === 0) return null;
+  return { min: Math.min(...sqfts), max: Math.max(...sqfts), count: sqfts.length };
+}
+
+export interface SizeBandVerdict {
+  /** True → the subject is so far outside the comp size band that the
+   *  psf-derived ARV is a size extrapolation and must not be trusted. */
+  outside: boolean;
+  reason: string | null;
+  band: SeedCompSqftBand | null;
+}
+
+/** Pure: is the subject square footage so far outside the seed's comp size band
+ *  that a psf-derived ARV can't be trusted? When there is no comp sqft to judge
+ *  against (older seed / no receipts), we do NOT block (outside=false). */
+export function subjectOutsideCompSizeBand(
+  seed: Pick<ZipArvSeed, "receiptsJson">,
+  sqft: number | null | undefined,
+  tolerance: number = SEED_SIZE_BAND_TOLERANCE,
+): SizeBandVerdict {
+  const band = seedCompSqftBand(seed);
+  if (band == null || sqft == null || !Number.isFinite(sqft) || sqft <= 0) {
+    return { outside: false, reason: null, band };
+  }
+  if (sqft > band.max * tolerance) {
+    return {
+      outside: true,
+      reason: `subject ${Math.round(sqft)} sqft > ${tolerance}× the largest comp (${band.max} sqft) — psf-derived ARV extrapolates above the comp size band`,
+      band,
+    };
+  }
+  if (sqft < band.min / tolerance) {
+    return {
+      outside: true,
+      reason: `subject ${Math.round(sqft)} sqft < the smallest comp (${band.min} sqft) ÷ ${tolerance} — psf-derived ARV extrapolates below the comp size band`,
+      band,
+    };
+  }
+  return { outside: false, reason: null, band };
+}
+
 // ── Airtable I/O ────────────────────────────────────────────────────
 
 function requirePat(): string {

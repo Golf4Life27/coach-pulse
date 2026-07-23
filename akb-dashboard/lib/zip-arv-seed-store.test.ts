@@ -4,6 +4,8 @@ import {
   seedConfidence,
   arvForSubjectFromSeed,
   seedFromArvIntelligence,
+  seedCompSqftBand,
+  subjectOutsideCompSizeBand,
   SEED_STRONG_MIN_COMPS,
   type ZipArvSeed,
 } from "./zip-arv-seed-store";
@@ -112,5 +114,42 @@ describe("seedFromArvIntelligence", () => {
 
   it("returns null when no usable $/sqft", () => {
     expect(seedFromArvIntelligence(arvResult({ avg_per_sqft: null }), "rentcast_avm")).toBeNull();
+  });
+});
+
+describe("size-extrapolation guard (927 Avon St, 2026-07-23)", () => {
+  const receipts = (sqfts: number[]) =>
+    JSON.stringify({ method: "comp_cluster_unimodal", comps: sqfts.map((sqft) => ({ addr: "x", sqft, psf: 100 })) });
+
+  it("seedCompSqftBand reads the min/max/count from receipts", () => {
+    expect(seedCompSqftBand({ receiptsJson: receipts([978, 1236, 991, 1040]) })).toEqual({ min: 978, max: 1236, count: 4 });
+  });
+
+  it("seedCompSqftBand is null with no receipts (older seeds are not guarded)", () => {
+    expect(seedCompSqftBand({ receiptsJson: null })).toBeNull();
+    expect(seedCompSqftBand({ receiptsJson: "not json" })).toBeNull();
+    expect(seedCompSqftBand({ receiptsJson: JSON.stringify({ comps: [] }) })).toBeNull();
+  });
+
+  it("flags a subject 2.1× the largest comp as outside the band (the Avon case)", () => {
+    const v = subjectOutsideCompSizeBand({ receiptsJson: receipts([978, 1236, 991, 1040]) }, 2605);
+    expect(v.outside).toBe(true);
+    expect(v.band).toEqual({ min: 978, max: 1236, count: 4 });
+  });
+
+  it("passes a subject inside the band", () => {
+    expect(subjectOutsideCompSizeBand({ receiptsJson: receipts([978, 1236, 991, 1040]) }, 1100).outside).toBe(false);
+    // exactly at 1.5× the max is the boundary (not outside)
+    expect(subjectOutsideCompSizeBand({ receiptsJson: receipts([1000]) }, 1500).outside).toBe(false);
+    expect(subjectOutsideCompSizeBand({ receiptsJson: receipts([1000]) }, 1501).outside).toBe(true);
+  });
+
+  it("flags a subject far below the smallest comp", () => {
+    expect(subjectOutsideCompSizeBand({ receiptsJson: receipts([1000, 1200]) }, 600).outside).toBe(true);
+  });
+
+  it("does not block when there is nothing to judge against", () => {
+    expect(subjectOutsideCompSizeBand({ receiptsJson: null }, 2605).outside).toBe(false);
+    expect(subjectOutsideCompSizeBand({ receiptsJson: receipts([1000]) }, null).outside).toBe(false);
   });
 });
