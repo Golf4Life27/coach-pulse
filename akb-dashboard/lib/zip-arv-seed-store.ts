@@ -24,6 +24,7 @@
 // pattern as lib/buyer-median-store.ts).
 
 import type { ArvIntelligenceResult } from "@/lib/arv-intelligence";
+import { adjustedArvFromComps, type AdjustComp } from "@/lib/comp-adjustment";
 
 export const ZIP_ARV_SEED_TABLE = "tblduJzD1gShaGDQQ";
 
@@ -189,6 +190,21 @@ export function arvForSubjectFromSeed(seed: ZipArvSeed, sqft: number | null | un
   // DONT_PRICE sentinel → no ARV (pricer falls to 65%-of-list, never stored).
   if (seed.dontPrice || seed.confidence === "DONT_PRICE") return null;
   if (sqft == null || !Number.isFinite(sqft) || sqft <= 0) return null;
+
+  // SIZE-ADJUSTED SALES COMPARISON (reliability build #2, 2026-07-23). A STRONG
+  // seed carries its comps; use them to compute a size-adjusted, similarity-
+  // weighted ARV for THIS subject instead of a flat ZIP $/sqft (the Avon bug).
+  // Falls back to $/sqft × sqft when there are no usable comp receipts (older
+  // seeds) or the adjustment can't be computed. THIN seeds keep the
+  // conservative low-end $/sqft (too few comps to weight reliably).
+  if (seed.confidence === "STRONG") {
+    const comps = seedComps(seed);
+    if (comps.length >= SEED_STRONG_MIN_COMPS) {
+      const adj = adjustedArvFromComps(comps, sqft);
+      if (adj) return adj.arv;
+    }
+  }
+
   const psf = seed.confidence === "THIN" && seed.arvLowPerSqft != null ? seed.arvLowPerSqft : seed.renovatedPerSqft;
   return Math.round(psf * sqft);
 }
@@ -215,6 +231,23 @@ export interface SeedCompSqftBand {
   min: number;
   max: number;
   count: number;
+}
+
+/** Pure: the priced comps (price + sqft + distance) from a seed's stored
+ *  receipts, for size-adjusted sales comparison. Empty when absent/unparseable. */
+export function seedComps(seed: Pick<ZipArvSeed, "receiptsJson">): AdjustComp[] {
+  if (!seed.receiptsJson) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(seed.receiptsJson);
+  } catch {
+    return [];
+  }
+  const raw = (parsed as { comps?: Array<{ price?: unknown; sqft?: unknown; dist?: unknown }> } | null)?.comps;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((c) => ({ price: Number(c?.price), sqft: Number(c?.sqft), dist: c?.dist == null ? null : Number(c?.dist) }))
+    .filter((c) => Number.isFinite(c.price) && c.price > 0 && Number.isFinite(c.sqft) && c.sqft > 0);
 }
 
 /** Pure: the comp square-footage band from a seed's stored receipts. Null when

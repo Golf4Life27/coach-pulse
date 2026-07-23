@@ -74,6 +74,15 @@ underwrite against.
   `[enforced]` `lib/opener-sanity-gate.ts` (`corroborateOpener`), wired as the final
   gate in `lib/opener-pricing.ts` (`priceOpenerWithSeed`) — the ONE choke point both the
   live send path and the read-only dry-run share.
+- `[enforced]` **ARV FROM A STRONG SEED IS SIZE-ADJUSTED SALES COMPARISON, NOT FLAT
+  $/sqft** (reliability build #2, 2026-07-23). A STRONG seed carries its comps; the ARV
+  for a subject is a similarity-weighted (size-proximity × distance) blend of the comp
+  prices, each scaled to the subject's size **sub-linearly** (`price ∝ sqft^β`, β≈0.75 —
+  bigger houses cost more in total but less per added sqft). This is what an appraiser
+  does by hand and it removes the flat-`$/sqft × sqft` distortion that over-priced Avon.
+  Falls back to `$/sqft × sqft` only when a seed has no comp receipts (older seeds) or too
+  few comps; THIN seeds keep the conservative low-end `$/sqft`. `[enforced]`
+  `lib/comp-adjustment.ts` (`adjustedArvFromComps`), used by `arvForSubjectFromSeed`.
 
 ## 3. Sticky offers
 

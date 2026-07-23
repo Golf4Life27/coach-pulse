@@ -63,6 +63,26 @@ describe("arvForSubjectFromSeed — THIN biases to the low end", () => {
   it("DONT_PRICE seed → null even with sqft + a positive $/sqft on the row", () => {
     expect(arvForSubjectFromSeed({ ...base, confidence: "DONT_PRICE", dontPrice: true }, 1000)).toBeNull();
   });
+
+  it("STRONG seed WITH comp receipts uses size-adjusted sales comparison, not flat $/sqft", () => {
+    // Comps ~1,000 sqft; a 2,000 sqft subject. Flat $/sqft (150×2000=300k) would
+    // over-price; comp-adjustment must come in below that.
+    const receipts = JSON.stringify({
+      comps: [
+        { price: 150_000, sqft: 1_000 }, { price: 150_000, sqft: 1_000 },
+        { price: 150_000, sqft: 1_000 }, { price: 150_000, sqft: 1_000 },
+        { price: 150_000, sqft: 1_000 },
+      ],
+    });
+    const arv = arvForSubjectFromSeed({ ...base, confidence: "STRONG", renovatedPerSqft: 150, receiptsJson: receipts }, 2_000);
+    expect(arv).not.toBeNull();
+    expect(arv!).toBeLessThan(300_000); // sub-linear, not 150 × 2000
+  });
+
+  it("STRONG seed with too FEW comps falls back to flat $/sqft", () => {
+    const receipts = JSON.stringify({ comps: [{ price: 150_000, sqft: 1_000 }, { price: 150_000, sqft: 1_000 }] });
+    expect(arvForSubjectFromSeed({ ...base, confidence: "STRONG", renovatedPerSqft: 150, receiptsJson: receipts }, 1_000)).toBe(150_000);
+  });
 });
 
 describe("validateSeedWrite — DONT_PRICE sentinel", () => {
