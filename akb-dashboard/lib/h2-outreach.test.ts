@@ -325,20 +325,19 @@ describe("selectOutreachReady / outreachReadyReason — confirmed-live + actiona
   it("NOT ready when never verified", () => {
     expect(outreachReadyReason(listing({ ...ready(), lastVerified: null }), NOW).reason).toBe("never_verified");
   });
-  it("NOT ready in a PAUSED Memphis market even if fresh + H2-eligible", () => {
+  it("READY in Memphis now (unpaused 2026-07-23; TN assignability enforced at EMD/contract)", () => {
     const r = outreachReadyReason(listing({ ...ready(), state: "TN", city: "Memphis", zip: "38109" }), NOW);
-    expect(r.ready).toBe(false);
-    expect(r.reason).toContain("paused_memphis");
+    expect(r.ready).toBe(true);
   });
   it("NOT ready when not H2-eligible (already texted)", () => {
     expect(outreachReadyReason(listing({ ...ready(), outreachStatus: "Texted" }), NOW).reason).toContain("Outreach_Status already set");
   });
-  it("selectOutreachReady filters a mixed set down to the ready ones", () => {
+  it("selectOutreachReady filters a mixed set down to the ready ones (Memphis now ready)", () => {
     const set = [
       listing({ id: "ready", ...ready() }),
       listing({ id: "stale", ...ready(), lastVerified: hoursAgo(99) }),
       listing({ id: "memphis", ...ready(), state: "TN", city: "Memphis", zip: "38109" }),
     ];
-    expect(selectOutreachReady(set, NOW).map((l) => l.id)).toEqual(["ready"]);
+    expect(selectOutreachReady(set, NOW).map((l) => l.id)).toEqual(["ready", "memphis"]);
   });
 });

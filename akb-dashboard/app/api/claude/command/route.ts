@@ -145,7 +145,7 @@ Anything sent to a buyer must show ONLY the Assignment Price.
 
 ENTITY FLEXIBILITY LANGUAGE: When discussing the closing entity with sellers or listing agents, use "We may close under one of our affiliated entities." Never use the word "assignable."
 
-GEOGRAPHIC SCOPE: Memphis (TN) is PAUSED for new acquisitions. New outreach is TX only. TN deals already in motion can still close.
+GEOGRAPHIC SCOPE: Memphis (TN) is OPEN for outreach (unpaused 2026-07-23), alongside TX and the other active markets. TN assignability is enforced at the money doors, not by withholding outreach: no earnest money goes out on a TN deal until assignment availability is confirmed with the seller and in the contract (pre-EMD gate PE-04, pre-contract PC-16).
 
 CANONICAL FIELD NAME: The status pipeline field is "Outreach_Status" (NOT "Pipeline_Status"). Statuses use the exact Airtable choice names: Not Contacted, Texted, Emailed, Response Received, Negotiating, Offer Accepted, Dead, Manual Review, Inbound Lead.
 

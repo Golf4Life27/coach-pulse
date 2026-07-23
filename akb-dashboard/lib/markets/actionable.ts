@@ -7,15 +7,20 @@
 //      OK, ND. We never operate here. Mirrors EXCLUDED_STATES in the
 //      intake filter (kept in sync; duplicated as a const so this module
 //      has no import cycle with the cron).
-//   2. PAUSED markets: a market that is on hold at the contract layer.
-//      Memphis is paused (non-assignable clause) — we can price it
-//      (TN is a disclosure state) but cannot ASSIGN, so verifying/texting
-//      Memphis listings burns credits on deals we can't close. Standing
-//      constraint: do NOT reverse Memphis without an explicit operator go.
+//   2. PAUSED markets: a market on hold at the OUTREACH layer (can't
+//      price OR can't work it at all). Currently EMPTY.
+//
+//      Memphis (TN) is NO LONGER paused here (operator 2026-07-23):
+//      Memphis is OPEN for outreach. TN assignability is enforced at the
+//      MONEY DOORS instead — PE-04 (assignment-clause attestation, every
+//      state, at EMD) and PC-16 (TN Memphis-compliant assignment language,
+//      at contract). No earnest money leaves on a TN deal until assignment
+//      is confirmed with the seller and in the contract. Blocking outreach
+//      was the wrong layer; the EMD/contract gates are the right one.
 //
 // Pure + config-driven so the gate is one source of truth for the
-// freshness re-verify pass AND the outreach selector. NO mass registry
-// edit — the pause lives in code, reversible by editing PAUSED_MARKETS.
+// freshness re-verify pass AND the outreach selector. The pause lives in
+// code, reversible by editing PAUSED_MARKETS.
 
 import { getMarketForListing, openerArvPctMax } from "./registry";
 
@@ -24,18 +29,11 @@ export const HARD_EXCLUDED_STATES: ReadonlySet<string> = new Set([
   "IL", "MO", "SC", "NC", "OK", "ND",
 ]);
 
-/** Markets paused at the contract layer (can't assign). Matched on a
- *  normalized city or an explicit zip. Memphis = non-assignable clause. */
-export const PAUSED_MARKETS: ReadonlyArray<{ label: string; state: string; cities: string[]; zips: string[]; reason: string }> = [
-  {
-    label: "Memphis",
-    state: "TN",
-    cities: ["memphis"],
-    // The Memphis ZIP cluster currently in ZIP_Registry.
-    zips: ["38109", "38114", "38116", "38118", "38127", "38128"],
-    reason: "non_assignable_clause_paused_at_contract",
-  },
-];
+/** Markets paused at the OUTREACH layer. Matched on a normalized city or an
+ *  explicit zip. Currently EMPTY — Memphis was unpaused 2026-07-23 (TN
+ *  assignability now enforced at EMD/contract via PE-04 + PC-16, not by
+ *  blocking outreach). Re-add an entry here to pause a market outright. */
+export const PAUSED_MARKETS: ReadonlyArray<{ label: string; state: string; cities: string[]; zips: string[]; reason: string }> = [];
 
 export interface MarketInput {
   state: string | null | undefined;
