@@ -92,6 +92,8 @@ async function handle(req: Request) {
       agentPhone: (l as { agentPhone?: string | null }).agentPhone ?? null,
       agentEmail: (l as { agentEmail?: string | null }).agentEmail ?? null,
       outreachStatus: (l as { outreachStatus?: string | null }).outreachStatus ?? null,
+      lastInboundAt: (l as { lastInboundAt?: string | null }).lastInboundAt ?? null,
+      lastOutboundAt: (l as { lastOutboundAt?: string | null }).lastOutboundAt ?? null,
     }));
   } catch (err) {
     if (live) return NextResponse.json({ ok: false, error: "population_fetch_failed", message: String(err) }, { status: 500 });
