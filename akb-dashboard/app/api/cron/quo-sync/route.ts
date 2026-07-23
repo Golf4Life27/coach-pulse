@@ -23,6 +23,7 @@ import { toE164 } from "@/lib/phone";
 import { appendQuoMessagesToNotes } from "@/lib/outreach/quo-sync";
 import { detectL3DollarAmounts } from "@/lib/outreach/l3-amount-detector";
 import { isSelfEchoOrAutoreply } from "@/lib/conversation-check";
+import { weOpenedThreadForListing } from "@/lib/conversation-thread";
 import { selectSweepCohort } from "@/lib/inbound/gmail-thread-link";
 import {
   buildInboundReplyDraft,
@@ -164,7 +165,21 @@ async function handle(req: Request) {
         const ballInCourt =
           newestInbound != null &&
           (!l.lastOutboundAt || Date.parse(newestInbound.createdAt) > Date.parse(l.lastOutboundAt));
-        if (newestInbound && ballInCourt) {
+        // THREAD OWNERSHIP GATE (operator 2026-07-22): a shared agent phone is
+        // ONE SMS thread across every property the agent reps. quo-sync fans a
+        // draft to EACH cohort listing on that phone — so Roberto's counter
+        // (about 7545 Holmes St) manufactured a sendable counter-reply + a
+        // Negotiating flip + decision-math on 11881 Saint Patrick St, a deal we
+        // NEVER texted (the operator then ran comps on the wrong property).
+        // Draft/flip/decision-math only when OUR OWN outbound in this thread
+        // names THIS listing's street — the pollution-proof "we opened this
+        // conversation" signal (Last_Outbound_At gets fanned; the opener body
+        // does not). Never-texted siblings are skipped.
+        const weOpenedThis = weOpenedThreadForListing(
+          msgs.filter((m) => m.direction === "outgoing").map((m) => m.body),
+          l.address,
+        );
+        if (newestInbound && ballInCourt && weOpenedThis) {
           const draft = await buildInboundReplyDraft({
             listing: {
               id: l.id,

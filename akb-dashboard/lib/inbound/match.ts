@@ -6,6 +6,7 @@
 // drops). PURE — no I/O.
 
 import { toE164 } from "@/lib/phone";
+import { selectThreadListing } from "@/lib/conversation-thread";
 import type { InboundMessage, MatchableListing } from "./types";
 
 /** Pure: extract a bare lowercased email address from a From-header value
@@ -22,12 +23,34 @@ export function matchInboundToListing(
   msg: InboundMessage,
   listings: MatchableListing[],
 ): MatchableListing | null {
+  // A phone/email can match SEVERAL of an agent's listings (one thread, many
+  // properties). Collect ALL matches and attribute to the ACTIVE-thread listing
+  // — the one we most recently texted — instead of the arbitrary first match
+  // that flipped the wrong deal's status (operator 2026-07-22, Roberto Carver).
   if (msg.channel === "sms") {
     const want = toE164(msg.sender);
     if (!/\d{7,}/.test(want)) return null; // too few digits to be a real phone
-    return listings.find((l) => l.agentPhone && toE164(l.agentPhone) === want) ?? null;
+    const matches = listings.filter((l) => l.agentPhone && toE164(l.agentPhone) === want);
+    return selectThreadListing(
+      matches.map((l) => ({
+        id: l.id,
+        lastInboundAt: l.lastInboundAt ?? null,
+        lastOutboundAt: l.lastOutboundAt ?? null,
+        outreachStatus: l.outreachStatus,
+        _row: l,
+      })),
+    )?._row ?? null;
   }
   const want = extractEmailAddress(msg.sender);
   if (!want.includes("@")) return null;
-  return listings.find((l) => l.agentEmail && extractEmailAddress(l.agentEmail) === want) ?? null;
+  const matches = listings.filter((l) => l.agentEmail && extractEmailAddress(l.agentEmail) === want);
+  return selectThreadListing(
+    matches.map((l) => ({
+      id: l.id,
+      lastInboundAt: l.lastInboundAt ?? null,
+      lastOutboundAt: l.lastOutboundAt ?? null,
+      outreachStatus: l.outreachStatus,
+      _row: l,
+    })),
+  )?._row ?? null;
 }

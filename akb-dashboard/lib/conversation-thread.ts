@@ -64,3 +64,22 @@ export function selectThreadListing<T extends ThreadCandidate>(listings: readonl
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   })[0];
 }
+
+/** Pure: did WE open a conversation about THIS listing on this SMS thread?
+ *  True iff one of OUR outbound messages in the thread names the listing's
+ *  street. This is the pollution-proof attribution signal: Last_Inbound/Outbound
+ *  timestamps get fanned across every listing an agent reps, but our own opener
+ *  ("...cash offer of $X on 7545 Holmes St...") names the exact property. A
+ *  listing we never texted (Saint Patrick) has NO outbound naming its street,
+ *  so a shared-phone inbound must not draft/flip/decision-math against it — the
+ *  exact defect that manufactured a sendable counter on a never-offered deal
+ *  (operator 2026-07-22). Match is case-insensitive substring on the street
+ *  line (address before the first comma), which our openers always contain. */
+export function weOpenedThreadForListing(
+  outboundBodies: readonly (string | null | undefined)[],
+  address: string | null | undefined,
+): boolean {
+  const street = (address ?? "").split(",")[0].trim().toLowerCase();
+  if (!street) return false;
+  return outboundBodies.some((b) => (b ?? "").toLowerCase().includes(street));
+}

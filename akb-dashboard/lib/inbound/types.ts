@@ -30,4 +30,9 @@ export interface MatchableListing {
   agentPhone: string | null;
   agentEmail: string | null;
   outreachStatus: string | null;
+  /** Activity stamps — used to pick the ACTIVE-thread listing when one agent
+   *  phone/email matches several of the agent's listings (operator 2026-07-22:
+   *  the first-match arbitrarily attributed a counter to the wrong property). */
+  lastInboundAt?: string | null;
+  lastOutboundAt?: string | null;
 }
