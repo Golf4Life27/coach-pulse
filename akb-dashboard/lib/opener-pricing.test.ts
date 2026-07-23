@@ -35,6 +35,65 @@ describe("priceOpenerWithSeed — source-swap", () => {
     expect(r.result.arvDistrusted).toBe(false);
   });
 
+  // Comp receipts whose sqft band is ~1,000 sqft — the 44310 Avon St shape.
+  const smallCompReceipts = JSON.stringify({
+    method: "comp_cluster_unimodal",
+    filter_quality: "noisy",
+    comps: [
+      { addr: "a", sqft: 978, psf: 184 },
+      { addr: "b", sqft: 1236, psf: 132 },
+      { addr: "c", sqft: 991, psf: 116 },
+      { addr: "d", sqft: 1040, psf: 100 },
+    ],
+  });
+
+  it("HOLDS a subject far outside the comp size band (927 Avon St repro — 2,605 sqft vs ~1,000 sqft comps)", () => {
+    // Before the guard this texted $121,250: 134/sqft × 2605 = 349k ARV, ×0.90
+    // anchor after a placeholder rehab. The subject is 2.1× the largest comp.
+    const r = priceOpenerWithSeed({
+      listPrice: 150_000,
+      sqft: 2_605,
+      arvPctMax: 0.70,
+      anchorPct: 0.90,
+      wholesaleFee: 5_000,
+      seed: seed({ zip: "44310", renovatedPerSqft: 134, arvLowPerSqft: 100, confidence: "STRONG", receiptsJson: smallCompReceipts }),
+    });
+    expect(r.result.opener).toBeNull();
+    expect(r.result.basis).toBe("hold_no_value_basis");
+    expect(r.basisLabel).toBe("hold_arv_size_extrapolation");
+    expect(r.arvUsed).toBeNull();
+    expect(r.arvSource).toBe("none");
+  });
+
+  it("does NOT fall back to stored ARV when the seed is size-extrapolated — it HOLDS", () => {
+    const r = priceOpenerWithSeed({
+      listPrice: 150_000, sqft: 2_605, storedArv: 180_000, storedArvConfidence: "HIGH",
+      arvPctMax: 0.70, anchorPct: 0.90, wholesaleFee: 5_000,
+      seed: seed({ zip: "44310", renovatedPerSqft: 134, confidence: "STRONG", receiptsJson: smallCompReceipts }),
+    });
+    expect(r.result.opener).toBeNull();
+    expect(r.basisLabel).toBe("hold_arv_size_extrapolation");
+  });
+
+  it("still prices a subject INSIDE the comp size band off the same seed", () => {
+    const r = priceOpenerWithSeed({
+      listPrice: 150_000, sqft: 1_100, arvPctMax: 0.70, anchorPct: 0.90,
+      estRehabMid: 20_000, wholesaleFee: 5_000,
+      seed: seed({ zip: "44310", renovatedPerSqft: 134, confidence: "STRONG", receiptsJson: smallCompReceipts }),
+    });
+    expect(r.arvSource).toBe("seed_renovated");
+    expect(r.result.opener).not.toBeNull();
+  });
+
+  it("does NOT guard when the seed carries no receipts (older seeds price as before)", () => {
+    const r = priceOpenerWithSeed({
+      listPrice: 150_000, sqft: 2_605, arvPctMax: 0.70, anchorPct: 0.90,
+      estRehabMid: 20_000, wholesaleFee: 5_000,
+      seed: seed({ zip: "44310", renovatedPerSqft: 134, confidence: "STRONG", receiptsJson: null }),
+    });
+    expect(r.arvSource).toBe("seed_renovated");
+  });
+
   it("THIN seed biases ARV to the low end", () => {
     const r = priceOpenerWithSeed({
       listPrice: 100_000, sqft: 1_000, arvPctMax: DETROIT, anchorPct: 0.90,

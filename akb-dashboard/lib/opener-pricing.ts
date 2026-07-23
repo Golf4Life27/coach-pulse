@@ -16,7 +16,11 @@
 // Pure. No I/O (the caller loads the seed + anchor).
 
 import { priceOpener, type PricerResult } from "@/lib/per-market-pricer";
-import { arvForSubjectFromSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
+import {
+  arvForSubjectFromSeed,
+  subjectOutsideCompSizeBand,
+  type ZipArvSeed,
+} from "@/lib/zip-arv-seed-store";
 
 export type ArvSource = "seed_renovated" | "stored" | "none";
 
@@ -65,10 +69,23 @@ export function priceOpenerWithSeed(input: OpenerWithSeedInput): OpenerWithSeedR
 
   const seedArv = input.seed ? arvForSubjectFromSeed(input.seed, input.sqft ?? null) : null;
   const seedDontPrice = !!input.seed && (input.seed.dontPrice || input.seed.confidence === "DONT_PRICE");
-  if (pos(seedArv)) {
+
+  // SIZE-EXTRAPOLATION GUARD (927 Avon St, 2026-07-23): a seed psf applied to a
+  // subject far outside its comp size band overstates ARV. When that happens we
+  // trust NEITHER the seed ARV nor the contaminated stored ARV — the record
+  // HOLDS for operator review (never an autonomous extrapolated send).
+  const sizeBand =
+    pos(seedArv) && input.seed ? subjectOutsideCompSizeBand(input.seed, input.sqft ?? null) : null;
+  const sizeExtrapolated = sizeBand?.outside === true;
+
+  if (pos(seedArv) && !sizeExtrapolated) {
     arvForPricer = seedArv;
     arvSource = "seed_renovated";
     arvConfidence = input.seed!.confidence === "STRONG" ? "STRONG" : "THIN";
+  } else if (sizeExtrapolated) {
+    // Untrusted ARV (subject outside the comp size band) → HOLD. Do NOT fall
+    // back to the stored ARV (contaminated) — leave arvForPricer null.
+    arvSource = "none";
   } else if (seedDontPrice) {
     // The ZIP was evaluated and explicitly marked do-not-price (comps too few
     // / too noisy). Do NOT fall back to the contaminated stored ARV — with no
@@ -95,10 +112,17 @@ export function priceOpenerWithSeed(input: OpenerWithSeedInput): OpenerWithSeedR
   // Compact label for the Opener_Basis receipt.
   const basisLabel =
     result.cappedToList ? "capped_to_list"
+    : sizeExtrapolated ? "hold_arv_size_extrapolation"
     : result.basis === "hold_no_value_basis" ? "hold"
     : arvSource === "seed_renovated"
       ? (result.overArvList ? "arv_buybox_seed_over_arv_list" : "arv_buybox_seed")
     : "arv_buybox_stored";
 
-  return { result, arvSource, arvUsed: arvForPricer, basisLabel };
+  // Surface the extrapolation reason on the HOLD result's detail for the audit.
+  const finalResult: PricerResult =
+    sizeExtrapolated && sizeBand?.reason
+      ? { ...result, detail: `size extrapolation HOLD — ${sizeBand.reason}; ${result.detail}`, flagReseed: false }
+      : result;
+
+  return { result: finalResult, arvSource, arvUsed: arvForPricer, basisLabel };
 }
