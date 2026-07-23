@@ -1,0 +1,85 @@
+# Credit-recovery kick (operator 2026-07-23) — one-shot, on demand.
+#
+# After the Anthropic credit balance was topped up, this re-runs the two
+# things the outage left stale:
+#   1. appraiser-backfill (rehab_ready) — re-run the rehab/vision + MAO math
+#      for deals whose vision calls 400'd on "credit balance too low" this
+#      morning (blank ARV/rehab on today's Response-Received deals).
+#   2. quo-sync — regenerate the reply drafts that HELD with the credit
+#      error (e.g. the 7545 Holmes St counter), clearing the stale text.
+#      Runs on the deployed fan-out fix, so it attributes to the right deal.
+#
+# Both are idempotent + self-audited. Required GitHub secret: CRON_SECRET.
+
+name: Credit recovery kick (rehab backfill + draft regen)
+
+on:
+  workflow_dispatch:
+    inputs:
+      backfill_limit:
+        description: "Max records for the appraiser rehab_ready backfill."
+        required: false
+        default: "15"
+        type: string
+      base_url:
+        description: "Production base URL (override only for staging tests)."
+        required: false
+        default: "https://coach-pulse-ten.vercel.app"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BACKFILL_LIMIT: ${{ inputs.backfill_limit }}
+      BASE_URL: ${{ inputs.base_url }}
+    steps:
+      - name: Refuse to run when CRON_SECRET is missing
+        run: |
+          if [ -z "${{ secrets.CRON_SECRET }}" ]; then
+            echo "::error::CRON_SECRET is not configured as a GitHub Actions secret."
+            exit 1
+          fi
+          echo "CRON_SECRET present; proceeding."
+
+      - name: Re-run appraiser rehab/vision backfill
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          URL="${BASE_URL}/api/admin/appraiser-backfill?apply=1&selection=rehab_ready&limit=${BACKFILL_LIMIT}"
+          echo "GET ${URL}"
+          CODE=$(curl -sS -o /tmp/bf.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${CRON_SECRET}" -H "x-vercel-cron: 1" "${URL}")
+          echo "HTTP ${CODE}"; jq . /tmp/bf.json 2>/dev/null || cat /tmp/bf.json
+          [ "${CODE}" -ge 400 ] && { echo "::error::appraiser-backfill HTTP ${CODE}"; exit 1; } || true
+
+      - name: Regenerate held reply drafts (quo-sync)
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          URL="${BASE_URL}/api/cron/quo-sync?limit=40&hours_back=48"
+          echo "GET ${URL}"
+          CODE=$(curl -sS -o /tmp/qs.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${CRON_SECRET}" -H "x-vercel-cron: 1" "${URL}")
+          echo "HTTP ${CODE}"; jq . /tmp/qs.json 2>/dev/null || cat /tmp/qs.json
+          [ "${CODE}" -ge 400 ] && { echo "::error::quo-sync HTTP ${CODE}"; exit 1; } || true
+
+      - name: Summary
+        if: success()
+        run: |
+          set -euo pipefail
+          {
+            echo "## Credit recovery"
+            echo ""
+            echo "### Appraiser backfill"
+            jq -r '"- considered: \(.considered // .scanned // "?")","- applied: \(.applied // .updated // "?")","- rehab_ok: \(.rehab_ok // .rehab_calibrated // "?")","- errors: \(.errors // "?")"' /tmp/bf.json 2>/dev/null || echo "- (see raw above)"
+            echo ""
+            echo "### Quo-sync draft regen"
+            jq -r '"- cohort: \(.cohort_size // "?")","- drafts_queued: \(.reply_drafts_queued // "?")","- drafts_held: \(.reply_drafts_held // .draftsHeld // "?")","- rows_with_new_events: \(.rows_with_new_events // "?")"' /tmp/qs.json 2>/dev/null || echo "- (see raw above)"
+          } >> "$GITHUB_STEP_SUMMARY"
