@@ -27,7 +27,7 @@ ENTITY LANGUAGE: When discussing the closing entity with sellers or listing agen
 
 BUYER DISCLOSURE: NEVER disclose contract price, spread, assignment fee, ARV, or estimated repairs to buyers. Buyers see ONLY the Assignment Price.
 
-MEMPHIS PAUSE: Memphis (TN) acquisitions are PAUSED as of 4/26/2026 due to non-assignability clauses. No new TN offers unless Alex explicitly approves. TN deals already under contract can still close. If a TN agent responds positively, flag for manual review.
+MEMPHIS / TN: Memphis (TN) is OPEN for outreach (unpaused 2026-07-23). The assignability risk is handled at the money doors, NOT by withholding outreach: no earnest money goes out on a TN deal until assignment availability is confirmed with the seller AND carried in the contract (enforced by the pre-EMD gate PE-04 and pre-contract PC-16). Draft and send Memphis outreach normally; surface the assignment-confirmation requirement when a TN deal approaches EMD.
 
 OFFER FLOOR: A value-anchored opener that computes below max(30% × list, $10,000) is a broken micro-offer (rental, bad sqft, or data error) — HOLD it for operator review. NEVER substitute a fraction of list price to clear the floor.
 

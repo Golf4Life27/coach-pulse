@@ -82,13 +82,19 @@ fields, never the quarantined legacy formula fields.
 ## 5. Geographic exclusions (PERMANENT): IL, MO, SC, NC, OK, ND
 
 Wholesale-restrictive states are excluded at intake **and** at the gate. (Verified
-side-effect: the live table holds **0** records in these states.) **Memphis is
-PAUSED** (configured market `memphis_tn`, but not to be actioned per operator).
+side-effect: the live table holds **0** records in these states.) **Memphis (TN) is
+OPEN for outreach** (unpaused 2026-07-23, operator). TN assignability is enforced at
+the **money doors**, not by blocking outreach: `PE-04` (assignment-clause attestation,
+every state, at EMD) and `PC-16` (TN Memphis-compliant assignment language, at
+contract) hold the line — no earnest money leaves on a TN deal until assignment is
+confirmed with the seller and in the contract.
 
 - `[enforced]` `lib/crawler/intake-filter.ts:30` `EXCLUDED_STATES = {IL,MO,SC,NC,OK,ND}`;
   Pre-Outreach `PO-05` `restricted_states` (`lib/config/gates/pre_outreach.json`).
-- `[operator/unknown]` Memphis pause: market exists in `lib/config/markets.json`; the
-  exact pause-enforcement location is **not verified** — confirm before any Memphis run.
+- `[enforced]` TN assignability at EMD/contract: `lib/orchestrator/pre-emd-checks.ts`
+  `PE-04`; `lib/orchestrator/pre-contract-checks.ts` `PC-16`.
+- `[history]` Memphis was outreach-paused 2026-04-26→2026-07-23; `PAUSED_MARKETS` in
+  `lib/markets/actionable.ts` and `app/v2/_lib/policy.ts` are now empty.
 
 ## 6. Operator gates (human-in-the-loop; OFF by default)
 

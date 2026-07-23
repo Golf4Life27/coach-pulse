@@ -10,17 +10,16 @@ describe("isActionableMarket", () => {
     expect(isActionableMarket({ state: "MI", city: "Detroit", zip: "48201" }).actionable).toBe(true);
   });
 
-  it("PAUSES Memphis by city (non-assignable clause)", () => {
+  it("Memphis TN is actionable again (unpaused 2026-07-23; assignability enforced at EMD/contract)", () => {
     const r = isActionableMarket({ state: "TN", city: "Memphis", zip: "38109" });
-    expect(r.actionable).toBe(false);
-    expect(r.reason).toContain("paused_memphis");
+    expect(r).toEqual({ actionable: true, reason: null });
   });
 
-  it("PAUSES Memphis by zip even if city is blank", () => {
-    expect(isActionableMarket({ state: "TN", city: null, zip: "38114" }).actionable).toBe(false);
+  it("Memphis by zip is actionable even if city is blank", () => {
+    expect(isActionableMarket({ state: "TN", city: null, zip: "38114" }).actionable).toBe(true);
   });
 
-  it("a non-Memphis TN market is still actionable (pause is Memphis-scoped)", () => {
+  it("other TN markets are actionable too", () => {
     expect(isActionableMarket({ state: "TN", city: "Nashville", zip: "37011" }).actionable).toBe(true);
   });
 

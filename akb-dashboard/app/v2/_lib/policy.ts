@@ -12,13 +12,10 @@
 import type { ListingDetail, OperatorItem, QueueCard } from "./types";
 import { isLocalToday } from "./format";
 
-const PAUSED_MARKETS: Array<{ state: string; label: string; reference: string }> = [
-  {
-    state: "TN",
-    label: "Memphis",
-    reference: "Memphis market paused — standing spine decision (stale-pipeline triage, June 2026)",
-  },
-];
+// Empty — Memphis (TN) was unpaused 2026-07-23. Memphis is OPEN for outreach;
+// TN assignability is enforced at the money doors (PE-04 at EMD, PC-16 at
+// contract), not by suppressing the market. Re-add an entry to suppress a market.
+const PAUSED_MARKETS: Array<{ state: string; label: string; reference: string }> = [];
 
 export interface SuppressionVerdict {
   suppressed: boolean;
