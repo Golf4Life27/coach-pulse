@@ -81,10 +81,6 @@ function lastActivitySummary(notes: string | null): string {
   return `${prefix} ${last.text.slice(0, 80)}`;
 }
 
-function roundOffer(listPrice: number): number {
-  return Math.ceil((listPrice * 0.65) / 250) * 250;
-}
-
 function toBriefingItem(l: {
   id: string;
   address: string;
@@ -93,6 +89,8 @@ function toBriefingItem(l: {
   agentName: string | null;
   agentPhone: string | null;
   listPrice: number | null;
+  roughOpenerAmount?: number | null;
+  outreachOfferPrice?: number | null;
   outreachStatus: string | null;
   lastOutreachDate: string | null;
   lastInboundAt: string | null;
@@ -112,7 +110,12 @@ function toBriefingItem(l: {
     agentName: l.agentName,
     agentPhone: l.agentPhone,
     listPrice: l.listPrice,
-    offer: l.listPrice ? roundOffer(l.listPrice) : null,
+    // Value-anchored opener stored at outreach time (INVARIANTS §2). The
+    // 65%-of-list rule was RETIRED 2026-06-28 — the brief shows the real
+    // stored opener (roughOpenerAmount on modern deals; the legacy
+    // Outreach_Offer_Price slot for older ones), or null (HOLD). NEVER a
+    // freshly-computed fraction of list.
+    offer: l.roughOpenerAmount ?? l.outreachOfferPrice ?? null,
     outreachStatus: l.outreachStatus,
     daysSinceTouch: daysSince(lastTouch),
     lastActivity: lastActivitySummary(l.notes),

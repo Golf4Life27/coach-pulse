@@ -18,7 +18,7 @@ interface FollowUpState {
   context: {
     address: string;
     list_price: number;
-    our_offer: number;
+    our_offer: number | null;
     agent_first_name: string;
     days_since_contact: number;
     last_reply_excerpt: string;

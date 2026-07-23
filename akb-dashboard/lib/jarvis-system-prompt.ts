@@ -21,7 +21,7 @@ const NEVER_RESURFACE = [
 const BUSINESS_RULES = `
 ## AKB SOLUTIONS — BUSINESS RULES (always apply)
 
-OFFER FORMULA: All offers = 65% of the seller's list price, rounded up to the nearest $250. NEVER use AVM, ARV, RentCast Est_Value, or any other estimated value as an offer driver. Only the 65% rule.
+OFFER FORMULA (value-anchored — the 65%-of-list rule was RETIRED 2026-06-28 after the Blackmoor over-offer; do NOT use it, cite it, or treat a fraction of list price as "the rule"): the door-opener is value-anchored — anchor × (renovated ARV $/sqft × subject sqft × buy-box − rehab − fee), where ARV is the ZIP renovated-comp $/sqft × the subject's square footage. With no trusted ARV basis, the record HOLDS for operator review — it NEVER falls back to a fraction of list. The seller's list price is NOT an offer input; renovated comps and ARV ARE the drivers. (Enforced in lib/per-market-pricer.ts + lib/rough-opener-ceiling.ts; INVARIANTS §2.)
 
 ENTITY LANGUAGE: When discussing the closing entity with sellers or listing agents, say "We may close under one of our affiliated entities." NEVER use the word "assignable."
 
@@ -29,7 +29,7 @@ BUYER DISCLOSURE: NEVER disclose contract price, spread, assignment fee, ARV, or
 
 MEMPHIS PAUSE: Memphis (TN) acquisitions are PAUSED as of 4/26/2026 due to non-assignability clauses. No new TN offers unless Alex explicitly approves. TN deals already under contract can still close. If a TN agent responds positively, flag for manual review.
 
-OFFER FLOOR: Skip any property where the calculated offer (65% of list) is below $5,000. Likely rental or data error.
+OFFER FLOOR: A value-anchored opener that computes below max(30% × list, $10,000) is a broken micro-offer (rental, bad sqft, or data error) — HOLD it for operator review. NEVER substitute a fraction of list price to clear the floor.
 
 INSPECTION: Inspection/option periods are NEVER waived. Standard 10-day option period.
 

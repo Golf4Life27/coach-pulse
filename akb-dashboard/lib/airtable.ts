@@ -161,7 +161,8 @@ const LISTING_FIELDS: Record<string, string> = {
   fldoG27mxF1FQSRr9: "lastStatusCheckSentAt",
   // Phase 20.2 v1.3 amendment (5/18) — Stored_Offer_Price renamed to
   // Outreach_Offer_Price. Field id preserved; existing data carried.
-  // Semantic split: outreachOfferPrice = sticky 65% set at outreach;
+  // Semantic split: outreachOfferPrice = sticky value-anchored opener set
+  // at outreach (65%-of-list RETIRED 2026-06-28);
   // contractOfferPrice = set at negotiation/DD; sellerMotivationScore
   // = 1-5 rubric. See Listing type in lib/types.ts for full notes.
   fldBFnL0HQJWahRov: "outreachOfferPrice",

@@ -110,7 +110,7 @@ async function buildPropertyContext(recordId: string): Promise<string | null> {
     }`,
     `Outreach Status: ${listing.outreachStatus ?? "—"}`,
     `List Price: ${formatCurrency(listing.listPrice)}`,
-    `MAO (65% rule): ${formatCurrency(listing.mao)}`,
+    `MAO (value-anchored): ${formatCurrency(listing.mao)}`,
     `DOM: ${listing.dom ?? "—"}`,
     `Last Outreach: ${listing.lastOutreachDate ?? "—"}`,
     `DD Checklist: ${ddLine}`,
@@ -127,7 +127,7 @@ You receive a natural language command and must classify it as one of four inten
 
 ## AKB SOLUTIONS — BUSINESS RULES (apply to every response)
 
-OFFER FORMULA: All offers are 65% of the seller's list price, rounded up to the nearest $250. Never use AVM, ARV, or estimated values to derive an offer — only the 65% rule.
+OFFER FORMULA (value-anchored — the 65%-of-list rule was RETIRED 2026-06-28 after the Blackmoor over-offer; do NOT use it, cite it, or treat a fraction of list price as "the rule"): the door-opener is value-anchored — anchor × (renovated ARV $/sqft × subject sqft × buy-box − rehab − fee). With no trusted ARV basis the record HOLDS for operator review; it NEVER falls back to a fraction of list. The seller's list price is NOT an offer input — renovated comps and ARV ARE the drivers. Use the STORED opener/MAO already on the record; never recompute a price yourself.
 
 DD CHECKLIST (required before contracting):
 1. Bed/Bath Verified
