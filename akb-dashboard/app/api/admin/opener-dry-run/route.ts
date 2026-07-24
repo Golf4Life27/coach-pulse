@@ -134,6 +134,12 @@ export async function GET(req: Request) {
     held_system_owned: 0,
     // Needs attention = creative-lane pipeline / one-time market config / operator.
     held_needs_attention: 0,
+    // ── PRE-SEND CORROBORATION GATE instrument (reliability build, 2026-07-23) ──
+    // How many computed openers the allowlist gate HELD, and on which signal.
+    // A computed opener that the gate holds = a number that would have sent under
+    // the old blocklist model. Watch this to calibrate the gate thresholds.
+    failed_corroboration: 0,
+    by_corroboration_flag: {} as Record<string, number>,
   };
   const rows: Array<Record<string, unknown>> = [];
   const anchorCache = new Map<string, number>();
@@ -186,6 +192,12 @@ export async function GET(req: Request) {
     if (priced.flagReseed) agg.reseed_flagged++;
     if (priced.cappedToList) agg.capped++;
     if (priced.arvDistrusted) agg.arv_below_list++;
+    if (pricedW.basisLabel === "hold_failed_corroboration") {
+      agg.failed_corroboration++;
+      for (const f of pricedW.corroborationFlags) {
+        agg.by_corroboration_flag[f] = (agg.by_corroboration_flag[f] ?? 0) + 1;
+      }
+    }
     if (priced.opener != null) {
       agg.priced++;
       agg.opener_sum += priced.opener;

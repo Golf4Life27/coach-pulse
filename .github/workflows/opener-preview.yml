@@ -94,6 +94,7 @@ jobs:
               "- held (no value basis): \(.aggregates.held_no_inputs // "?")",
               "- lowball-eligible: \(.aggregates.lowball_eligible // "?")",
               "- would-send aggressive: \(.aggregates.would_send_aggressive // "?")",
+              "- HELD by corroboration gate: \(.aggregates.failed_corroboration // "?") \(.aggregates.by_corroboration_flag // {})",
               "- avg opener: \(.aggregates.avg_opener // "n/a")"
             ' /tmp/opener.json 2>/dev/null || echo "- (see raw response above)"
             echo ""
