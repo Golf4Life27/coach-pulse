@@ -21,6 +21,9 @@ export interface Listing {
   notes: string | null;
   distressScore: number | null;
   distressBucket: string | null;
+  /** Renovated-listing veto (2026-07-25): listing markets itself renovated/
+   *  turnkey with NO distress language — never first-touch, never bump. */
+  renovatedLanguage?: boolean | null;
   bedrooms: number | null;
   bathrooms: number | null;
   buildingSqFt: number | null;

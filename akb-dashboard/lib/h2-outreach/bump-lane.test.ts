@@ -112,6 +112,12 @@ describe("extractStickyOffer", () => {
 });
 
 describe("bumpVerdict", () => {
+  it("never bumps a renovated-language listing (veto learned after first touch)", () => {
+    const v = bumpVerdict(texted({ renovatedLanguage: true }), NOW);
+    expect(v.due).toBe(false);
+    expect(v.reason).toBe("renovated_listing_veto");
+  });
+
   it("is due for attempt 1 just past the day-3 gap", () => {
     const v = bumpVerdict(texted(), NOW);
     expect(v).toEqual({ due: true, attempt: 1, reason: null });

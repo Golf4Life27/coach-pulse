@@ -115,6 +115,10 @@ export function isH2Eligible(l: Listing): boolean {
     l.liveStatus === LIVE_ACTIVE &&
     l.executionPath === AUTO_PROCEED &&
     l.doNotText !== true &&
+    // RENOVATED-LISTING VETO (operator 2026-07-25, 914 Dan St / 529 Bina):
+    // the page markets itself renovated/turnkey with no distress language —
+    // a distress opener at a turnkey ask cannot convert, only insults.
+    l.renovatedLanguage !== true &&
     agentPhonePresent(l) &&
     l.sourceVersion === SOURCE_VERSION_V2
   );
@@ -162,6 +166,7 @@ export function ineligibleReasonForListing(l: Listing): string | null {
   if (l.liveStatus !== LIVE_ACTIVE) return `Live_Status is '${l.liveStatus}', not Active`;
   if (l.executionPath !== AUTO_PROCEED) return `Execution_Path is '${l.executionPath}', not Auto Proceed`;
   if (l.doNotText === true) return "Do_Not_Text is set";
+  if (l.renovatedLanguage === true) return "Renovated_Language veto (turnkey listing — distress opener would insult)";
   if (!agentPhonePresent(l)) return "Agent_Phone is empty";
   if (l.sourceVersion !== SOURCE_VERSION_V2) return `Source_Version is '${l.sourceVersion}', not ${SOURCE_VERSION_V2}`;
   return null;
