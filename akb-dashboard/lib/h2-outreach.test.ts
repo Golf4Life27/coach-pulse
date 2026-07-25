@@ -69,6 +69,11 @@ describe("isH2Eligible", () => {
   it("matches the canonical first-touch candidate", () => {
     expect(isH2Eligible(listing())).toBe(true);
   });
+  it("VETOES a renovated-language listing (operator 2026-07-25 — 914 Dan St class)", () => {
+    expect(isH2Eligible(listing({ renovatedLanguage: true }))).toBe(false);
+    expect(isH2Eligible(listing({ renovatedLanguage: false }))).toBe(true);
+    expect(isH2Eligible(listing({ renovatedLanguage: null }))).toBe(true); // unverified stays eligible
+  });
   it("treats null/whitespace Outreach_Status as empty (eligible)", () => {
     expect(isH2Eligible(listing({ outreachStatus: null }))).toBe(true);
     expect(isH2Eligible(listing({ outreachStatus: "  " }))).toBe(true);

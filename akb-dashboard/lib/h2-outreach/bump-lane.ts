@@ -109,6 +109,10 @@ export function bumpVerdict(
   if ((l.outreachStatus ?? "").trim() !== "Texted") return skip("not_texted");
   if (l.sourceVersion !== SOURCE_VERSION_V2) return skip("not_v2");
   if (l.doNotText === true) return skip("do_not_text");
+  // RENOVATED-LISTING VETO (operator 2026-07-25): a later verify found the
+  // listing markets itself turnkey — never bump a distress number at it
+  // (914 Dan St / 529 Bina class; first-touch is vetoed in isH2Eligible).
+  if (l.renovatedLanguage === true) return skip("renovated_listing_veto");
   if (!normalizePhone(l.agentPhone)) return skip("no_valid_phone");
   // POST-VISION PARK (operator 2026-07-16): once decision-math has run and
   // the spread is negative — the real rehab revealed the sent opener is above

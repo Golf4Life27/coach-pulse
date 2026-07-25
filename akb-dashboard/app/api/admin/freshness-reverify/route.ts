@@ -217,7 +217,22 @@ export async function GET(req: Request) {
         continue;
       }
       const newLive = fc.stillActive ? "Active" : "Off Market";
-      await updateListingRecord(l.id, { Live_Status: newLive, Last_Verified: iso });
+      // ── RENOVATED-LISTING VETO (operator 2026-07-25, 914 Dan St / 529 Bina) ──
+      // verifyListingByUrl ALREADY reads the page and computes
+      // hasRenovatedLanguage — this route used to throw that verdict away and
+      // stamp the record outreach-fresh anyway, so the RentCast lane (which has
+      // no listing text at intake) texted distress openers at turnkey houses.
+      // Persist the verdict: renovated language WITHOUT distress language =
+      // veto (the crawler's own tier doctrine — distress copy like "investor
+      // special, recently updated" still overrides). Cleared automatically when
+      // a later scrape finds distress copy, so price-cut re-engagement stays
+      // possible. Enforced in lib/h2-outreach outreachReadyReason + bump lane.
+      const renovatedVeto = fc.hasRenovatedLanguage && !fc.hasConditionSignal;
+      await updateListingRecord(l.id, {
+        Live_Status: newLive,
+        Last_Verified: iso,
+        Renovated_Language: renovatedVeto,
+      });
       results.push({ recordId: l.id, address: l.address, stillActive: fc.stillActive, credits: fc.creditsUsed, newLiveStatus: newLive, error: null });
       await audit({
         agent: "scout",
@@ -226,8 +241,8 @@ export async function GET(req: Request) {
         recordId: l.id,
         ms: 0,
         inputSummary: { url: l.verificationUrl, prior_last_verified: l.lastVerified ?? null },
-        outputSummary: { still_active: fc.stillActive, new_live_status: newLive, credits: fc.creditsUsed },
-        decision: fc.stillActive ? "reconfirmed_active" : "marked_off_market",
+        outputSummary: { still_active: fc.stillActive, new_live_status: newLive, renovated_language_veto: renovatedVeto, matched_renovation_keywords: fc.matchedKeywords.slice(0, 5), credits: fc.creditsUsed },
+        decision: fc.stillActive ? (renovatedVeto ? "reconfirmed_active_renovated_veto" : "reconfirmed_active") : "marked_off_market",
       });
     } catch (err) {
       results.push({ recordId: l.id, address: l.address, stillActive: null, credits: 0, newLiveStatus: null, error: String(err).slice(0, 160) });

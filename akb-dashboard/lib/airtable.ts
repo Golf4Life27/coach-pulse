@@ -32,6 +32,9 @@ const LISTING_FIELDS: Record<string, string> = {
   fldwKGxZly6O8qyPu: "notes",
   fldwSjhdhEKVzpVRQ: "distressScore",
   fldpFHAXujnz9x72x: "distressBucket",
+  // Renovated-listing veto (operator 2026-07-25) — set by freshness-reverify
+  // from the Firecrawl page read; enforced by outreachReadyReason + bump lane.
+  fldnNSji9OLcDPRu9: "renovatedLanguage",
   fld5GBaHtwvLY3sq8: "bedrooms",
   fldvZ8hU1aREVg3Gs: "bathrooms",
   fld5bKGJLlN7GmiE9: "buildingSqFt",
@@ -218,6 +221,7 @@ const LISTING_NAME_MAP: Record<string, string> = {
   "Verification_Notes": "notes",
   "Distress_Score": "distressScore",
   "Distress_Bucket": "distressBucket",
+  "Renovated_Language": "renovatedLanguage",
   "Bedrooms": "bedrooms",
   "Bathrooms": "bathrooms",
   "Building_SqFt": "buildingSqFt",

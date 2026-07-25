@@ -77,6 +77,19 @@ underwrite against.
   opener untouched. This NARROWS the 2026-07-22 `over_arv_list` amendment: over-ARV
   lowballs still send, but only when the ask is structurally reachable).
   Thresholds env-tunable. `Opener_Basis` `hold_failed_corroboration` marks a gated HOLD.
+- `[enforced]` **RENOVATED-LISTING VETO** (operator 2026-07-25, the 914 Dan St /
+  529 Bina insult class — "AVOID RENOVATED HOUSES"): a listing whose page copy
+  affirmatively markets it as renovated/updated/turnkey (Firecrawl
+  `hasRenovatedLanguage`) WITHOUT distress language is NEVER first-touch texted
+  and NEVER bumped — a distress opener at a turnkey ask cannot convert; it only
+  burns the agent. The verdict was ALREADY computed by `verifyListingByUrl` on
+  every freshness pass and thrown away; it is now persisted to
+  `Renovated_Language` (fldnNSji9OLcDPRu9) by `freshness-reverify` and enforced
+  in `isH2Eligible` / `outreachReadyReason` (first touch) + `bumpVerdict`
+  (bumps). Distress copy still overrides ("investor special — recently
+  updated"), and the flag clears when a later scrape finds distress language,
+  so price-cut re-engagement stays possible. Zero added API cost — the page
+  was already being fetched.
   `[enforced]` `lib/opener-sanity-gate.ts` (`corroborateOpener`), wired as the final
   gate in `lib/opener-pricing.ts` (`priceOpenerWithSeed`) — the ONE choke point both the
   live send path and the read-only dry-run share.
