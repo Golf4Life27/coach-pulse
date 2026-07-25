@@ -32,6 +32,22 @@ export const CORROB_ARV_LIST_MAX_RATIO = (() => {
   return Number.isFinite(raw) && raw > 1 ? raw : 2.5;
 })();
 
+/** FEASIBILITY floor (operator 2026-07-25, 529 Bina "insane ask" / 2048 Joffre
+ *  "is that what you mean?"): if even the BEST-CASE opener — the same formula at
+ *  ZERO rehab, perfect condition — lands below this fraction of the seller's
+ *  ask, no offer we are structurally able to make can ever reach them. Texting
+ *  the (lower, pessimistic) real opener at that point is distress pricing
+ *  aimed at a non-distressed ask — it can't convert, it can only burn the
+ *  agent relationship. HOLD instead. Observed insult class: Joffre best-case
+ *  48% of list, 1930 Cummings 39%, 2654 Elsinore 36% — all under 0.55, while
+ *  genuine discounts clear it comfortably. NOTE the best-case number is a
+ *  TEST, never a text: distressed deals keep the pessimistic opener untouched.
+ *  Env-tunable. */
+export const CORROB_MIN_BEST_CASE_PCT_OF_LIST = (() => {
+  const raw = Number(process.env.CORROB_MIN_BEST_CASE_PCT_OF_LIST);
+  return Number.isFinite(raw) && raw > 0 && raw < 1 ? raw : 0.55;
+})();
+
 /** Sane absolute bounds for a renovated $/sqft. Outside this the seed is junk
  *  (bad sqft, decimal error, luxury outlier). Env-tunable. */
 export const CORROB_PSF_MIN = (() => {
@@ -62,13 +78,18 @@ export interface CorroborationInput {
   seed?: Pick<ZipArvSeed, "receiptsJson"> | null;
   /** Seed renovated $/sqft, for the absolute-$/sqft sanity bound. */
   renovatedPerSqft?: number | null;
+  /** The ZERO-REHAB twin of the opener (per-market-pricer bestCaseOpener) —
+   *  the most generous number the formula can ever produce for this deal.
+   *  Used only by the infeasible_ask signal; never sent. */
+  bestCaseOpener?: number | null;
 }
 
 export type CorroborationFlag =
   | "size_extrapolation"       // subject outside the comp size band
   | "arv_implausible_vs_list"  // renovated ARV ≫ list price
   | "psf_out_of_range"         // renovated $/sqft outside sane absolute bounds
-  | "capped_untrusted_arv";    // opener only survived by clamping to list, on a non-STRONG ARV
+  | "capped_untrusted_arv"     // opener only survived by clamping to list, on a non-STRONG ARV
+  | "infeasible_ask";          // even the ZERO-rehab best case is hopelessly under the ask
 
 export interface CorroborationResult {
   /** True ⇒ every signal corroborates the opener; safe to send. False ⇒ HOLD. */
@@ -123,7 +144,25 @@ export function corroborateOpener(input: CorroborationInput): CorroborationResul
     );
   }
 
-  // 4. CAPPED TO LIST ON AN UNTRUSTED ARV — the opener only fit under the
+  // 4. INFEASIBLE ASK — even the zero-rehab, perfect-condition best case can't
+  //    plausibly reach the seller's ask. No rehab estimate, photo, or
+  //    walkthrough changes the answer, so texting the pessimistic real opener
+  //    is pure relationship burn (distress pricing on a non-distressed ask).
+  //    Distressed stock is untouched: a real discount clears this easily.
+  if (pos(input.bestCaseOpener) && pos(input.listPrice)) {
+    const bestPct = input.bestCaseOpener / input.listPrice;
+    if (bestPct < CORROB_MIN_BEST_CASE_PCT_OF_LIST) {
+      flags.push("infeasible_ask");
+      reasons.push(
+        `even at ZERO rehab the best-case opener $${input.bestCaseOpener.toLocaleString()} is only ` +
+          `${Math.round(bestPct * 100)}% of the $${input.listPrice.toLocaleString()} ask ` +
+          `(< ${Math.round(CORROB_MIN_BEST_CASE_PCT_OF_LIST * 100)}% floor) — ask structurally unreachable; ` +
+          `no sendable number exists, HOLD instead of insulting the agent`,
+      );
+    }
+  }
+
+  // 5. CAPPED TO LIST ON AN UNTRUSTED ARV — the opener only fit under the
   //    never-over-list cap because it was clamped there; the underlying value
   //    exceeded list. Fine when the ARV is STRONG-corroborated (a real deep
   //    discount); a HOLD when it is not (THIN/STORED — likely inflated).

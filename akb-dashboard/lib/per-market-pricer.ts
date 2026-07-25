@@ -162,6 +162,15 @@ export interface PricerResult {
   maoBound: number | null;
   /** True when the anchored opener exceeded maoBound and was clamped to it. */
   boundedToMao: boolean;
+  /** BEST-CASE OPENER (feasibility, operator 2026-07-25): the opener this same
+   *  math would produce at ZERO rehab — perfect condition, most generous case
+   *  possible. Same anchor, same buy-box, same flip-MAO bound, same 85%-of-list
+   *  cap. If even THIS number is hopelessly below the ask, no rehab estimate,
+   *  photo, or walkthrough can ever close the gap — the deal is structurally
+   *  infeasible and texting any number just burns the agent relationship
+   *  (529 Bina "insane ask" / 2048 Joffre "is that what you mean?" class).
+   *  Read by the corroboration gate's infeasible_ask signal. Null on a hold. */
+  bestCaseOpener: number | null;
   detail: string;
 }
 
@@ -192,6 +201,7 @@ function holdResult(
     cappedToList: false,
     maoBound: null,
     boundedToMao: false,
+    bestCaseOpener: null,
     detail,
   };
 }
@@ -268,6 +278,22 @@ export function priceOpener(input: PricerInput): PricerResult {
     if (gate.ok && gate.opener != null) {
       const boundedToMao = gate.opener > maoBound;
       const opener = boundedToMao ? maoBound : gate.opener;
+
+      // ── BEST-CASE OPENER (feasibility test, operator 2026-07-25) ─────────
+      // The zero-rehab twin of the sent number: same ARV, same buy-box, same
+      // anchor, same flip-MAO bound, same never-over-list cap — rehab = $0
+      // (perfect condition, the most generous case the formula allows). This
+      // number is NEVER texted; the corroboration gate reads it to answer one
+      // question: could ANY offer we're able to make plausibly reach this ask?
+      // If even the perfect-condition figure is hopelessly under list, no
+      // rehab estimate can bridge the gap — the ask is structurally
+      // unreachable, and texting the (lower, pessimistic) real opener only
+      // reads as an insult on a non-distressed house (529 Bina / 2048 Joffre).
+      const bestFlip = computeFlipOffer({ arv: trustedArv, rehab: 0, assignmentFee: fee });
+      let bestCase = Math.round((trustedArv! * input.arvPctMax! - fee) * (gate.anchorPct ?? 1));
+      if (bestFlip.offer != null && bestFlip.offer > 0 && bestFlip.offer < bestCase) bestCase = bestFlip.offer;
+      if (list != null) bestCase = Math.min(bestCase, Math.floor(list * NEVER_OVER_LIST_PCT));
+      const bestCaseOpener = bestCase > 0 ? bestCase : null;
       // ── GUARD: LOW-OPENER FLOOR (Hole B) ── a tiny-but-positive ceiling
       // yields a broken-looking micro-opener. Below max(PCT×list, USD) → HOLD
       // for operator review instead of sending it (and instead of the retired
@@ -301,6 +327,7 @@ export function priceOpener(input: PricerInput): PricerResult {
           cappedToList: false,
           maoBound,
           boundedToMao,
+          bestCaseOpener,
           detail:
             `${gate.detail} [${confidence}] (${rough.detail})` +
             (boundedToMao

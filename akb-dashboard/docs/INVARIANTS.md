@@ -69,7 +69,13 @@ underwrite against.
   pricer's own math): **size_extrapolation** (subject sqft outside the seed's comp size
   band — the 927 Avon $121k bug), **arv_implausible_vs_list** (renovated ARV > 2.5× list),
   **psf_out_of_range** (renovated $/sqft outside $15–$600), **capped_untrusted_arv** (opener
-  only survived by clamping to list on a non-STRONG ARV — 110 Leathers / 868 N Main).
+  only survived by clamping to list on a non-STRONG ARV — 110 Leathers / 868 N Main),
+  **infeasible_ask** (operator 2026-07-25, the 529 Bina "insane ask" / 2048 Joffre class:
+  even the ZERO-rehab best-case opener — same ARV/anchor/buy-box/MAO-bound/list-cap math,
+  perfect condition — lands under 55% of the ask, so no sendable number exists; the
+  best-case figure is a TEST, never a text — distressed stock keeps its pessimistic
+  opener untouched. This NARROWS the 2026-07-22 `over_arv_list` amendment: over-ARV
+  lowballs still send, but only when the ask is structurally reachable).
   Thresholds env-tunable. `Opener_Basis` `hold_failed_corroboration` marks a gated HOLD.
   `[enforced]` `lib/opener-sanity-gate.ts` (`corroborateOpener`), wired as the final
   gate in `lib/opener-pricing.ts` (`priceOpenerWithSeed`) — the ONE choke point both the

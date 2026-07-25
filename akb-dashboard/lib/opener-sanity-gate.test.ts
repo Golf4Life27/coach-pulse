@@ -68,6 +68,37 @@ describe("corroborateOpener — allowlist pre-send gate", () => {
     expect(r.flags).toContain("capped_untrusted_arv");
   });
 
+  it("FLAGS an infeasible ask — even the zero-rehab best case is hopeless (2048 Joffre class)", () => {
+    // Joffre: $45k texted on a $147.5k ask; best case ~$71k = 48% of list.
+    const r = corroborateOpener({
+      opener: 45_000, listPrice: 147_500, arvUsed: 120_000, sqft: 1_736,
+      cappedToList: false, arvConfidence: "STRONG", seed: null, renovatedPerSqft: 69,
+      bestCaseOpener: 71_000,
+    });
+    expect(r.corroborated).toBe(false);
+    expect(r.flags).toContain("infeasible_ask");
+  });
+
+  it("does NOT flag a genuine discount — distressed stock keeps its pessimistic opener (test, not text)", () => {
+    // Deep-discount shell: list $40k, ARV $120k. Real opener is the pessimistic
+    // number; best case is far above list (capped) so feasibility clears.
+    const r = corroborateOpener({
+      opener: 22_500, listPrice: 40_000, arvUsed: 96_000, sqft: 1_764,
+      cappedToList: false, arvConfidence: "STRONG", seed: null, renovatedPerSqft: 54,
+      bestCaseOpener: 34_000, // capped at 85% of list
+    });
+    expect(r.corroborated).toBe(true);
+  });
+
+  it("529 Bina class passes feasibility (best case 70% of ask) — its fix is condition, not this gate", () => {
+    const r = corroborateOpener({
+      opener: 31_000, listPrice: 89_000, arvUsed: 98_600, sqft: 671,
+      cappedToList: false, arvConfidence: "STRONG", seed: null, renovatedPerSqft: 129,
+      bestCaseOpener: 62_500,
+    });
+    expect(r.flags).not.toContain("infeasible_ask");
+  });
+
   it("does NOT flag a capped opener when the ARV is STRONG (a trusted deep discount)", () => {
     const r = corroborateOpener({
       opener: 84_150, listPrice: 99_000, arvUsed: 200_000, sqft: 1_400,

@@ -123,6 +123,7 @@ export function priceOpenerWithSeed(input: OpenerWithSeedInput): OpenerWithSeedR
     arvConfidence: confidenceLabel,
     seed: input.seed ?? null,
     renovatedPerSqft: psfUsed,
+    bestCaseOpener: result.bestCaseOpener,
   });
 
   let finalResult: PricerResult = result;
