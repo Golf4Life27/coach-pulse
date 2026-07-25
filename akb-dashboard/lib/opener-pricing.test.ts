@@ -74,6 +74,33 @@ describe("priceOpenerWithSeed — source-swap", () => {
     expect(r.basisLabel).toBe("hold_failed_corroboration");
   });
 
+  it("HOLDS an infeasible ask end-to-end — over-ARV listing where even zero rehab can't reach (Joffre class)", () => {
+    // ARV $120k STRONG vs a $150k ask. Best case = 0.9×(0.7×120k − 5k) ≈ $71k
+    // = 47% of list (< 55% floor) → the pessimistic opener must NOT text.
+    const r = priceOpenerWithSeed({
+      listPrice: 150_000, sqft: 1_000, arvPctMax: 0.70, anchorPct: 0.90,
+      estRehabMid: 15_000, wholesaleFee: 5_000,
+      seed: seed({ renovatedPerSqft: 120, arvLowPerSqft: 100, confidence: "STRONG" }),
+    });
+    expect(r.result.opener).toBeNull();
+    expect(r.basisLabel).toBe("hold_failed_corroboration");
+    expect(r.corroborationFlags).toContain("infeasible_ask");
+  });
+
+  it("SENDS the same pessimistic opener when the ask is reachable — distressed pricing untouched", () => {
+    // Same house, seller asking $90k instead of $150k: best case ≈ 79% of list
+    // → feasibility clears, and the number that sends is STILL the pessimistic
+    // (rehab-loaded) opener, not the best case.
+    const r = priceOpenerWithSeed({
+      listPrice: 90_000, sqft: 1_000, arvPctMax: 0.70, anchorPct: 0.90,
+      estRehabMid: 15_000, wholesaleFee: 5_000,
+      seed: seed({ renovatedPerSqft: 120, arvLowPerSqft: 100, confidence: "STRONG" }),
+    });
+    expect(r.result.opener).not.toBeNull();
+    expect(r.result.opener!).toBeLessThan(r.result.bestCaseOpener!); // pessimistic sends, best case is only the test
+    expect(r.corroborationFlags).not.toContain("infeasible_ask");
+  });
+
   it("HOLDS an opener that only survived by clamping to list on a non-STRONG ARV (868 N Main / capped class)", () => {
     // A stored (contaminated) ARV so high the opener hits the 85%-of-list cap.
     // capped_untrusted_arv → not a trusted deep discount → HOLD.
