@@ -328,6 +328,10 @@ async function handle(req: Request): Promise<Response> {
   // ceiling (informational lineage) is still computed for the probe's
   // telemetry block so Maverick reviews with full numbers in hand.
   const openerGuarded: Array<{ recordId: string; address: string | null; listPrice: number | null; action: "skipped"; reason: string | null; ceiling: number | null; ceilingSource: string | null; anchorPct: number | null; opener: number | null; source: string | null }> = [];
+  // recordId → the opener + basis this run priced and (if delivery confirms) TEXTED.
+  // Persisted on confirmed first-touch delivery so the stored number always equals
+  // the number the seller actually received. See the STICKY-OFFER RECEIPT note below.
+  const sentOpenerReceipt = new Map<string, { opener: number; basis: string }>();
   // One anchor read per market per tick + one ARV-seed read per ZIP — cached so
   // a 100-record cohort doesn't hit KV per record.
   const anchorCache = new Map<string, number>();
@@ -431,6 +435,14 @@ async function handle(req: Request): Promise<Response> {
     // SUCCESS — overwrite l.mao with the seed-aware anchored opener so all
     // downstream rails (send composer, idempotency, audit) read one value.
     l.mao = priced.opener;
+    // STICKY-OFFER RECEIPT (operator 2026-07-25, drift bug): remember the exact
+    // number this pass computed so the confirmed-delivery write-back can persist
+    // the SELLER-FACING figure. Before this, the send path priced fresh at send
+    // time and texted that number but never stored it, so Rough_Opener_Amount
+    // kept a stale intake value (529 Bina: texted $31,000, stored $26,750) or
+    // stayed empty — breaking INVARIANTS §3 stickiness and making the follow-up
+    // path quote a DIFFERENT number than the seller was told.
+    sentOpenerReceipt.set(l.id, { opener: priced.opener!, basis: pw.basisLabel });
     filteredQueue.push(l);
   }
   queue = filteredQueue;
@@ -808,11 +820,25 @@ async function handle(req: Request): Promise<Response> {
           // cron. A merely-unconfirmed send keeps its KV claim (it may have
           // actually landed — a re-text is worse than a transiently-stale status).
           if (delivered) {
-            await updateListingRecord(p.recordId, {
+            const sentFields: Record<string, unknown> = {
               Outreach_Status: "Texted",
               Last_Outbound_At: iso,
               Verification_Notes: buildSentNote(existingNotes, iso, result.id, p.message!),
-            });
+            };
+            // ── STICKY-OFFER RECEIPT (operator 2026-07-25) ──────────────────
+            // Persist the number the seller was ACTUALLY told, on the FIRST
+            // touch only. The send path re-prices at send time, so without this
+            // the record kept a stale intake figure (or none) while a different
+            // number went out — INVARIANTS §3 stickiness broken, decision-math
+            // reading openerSent=false, and the follow-up path re-quoting a
+            // number the agent never heard. First touch only: a bump re-quotes
+            // the already-stored offer and must never rewrite it.
+            const receipt = sentOpenerReceipt.get(p.recordId);
+            if (p.route === "first_touch" && receipt && receipt.opener > 0) {
+              sentFields.Rough_Opener_Amount = receipt.opener;
+              sentFields.Opener_Basis = receipt.basis;
+            }
+            await updateListingRecord(p.recordId, sentFields);
             row.delivered = true;
             row.airtable_updated = true;
             summary.first_touch_sent++; // Texted only counted on confirmed delivery
