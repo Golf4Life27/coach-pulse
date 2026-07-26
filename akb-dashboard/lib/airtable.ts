@@ -12,132 +12,195 @@ const DEALS_TABLE = "tblKDYhaghKe6dToW";
 const BUYERS_TABLE = "tbl4Rr07vq0mTftZB";
 const PROSPECTIVE_BUYERS_TABLE = "tblyPAkwRyrlPIP59";
 
-// Field IDs (used for list endpoints with returnFieldsByFieldId=true)
-const LISTING_FIELDS: Record<string, string> = {
-  fldwvp72hKTfiHHjj: "address",
-  fldjbiNuHXzPzVWFk: "city",
-  fld9PTaKkgBNtvWbB: "zip",
-  fld9J3Vi9fTq3zzMU: "listPrice",
-  flduPNI7iLK8Yj07E: "mao",
-  fldfsGAAae2mGXzvC: "dom",
-  fldyOByFmw33i17I2: "offerTier",
-  fldCKnC1nnXEnTUKL: "liveStatus",
-  fldOrWvqKcc1g6Lka: "executionPath",
-  fldGIgqwyCJg4uFyv: "outreachStatus",
-  fldbRrOW3IEoLtnFE: "lastOutreachDate",
-  fld69oB0no6tfguom: "agentName",
-  fldee9MOstjNDKjnm: "agentPhone",
-  fldzdck2fhd6DZ3Oq: "agentEmail",
-  fldXrW8CWUphUfKgJ: "verificationUrl",
-  fldwKGxZly6O8qyPu: "notes",
-  fldwSjhdhEKVzpVRQ: "distressScore",
-  fldpFHAXujnz9x72x: "distressBucket",
+// ── SINGLE SOURCE OF REGISTRY (structural two-map rule) ─────────────────────
+// Historically this file carried TWO independently-maintained Listing field
+// maps: LISTING_FIELDS (Airtable field-ID → prop, used by every BULK/cron
+// read via returnFieldsByFieldId=true) and LISTING_NAME_MAP (Airtable field
+// NAME → prop, used by single-record getListing). A field added to only one
+// map was silently NULL on the other read path — the P1.1 Rough_Opener_Amount
+// bug, and again on 2026-07-14 when the Mayfield $27k counter dropped out of
+// the decision-math set because the 00:05Z backfill only saw the name map.
+//
+// LISTING_FIELD_REGISTRY below is now the ONLY place a Listing field is
+// declared. LISTING_FIELDS and LISTING_NAME_MAP are both mechanically derived
+// from it (see derivation below), so a field with both `fieldId` and `name`
+// is now structurally guaranteed to appear on both read paths — divergence
+// between the two maps is no longer possible for two-sided entries.
+//
+// A minority of entries are legitimately one-sided today (present on only
+// one read path) — these are pre-existing asymmetries, NOT invented here.
+// They are marked `fieldId?`/`name?` (optional) rather than given a made-up
+// counterpart, so the registry documents the gap instead of hiding it:
+//   - gmailThreadIds   : name-only  (Gmail_Thread_Ids)
+//   - estRehabLow      : name-only  (Rehab_Est_Low)
+//   - estRehabHigh     : name-only  (Rehab_Est_High)
+//   - realArvLow       : name-only  (Real_ARV_Low)
+//   - realArvHigh      : name-only  (Real_ARV_High)
+// lib/airtable-map-parity.test.ts pins these snapshots and asserts every
+// entry has at least one of fieldId/name.
+interface ListingFieldRegistryEntry {
+  prop: string;
+  fieldId?: string;
+  name?: string;
+}
+
+const LISTING_FIELD_REGISTRY: ReadonlyArray<ListingFieldRegistryEntry> = [
+  { prop: "address", fieldId: "fldwvp72hKTfiHHjj", name: "Address" },
+  { prop: "city", fieldId: "fldjbiNuHXzPzVWFk", name: "City" },
+  { prop: "zip", fieldId: "fld9PTaKkgBNtvWbB", name: "Zip" },
+  { prop: "listPrice", fieldId: "fld9J3Vi9fTq3zzMU", name: "List_Price" },
+  { prop: "mao", fieldId: "flduPNI7iLK8Yj07E", name: "MAO_V1" },
+  { prop: "dom", fieldId: "fldfsGAAae2mGXzvC", name: "DOM_Calc_V2" },
+  { prop: "offerTier", fieldId: "fldyOByFmw33i17I2", name: "Offer_Tier" },
+  { prop: "liveStatus", fieldId: "fldCKnC1nnXEnTUKL", name: "Live_Status" },
+  { prop: "executionPath", fieldId: "fldOrWvqKcc1g6Lka", name: "Execution_Path" },
+  { prop: "outreachStatus", fieldId: "fldGIgqwyCJg4uFyv", name: "Outreach_Status" },
+  { prop: "lastOutreachDate", fieldId: "fldbRrOW3IEoLtnFE", name: "Last_Outreach_Date" },
+  { prop: "agentName", fieldId: "fld69oB0no6tfguom", name: "Agent_Name" },
+  { prop: "agentPhone", fieldId: "fldee9MOstjNDKjnm", name: "Agent_Phone" },
+  { prop: "agentEmail", fieldId: "fldzdck2fhd6DZ3Oq", name: "Agent_Email" },
+  { prop: "verificationUrl", fieldId: "fldXrW8CWUphUfKgJ", name: "Verification_URL" },
+  { prop: "notes", fieldId: "fldwKGxZly6O8qyPu", name: "Verification_Notes" },
+  { prop: "distressScore", fieldId: "fldwSjhdhEKVzpVRQ", name: "Distress_Score" },
+  { prop: "distressBucket", fieldId: "fldpFHAXujnz9x72x", name: "Distress_Bucket" },
   // Renovated-listing veto (operator 2026-07-25) — set by freshness-reverify
   // from the Firecrawl page read; enforced by outreachReadyReason + bump lane.
-  fldnNSji9OLcDPRu9: "renovatedLanguage",
-  fld5GBaHtwvLY3sq8: "bedrooms",
-  fldvZ8hU1aREVg3Gs: "bathrooms",
-  fld5bKGJLlN7GmiE9: "buildingSqFt",
-  fldXf7Xhw5sBqNRWk: "yearBuilt",
-  fldWePZv07Xy5oQ3H: "portfolioDetected",
-  fldA8B9zOCneF0rjp: "stageCalc",
-  fldbYzkL24aQ1Y1xz: "approvedForOutreach",
-  fldyiFT48fudbF34k: "flipScore",
-  fldytROucQFdlPGLm: "offMarketOverride",
-  fldapf2ZXpIWTZfSX: "restrictionText",
-  fldZVZT98A6cEmJB3: "ddChecklist",
-  fldoXlPt9s6a1oopo: "doNotText",
-  fldSlDQvgCyr0J8tI: "state",
-  [SOURCE_VERSION_FIELD_ID]: "sourceVersion",
-  fldkYeP8onCHil0pd: "actionHoldUntil",
-  fldiNKFpIBUYgg7el: "actionCardState",
-  fld3IhR1DXzcVuq6F: "lastInboundAt",
-  fldaK4lR5UNvycg11: "lastOutboundAt",
-  // ── TWO-MAP RULE (2026-07-14 Mayfield counter miss): this fld-ID map is
-  // what getListings / getActiveListingsForBrief (BULK — every cron) fetch
-  // and map with; LISTING_NAME_MAP below serves getListing (single record).
-  // A field present only in the name map is silently NULL on every cron read
-  // — the P1.1 Rough_Opener_Amount bug, repeated with the whole decision-math
-  // set (the 00:05Z backfill recomputed Mayfield WITHOUT its $27k counter and
-  // overwrote the engaged cron's correct number). EVERY new field goes in
-  // BOTH maps; lib/airtable-map-parity.test.ts enforces it for this set.
-  fld4r1a94Uv8tVy5k: "draftReplyText",
-  fldlRrtCUBppUbQam: "draftReplyMeta",
-  fldjO7rbGYkdhB7dM: "ddVolleyState",
-  fldczfQMESZEhEOR3: "buyerCeiling",
-  fldlhhMf4IBd3i9iD: "dealSpread",
-  fldliR5VFMDfvwKOs: "allInPctArv",
-  fldzmptnwPFIR5iaU: "decisionVerdict",
-  fldVvFRx9rjCZeG4d: "decisionReason",
-  fld2W8U9RckaGdAL9: "decisionComputedAt",
-  fldaa58hwu6AWUDYU: "decisionInputsHash",
-  fldw0zfap0NbzqsO5: "underwriteConfidence",
-  fldVEInwbGdWOlt5F: "latestCounterUsd",
-  fldCjwSV2vLeui8Mf: "openerBasis",
+  { prop: "renovatedLanguage", fieldId: "fldnNSji9OLcDPRu9", name: "Renovated_Language" },
+  { prop: "bedrooms", fieldId: "fld5GBaHtwvLY3sq8", name: "Bedrooms" },
+  { prop: "bathrooms", fieldId: "fldvZ8hU1aREVg3Gs", name: "Bathrooms" },
+  { prop: "buildingSqFt", fieldId: "fld5bKGJLlN7GmiE9", name: "Building_SqFt" },
+  { prop: "yearBuilt", fieldId: "fldXf7Xhw5sBqNRWk", name: "Year_Built" },
+  { prop: "portfolioDetected", fieldId: "fldWePZv07Xy5oQ3H", name: "Portfolio_Detected" },
+  { prop: "stageCalc", fieldId: "fldA8B9zOCneF0rjp", name: "Stage_Calc_V2" },
+  { prop: "approvedForOutreach", fieldId: "fldbYzkL24aQ1Y1xz", name: "Approved_For_Outreach" },
+  { prop: "flipScore", fieldId: "fldyiFT48fudbF34k", name: "Flip_Score" },
+  { prop: "offMarketOverride", fieldId: "fldytROucQFdlPGLm", name: "Off_Market_Override" },
+  { prop: "restrictionText", fieldId: "fldapf2ZXpIWTZfSX", name: "Restriction_Text" },
+  { prop: "ddChecklist", fieldId: "fldZVZT98A6cEmJB3", name: "DD_Checklist" },
+  { prop: "doNotText", fieldId: "fldoXlPt9s6a1oopo", name: "Do_Not_Text" },
+  { prop: "state", fieldId: "fldSlDQvgCyr0J8tI", name: "State" },
+  { prop: "sourceVersion", fieldId: SOURCE_VERSION_FIELD_ID, name: SOURCE_VERSION_FIELD_NAME },
+  { prop: "actionHoldUntil", fieldId: "fldkYeP8onCHil0pd", name: "Action_Hold_Until" },
+  { prop: "actionCardState", fieldId: "fldiNKFpIBUYgg7el", name: "Action_Card_State" },
+  { prop: "lastInboundAt", fieldId: "fld3IhR1DXzcVuq6F", name: "Last_Inbound_At" },
+  // name-only: never wired into the bulk fld-ID map (pre-existing asymmetry).
+  { prop: "gmailThreadIds", name: "Gmail_Thread_Ids" },
+  { prop: "lastOutboundAt", fieldId: "fldaK4lR5UNvycg11", name: "Last_Outbound_At" },
+  // ── Decision math (2026-07-13/14, the Mayfield counter miss) — machine-
+  // computed go/no-go set. Both read paths must see these.
+  { prop: "draftReplyText", fieldId: "fld4r1a94Uv8tVy5k", name: "Draft_Reply_Text" },
+  { prop: "draftReplyMeta", fieldId: "fldlRrtCUBppUbQam", name: "Draft_Reply_Meta" },
+  { prop: "ddVolleyState", fieldId: "fldjO7rbGYkdhB7dM", name: "DD_Volley_State" },
+  { prop: "buyerCeiling", fieldId: "fldczfQMESZEhEOR3", name: "Buyer_Ceiling" },
+  { prop: "dealSpread", fieldId: "fldlhhMf4IBd3i9iD", name: "Deal_Spread" },
+  { prop: "allInPctArv", fieldId: "fldliR5VFMDfvwKOs", name: "AllIn_Pct_ARV" },
+  { prop: "decisionVerdict", fieldId: "fldzmptnwPFIR5iaU", name: "Decision_Verdict" },
+  { prop: "decisionReason", fieldId: "fldVvFRx9rjCZeG4d", name: "Decision_Reason" },
+  { prop: "decisionComputedAt", fieldId: "fld2W8U9RckaGdAL9", name: "Decision_Computed_At" },
+  { prop: "decisionInputsHash", fieldId: "fldaa58hwu6AWUDYU", name: "Decision_Inputs_Hash" },
+  { prop: "underwriteConfidence", fieldId: "fldw0zfap0NbzqsO5", name: "Underwrite_Confidence" },
+  { prop: "latestCounterUsd", fieldId: "fldVEInwbGdWOlt5F", name: "Latest_Counter_Usd" },
+  { prop: "openerBasis", fieldId: "fldCjwSV2vLeui8Mf", name: "Opener_Basis" },
   // Phase 11.2 (5/18) — email-attributable outbound send timestamp.
   // Crier staleness math takes max() across this + lastOutreachDate
   // (SMS) + lastInboundAt + lastOutboundAt so active email negotiations
   // no longer surface as false-stale. Written by lib/gmail.ts sendEmail
   // when a listing recordId is in scope.
-  fld4Jzjs8etKact6g: "lastEmailOutreachDate",
+  { prop: "lastEmailOutreachDate", fieldId: "fld4Jzjs8etKact6g", name: "Last_Email_Outreach_Date" },
   // Phase 5.4 (5/18) — DocuSign envelope attribution. Single-line text
   // (envelope GUID). Written by the "Track in Scribe" affordance on
   // the deal-detail page; read by components/ScribeDealCommentary.tsx
   // to surface envelope status from briefing.external_signals.docusign.
-  fldKPVG9qmbzxW5lK: "envelopeId",
+  { prop: "envelopeId", fieldId: "fldKPVG9qmbzxW5lK", name: "Envelope_ID" },
+  // ── Pre-Outreach Gate (orchestrator Gate 1) inputs
+  { prop: "mlsStatus", fieldId: "fldif6WwcJeXZtJcX", name: "MLS_Status" },
+  { prop: "propertyType", fieldId: "fldrlbePeS9glaFQu", name: "Property_Type" },
+  { prop: "priceDropCount", fieldId: "fldg1j5wHJzoGJB0I", name: "Price_Drop_Count" },
+  { prop: "lastVerified", fieldId: "fld2eUkKaC4pMjIdd", name: "Last_Verified" },
+  { prop: "pipelineStage", fieldId: "fldJt2pSCHiXqBxwj", name: "Pipeline_Stage" },
   // ── Back-half contract lifecycle (2026-07-14, the 3123 Sunbeam blind spot):
   // the deadline fields that drive under_contract/dispo surfacing + clocks in
   // the conveyor. Money/signature steps stay operator-gated (EMD is voice-
-  // verified). TWO-MAP: also in LISTING_NAME_MAP + the parity test.
-  fldSnAeUAn8cahN6R: "contractExecutedAt",
-  fldRbQ7I6pn9Iezvh: "emdDueAt",
-  fldUBxg2UHqZ3wvDS: "emdReceived",
-  fldNzqz8j4jU0mUCA: "optionDeadline",
-  fldMnnYbM9ThA779k: "closeDate",
+  // verified).
+  { prop: "contractExecutedAt", fieldId: "fldSnAeUAn8cahN6R", name: "Contract_Executed_At" },
+  { prop: "emdDueAt", fieldId: "fldRbQ7I6pn9Iezvh", name: "EMD_Due_At" },
+  { prop: "emdReceived", fieldId: "fldUBxg2UHqZ3wvDS", name: "EMD_Received" },
+  { prop: "optionDeadline", fieldId: "fldNzqz8j4jU0mUCA", name: "Option_Deadline" },
+  { prop: "closeDate", fieldId: "fldMnnYbM9ThA779k", name: "Close_Date" },
   // ── Pre-contract gate (2026-07-16, the Sunbeam-contracted-at-NEEDS_DATA
   // failure): operator inputs the gate reads. Exit picks the price ceiling;
-  // waivers are eyes-open overrides. TWO-MAP: also in LISTING_NAME_MAP + parity.
-  fldBi5e0X6lUs7YPd: "exitStrategy",
-  fldbLKV9zX4MQeCHH: "preContractWaivers",
+  // waivers are eyes-open overrides.
+  { prop: "exitStrategy", fieldId: "fldBi5e0X6lUs7YPd", name: "Exit_Strategy" },
+  { prop: "preContractWaivers", fieldId: "fldbLKV9zX4MQeCHH", name: "Pre_Contract_Waivers" },
   // Exit auto-sort (2026-07-16): the machine's suggested close lane.
-  fldC3VIsmBxBGQRMW: "suggestedExit",
-  // ── Pre-Outreach Gate (orchestrator Gate 1) inputs
-  fldif6WwcJeXZtJcX: "mlsStatus",
-  fldrlbePeS9glaFQu: "propertyType",
-  fldg1j5wHJzoGJB0I: "priceDropCount",
-  fld2eUkKaC4pMjIdd: "lastVerified",
-  fldJt2pSCHiXqBxwj: "pipelineStage",
-  // ── Pre-Send Gate (orchestrator Gate 2) inputs
-  fld3lxWDerPs3rSNM: "rehabConfidenceScore",
-  fld0fWZGiFS73PPB7: "agentPriorOutreachCount",
+  { prop: "suggestedExit", fieldId: "fldC3VIsmBxBGQRMW", name: "Suggested_Exit" },
+  { prop: "rehabConfidenceScore", fieldId: "fld3lxWDerPs3rSNM", name: "Rehab_Confidence_Score" },
+  { prop: "agentPriorOutreachCount", fieldId: "fld0fWZGiFS73PPB7", name: "Agent_Prior_Outreach_Count" },
   // ── Pre-Negotiation Gate (orchestrator Gate 3) inputs
-  fldmup8SvMky9eyag: "estRehab",
+  { prop: "estRehab", fieldId: "fldmup8SvMky9eyag", name: "Est_Rehab" },
   // ── D3 Phase 0b math-filter inputs (formula fields read-only by design)
-  flduzFLSaFBfIl9Rn: "prevListPrice",
-  fldyDCVwvn9jfdiES: "estRehabMid",
+  { prop: "prevListPrice", fieldId: "flduzFLSaFBfIl9Rn", name: "Prev_List_Price" },
+  // ── D3 cadence inputs
+  { prop: "followUpCount", fieldId: "fldzqlBceCXhQ9Vlq", name: "Follow_Up_Count" },
+  { prop: "lastStatusCheckSentAt", fieldId: "fldoG27mxF1FQSRr9", name: "Last_Status_Check_Sent_At" },
+  // Phase 20.2 v1.3 amendment (5/18) — Stored_Offer_Price renamed to
+  // Outreach_Offer_Price. Field id preserved; existing data carried.
+  // Semantic split: outreachOfferPrice = sticky value-anchored opener set
+  // at outreach (65%-of-list RETIRED 2026-06-28);
+  // contractOfferPrice = set at negotiation/DD; sellerMotivationScore
+  // = 1-5 rubric. See Listing type in lib/types.ts for full notes.
+  { prop: "outreachOfferPrice", fieldId: "fldBFnL0HQJWahRov", name: "Outreach_Offer_Price" },
+  { prop: "contractOfferPrice", fieldId: "fldfJWuEIHqaRuWq3", name: "Contract_Offer_Price" },
+  { prop: "underwrittenMao", fieldId: "fldTSadqhYKeyKd89", name: "Underwritten_MAO" },
+  { prop: "underwrittenMaoTrack", fieldId: "fldFuePOkTlAl3NUT", name: "Underwritten_MAO_Track" },
+  { prop: "underwrittenPropertyMao", fieldId: "fldJZpyn5uqYfP0Oc", name: "Underwritten_Property_MAO" },
+  { prop: "sellerMotivationScore", fieldId: "fldfEVJijfPOBulpc", name: "Seller_Motivation_Score" },
+  { prop: "listPriceAtSend", fieldId: "fldusUTeJQ2ALX37U", name: "List_Price_At_Send" },
+  // ── D3 Phase 0b math-filter inputs cont'd + Phase 3 rehab/ARV ────────────
+  // Field-name audit 2026-06-04 (Spine recd9RNKGWOWjjDzz): canonical schema
+  // uses Rehab_Est_Low / Rehab_Est_High (prefix-swapped from the older
+  // Est_Rehab_Low/High names). The JS prop names retain the legacy
+  // Est_Rehab_Low / Est_Rehab_High shape to avoid a ripple-rename across
+  // consumers (3+ readers in pipeline, appraiser-panel, etc.). Translation
+  // lives here. Rehab_Est_Low / Rehab_Est_High are name-only (pre-existing
+  // asymmetry — never wired into the bulk fld-ID map).
+  { prop: "estRehabLow", name: "Rehab_Est_Low" },
+  { prop: "estRehabMid", fieldId: "fldyDCVwvn9jfdiES", name: "Est_Rehab_Mid" },
+  { prop: "estRehabHigh", name: "Rehab_Est_High" },
   // Phase 4B.1 — Appraiser rehab endpoint writes these:
-  fldRU4ITbMM4ZjaaK: "rehabEstimatedAt",
-  fldi3i6bnyzt2lKsu: "rehabLineItemsJson",
-  fldeLFgCV7jaf4Wn3: "rehabRedFlags",
+  { prop: "rehabEstimatedAt", fieldId: "fldRU4ITbMM4ZjaaK", name: "Rehab_Estimated_At" },
+  { prop: "rehabLineItemsJson", fieldId: "fldi3i6bnyzt2lKsu", name: "Rehab_Line_Items_JSON" },
+  { prop: "rehabRedFlags", fieldId: "fldeLFgCV7jaf4Wn3", name: "Rehab_Red_Flags" },
   // INV-005 — Rehab_Source provenance (vision | manual_operator | manual_partner).
   // Auxiliary to rehabConfidenceScore (numeric). Per Constitution Rule 3,
   // manual values are fallback-only — vision must fail first.
-  fldhn2vxQipa3PVsX: "rehabSource",
+  { prop: "rehabSource", fieldId: "fldhn2vxQipa3PVsX", name: "Rehab_Source" },
+  // ── Phase 3: ARV validation ────────────────────────────────────────────
+  { prop: "realArvLow", name: "Real_ARV_Low" },
+  { prop: "realArvHigh", name: "Real_ARV_High" },
   // INV-029 — Pre-EMD Gate operator-verify flags (checkboxes).
-  fldoNZxSZqQsCLIW6: "realArvMedian",
+  { prop: "realArvMedian", fieldId: "fldoNZxSZqQsCLIW6", name: "Real_ARV_Median" },
   // Phase 4C.1 — RentCast AVM rent estimate, drives landlord-track MAO.
-  fldrFB0owY6BnQewr: "estimatedMonthlyRent",
+  { prop: "estimatedMonthlyRent", fieldId: "fldrFB0owY6BnQewr", name: "Estimated_Monthly_Rent" },
   // Phase 4A.1 — Appraiser ARV endpoint writes these fields (existing
   // pricing route writes Real_ARV_* but leaves comp count + avg + JSON
   // unwritten). New /api/agents/appraiser/arv/[recordId] fills them.
-  fldDcIiUajkvi8Wz3: "arvConfidence",
-  fldyukQHGzGdxoDGf: "arvCompCount",
-  fld9uJ3xRjkHGYruM: "arvCompAvgPrSqFt",
-  fldIrL7bFboOEr9vj: "arvCompDetailsJson",
+  { prop: "arvConfidence", fieldId: "fldDcIiUajkvi8Wz3", name: "ARV_Confidence" },
+  { prop: "arvCompCount", fieldId: "fldyukQHGzGdxoDGf", name: "ARV_Comp_Count" },
+  { prop: "arvCompAvgPrSqFt", fieldId: "fld9uJ3xRjkHGYruM", name: "ARV_Comp_Avg_PrSqFt" },
+  { prop: "arvCompDetailsJson", fieldId: "fldIrL7bFboOEr9vj", name: "ARV_Comp_Details_JSON" },
   // V2.1 floor inputs the new endpoint reads (defaults Bible v3 §9):
   //   wholesaleFeeTarget default 15000, buyerProfitTarget default 30000
-  fldSPxo0LRdGDBxcv: "wholesaleFeeTarget",
-  fldpmMwfqbXx6d58N: "buyerProfitTarget",
+  { prop: "wholesaleFeeTarget", fieldId: "fldSPxo0LRdGDBxcv", name: "Wholesale_Fee_Target" },
+  { prop: "buyerProfitTarget", fieldId: "fldpmMwfqbXx6d58N", name: "Buyer_Profit_Target" },
+  // Rough_Opener_Amount — the VALUE-ANCHORED door-opener the modern send path
+  // writes (anchor × (ARV×buybox − rehab − fee)). This is the real sent
+  // number for value-anchored deals; Outreach_Offer_Price is the legacy 65%
+  // slot and is empty on modern deals. The serializer read the empty legacy
+  // field → "no price on record" (P1.1, 2026-07-13). Never confuse either
+  // with MAO_V1 (flduPNI7iLK8Yj07E, the retired List×0.65 formula). Also
+  // read by the Review-backlog re-price pass to skip records already priced.
+  { prop: "roughOpenerAmount", fieldId: "fldiOvLQZaLpK7lTD", name: "Rough_Opener_Amount" },
   // ── ECONOMICS QUARANTINE (2026-06-05) ────────────────────────────────
   // Investor_MAO / Your_MAO (flds Hh.. / fE..) are LEGACY FORMULA fields:
   //   Your_MAO = ARV − rehab − ARV*0.13 − IF(profit,_,30000) − IF(fee,_,15000)
@@ -148,191 +211,55 @@ const LISTING_FIELDS: Record<string, string> = {
   // V2.1 value (null → HOLD until the triage worker computes it). The
   // legacy formula fields are intentionally NOT mapped (renamed legacy_*
   // in Airtable); nothing reads them for decisions.
-  fldAtudyUDNgoPWLR: "investorMao", // Investor_MAO_V21 (clean)
-  fldd8EndI5IrBtETD: "yourMao",     // Your_MAO_V21 (clean)
-  // ── Tax confirmed-override (2026-06-06). Confirmed values are
-  // operator/CAD-sourced and survive the V2.1 cron's re-runs (the
-  // structural anti-regression — Spine-only Bexar fact regressed
-  // Callaghan to $555 RentCast tax). When confirmedTaxes is present,
-  // the cron USES it and NEVER writes Annual_Taxes_Confirmed.
-  fld5XgHjw4vohVVKa: "confirmedTaxes",
-  fldm8UB2wT9jkWvNs: "confirmedTaxesSource",
-  fldAvk2aIBU1Lh3Dz: "autoApproveV2",
-  fldvHDqtftWehMJR7: "arvValidatedAt",
-  // ── D3 cadence inputs
-  fldzqlBceCXhQ9Vlq: "followUpCount",
-  fldoG27mxF1FQSRr9: "lastStatusCheckSentAt",
-  // Phase 20.2 v1.3 amendment (5/18) — Stored_Offer_Price renamed to
-  // Outreach_Offer_Price. Field id preserved; existing data carried.
-  // Semantic split: outreachOfferPrice = sticky value-anchored opener set
-  // at outreach (65%-of-list RETIRED 2026-06-28);
-  // contractOfferPrice = set at negotiation/DD; sellerMotivationScore
-  // = 1-5 rubric. See Listing type in lib/types.ts for full notes.
-  fldBFnL0HQJWahRov: "outreachOfferPrice",
-  fldfJWuEIHqaRuWq3: "contractOfferPrice",
-  // Rough_Opener_Amount — the VALUE-ANCHORED door-opener the modern send path
-  // writes (anchor × (ARV×buybox − rehab − fee)). This is the real sent
-  // number for value-anchored deals; Outreach_Offer_Price is the legacy 65%
-  // slot and is empty on modern deals. The serializer read the empty legacy
-  // field → "no price on record" (P1.1, 2026-07-13). Never confuse either
-  // with MAO_V1 (flduPNI7iLK8Yj07E, the retired List×0.65 formula).
-  fldiOvLQZaLpK7lTD: "roughOpenerAmount",
-  fldfEVJijfPOBulpc: "sellerMotivationScore",
-  fldusUTeJQ2ALX37U: "listPriceAtSend",
-  // Underwritten_MAO (operator 2026-06-09): the COMPUTED MAO ceiling the
-  // opener guard reads at send time. Distinct from contractOfferPrice
-  // (V2.1-reserved for the DD-time contract number set by the INV-023 gate
-  // after CMA + rehab — that field MUST stay empty until DD).
-  fldTSadqhYKeyKd89: "underwrittenMao",
-  fldFuePOkTlAl3NUT: "underwrittenMaoTrack",
+  { prop: "investorMao", fieldId: "fldAtudyUDNgoPWLR", name: "Investor_MAO_V21" }, // clean
+  { prop: "yourMao", fieldId: "fldd8EndI5IrBtETD", name: "Your_MAO_V21" },         // clean
   // (legacy_Your_MAO fldfE06eS402RcPCN DELETED 2026-06-13 — spine
   // recbC1XxAKRwRiOvq. AVM-poison Airtable formula, the field that
   // priced Rosemary at $7,370 → $6,634 insult. Zero readers on main;
   // the one branch reader at h2-outreach was repointed to yourMao
   // (Your_MAO_V21, clean code-computed) in the same commit.)
+  // ── Tax confirmed-override (2026-06-06). Confirmed values are
+  // operator/CAD-sourced and survive the V2.1 cron's re-runs (the
+  // structural anti-regression — Spine-only Bexar fact regressed
+  // Callaghan to $555 RentCast tax). When confirmedTaxes is present,
+  // the cron USES it and NEVER writes Annual_Taxes_Confirmed.
+  { prop: "confirmedTaxes", fieldId: "fld5XgHjw4vohVVKa", name: "Annual_Taxes_Confirmed" },
+  { prop: "confirmedTaxesSource", fieldId: "fldm8UB2wT9jkWvNs", name: "Annual_Taxes_Source" },
+  { prop: "autoApproveV2", fieldId: "fldAvk2aIBU1Lh3Dz", name: "Auto_Approve_v2" },
+  { prop: "arvValidatedAt", fieldId: "fldvHDqtftWehMJR7", name: "ARV_Validated_At" },
   // Underwritten_Property_MAO (keystone rewrite 2026-06-12, adjudication
   // recXJrM7EYK3pEFmF item 5): the ONLY field that authorizes Tier-C
   // autonomous property-up pricing. Underwritten_MAO above is demoted to
   // informational the same commit — it never authorizes a send again.
-  fldJZpyn5uqYfP0Oc: "underwrittenPropertyMao",
-};
+  // (See underwrittenPropertyMao entry above.)
+];
+
+function buildListingFields(): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const entry of LISTING_FIELD_REGISTRY) {
+    if (entry.fieldId) map[entry.fieldId] = entry.prop;
+  }
+  return map;
+}
+
+function buildListingNameMap(): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const entry of LISTING_FIELD_REGISTRY) {
+    if (entry.name) map[entry.name] = entry.prop;
+  }
+  return map;
+}
+
+// Field IDs (used for list endpoints with returnFieldsByFieldId=true)
+const LISTING_FIELDS: Record<string, string> = buildListingFields();
 
 // Reverse map: field name -> prop name (for single-record GET which returns field names)
-// Test-only export surface for the two-map parity check (see the TWO-MAP
-// RULE comment in LISTING_FIELDS). Not for runtime use.
+// Test-only export surface for the two-map parity check (see the registry
+// comment above LISTING_FIELD_REGISTRY). Not for runtime use.
 export const __TEST_LISTING_MAPS = { byId: LISTING_FIELDS };
+export const __TEST_LISTING_FIELD_REGISTRY = LISTING_FIELD_REGISTRY;
 
-const LISTING_NAME_MAP: Record<string, string> = {
-  "Address": "address",
-  "City": "city",
-  "Zip": "zip",
-  "List_Price": "listPrice",
-  "MAO_V1": "mao",
-  "DOM_Calc_V2": "dom",
-  "Offer_Tier": "offerTier",
-  "Live_Status": "liveStatus",
-  "Execution_Path": "executionPath",
-  "Outreach_Status": "outreachStatus",
-  "Last_Outreach_Date": "lastOutreachDate",
-  "Agent_Name": "agentName",
-  "Agent_Phone": "agentPhone",
-  "Agent_Email": "agentEmail",
-  "Verification_URL": "verificationUrl",
-  "Verification_Notes": "notes",
-  "Distress_Score": "distressScore",
-  "Distress_Bucket": "distressBucket",
-  "Renovated_Language": "renovatedLanguage",
-  "Bedrooms": "bedrooms",
-  "Bathrooms": "bathrooms",
-  "Building_SqFt": "buildingSqFt",
-  "Year_Built": "yearBuilt",
-  "Portfolio_Detected": "portfolioDetected",
-  "Stage_Calc_V2": "stageCalc",
-  "Approved_For_Outreach": "approvedForOutreach",
-  "Flip_Score": "flipScore",
-  "Off_Market_Override": "offMarketOverride",
-  "Restriction_Text": "restrictionText",
-  "DD_Checklist": "ddChecklist",
-  "Do_Not_Text": "doNotText",
-  "State": "state",
-  "Source_Version": "sourceVersion",
-  "Action_Hold_Until": "actionHoldUntil",
-  "Action_Card_State": "actionCardState",
-  "Last_Inbound_At": "lastInboundAt",
-  "Gmail_Thread_Ids": "gmailThreadIds",
-  "Draft_Reply_Text": "draftReplyText",
-  "Draft_Reply_Meta": "draftReplyMeta",
-  "DD_Volley_State": "ddVolleyState",
-  // Decision math (2026-07-13) — machine-computed go/no-go set.
-  "Buyer_Ceiling": "buyerCeiling",
-  "Deal_Spread": "dealSpread",
-  "AllIn_Pct_ARV": "allInPctArv",
-  "Decision_Verdict": "decisionVerdict",
-  "Decision_Reason": "decisionReason",
-  "Decision_Computed_At": "decisionComputedAt",
-  "Decision_Inputs_Hash": "decisionInputsHash",
-  "Underwrite_Confidence": "underwriteConfidence",
-  "Latest_Counter_Usd": "latestCounterUsd",
-  "Opener_Basis": "openerBasis",
-  "Last_Outbound_At": "lastOutboundAt",
-  "Last_Email_Outreach_Date": "lastEmailOutreachDate",
-  "Envelope_ID": "envelopeId",
-  // ── Pre-Outreach Gate (orchestrator Gate 1)
-  "MLS_Status": "mlsStatus",
-  "Property_Type": "propertyType",
-  "Price_Drop_Count": "priceDropCount",
-  "Last_Verified": "lastVerified",
-  "Pipeline_Stage": "pipelineStage",
-  // ── Back-half contract lifecycle (2026-07-14) — TWO-MAP twin of the fld-ID
-  // block above; parity enforced by lib/airtable-map-parity.test.ts.
-  "Contract_Executed_At": "contractExecutedAt",
-  "EMD_Due_At": "emdDueAt",
-  "EMD_Received": "emdReceived",
-  "Option_Deadline": "optionDeadline",
-  "Close_Date": "closeDate",
-  // Pre-contract gate (2026-07-16) — TWO-MAP twin; parity-enforced.
-  "Exit_Strategy": "exitStrategy",
-  "Pre_Contract_Waivers": "preContractWaivers",
-  "Suggested_Exit": "suggestedExit",
-  "Rehab_Confidence_Score": "rehabConfidenceScore",
-  "Agent_Prior_Outreach_Count": "agentPriorOutreachCount",
-  "Est_Rehab": "estRehab",
-  "Prev_List_Price": "prevListPrice",
-  "Follow_Up_Count": "followUpCount",
-  "Last_Status_Check_Sent_At": "lastStatusCheckSentAt",
-  "Outreach_Offer_Price": "outreachOfferPrice",
-  "Contract_Offer_Price": "contractOfferPrice",
-  "Underwritten_MAO": "underwrittenMao",
-  "Underwritten_MAO_Track": "underwrittenMaoTrack",
-  "Underwritten_Property_MAO": "underwrittenPropertyMao",
-  "Seller_Motivation_Score": "sellerMotivationScore",
-  "List_Price_At_Send": "listPriceAtSend",
-  // ── Phase 3: photo analysis / rehab ──────────────────────────────────────
-  // Field-name audit 2026-06-04 (Spine recd9RNKGWOWjjDzz): canonical
-  // schema uses Rehab_Est_Low / Rehab_Est_High (prefix-swapped from
-  // the older Est_Rehab_Low/High names). The 8 fields below the rehab
-  // block (Photo_Confidence / Line_Items_JSON / Red_Flags /
-  // Photo_Analyzed_At / Visual_Verified / Visual_Source /
-  // Pre_Offer_Screen_* / DD_Volley_Text_*) DO NOT EXIST in the
-  // Listings_V1 schema and their mappings were removed — they always
-  // read null, so any consumer that gated on them was effectively
-  // dead code. Flagged for operator: see audit report.
-  // Schema field names are Rehab_Est_Low / Rehab_Est_High; the JS prop
-  // names retain the legacy Est_Rehab_Low / Est_Rehab_High shape to
-  // avoid a ripple-rename across consumers (3+ readers in pipeline,
-  // appraiser-panel, etc.). Translation lives here.
-  "Rehab_Est_Low": "estRehabLow",
-  "Est_Rehab_Mid": "estRehabMid",
-  "Rehab_Est_High": "estRehabHigh",
-  "Rehab_Estimated_At": "rehabEstimatedAt",
-  "Rehab_Line_Items_JSON": "rehabLineItemsJson",
-  "Rehab_Red_Flags": "rehabRedFlags",
-  "Rehab_Source": "rehabSource",
-  // ── Phase 3: ARV validation ──────────────────────────────────────────────
-  "Real_ARV_Low": "realArvLow",
-  "Real_ARV_High": "realArvHigh",
-  "Real_ARV_Median": "realArvMedian",
-  "Estimated_Monthly_Rent": "estimatedMonthlyRent",
-  "ARV_Confidence": "arvConfidence",
-  "ARV_Comp_Count": "arvCompCount",
-  "ARV_Comp_Avg_PrSqFt": "arvCompAvgPrSqFt",
-  "ARV_Comp_Details_JSON": "arvCompDetailsJson",
-  "Wholesale_Fee_Target": "wholesaleFeeTarget",
-  "Buyer_Profit_Target": "buyerProfitTarget",
-  // Rough opener (national crawler). Read here so the Review-backlog re-price
-  // pass can skip records already priced (idempotent cursor).
-  "Rough_Opener_Amount": "roughOpenerAmount",
-  // Economics quarantine (see ID-map note): map to the clean V2.1 fields,
-  // NOT the legacy ARV-driven formula fields (legacy_Investor_MAO /
-  // legacy_Your_MAO in Airtable). null → HOLD until V2.1 computes.
-  "Investor_MAO_V21": "investorMao",
-  "Your_MAO_V21": "yourMao",
-  // (legacy_Your_MAO mapping deleted 2026-06-13, spine recbC1XxAKRwRiOvq)
-  "Annual_Taxes_Confirmed": "confirmedTaxes",
-  "Annual_Taxes_Source": "confirmedTaxesSource",
-  "Auto_Approve_v2": "autoApproveV2",
-  "ARV_Validated_At": "arvValidatedAt",
-};
+const LISTING_NAME_MAP: Record<string, string> = buildListingNameMap();
 
 const DEAL_FIELDS: Record<string, string> = {
   fld2AaqbSahBMY62j: "propertyAddress",
