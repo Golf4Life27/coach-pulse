@@ -263,6 +263,7 @@ import {
   CHEWED_CYCLE_HOURS,
   OPENER_HOLD_CYCLE_HOURS,
   CHEWED_STREAK_RUNS,
+  SATURATED_CYCLE_HOURS,
   type ZipCadenceRow,
 } from "./zip-rotation";
 
@@ -370,5 +371,67 @@ describe("selectDueZipsTiered — fresh metros first, chewed metros later", () =
     const r = selectDueZipsTiered(rows, 5, T0, 24);
     expect(r.selected).toEqual(["48205"]);
     expect(r.dueNeverCrawled).toBe(1); // the null (oldest) stamp won the dedup
+  });
+});
+
+describe("recrawlCycleHours — SATURATED cadence (operator /goal 2026-07-26, ZIP 44310)", () => {
+  it("a saturated ZIP gets at least the SATURATED_CYCLE_HOURS trickle even while producing", () => {
+    const saturated = row({
+      zip: "44310",
+      lastIngestedAt: hrsAgoT(30),
+      recordsIngested: 5,
+      acceptRate: 0.2,
+      saturated: true,
+    });
+    expect(recrawlCycleHours(saturated, 24)).toBe(SATURATED_CYCLE_HOURS);
+  });
+
+  it("an unsaturated ZIP is unaffected — cadence unchanged from before this signal existed", () => {
+    const producing = row({ zip: "48221", lastIngestedAt: hrsAgoT(25), recordsIngested: 3, acceptRate: 0.07 });
+    expect(recrawlCycleHours(producing, 24)).toBe(24);
+    const cooling = row({ zip: "48219", lastIngestedAt: hrsAgoT(30), recordsIngested: 0, acceptRate: 0 });
+    expect(recrawlCycleHours(cooling, 24)).toBe(COOLING_CYCLE_HOURS);
+  });
+
+  it("saturated + sustained zero-yield takes the MAX of the applicable cycles", () => {
+    // SATURATED_CYCLE_HOURS (336) > CHEWED_CYCLE_HOURS (168) — saturation wins.
+    const both = row({
+      zip: "44310",
+      lastIngestedAt: hrsAgoT(200),
+      recordsIngested: 0,
+      acceptRate: 0,
+      zeroYieldStreak: CHEWED_STREAK_RUNS,
+      saturated: true,
+    });
+    expect(recrawlCycleHours(both, 24)).toBe(Math.max(SATURATED_CYCLE_HOURS, CHEWED_CYCLE_HOURS));
+    expect(recrawlCycleHours(both, 24)).toBe(SATURATED_CYCLE_HOURS);
+  });
+
+  it("saturated + opener-HOLD also takes the max (both 336 by default, still correct if tuned apart)", () => {
+    const both = row({ zip: "78210", lastIngestedAt: hrsAgoT(30), openerHold: true, saturated: true });
+    expect(recrawlCycleHours(both, 24)).toBe(Math.max(OPENER_HOLD_CYCLE_HOURS, SATURATED_CYCLE_HOURS));
+  });
+
+  it("a base cycle longer than SATURATED_CYCLE_HOURS still wins (never shortens)", () => {
+    const saturated = row({ zip: "44310", lastIngestedAt: hrsAgoT(400), recordsIngested: 1, saturated: true });
+    expect(recrawlCycleHours(saturated, 500)).toBe(500);
+  });
+
+  it("selectDueZipsTiered: a saturated ZIP is not due until the trickle window lapses, and buckets as saturated", () => {
+    const saturated = row({
+      zip: "44310",
+      lastIngestedAt: hrsAgoT(200),
+      recordsIngested: 4,
+      acceptRate: 0.1,
+      saturated: true,
+    });
+    const r1 = selectDueZipsTiered([saturated], 5, T0, 24);
+    expect(r1.selected).toEqual([]);
+    expect(r1.freshTotal).toBe(1);
+
+    const lapsed = { ...saturated, lastIngestedAt: hrsAgoT(SATURATED_CYCLE_HOURS + 1) };
+    const r2 = selectDueZipsTiered([lapsed], 5, T0, 24);
+    expect(r2.selected).toEqual(["44310"]);
+    expect(r2.dueByCadence.saturated).toBe(1);
   });
 });

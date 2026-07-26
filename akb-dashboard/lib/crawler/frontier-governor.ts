@@ -156,6 +156,11 @@ export interface FrontierZipRow {
   openerHold?: boolean;
   /** Consecutive zero-yield ingest runs (Below_Threshold_Streak_Days). */
   zeroYieldStreak?: number | null;
+  /** Sellers in this ZIP show a recent cluster of hard-negative outreach
+   *  signals (lib/crawler/zip-saturation.ts) — blanketed by competing
+   *  wholesalers. Idles at the SATURATED_CYCLE_HOURS trickle, same as
+   *  opener-HOLD; a COOLING input, never a permanent exclusion. */
+  saturated?: boolean;
 }
 
 /** Pure: a ZIP's crawl cost in RentCast calls/day under the tiered cadence
@@ -173,6 +178,7 @@ export function zipDailyCallCost(row: FrontierZipRow, baseCycleHours = 24): numb
       acceptRate: row.acceptRate30d,
       zeroYieldStreak: row.zeroYieldStreak ?? null,
       openerHold: row.openerHold === true,
+      saturated: row.saturated === true,
     },
     baseCycleHours,
   );
