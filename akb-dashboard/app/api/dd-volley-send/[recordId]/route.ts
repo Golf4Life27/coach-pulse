@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireSendAuth } from "@/lib/send-route-auth";
 import { getListing, updateListingRecord } from "@/lib/airtable";
-import { sendMessage } from "@/lib/quo";
+import { sendGuarded } from "@/lib/outreach/send-gate";
 import { getVolleyText } from "@/lib/dd-volley";
 
 export const runtime = "nodejs";
@@ -70,7 +70,22 @@ export async function POST(
   const content = getVolleyText(body.textIndex, listing.agentName);
 
   try {
-    await sendMessage(cleanPhone(listing.agentPhone), content);
+    // ONE choke point (lib/outreach/send-gate) — a DD question inside a live
+    // thread, so purpose "reply".
+    const gated = await sendGuarded({
+      to: cleanPhone(listing.agentPhone),
+      body: content,
+      purpose: "reply",
+      recordId,
+      listing,
+      auditContext: { lane: "dd_volley_send", text_index: body.textIndex },
+    });
+    if (!gated.sent) {
+      return NextResponse.json(
+        { error: "send_gate_refused", reason: gated.reason },
+        { status: 422 },
+      );
+    }
   } catch (err) {
     console.error(`[dd-volley-send] Quo send failed for ${recordId}:`, err);
     return NextResponse.json(

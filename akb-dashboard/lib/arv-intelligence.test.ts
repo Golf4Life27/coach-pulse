@@ -211,12 +211,21 @@ describe("dedupeDoubleRecordedDeeds — one sale is one comp", () => {
     const subject = { zip: "48214", beds: 3, baths: 2, sqft: 1_000, condition_target: "as_is" };
     // psf uniform (~$150) and sqft inside the 0.8-1.2 ratio gate so no
     // other filter muddies the count — this test isolates the dedupe.
-    const dup = (date: string) =>
-      comp({ formattedAddress: "2431 PARKER, Detroit, MI, 48214", price: 165_000, squareFootage: 1_100, saleDate: date });
+    // Dates are RELATIVE to the clock (not fixed calendar dates) so this
+    // fixture never ages out of the engine's default recency window —
+    // see the 2026-07-26 postmortem where fixed 2025-07-22/25 dates aged
+    // past max_age_days and silently flipped comp_count_used from 3 to 2.
+    const dup = (daysAgo: number) =>
+      comp({
+        formattedAddress: "2431 PARKER, Detroit, MI, 48214",
+        price: 165_000,
+        squareFootage: 1_100,
+        saleDate: new Date(Date.now() - daysAgo * 86_400_000).toISOString(),
+      });
     const r = computeArvIntelligence(
       [
-        dup("2025-07-22T00:00:00.000Z"),
-        dup("2025-07-25T00:00:00.000Z"),
+        dup(13),
+        dup(10),
         comp({ formattedAddress: "3466 FISCHER, Detroit, MI, 48214" }),
         comp({ formattedAddress: "1 ELSEWHERE ST" }),
       ],

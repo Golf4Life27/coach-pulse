@@ -94,6 +94,17 @@ const REJECTION_PATTERNS = [
   /\b(?:got|have|received)\s+(?:a\s+|an\s+)?(?:another|higher|better|stronger|cash)\s+offer\b/i,
   /\bgoing\s+(?:with|to\s+go\s+with)\s+(?:another|a\s+different|a\s+higher|the)\s+(?:offer|buyer)\b/i,
   /\bin\s+escrow\b/i,
+  // NEGATION AWARENESS (2026-07-26, "Seller is not. He may not counter" +
+  // "no he's not. That's an insane ask." both misread as agent INTEREST
+  // because the bare \bcounter\b interest pattern fired on a negated
+  // clause): elliptical "X is not [interested]." — the complement is
+  // dropped but the negation stands alone as the whole clause. Requires
+  // trailing punctuation (or end of string) so a mid-sentence hedge like
+  // "is not at that price yet, but..." isn't eaten.
+  /\b(?:is|are|was|were)\s+not\b(?=[.,;!]|\s*$)/i,
+  // "he's not" / "she's not" / "they're not" — the contraction form of the
+  // same ellipsis.
+  /\b(?:he|she|they)'?(?:s|re)\s+not\b/i,
 ];
 
 /** SOFT NO — the seller (or agent) declined our number or isn't selling
@@ -134,7 +145,28 @@ const SOFT_NO_PATTERNS = [
   /\bno\s+at\s+\$?\d/i,
   /\b(?:it|that)'?s\s+a\s+(?:no|pass)\b/i,
   /\blow[\s-]?ball/i,
+  // NEGATION AWARENESS (2026-07-26, generic-negatives-as-UNCLASSIFIED miss):
+  // "Won't work" — a bare stance rejection with no other keyword to key off.
+  /\bwon'?t\s+work\b/i,
+  // Price-blowup language with no "too low"/"firm at" keyword present.
+  /\binsane\b/i,
+  /\btoo\s+far\s+apart\b/i,
 ];
+
+/** NEGATION AWARENESS (2026-07-26): a positive-interest phrase preceded or
+ *  followed by a negation ("not", "isn't", "won't", "no longer", "n't", …)
+ *  within ~4 words must NOT read as interest — this is the second line of
+ *  defense behind the explicit REJECTION/SOFT_NO ellipsis patterns above
+ *  (e.g. a negated "counter" or "call me" shape neither of those lists
+ *  anticipated verbatim). Word-window, not full-clause, by design: cheap,
+ *  pure, and matches every corpus case without a sentence tokenizer. */
+const NEGATION_RE = /\b(?:not|isn'?t|aren'?t|wasn'?t|weren'?t|won'?t|wont|don'?t|doesn'?t|didn'?t|can'?t|no longer|n't)\b/i;
+
+function isNegatedNearby(text: string, matchIndex: number, matchLength: number): boolean {
+  const start = Math.max(0, matchIndex - 20);
+  const end = Math.min(text.length, matchIndex + matchLength + 20);
+  return NEGATION_RE.test(text.slice(start, end));
+}
 
 /** The soft-no subset whose real message is "your NUMBER is wrong", not
  *  "go away" — routed as a pricing decision. */
@@ -304,7 +336,10 @@ export function classifyReply(body: string): {
   }
 
   for (const pat of INTEREST_PATTERNS) {
-    if (pat.test(trimmed)) return { classification: "interest", matchedPattern: pat.source };
+    const m = pat.exec(trimmed);
+    if (m && !isNegatedNearby(trimmed, m.index, m[0].length)) {
+      return { classification: "interest", matchedPattern: pat.source };
+    }
   }
 
   return { classification: "unknown", matchedPattern: null };

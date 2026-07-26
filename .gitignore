@@ -19,3 +19,6 @@
 # should never collide across machines or with CI's checkout.
 .obsidian/
 **/.obsidian/
+
+# Subagent worktrees (Claude Code isolated workspaces — never commit)
+.claude/worktrees/

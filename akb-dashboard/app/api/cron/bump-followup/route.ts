@@ -32,7 +32,8 @@
 
 import { NextResponse } from "next/server";
 import { getListings, getListing, updateListingRecord } from "@/lib/airtable";
-import { sendMessageWithId, getMessageStatus, getMessagesForParticipant } from "@/lib/quo";
+import { getMessageStatus, getMessagesForParticipant } from "@/lib/quo";
+import { sendGuarded } from "@/lib/outreach/send-gate";
 import { audit } from "@/lib/audit-log";
 import { checkOfferOverList } from "@/lib/outreach-economics";
 import { readSendCapConfig, resolveCoverage, applySendCap } from "@/lib/outreach/send-cap";
@@ -424,7 +425,27 @@ async function handle(req: Request): Promise<Response> {
       }
 
       // ── SEND + positive confirmation (same posture as first touch) ──
-      const result = await sendMessageWithId(p.toE164, p.message);
+      // Through the ONE choke point (lib/outreach/send-gate): Do_Not_Text,
+      // renovated-opener veto, number-level 30m duplicate suppression,
+      // mandatory purpose + recordId. The lane's own stricter guards above
+      // (fresh-state re-check, Quo thread truth, economics rail, per-attempt
+      // KV claim) are unchanged — the gate is the floor, not the ceiling.
+      const gated = await sendGuarded({
+        to: p.toE164,
+        body: p.message,
+        purpose: "bump",
+        recordId: p.recordId,
+        listing: fresh,
+        auditContext: { lane: "bump_followup", attempt: p.attempt },
+      });
+      if (!gated.sent) {
+        row.error = `send_gate_refused: ${gated.reason}`;
+        summary.errors++;
+        if (claimAcquired) await kvProd.del(claimKey).catch(() => {});
+        processed.push(row);
+        continue;
+      }
+      const result = gated.result!;
       row.sms_fired = true;
       row.sms_message_id = result.id;
 

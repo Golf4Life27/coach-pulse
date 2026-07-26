@@ -56,7 +56,7 @@ import {
   type RecentlyTouchedAgentMap,
 } from "@/lib/d3-cadence";
 import { normalizePhone } from "@/lib/phone-normalize";
-import { sendMessage } from "@/lib/quo";
+import { sendGuarded } from "@/lib/outreach/send-gate";
 import { verifyListing } from "@/lib/crawler/sources/firecrawl";
 import { classifyVerifiedListing } from "@/lib/crawler/sources/firecrawl";
 import { evaluateSendWindow } from "@/lib/h2-working-hours";
@@ -504,7 +504,30 @@ export async function GET(req: Request) {
     // ── REAL SEND ────────────────────────────────────────────────────
     const phone = toE164(listing.agentPhone);
     try {
-      await sendMessage(phone, built.text);
+      // ONE choke point (lib/outreach/send-gate) — Do_Not_Text, renovated-
+      // opener veto, number-level 30m duplicate suppression, mandatory
+      // purpose + recordId. The lane's cohort filter, cadence classifier,
+      // quiet-hours check and Firecrawl still-active check are unchanged.
+      const gated = await sendGuarded({
+        to: phone,
+        body: built.text,
+        purpose: "followup",
+        recordId: listing.id,
+        listing,
+        auditContext: { lane: "parked_followup", action: decision.action },
+      });
+      if (!gated.sent) {
+        outcomes.push({
+          recordId: listing.id,
+          address: listing.address,
+          action: decision.action,
+          status: "skipped_other",
+          detail: `send_gate_refused: ${gated.reason}`,
+          firecrawl: { creditsUsed: fc?.creditsUsed ?? 0, stillActive: true, outcome: "accept" },
+        });
+        acted++;
+        continue;
+      }
       const nowIso = new Date().toISOString();
       await updateListingRecord(listing.id, {
         Outreach_Status: "Parked",

@@ -21,7 +21,7 @@
 // Bot autoresponders and self-echoes never reach this module — they're
 // stripped pre-triage by isSelfEchoOrAutoreply (no action at all).
 
-import { sendMessageWithId } from "@/lib/quo";
+import { sendGuarded } from "@/lib/outreach/send-gate";
 import { evaluateSendWindow } from "@/lib/h2-working-hours";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { audit } from "@/lib/audit-log";
@@ -107,7 +107,18 @@ export async function sendAutoClose(input: AutoCloseInput): Promise<AutoCloseRes
   }
 
   try {
-    const send = await sendMessageWithId(input.toE164, body);
+    // ONE choke point (lib/outreach/send-gate) — purpose "reply" (closing a
+    // live thread, not an opener). Guards 1-3 above are unchanged.
+    const gated = await sendGuarded({
+      to: input.toE164,
+      body,
+      purpose: "reply",
+      recordId: input.recordId,
+      listing: { doNotText: input.doNotText },
+      auditContext: { lane: "auto_close", address: input.address ?? null },
+    });
+    if (!gated.sent) return fail(`send_gate_refused: ${gated.reason}`);
+    const send = gated.result!;
     await audit({
       agent: "crier",
       event: "reply_auto_close_sent",

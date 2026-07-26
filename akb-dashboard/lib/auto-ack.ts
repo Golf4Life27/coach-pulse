@@ -26,7 +26,7 @@
 // Self-echoes / bot autoreplies never reach here — stripped pre-triage by
 // isSelfEchoOrAutoreply, same as the Tier-0 path.
 
-import { sendMessageWithId } from "@/lib/quo";
+import { sendGuarded } from "@/lib/outreach/send-gate";
 import { evaluateSendWindow } from "@/lib/h2-working-hours";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { audit } from "@/lib/audit-log";
@@ -158,7 +158,21 @@ export async function sendAutoAck(input: AutoAckInput): Promise<AutoAckResult> {
   }
 
   try {
-    const send = await sendMessageWithId(input.toE164, body);
+    // ONE choke point (lib/outreach/send-gate) — purpose "reply" (a live
+    // conversation, so the renovated-opener veto does not apply). The module's
+    // own stricter guards above (flag, classification, no-language/price
+    // vetoes, number-free assertion, quiet hours, one-per-thread KV claim)
+    // are unchanged; the gate is the floor beneath them.
+    const gated = await sendGuarded({
+      to: input.toE164,
+      body,
+      purpose: "reply",
+      recordId: input.recordId,
+      listing: { doNotText: input.doNotText },
+      auditContext: { lane: "auto_ack", address: input.address ?? null },
+    });
+    if (!gated.sent) return fail(`send_gate_refused: ${gated.reason}`);
+    const send = gated.result!;
     await audit({
       agent: "crier",
       event: "reply_auto_ack_sent",

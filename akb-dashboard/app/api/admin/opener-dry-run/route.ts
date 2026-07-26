@@ -24,6 +24,9 @@ import { getListings } from "@/lib/airtable";
 import { audit } from "@/lib/audit-log";
 import { priceOpenerWithSeed } from "@/lib/opener-pricing";
 import { evaluateLowballEligibility } from "@/lib/lowball-eligibility";
+// ONE implementation, shared with the LIVE h2-outreach gate — the preview is
+// only a forecast if both sides map the signals identically.
+import { listingLanguageDistress, visionDistress } from "@/lib/lowball-signals";
 import { classifyHold } from "@/lib/pricing/hold-reason";
 import { resolveCumulativeDom } from "@/lib/attom/cumulative-dom";
 import { getMarketForListing, openerArvPctMax } from "@/lib/markets/registry";
@@ -41,22 +44,9 @@ import type { Listing } from "@/lib/types";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-/** Approximate the live distress signals from stored cohort fields. The live
- *  crawler computes these fresh from Firecrawl (listing language) + rehab
- *  vision; over the existing cohort we proxy: intake distressScore stands in
- *  for listing-language distress, parsed redFlags for the vision read. DOM is
- *  exact. Labeled in the response so the proxy is never mistaken for live. */
-function listingLanguageDistress(l: Listing): boolean {
-  if (typeof l.distressScore === "number" && l.distressScore > 0) return true;
-  const b = (l.distressBucket ?? "").toLowerCase();
-  return b.includes("distress") || b.includes("motivated") || b.includes("high");
-}
-function visionDistress(l: Listing): boolean {
-  const rf = l.redFlags ?? l.rehabRedFlags ?? null;
-  if (Array.isArray(rf)) return rf.length > 0;
-  if (typeof rf === "string") return rf.trim().length > 0 && rf.trim() !== "[]";
-  return false;
-}
+// listingLanguageDistress / visionDistress now live in lib/lowball-signals.ts
+// (imported above) so this preview and the live h2-outreach gate compute the
+// proxy signals from ONE implementation.
 
 export async function GET(req: Request) {
   const t0 = Date.now();

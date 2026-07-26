@@ -38,8 +38,12 @@
 
 import { NextResponse } from "next/server";
 import { getListings, getListing, updateListingRecord } from "@/lib/airtable";
-import { sendMessageWithId, getMessageStatus } from "@/lib/quo";
+import { getMessageStatus } from "@/lib/quo";
+import { sendGuarded } from "@/lib/outreach/send-gate";
 import { audit } from "@/lib/audit-log";
+import { evaluateLowballEligibility } from "@/lib/lowball-eligibility";
+import { listingLanguageDistress, visionDistress } from "@/lib/lowball-signals";
+import { resolveCumulativeDom } from "@/lib/attom/cumulative-dom";
 import { checkFirstOutreachHydration, checkOfferOverList } from "@/lib/outreach-economics";
 import { persistDecisionMath } from "@/lib/decision-persist";
 import { priceOpenerWithSeed } from "@/lib/opener-pricing";
@@ -347,10 +351,60 @@ async function handle(req: Request): Promise<Response> {
   // they just stop blocking the records behind them.
   const scanCap = Math.max(limit * 5, 50);
   let scanned = 0;
+  // ── LOWBALL-ELIGIBILITY FRONT GATE, NOW LIVE (2026-07-26) ─────────────
+  // lib/lowball-eligibility is the operator-ruled doctrine for WHO receives
+  // the aggressive opener (TIME-ON-MARKET decides at DOM ≥ 60; vision only
+  // ADDS via language+visual corroboration; uncertainty errs toward NOT
+  // sending). It had NO live caller — only the read-only dry-run preview —
+  // so the doctrine was documented and previewed but never enforced on a real
+  // send. It is wired below, using the SAME signal mappers the preview uses
+  // (lib/lowball-signals) so preview and live cannot drift.
+  //
+  // Volume note: most of the cohort is DOM ≥ 60 and therefore eligible on
+  // time-on-market ALONE, so this should not collapse throughput — but the
+  // counts are surfaced in the response so the operator can see exactly what
+  // it skips instead of inferring it from a volume dip.
+  const lowballGate = {
+    evaluated: 0,
+    eligible: 0,
+    not_eligible: 0,
+    by_tier: {} as Record<string, number>,
+  };
   const filteredQueue: typeof queue = [];
   for (const l of queue) {
     if (filteredQueue.length >= limit || scanned >= scanCap) break;
     scanned += 1;
+
+    // FRONT GATE — runs BEFORE the opener is priced (it decides WHO gets an
+    // aggressive approach at all; pricing decides the number).
+    const dom = resolveCumulativeDom({ mlsDomV2: l.dom });
+    const lowball = evaluateLowballEligibility({
+      cumulativeDom: dom.cumulativeDom,
+      relistSuspected: dom.relistSuspected,
+      listingLanguageDistress: listingLanguageDistress(l),
+      visionDistress: visionDistress(l),
+      visionConditionLabel: l.distressBucket ?? null,
+    });
+    lowballGate.evaluated++;
+    lowballGate.by_tier[lowball.tier] = (lowballGate.by_tier[lowball.tier] ?? 0) + 1;
+    if (!lowball.eligible) {
+      lowballGate.not_eligible++;
+      openerGuarded.push({
+        recordId: l.id,
+        address: l.address ?? null,
+        listPrice: l.listPrice ?? null,
+        action: "skipped",
+        reason: `lowball_not_eligible_${lowball.tier}`,
+        ceiling: null,
+        ceilingSource: "lowball_eligibility_gate",
+        anchorPct: null,
+        opener: null,
+        source: dom.source ?? null,
+      });
+      continue;
+    }
+    lowballGate.eligible++;
+
     const market = getMarketForListing({ state: l.state, zip: l.zip });
     const marketId = market?.id ?? "";
     let anchorPct = anchorCache.get(marketId);
@@ -782,8 +836,25 @@ async function handle(req: Request): Promise<Response> {
             });
             continue;
           }
-          // ── 1) SEND ─────────────────────────────────────────────────
-          const result = await sendMessageWithId(p.toE164!, p.message!);
+          // ── 1) SEND — through the ONE choke point (lib/outreach/send-gate).
+          // The gate is the FLOOR (Do_Not_Text, renovated-opener veto,
+          // number-level 30m duplicate suppression, mandatory purpose +
+          // recordId). Every stricter guard above (hydration, economics,
+          // working hours, per-record KV claim, run mutex) is unchanged.
+          const gated = await sendGuarded({
+            to: p.toE164!,
+            body: p.message!,
+            purpose: "first_touch",
+            recordId: p.recordId,
+            listing: fresh ?? listing ?? null,
+            auditContext: { address: p.address, lane: "h2_outreach" },
+          });
+          if (!gated.sent) {
+            row.error = `send_gate_refused: ${gated.reason}`;
+            summary.errors++;
+            continue;
+          }
+          const result = gated.result!;
           row.sms_fired = true;
           row.sms_message_id = result.id;
 
@@ -972,6 +1043,9 @@ async function handle(req: Request): Promise<Response> {
     send_cap: sendCapSummary,
     opt_out_enforcement_live: optOutEnforcementLive,
     opener_guarded: openerGuarded,
+    // WHO the aggressive-opener doctrine let through this run, and which tier
+    // each refusal landed in (lib/lowball-eligibility, now live).
+    lowball_gate: lowballGate,
     hold_proposals: holdProposals,
     supply_floor: supplyFloor,
     auth_kind: authKind,

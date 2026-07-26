@@ -784,6 +784,10 @@ export default function DealWorkspace() {
               {listing.agentEmail && (
                 <a href={`mailto:${listing.agentEmail}?subject=${encodeURIComponent(`Cash Offer — ${listing.address}`)}&body=${encodeURIComponent(`Hi ${listing.agentName?.split(" ")[0] ?? "there"},\n\nI'd like to submit a formal cash offer on ${listing.address}.\n\nOffer: ${stampedOffer != null ? formatCurrency(stampedOffer) : "[CONFIRM OFFER — no delivery-stamped number on record]"}\nTerms: Cash, as-is, 10-day option period, quick close\nClosing entity: We may close under one of our affiliated entities.\n\nPlease let me know if the seller is open to this offer. Happy to provide proof of funds.\n\nBest,\nAlex Balog\nAKB Solutions LLC\nalex@akb-properties.com\n(815) 556-9965`)}`} className="bg-purple-700 hover:bg-purple-600 text-white text-xs font-semibold px-3 py-2 rounded min-h-[44px] inline-flex items-center">Send Formal Offer Email</a>
               )}
+              {/* Written offer letter — printable page for a listing agent who
+                  asks to "put it in writing". Uses the STICKY stored number;
+                  the route 422s rather than inventing one. */}
+              <a href={`/api/offer-letter/${listing.id}`} target="_blank" rel="noopener noreferrer" className="bg-amber-700 hover:bg-amber-600 text-white text-xs font-semibold px-3 py-2 rounded min-h-[44px] inline-flex items-center">Written Offer</a>
               <div className="relative group">
                 <button type="button" className="bg-red-900/50 hover:bg-red-900/70 text-red-300 text-xs font-semibold px-3 py-2 rounded min-h-[44px]">Mark Dead ▾</button>
                 <div className="absolute bottom-full left-0 mb-1 bg-[#1c2128] border border-[#30363d] rounded shadow-lg hidden group-hover:block z-10 min-w-[160px]">
