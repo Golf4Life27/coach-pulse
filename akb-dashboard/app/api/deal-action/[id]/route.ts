@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getListing, updateListingRecord } from "@/lib/airtable";
-import { sendMessage } from "@/lib/quo";
+import { sendGuarded } from "@/lib/outreach/send-gate";
 import type {
   ActionType,
   Channel,
@@ -237,7 +237,21 @@ export async function POST(
       return NextResponse.json({ error: "QUO_API_KEY not set" }, { status: 500 });
     }
     try {
-      await sendMessage(cleanPhone(listing.agentPhone), draft);
+      // ONE choke point (lib/outreach/send-gate) — operator deal-room reply.
+      const gated = await sendGuarded({
+        to: cleanPhone(listing.agentPhone),
+        body: draft,
+        purpose: "reply",
+        recordId: id,
+        listing,
+        auditContext: { lane: "deal_action" },
+      });
+      if (!gated.sent) {
+        return NextResponse.json(
+          { error: "send_gate_refused", reason: gated.reason },
+          { status: 422 },
+        );
+      }
     } catch (err) {
       console.error(`[deal-action] Quo send failed for ${id}:`, err);
       return NextResponse.json(

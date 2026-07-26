@@ -22,7 +22,10 @@ export interface Listing {
   distressScore: number | null;
   distressBucket: string | null;
   /** Renovated-listing veto (2026-07-25): listing markets itself renovated/
-   *  turnkey with NO distress language — never first-touch, never bump. */
+   *  turnkey with NO distress language — never first-touch, never bump.
+   *  Written by freshness-reverify (Firecrawl hasRenovatedLanguage);
+   *  enforced in isH2Eligible/bumpVerdict AND the send choke point
+   *  (lib/outreach/send-gate) so every lane inherits the veto. */
   renovatedLanguage?: boolean | null;
   bedrooms: number | null;
   bathrooms: number | null;

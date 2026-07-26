@@ -28,8 +28,8 @@
 
 import { NextResponse } from "next/server";
 import { requireSendAuth } from "@/lib/send-route-auth";
-import { sendMessageWithId } from "@/lib/quo";
-import { updateListingRecord } from "@/lib/airtable";
+import { sendGuarded } from "@/lib/outreach/send-gate";
+import { getListing, updateListingRecord } from "@/lib/airtable";
 import { audit } from "@/lib/audit-log";
 
 export const runtime = "nodejs";
@@ -73,6 +73,17 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
+  // recordId is now MANDATORY: the send choke point requires a purpose + a
+  // recordId on every outbound so the audit trail can never have an orphan
+  // send in it. Previously optional — an untagged send left no record-level
+  // trace, which is precisely what made the duplicate-outbound bug hard to
+  // diagnose.
+  if (!recordId) {
+    return NextResponse.json(
+      { error: "Missing recordId — required for the send audit trail" },
+      { status: 400 },
+    );
+  }
 
   if (!process.env.QUO_API_KEY) {
     await audit({
@@ -87,10 +98,31 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "QUO_API_KEY not set" }, { status: 500 });
   }
 
-  // ── Send ────────────────────────────────────────────────────────────
+  // ── Send — through the ONE choke point (lib/outreach/send-gate) ──────
+  // This is the operator/deal-room reply lane: purpose "reply", so the
+  // renovated-listing veto (opener/bump only) does NOT apply — but
+  // Do_Not_Text and the number-level 30-minute duplicate suppression do.
+  // The duplicate check is the fix for the double-send that reached the same
+  // agent twice across two same-phone listings: per-record claims could not
+  // see it, a per-NUMBER claim can.
+  const listing = await getListing(recordId).catch(() => null);
   let sendResult;
   try {
-    sendResult = await sendMessageWithId(to, message);
+    const gated = await sendGuarded({
+      to,
+      body: message,
+      purpose: "reply",
+      recordId,
+      listing,
+      auditContext: { lane: "jarvis_send", proposalId },
+    });
+    if (!gated.sent) {
+      return NextResponse.json(
+        { error: "send_gate_refused", reason: gated.reason },
+        { status: 422 },
+      );
+    }
+    sendResult = gated.result!;
   } catch (err) {
     console.error("[jarvis-send] Quo send failed:", err);
     await audit({

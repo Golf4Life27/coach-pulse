@@ -172,6 +172,34 @@ These actions require an explicit human decision and do not happen autonomously:
   the run summary — never silent.
   `[enforced]` `lib/outreach/send-cap.ts` (`readDailySendCap`, `governDailySends`),
   wired in `app/api/cron/h2-outreach/route.ts`.
+- **ONE OUTBOUND SEND CHOKE POINT (2026-07-26 consolidation)** — every
+  seller/agent-facing SMS passes through `sendGuarded` and NOTHING calls the raw
+  Quo sender directly. Lanes each re-implementing their own guards is what
+  produced the recurring bugs (a duplicate outbound to the same agent across two
+  same-phone listings; a renovated veto added to two lanes separately). The gate
+  is the FLOOR — lanes keep their stricter guards on top of it — and enforces:
+  (a) `doNotText` refuse, always; (b) renovated-listing veto for `first_touch` /
+  `bump` only (conversational replies allowed); (c) NUMBER-level duplicate
+  suppression — identical body to the same E.164 within 30 min refused (the
+  check no per-record claim could make); (d) mandatory `purpose` + `recordId`
+  audit tags. (a)/(b)/(d) are PURE and always enforced; (c) needs KV and FAILS
+  OPEN on outage (audited every time) — an infra blip must never silently dark
+  all outreach. `[enforced]` `lib/outreach/send-gate.ts`, tests
+  `lib/outreach/send-gate.test.ts`. Deliberately OUTSIDE the gate: the
+  operator-alert channel (`ALERT_PHONE`/`ALERT_FROM` — morning-digest,
+  decision-escalation, reply-alert, zip-approval notify, maverick sms-escalation)
+  and the buyer dispo blast; they carry no listing, no seller, and their own
+  per-key dedupe.
+- **THE LOWBALL-ELIGIBILITY DOCTRINE IS LIVE (2026-07-26)** — `lib/lowball-eligibility`
+  (TIME-ON-MARKET decides at cumulative DOM ≥ 60; vision only ADDS via
+  language+visual corroboration; uncertainty errs toward NOT sending) previously
+  had NO live caller — it was previewed and never enforced. It now gates the
+  h2-outreach pricing loop BEFORE an opener is priced; a non-eligible record is
+  pushed to `openerGuarded` with reason `lowball_not_eligible_<tier>` and never
+  sends. Preview and live share ONE signal implementation
+  (`lib/lowball-signals.ts`) so they cannot drift. Counts surface as
+  `lowball_gate` in the route response.
+  `[enforced]` `app/api/cron/h2-outreach/route.ts`, tests `lib/lowball-signals.test.ts`.
 - **RentCast crawl budget governor (unchanged, restated)** — the intake belt's
   daily ZIP spend derives from the plan (`computeDailyCrawlBudget`) and is metered
   in KV; adding cron slots widens THROUGHPUT, never SPEND. The 2026-07-22 tiered

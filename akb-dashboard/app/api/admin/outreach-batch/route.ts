@@ -35,7 +35,8 @@
 
 import { NextResponse } from "next/server";
 import { getListings, getListing, updateListingRecord } from "@/lib/airtable";
-import { sendMessageWithId, getMessageStatus } from "@/lib/quo";
+import { getMessageStatus } from "@/lib/quo";
+import { sendGuarded } from "@/lib/outreach/send-gate";
 import { audit } from "@/lib/audit-log";
 import {
   authenticate,
@@ -271,6 +272,8 @@ async function handle(req: Request): Promise<Response> {
   for (const p of firstTouchPlans.slice(limit)) dispose({ id: p.recordId, address: p.address, zip: null }, "planned_over_limit", `dropped by limit=${limit}`);
   // Property state (for the quiet-hours timezone) — the plan carries city, not state.
   const stateById = new Map(leads.map((l) => [l.id, l.state]));
+  // Guard fields for the send choke point (Do_Not_Text / renovated veto).
+  const leadById = new Map(leads.map((l) => [l.id, l]));
 
   // ── Funnel audit: every input lead must appear exactly once. ──────
   const seen = new Set(dispositions.map((d) => d.recordId));
@@ -364,8 +367,23 @@ async function handle(req: Request): Promise<Response> {
     }
 
     try {
-      // 1) SEND
-      const send = await sendMessageWithId(p.toE164!, p.message!);
+      // 1) SEND — through the ONE choke point (lib/outreach/send-gate).
+      // Same first_touch purpose as the h2 cron; the batch's own stricter
+      // rails (quiet hours above, shared per-record dispatch claim) unchanged.
+      const gated = await sendGuarded({
+        to: p.toE164!,
+        body: p.message!,
+        purpose: "first_touch",
+        recordId: p.recordId,
+        listing: leadById.get(p.recordId) ?? null,
+        auditContext: { lane: "outreach_batch", address: p.address },
+      });
+      if (!gated.sent) {
+        row.error = `send_gate_refused: ${gated.reason}`;
+        rows.push(row);
+        continue;
+      }
+      const send = gated.result!;
       row.sent = true;
       row.quo_message_id = send.id;
       row.send_status = send.status;

@@ -24,7 +24,7 @@
 // A skipped dispatch leaves the proposal PENDING (the route must not stamp
 // Approved on a no-send) so the operator can retry inside the window.
 
-import { sendMessageWithId } from "@/lib/quo";
+import { sendGuarded } from "@/lib/outreach/send-gate";
 import { evaluateSendWindow } from "@/lib/h2-working-hours";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { audit } from "@/lib/audit-log";
@@ -183,7 +183,28 @@ export async function sendApprovedReply(input: ApproveSendInput): Promise<Approv
   }
 
   try {
-    const send = await sendMessageWithId(input.toE164, input.body);
+    // ONE choke point (lib/outreach/send-gate) — purpose "reply" (operator
+    // lane, live conversation). The number-level duplicate suppression is the
+    // exact protection the per-proposal claim could not give: two DIFFERENT
+    // proposals on two same-phone listings each held their own claim and both
+    // sent the same body to the same agent. Rails 1-6 above are unchanged.
+    const gated = await sendGuarded({
+      to: input.toE164,
+      body: input.body,
+      purpose: "reply",
+      recordId: input.recordId,
+      listing: { doNotText: input.doNotText },
+      auditContext: { lane: "approve_send", proposalId: input.proposalId },
+    });
+    if (!gated.sent) {
+      // Release the per-proposal claim so the operator can retry once the
+      // refusal condition clears — a refused send is not a send.
+      if (kvConfigured()) {
+        await kvProd.del(approveSendClaimKey(input.proposalId)).catch(() => {});
+      }
+      return fail(`send_gate_refused: ${gated.reason}`);
+    }
+    const send = gated.result!;
     await audit({
       agent: "crier",
       event: "queue_approve_send_sent",

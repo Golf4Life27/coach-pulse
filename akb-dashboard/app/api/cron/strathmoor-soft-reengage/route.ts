@@ -21,7 +21,7 @@
 
 import { NextResponse } from "next/server";
 import { getListing, updateListingRecord } from "@/lib/airtable";
-import { sendMessageWithId } from "@/lib/quo";
+import { sendGuarded } from "@/lib/outreach/send-gate";
 import { normalizePhone } from "@/lib/phone-normalize";
 import { audit } from "@/lib/audit-log";
 import {
@@ -110,7 +110,30 @@ async function handle(req: Request) {
   // writes the sentinel).
   let sendResult;
   try {
-    sendResult = await sendMessageWithId(phone, SCRIPT);
+    // ONE choke point (lib/outreach/send-gate). Soft re-engagement on an
+    // already-contacted thread → purpose "followup" (not an opener), so
+    // Do_Not_Text + the number-level 30m duplicate suppression apply and the
+    // renovated-opener veto does not. The sentinel idempotency below is
+    // unchanged and remains the lane's own stricter guard.
+    const gated = await sendGuarded({
+      to: phone,
+      body: SCRIPT,
+      purpose: "followup",
+      recordId: RECORD_ID,
+      listing,
+      auditContext: { lane: "strathmoor_soft_reengage", agent_name: AGENT_NAME },
+    });
+    if (!gated.sent) {
+      await audit({
+        agent: "outreach",
+        event: "strathmoor_soft_reengage",
+        status: "confirmed_failure",
+        recordId: RECORD_ID,
+        outputSummary: { stage: "send_gate_refused", reason: gated.reason },
+      });
+      return NextResponse.json({ ok: false, error: "send_gate_refused", reason: gated.reason }, { status: 409 });
+    }
+    sendResult = gated.result!;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     await audit({

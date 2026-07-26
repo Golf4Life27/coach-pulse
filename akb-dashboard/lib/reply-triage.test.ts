@@ -226,3 +226,39 @@ describe("triageSellerReply", () => {
     expect(t2.queueStatus).toBeNull(); // never downgrades an advanced record
   });
 });
+
+// NEGATION AWARENESS (2026-07-26): the classifier misread the agent reply
+// "Seller is not. He may not counter" as agent INTEREST (the bare \bcounter\b
+// interest pattern fired on a negated clause), and generic negatives ("Won't
+// work", "insane ask") fell through to UNCLASSIFIED. Real corpus from this
+// week, both directions: negatives must classify negative, true positives
+// must NOT regress.
+describe("classifyReply — negation awareness (real reply corpus 2026-07-26)", () => {
+  it("negatives classify negative, never interest", () => {
+    expect(classifyReply("Seller is not. He may not counter").classification).toBe("rejection");
+    expect(classifyReply("She is not interested in that price").classification).toBe("soft_no");
+    expect(classifyReply("I'm sorry but no he's not. That's an insane ask.").classification).toBe(
+      "rejection",
+    );
+    expect(classifyReply("Won't work").classification).toBe("soft_no");
+    expect(classifyReply("No thank you").classification).toBe("soft_no");
+    expect(classifyReply("No").classification).toBe("soft_no");
+    expect(
+      classifyReply(
+        "We have had over 15 of these offers. Seller asked me to stop sending them to him.",
+      ).classification,
+    ).toBe("rejection");
+  });
+
+  it("true positives do not regress", () => {
+    expect(classifyReply("still interested").classification).toBe("interest");
+    expect(classifyReply("are you still interested?").classification).toBe("interest");
+    expect(classifyReply("can you come up to 50").classification).toBe("interest");
+    expect(classifyReply("send the contract").classification).toBe("acceptance");
+    expect(
+      classifyReply(
+        "If you want to send a written offer over I will present it to the seller",
+      ).classification,
+    ).toBe("offer_format");
+  });
+});
