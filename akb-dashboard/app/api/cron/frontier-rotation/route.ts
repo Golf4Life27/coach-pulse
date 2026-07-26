@@ -24,6 +24,8 @@ import {
 } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { getAllRegistryRows, promoteStagedZip, createStagedZips } from "@/lib/zip-registry";
+import { getListings } from "@/lib/airtable";
+import { computeZipSaturation } from "@/lib/crawler/zip-saturation";
 import {
   computeDailyCrawlBudget,
   frontierDecisions,
@@ -73,6 +75,28 @@ export async function GET(req: Request) {
     );
   }
 
+  // SATURATION signal (lib/crawler/zip-saturation.ts, operator /goal
+  // 2026-07-26): sellers in a ZIP blanketed by competing wholesalers show
+  // up as a cluster of recent hard-negative outreach signals. Feed that
+  // into the same tiered cadence as opener-HOLD/zero-yield — a COOLING
+  // input, never a permanent exclusion. Minimal Listings read (no new
+  // registry fetch needed; this is the route's only listings-shaped read).
+  let saturatedZips: string[] = [];
+  try {
+    const listings = await getListings();
+    const zipSaturation = computeZipSaturation(listings, now);
+    saturatedZips = [...zipSaturation.entries()]
+      .filter(([, v]) => v.saturated)
+      .map(([zip]) => zip)
+      .sort();
+  } catch {
+    // Saturation is advisory cadence input, not a hard gate — a Listings
+    // fetch failure degrades to "no known saturation" rather than
+    // blocking the whole rotation pass.
+    saturatedZips = [];
+  }
+  const saturatedZipSet = new Set(saturatedZips);
+
   const monthlyPlanRaw = Number(process.env.RENTCAST_MONTHLY_PLAN);
   const budget = computeDailyCrawlBudget({
     monthlyPlan: Number.isFinite(monthlyPlanRaw) && monthlyPlanRaw > 0
@@ -100,6 +124,7 @@ export async function GET(req: Request) {
       openerHold:
         openerArvPctMax(getMarketForListing({ state: r.state, zip: r.zip }), r.state) == null,
       zeroYieldStreak: r.belowThresholdStreak,
+      saturated: saturatedZipSet.has(r.zip),
     })),
     dailyBudget: budget.dailyBudget,
     now,
@@ -115,6 +140,11 @@ export async function GET(req: Request) {
     target_cycle_days: TARGET_CYCLE_DAYS,
     daily_budget: budget.dailyBudget,
     budget_basis: budget.basis,
+  };
+
+  const saturation = {
+    saturated_zips: saturatedZips,
+    saturation_excluded: saturatedZips.length,
   };
 
   const promoted: Array<{ zip: string; recordId: string; error: string | null }> = [];
@@ -228,6 +258,7 @@ export async function GET(req: Request) {
       staged_created: stagingResult.created,
       staged_backlog: stagedBacklog,
       staging_queue_exhausted: staging.queueExhausted,
+      saturation_excluded: saturation.saturation_excluded,
     },
     ms: Date.now() - t0,
   });
@@ -237,6 +268,7 @@ export async function GET(req: Request) {
     mode: apply ? "apply" : "dry_run",
     auth_kind: authKind,
     health,
+    saturation,
     promote: decisions.promote.map((r) => ({ zip: r.zip, recordId: r.recordId })),
     promoted,
     retire_candidates: decisions.retireCandidates.map((c) => ({ zip: c.row.zip, reason: c.reason })),
