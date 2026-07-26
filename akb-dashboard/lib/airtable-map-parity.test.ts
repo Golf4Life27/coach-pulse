@@ -100,6 +100,13 @@ const EXPECTED_LISTING_FIELDS: Record<string, string> = {
   "fldiNKFpIBUYgg7el": "actionCardState",
   "fld3IhR1DXzcVuq6F": "lastInboundAt",
   "fldaK4lR5UNvycg11": "lastOutboundAt",
+  // 2026-07-26 backfill of the five formerly name-only fields (IDs pulled
+  // from the live schema; they were NULL on bulk reads until then):
+  "flduNZ2G332OdVnp8": "gmailThreadIds",
+  "fld1I0vcWZbp56GKc": "estRehabLow",
+  "fldAcdeYJQbEyYNU2": "estRehabHigh",
+  "fldKAwIU8InM0ycfi": "realArvLow",
+  "fldXXIIgVvz4lvjVD": "realArvHigh",
   "fld4r1a94Uv8tVy5k": "draftReplyText",
   "fldlRrtCUBppUbQam": "draftReplyMeta",
   "fldjO7rbGYkdhB7dM": "ddVolleyState",

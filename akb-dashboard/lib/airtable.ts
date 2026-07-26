@@ -27,17 +27,12 @@ const PROSPECTIVE_BUYERS_TABLE = "tblyPAkwRyrlPIP59";
 // is now structurally guaranteed to appear on both read paths — divergence
 // between the two maps is no longer possible for two-sided entries.
 //
-// A minority of entries are legitimately one-sided today (present on only
-// one read path) — these are pre-existing asymmetries, NOT invented here.
-// They are marked `fieldId?`/`name?` (optional) rather than given a made-up
-// counterpart, so the registry documents the gap instead of hiding it:
-//   - gmailThreadIds   : name-only  (Gmail_Thread_Ids)
-//   - estRehabLow      : name-only  (Rehab_Est_Low)
-//   - estRehabHigh     : name-only  (Rehab_Est_High)
-//   - realArvLow       : name-only  (Real_ARV_Low)
-//   - realArvHigh      : name-only  (Real_ARV_High)
-// lib/airtable-map-parity.test.ts pins these snapshots and asserts every
-// entry has at least one of fieldId/name.
+// 2026-07-26: the five formerly name-only entries (gmailThreadIds,
+// estRehabLow/High, realArvLow/High) were backfilled with their real field
+// IDs pulled from the live schema — they were NULL on every bulk fld-ID
+// read until then. All entries are now two-sided.
+// lib/airtable-map-parity.test.ts asserts every entry has at least one of
+// fieldId/name.
 interface ListingFieldRegistryEntry {
   prop: string;
   fieldId?: string;
@@ -83,8 +78,7 @@ const LISTING_FIELD_REGISTRY: ReadonlyArray<ListingFieldRegistryEntry> = [
   { prop: "actionHoldUntil", fieldId: "fldkYeP8onCHil0pd", name: "Action_Hold_Until" },
   { prop: "actionCardState", fieldId: "fldiNKFpIBUYgg7el", name: "Action_Card_State" },
   { prop: "lastInboundAt", fieldId: "fld3IhR1DXzcVuq6F", name: "Last_Inbound_At" },
-  // name-only: never wired into the bulk fld-ID map (pre-existing asymmetry).
-  { prop: "gmailThreadIds", name: "Gmail_Thread_Ids" },
+  { prop: "gmailThreadIds", fieldId: "flduNZ2G332OdVnp8", name: "Gmail_Thread_Ids" },
   { prop: "lastOutboundAt", fieldId: "fldaK4lR5UNvycg11", name: "Last_Outbound_At" },
   // ── Decision math (2026-07-13/14, the Mayfield counter miss) — machine-
   // computed go/no-go set. Both read paths must see these.
@@ -162,11 +156,10 @@ const LISTING_FIELD_REGISTRY: ReadonlyArray<ListingFieldRegistryEntry> = [
   // Est_Rehab_Low/High names). The JS prop names retain the legacy
   // Est_Rehab_Low / Est_Rehab_High shape to avoid a ripple-rename across
   // consumers (3+ readers in pipeline, appraiser-panel, etc.). Translation
-  // lives here. Rehab_Est_Low / Rehab_Est_High are name-only (pre-existing
-  // asymmetry — never wired into the bulk fld-ID map).
-  { prop: "estRehabLow", name: "Rehab_Est_Low" },
+  // lives here.
+  { prop: "estRehabLow", fieldId: "fld1I0vcWZbp56GKc", name: "Rehab_Est_Low" },
   { prop: "estRehabMid", fieldId: "fldyDCVwvn9jfdiES", name: "Est_Rehab_Mid" },
-  { prop: "estRehabHigh", name: "Rehab_Est_High" },
+  { prop: "estRehabHigh", fieldId: "fldAcdeYJQbEyYNU2", name: "Rehab_Est_High" },
   // Phase 4B.1 — Appraiser rehab endpoint writes these:
   { prop: "rehabEstimatedAt", fieldId: "fldRU4ITbMM4ZjaaK", name: "Rehab_Estimated_At" },
   { prop: "rehabLineItemsJson", fieldId: "fldi3i6bnyzt2lKsu", name: "Rehab_Line_Items_JSON" },
@@ -176,8 +169,8 @@ const LISTING_FIELD_REGISTRY: ReadonlyArray<ListingFieldRegistryEntry> = [
   // manual values are fallback-only — vision must fail first.
   { prop: "rehabSource", fieldId: "fldhn2vxQipa3PVsX", name: "Rehab_Source" },
   // ── Phase 3: ARV validation ────────────────────────────────────────────
-  { prop: "realArvLow", name: "Real_ARV_Low" },
-  { prop: "realArvHigh", name: "Real_ARV_High" },
+  { prop: "realArvLow", fieldId: "fldKAwIU8InM0ycfi", name: "Real_ARV_Low" },
+  { prop: "realArvHigh", fieldId: "fldXXIIgVvz4lvjVD", name: "Real_ARV_High" },
   // INV-029 — Pre-EMD Gate operator-verify flags (checkboxes).
   { prop: "realArvMedian", fieldId: "fldoNZxSZqQsCLIW6", name: "Real_ARV_Median" },
   // Phase 4C.1 — RentCast AVM rent estimate, drives landlord-track MAO.
