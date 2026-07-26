@@ -56,6 +56,7 @@ import { type BuyerTrack } from "@/lib/buyer-median-input";
 import { buildIntakeListingFields } from "@/lib/crawler/intake-fields";
 import { rentcastQuotaAllows, computeBurnRate } from "@/lib/maverick/rentcast-burn-rate";
 import { selectDueZipsTiered, type ZipDueResult } from "@/lib/crawler/zip-rotation";
+import { computeZipSaturation } from "@/lib/crawler/zip-saturation";
 import {
   computeDailyCrawlBudget,
   governRunCap,
@@ -274,6 +275,25 @@ export async function GET(req: Request) {
   const debugDuplicates: Array<{ sourceId: string; address: string | null; zip: string | null }> = [];
   const debugDecisions: Array<Record<string, unknown>> = [];
 
+  // ── Listings load (moved up from the dedup step so the SATURATION
+  // signal — lib/crawler/zip-saturation.ts — can feed the cadence below
+  // BEFORE ZIPs are selected, not just the dedup set afterward). Reused
+  // as-is at the dedup step; no second Airtable fetch. ─────────────────
+  let listings: Awaited<ReturnType<typeof getListings>>;
+  try {
+    listings = await getListings();
+  } catch (err) {
+    return NextResponse.json(
+      { error: "listings_fetch_failed", message: err instanceof Error ? err.message : String(err) },
+      { status: 502 },
+    );
+  }
+  const zipSaturation = computeZipSaturation(listings, new Date());
+  const saturatedZips = [...zipSaturation.entries()]
+    .filter(([, v]) => v.saturated)
+    .map(([zip]) => zip)
+    .sort();
+
   // ── ZIP source: manual override bypasses the registry; otherwise
   // read launch/active, non-wholesale-restricted ZIPs from ZIP_Registry
   // (D1 — replaces the CRAWLER_TARGET_ZIPS env). zipToRecordId lets the
@@ -368,6 +388,7 @@ export async function GET(req: Request) {
           zeroYieldStreak: r.belowThresholdStreak,
           openerHold:
             openerArvPctMax(getMarketForListing({ state: r.state, zip: r.zip }), r.state) == null,
+          saturated: zipSaturation.get(r.zip)?.saturated ?? false,
         })),
         effectiveCap,
         new Date(),
@@ -429,6 +450,10 @@ export async function GET(req: Request) {
         zip_cap_this_run: runCap.zipCapThisRun,
         reason: runCap.reason,
         paused_market_excluded: pausedMarketExcluded,
+      },
+      saturation: {
+        saturated_zips: saturatedZips,
+        saturation_excluded: saturatedZips.length,
       },
       // Keep `blocked` populated only for the REAL blocker case so
       // existing operators / dashboards reading that key see "blocked" only
@@ -506,17 +531,9 @@ export async function GET(req: Request) {
     }
   }
 
-  // ── Existing-address dedup set ──────────────────────────────────
-  let existingKeys: Set<string>;
-  try {
-    const listings = await getListings();
-    existingKeys = new Set(listings.map((l) => normalizeAddressKey(l.address)));
-  } catch (err) {
-    return NextResponse.json(
-      { error: "listings_fetch_failed", message: err instanceof Error ? err.message : String(err) },
-      { status: 502 },
-    );
-  }
+  // ── Existing-address dedup set (reuses the listings loaded up-front
+  // for the SATURATION signal — no second Airtable fetch) ─────────────
+  const existingKeys: Set<string> = new Set(listings.map((l) => normalizeAddressKey(l.address)));
 
   const summary = {
     source: "rentcast",
@@ -1399,6 +1416,10 @@ export async function GET(req: Request) {
         zip_cap_this_run: runCap.zipCapThisRun,
         paused_market_excluded: pausedMarketExcluded,
       },
+      saturation: {
+        saturated_zips: saturatedZips,
+        saturation_excluded: saturatedZips.length,
+      },
     },
     ms: Date.now() - t0,
   });
@@ -1418,6 +1439,10 @@ export async function GET(req: Request) {
       zip_cap_this_run: runCap.zipCapThisRun,
       reason: runCap.reason,
       paused_market_excluded: pausedMarketExcluded,
+    },
+    saturation: {
+      saturated_zips: saturatedZips,
+      saturation_excluded: saturatedZips.length,
     },
     zip_due: zipDue
       ? {

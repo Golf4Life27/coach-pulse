@@ -195,6 +195,18 @@ export const CHEWED_CYCLE_HOURS = 168;
 export const OPENER_HOLD_CYCLE_HOURS = 336;
 /** Consecutive zero-yield ingest runs before a ZIP counts as chewed. */
 export const CHEWED_STREAK_RUNS = 3;
+/** SATURATED cycle (lib/crawler/zip-saturation.ts, operator /goal
+ *  2026-07-26): sellers in this ZIP are blanketed by competing
+ *  wholesalers (recent do-not-text / opt-out / L3 rejection cluster) —
+ *  continuing to crawl/text burns credits and reputation for zero
+ *  conversion. Same 14-day-ish trickle as opener-HOLD: a COOLING input,
+ *  never a permanent exclusion — the system comes back later. Env-tunable
+ *  so the operator can widen/narrow the trickle without a redeploy. */
+const SATURATED_CYCLE_HOURS_RAW = Number(process.env.SATURATED_CYCLE_HOURS);
+export const SATURATED_CYCLE_HOURS =
+  Number.isFinite(SATURATED_CYCLE_HOURS_RAW) && SATURATED_CYCLE_HOURS_RAW > 0
+    ? Math.floor(SATURATED_CYCLE_HOURS_RAW)
+    : 336;
 
 export interface ZipCadenceRow {
   zip: string;
@@ -208,24 +220,33 @@ export interface ZipCadenceRow {
   /** The opener cannot price this market (openerArvPctMax == null):
    *  non-disclosure state, configured-but-unverified market, etc. */
   openerHold: boolean;
+  /** Sellers in this ZIP show a recent cluster of hard-negative outreach
+   *  signals (lib/crawler/zip-saturation.ts) — the market is blanketed by
+   *  competing wholesalers. COOLING input, not a permanent exclusion. */
+  saturated?: boolean;
 }
 
-/** Pure: the recrawl interval this ZIP has earned. */
+/** Pure: the recrawl interval this ZIP has earned. Opener-HOLD, saturation,
+ *  and the zero-yield streak are independent COOLING inputs — when more
+ *  than one applies, the ZIP earns the LONGEST (most conservative) of the
+ *  applicable cycles, never a shorter one. */
 export function recrawlCycleHours(row: ZipCadenceRow, baseCycleHours: number): number {
-  if (row.openerHold) return Math.max(baseCycleHours, OPENER_HOLD_CYCLE_HOURS);
-  if (row.lastIngestedAt == null) return baseCycleHours; // never crawled — always due anyway
+  let cycle = baseCycleHours;
+  if (row.openerHold) cycle = Math.max(cycle, OPENER_HOLD_CYCLE_HOURS);
+  if (row.saturated) cycle = Math.max(cycle, SATURATED_CYCLE_HOURS);
+  if (row.lastIngestedAt == null) return cycle; // never crawled — always due anyway (modulo above)
   const producing = (row.recordsIngested ?? 0) > 0 || (row.acceptRate ?? 0) > 0;
-  if (producing) return baseCycleHours;
+  if (producing) return cycle;
   const streak = Math.max(0, Math.floor(row.zeroYieldStreak ?? 0));
-  if (streak >= CHEWED_STREAK_RUNS) return Math.max(baseCycleHours, CHEWED_CYCLE_HOURS);
-  return Math.max(baseCycleHours, COOLING_CYCLE_HOURS);
+  if (streak >= CHEWED_STREAK_RUNS) return Math.max(cycle, CHEWED_CYCLE_HOURS);
+  return Math.max(cycle, COOLING_CYCLE_HOURS);
 }
 
 export interface ZipDueTieredResult extends ZipDueResult {
   /** Diagnostic: how many of the DUE set were never-crawled ZIPs. */
   dueNeverCrawled: number;
   /** Diagnostic: due counts by cadence bucket for the audit trail. */
-  dueByCadence: { base: number; cooling: number; chewed: number; opener_hold: number };
+  dueByCadence: { base: number; cooling: number; chewed: number; opener_hold: number; saturated: number };
 }
 
 /** Pure: tiered freshness cursor. Same contract as selectDueZips — the N
@@ -252,7 +273,7 @@ export function selectDueZipsTiered(
   const nowMs = now.getTime();
   const due: Array<{ zip: string; ms: number; bucket: keyof ZipDueTieredResult["dueByCadence"] }> = [];
   let freshTotal = 0;
-  const dueByCadence = { base: 0, cooling: 0, chewed: 0, opener_hold: 0 };
+  const dueByCadence = { base: 0, cooling: 0, chewed: 0, opener_hold: 0, saturated: 0 };
   for (const { row, ms } of byZip.values()) {
     const cycleH = recrawlCycleHours(row, baseCycleHours);
     if (ms >= nowMs - cycleH * 3_600_000) {
@@ -261,11 +282,13 @@ export function selectDueZipsTiered(
     }
     const bucket: keyof typeof dueByCadence = row.openerHold
       ? "opener_hold"
-      : cycleH >= CHEWED_CYCLE_HOURS
-        ? "chewed"
-        : cycleH >= COOLING_CYCLE_HOURS
-          ? "cooling"
-          : "base";
+      : row.saturated
+        ? "saturated"
+        : cycleH >= CHEWED_CYCLE_HOURS
+          ? "chewed"
+          : cycleH >= COOLING_CYCLE_HOURS
+            ? "cooling"
+            : "base";
     dueByCadence[bucket]++;
     due.push({ zip: row.zip, ms, bucket });
   }
