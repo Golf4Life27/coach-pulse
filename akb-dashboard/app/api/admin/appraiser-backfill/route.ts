@@ -55,6 +55,7 @@ import {
   type LegName,
   type RecordLegPlan,
 } from "@/lib/admin/p2-done-gate";
+import { nextRehabSweepSlice } from "@/lib/admin/rehab-sweep-cursor";
 
 function originFromReq(req: Request): string {
   const url = new URL(req.url);
@@ -67,6 +68,12 @@ function originFromReq(req: Request): string {
 // return a partial result than to have the lambda 504 mid-write.
 const MAX_RECORD_BUDGET_MS = 70_000;
 const SAFETY_BUFFER_MS = 10_000;
+
+// KV key for the rehab_ready rotating cursor (2026-07-27) — one cursor
+// shared by every rehab_ready caller (the */5 cron never varies its
+// params) so successive ticks advance through the pool instead of
+// re-slicing the same top-N every time.
+const REHAB_SWEEP_CURSOR_KEY = "rehab_ready";
 
 async function callEndpoint(
   origin: string,
@@ -197,7 +204,23 @@ export async function GET(req: Request) {
   const filtered = ordered.filter(
     (l) => !skipIds.has(l.id) && (after ? l.id.localeCompare(after) > 0 : true),
   );
-  const subset = limit != null ? filtered.slice(0, limit) : filtered;
+  // Rotating cursor (2026-07-27): rehab_ready's */5 cron always fires the
+  // same params (?apply=1&selection=rehab_ready&limit=3, no &after=), so a
+  // plain slice(0, limit) re-examined the SAME top-N every tick forever —
+  // records deeper in the ~1,751-record pool were never reached. A KV
+  // cursor (id-keyed, self-healing, wraps at the end) lets successive
+  // ticks advance through the whole pool. An explicit ?after= is an
+  // operator taking manual control and wins outright. KV-unreachable
+  // fails open to today's top-N slice (see rehab-sweep-cursor.ts).
+  let subset: typeof filtered;
+  let cursorWrapped = false;
+  if (rehabReady && after == null && limit != null) {
+    const rotation = await nextRehabSweepSlice(REHAB_SWEEP_CURSOR_KEY, filtered, limit);
+    subset = rotation.selected;
+    cursorWrapped = rotation.wrapped;
+  } else {
+    subset = limit != null ? filtered.slice(0, limit) : filtered;
+  }
 
   const outcomes: BackfillRecordOutcome[] = subset.map((l) => {
     const eligibility = classifyBackfillEligibility(l, {
@@ -249,6 +272,7 @@ export async function GET(req: Request) {
         selection: rehabReady ? "rehab_ready" : "brief_active",
         active_total: active.length,
         examined: subset.length,
+        cursor_wrapped: cursorWrapped,
       },
       outputSummary: {
         eligible_count: eligible.length,
@@ -271,6 +295,7 @@ export async function GET(req: Request) {
       candidate_count: active.length,
       examined: subset.length,
       next_cursor,
+      cursor_wrapped: cursorWrapped,
       summary: {
         eligible: eligible.length,
         skipped: skipped.length,
@@ -555,6 +580,8 @@ export async function GET(req: Request) {
       force,
       pace_ms: paceMs,
       eligible_total: eligible.length,
+      selection: rehabReady ? "rehab_ready" : "brief_active",
+      cursor_wrapped: cursorWrapped,
     },
     outputSummary: {
       ...apply_summary,
@@ -586,6 +613,7 @@ export async function GET(req: Request) {
     active_total_in_airtable: active.length,
     examined: subset.length,
     next_cursor,
+    cursor_wrapped: cursorWrapped,
     summary: {
       eligible: eligible.length,
       skipped: skipped.length,

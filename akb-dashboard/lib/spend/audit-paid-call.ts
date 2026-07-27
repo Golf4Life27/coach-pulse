@@ -35,10 +35,15 @@ export interface AuditPaidCallArgs {
   recordId?: string;
   /** Short error message on non-2xx / throw. Capped at 300 chars. */
   error?: string;
+  /** Override the http-range success check — set true when a non-2xx
+   *  response is an honest empty-result answer (e.g. RentCast 404 = "no
+   *  record here", see #135) rather than a real failure. The true http
+   *  code is still recorded in outputSummary either way. */
+  forceSuccess?: boolean;
 }
 
 export async function auditPaidCall(args: AuditPaidCallArgs): Promise<void> {
-  const ok = args.http >= 200 && args.http < 300;
+  const ok = args.forceSuccess ?? (args.http >= 200 && args.http < 300);
   await audit({
     agent: args.source,
     event: "paid_api_call",

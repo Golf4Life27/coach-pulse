@@ -1,6 +1,6 @@
 // @agent: outreach — Quo→Verification_Notes sync (idempotent append) tests.
 import { describe, it, expect } from "vitest";
-import { extractCitedQuoIds, appendQuoMessagesToNotes } from "./quo-sync";
+import { extractCitedQuoIds, appendQuoMessagesToNotes, newestInboundIso } from "./quo-sync";
 
 const NOW_ISO = "2026-06-07T03:55:00.000Z";
 
@@ -83,5 +83,34 @@ describe("appendQuoMessagesToNotes — idempotent verbatim append", () => {
     ], { nowIso: NOW_ISO });
     expect(r.newEvents).toHaveLength(2);
     expect(r.escalationCount).toBe(1);
+  });
+});
+
+// FIX 4a regression (2026-07-27): quo-sync appended inbound to Verification_
+// Notes and created Agent_Proposals rows but never wrote Last_Inbound_At
+// (recVsyzqofZDBMPJo, recgAhxLKBBSrqKEm, recfnfqn1dw7NeAdR). The cron now
+// stamps it with newestInboundIso(r.newEvents), forward-only.
+describe("newestInboundIso — Last_Inbound_At stamp source", () => {
+  it("surfaces the MAX inbound createdAt among newly-ingested messages", () => {
+    const r = appendQuoMessagesToNotes("", [
+      { id: ID_INBOUND_1, body: "Hi", createdAt: "2026-06-06T00:00:00.000Z", direction: "incoming" },
+      { id: ID_INBOUND_2, body: "Later reply", createdAt: "2026-06-06T05:30:00.000Z", direction: "incoming" },
+    ], { nowIso: NOW_ISO });
+    expect(newestInboundIso(r.newEvents)).toBe("2026-06-06T05:30:00.000Z");
+  });
+
+  it("returns null when nothing was ingested (no inbound → no stamp write)", () => {
+    expect(newestInboundIso([])).toBeNull();
+  });
+
+  it("NEVER-BACKWARD: candidate older than the stored Last_Inbound_At must not overwrite it", () => {
+    const r = appendQuoMessagesToNotes("", [
+      { id: ID_INBOUND_1, body: "Stale, late-arriving message", createdAt: "2026-06-01T00:00:00.000Z", direction: "incoming" },
+    ], { nowIso: NOW_ISO });
+    const newest = newestInboundIso(r.newEvents);
+    const storedLastInboundAt = "2026-06-05T12:00:00.000Z";
+    // Same guard the route applies before writing the field.
+    const shouldWrite = Boolean(newest) && (!storedLastInboundAt || new Date(newest!) > new Date(storedLastInboundAt));
+    expect(shouldWrite).toBe(false);
   });
 });

@@ -136,3 +136,19 @@ export function appendQuoMessagesToNotes(
     escalationCount: newEvents.filter((e) => e.amounts.length > 0).length,
   };
 }
+
+/** Pure: newest inbound timestamp among ingested events — the sweep stamps
+ *  Last_Inbound_At with this (only forward, never backward). Mirrors
+ *  lib/inbound/gmail-capture.ts's newestInboundIso; quo-sync itself never
+ *  wrote this field before (recVsyzqofZDBMPJo, recgAhxLKBBSrqKEm,
+ *  recfnfqn1dw7NeAdR — inbound landed in notes but Last_Inbound_At stayed
+ *  null). */
+export function newestInboundIso(events: Array<{ createdAt: string }>): string | null {
+  let best: string | null = null;
+  for (const e of events) {
+    const t = Date.parse(e.createdAt);
+    if (!Number.isFinite(t)) continue;
+    if (!best || t > Date.parse(best)) best = e.createdAt;
+  }
+  return best;
+}

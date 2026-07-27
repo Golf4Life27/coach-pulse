@@ -20,7 +20,7 @@ import { getActiveListingsForBrief, updateListingRecord } from "@/lib/airtable";
 import { getThreadVerified } from "@/lib/quo";
 import { normalizePhone } from "@/lib/phone-normalize";
 import { toE164 } from "@/lib/phone";
-import { appendQuoMessagesToNotes } from "@/lib/outreach/quo-sync";
+import { appendQuoMessagesToNotes, newestInboundIso } from "@/lib/outreach/quo-sync";
 import { detectL3DollarAmounts } from "@/lib/outreach/l3-amount-detector";
 import { isSelfEchoOrAutoreply } from "@/lib/conversation-check";
 import { weOpenedThreadForListing } from "@/lib/conversation-thread";
@@ -145,6 +145,12 @@ async function handle(req: Request) {
       const fields: Record<string, unknown> = {};
       if (r.newEvents.length > 0) {
         fields["Verification_Notes"] = r.notes;
+        // Stamp Last_Inbound_At forward only (never move it backward) — the
+        // integrity hole this route left open (see newestInboundIso doc).
+        const newest = newestInboundIso(r.newEvents);
+        if (newest && (!l.lastInboundAt || new Date(newest) > new Date(l.lastInboundAt))) {
+          fields["Last_Inbound_At"] = newest;
+        }
       }
 
       // ── ONE PIPELINE (unification, 2026-07-13): the draft trigger runs for
