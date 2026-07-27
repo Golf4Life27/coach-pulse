@@ -54,11 +54,18 @@ underwrite against.
     amendment reversible on evidence. THIN/STORED/unlabeled ARVs below list
     still HOLD + flag re-seed, and every downstream guard (micro-opener floor,
     MAO bound, never-over-list clamp) applies unchanged.
-    `[enforced]` `lib/per-market-pricer.ts` ARV-sanity gate. The only place a fraction of list survives is
-  the never-over-list *clamp* (`0.85 × list`, operator 2026-07-01 — set EQUAL to the
-  `>85%-of-list` send rail `OFFER_OVER_LIST_BLOCK_PCT` and **floored** so a capped
-  opener can never round up past it and get refused), which only ever lowers an already
-  value-anchored opener. Keep the clamp ≤ the send rail. (`lib/per-market-pricer.ts`,
+    `[enforced]` `lib/per-market-pricer.ts` ARV-sanity gate. **NO fraction of list survives as a
+  producer** (operator ruling recmy2Vwp1wMA1Vs8 2026-07-06, producer path killed
+  2026-07-27 — "no value in it"): the former never-over-list *clamp* (`0.85 × list`,
+  operator 2026-07-01) is retired. It laundered inflated ARVs into confident
+  list-anchored texts — the 43-record `capped_to_list` cohort, 533 Robison $29,750
+  (portfolio-deed-poisoned $944K ARV on a collapsed house), 1122 West Ave $110,499.
+  `NEVER_OVER_LIST_PCT` survives only as the **over-list TRIPWIRE threshold**: an
+  opener above `floor(0.85 × list)` HOLDS and surfaces for operator review (Type 2C,
+  `Opener_Basis` `hold_over_list_tripwire`) with the computed number preserved in the
+  receipt — deep discount or broken inputs, the operator decides. Keep the threshold
+  EQUAL to the `>85%-of-list` send rail `OFFER_OVER_LIST_BLOCK_PCT` so everything that
+  passes the tripwire also clears the rail. (`lib/per-market-pricer.ts`,
   `lib/rough-opener-ceiling.ts`).
 - `[enforced]` **PRE-SEND CORROBORATION GATE — allowlist, not blocklist** (operator
   2026-07-23, reliability build). Even after every pricer guard passes, a computed

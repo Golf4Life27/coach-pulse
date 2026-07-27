@@ -101,17 +101,19 @@ describe("priceOpenerWithSeed — source-swap", () => {
     expect(r.corroborationFlags).not.toContain("infeasible_ask");
   });
 
-  it("HOLDS an opener that only survived by clamping to list on a non-STRONG ARV (868 N Main / capped class)", () => {
-    // A stored (contaminated) ARV so high the opener hits the 85%-of-list cap.
-    // capped_untrusted_arv → not a trusted deep discount → HOLD.
+  it("HOLDS an over-threshold opener from a contaminated stored ARV at the pricer tripwire (868 N Main / retired capped class)", () => {
+    // A stored (contaminated) ARV so high the opener exceeds 85% of list.
+    // RETIRED path: clamp to a list fraction, then corroboration caught it
+    // (capped_untrusted_arv). NOW: the pricer itself trips first — the record
+    // surfaces as hold_over_list_tripwire with nothing produced to corroborate.
     const r = priceOpenerWithSeed({
       listPrice: 99_000, sqft: 1_200, storedArv: 400_000, storedArvConfidence: "MED",
       arvPctMax: 0.70, anchorPct: 0.90, wholesaleFee: 5_000, seed: null,
     });
     expect(r.result.opener).toBeNull();
-    expect(r.basisLabel).toBe("hold_failed_corroboration");
-    expect(r.corroborationFlags).toContain("capped_untrusted_arv");
-    expect(r.corroborationFlags).toContain("arv_implausible_vs_list");
+    expect(r.result.overListTripwire).toBe(true);
+    expect(r.basisLabel).toBe("hold_over_list_tripwire");
+    expect(r.result.flagReseed).toBe(true); // THIN stored ARV — a re-pull could fix it
   });
 
   it("still prices a subject INSIDE the comp size band off the same seed", () => {

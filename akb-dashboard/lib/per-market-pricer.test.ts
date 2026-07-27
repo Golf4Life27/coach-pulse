@@ -85,12 +85,12 @@ describe("priceOpener — no value basis HOLDS (the list-fraction fallback is RE
   });
 });
 
-describe("GUARD A — never-over-list cap (Hole A) — clamps a VALUE-anchored opener", () => {
-  it("clamps an over-list opener down to the list price and flags re-seed", () => {
+describe("GUARD A — over-list TRIPWIRE (Hole A, Option B) — HOLDS, never clamps (ruling recmy2Vwp1wMA1Vs8)", () => {
+  it("an over-threshold opener HOLDS with the tripwire — no list fraction is ever produced", () => {
     // 14299 Kilbourne: garbage-high ARV → opener would be ~$87,882 on a
-    // $47,900 list. Must cap to list, never over asking. (The cap only bites
-    // when ARV ≫ list — a deep-discount listing — so it is safe, NOT the
-    // retired list-fraction fallback.)
+    // $47,900 list. RETIRED behavior: clamp to $40,715 = floor(0.85 × list)
+    // and send. Now: HOLD and surface — deep discount or broken inputs, the
+    // operator decides either way.
     const r = priceOpener({
       listPrice: 47_900,
       realArvMedian: 230_120,
@@ -99,12 +99,15 @@ describe("GUARD A — never-over-list cap (Hole A) — clamps a VALUE-anchored o
       arvPctMax: DETROIT_BUYBOX,
       anchorPct: 0.90,
     });
-    expect(r.cappedToList).toBe(true);
-    expect(r.opener).toBe(40_715); // 0.85 × 47,900 — auto-offer 85% (operator 2026-07-01)
-    expect(r.flagReseed).toBe(true);
+    expect(r.overListTripwire).toBe(true);
+    expect(r.cappedToList).toBe(false);
+    expect(r.opener).toBeNull(); // was 40,715 — the clamp never produces again
+    expect(r.basis).toBe("hold_no_value_basis");
+    expect(r.flagReseed).toBe(true); // unlabeled ARV → re-pull could fix it
+    expect(r.detail).toContain("OVER-LIST TRIPWIRE");
   });
 
-  it("a STRONG seed that gets capped is NOT flagged for re-seed (guard fired, seed trusted)", () => {
+  it("a STRONG seed above the threshold ALSO holds (deep discount is the operator's call), no re-seed flag", () => {
     const r = priceOpener({
       listPrice: 47_900,
       realArvMedian: 230_120,
@@ -114,12 +117,12 @@ describe("GUARD A — never-over-list cap (Hole A) — clamps a VALUE-anchored o
       anchorPct: 0.90,
       arvConfidence: "STRONG",
     });
-    expect(r.cappedToList).toBe(true);
-    expect(r.flagReseed).toBe(false); // STRONG → trusted, not a re-seed candidate
-    expect(r.opener).toBe(40_715);
+    expect(r.overListTripwire).toBe(true);
+    expect(r.opener).toBeNull();
+    expect(r.flagReseed).toBe(false); // STRONG → trusted seed, not a re-seed candidate
   });
 
-  it("a THIN/unlabeled ARV that gets capped IS flagged for re-seed", () => {
+  it("a THIN ARV above the threshold holds AND flags re-seed", () => {
     const r = priceOpener({
       listPrice: 47_900,
       realArvMedian: 230_120,
@@ -129,12 +132,35 @@ describe("GUARD A — never-over-list cap (Hole A) — clamps a VALUE-anchored o
       anchorPct: 0.90,
       arvConfidence: "THIN",
     });
-    expect(r.cappedToList).toBe(true);
+    expect(r.overListTripwire).toBe(true);
+    expect(r.opener).toBeNull();
     expect(r.flagReseed).toBe(true); // THIN → re-pull could fix it
   });
 
-  it("caps at 85% of list (default) — auto-offer 85%, aligned with the send rail, never over", () => {
+  it("533 Robison Dr regression: floor(0.85 × $35,000) = $29,750 can never be produced again", () => {
+    // The texted 2026-07-23 number on recRZE730FHuiU8iW: portfolio-deed-
+    // poisoned ARV ($944,078 from twelve $950K bulk-sale deeds) exploded the
+    // derived opener; the retired clamp laundered it into a confident
+    // $29,750 = floor(0.85 × list) text on a structurally collapsed house.
+    const r = priceOpener({
+      listPrice: 35_000,
+      realArvMedian: 944_078,
+      estRehabMid: 28_846,
+      wholesaleFee: 5_000,
+      arvPctMax: DETROIT_BUYBOX,
+      anchorPct: 0.90,
+      arvConfidence: "STRONG",
+    });
+    expect(r.opener).toBeNull(); // was 29,750
+    expect(r.overListTripwire).toBe(true);
+    expect(r.basis).toBe("hold_no_value_basis");
+    expect(r.detail).toContain("29,750"); // the threshold figure surfaces in the receipt
+  });
+
+  it("threshold stays 0.85, FLOORED, and equal to the >85% send rail — but only as a pass/hold test", () => {
     expect(NEVER_OVER_LIST_PCT).toBe(0.85);
+    // list 79,000 → threshold floor(0.85 × 79,000) = 67,150. An opener above
+    // it holds; nothing is ever emitted AT the threshold value.
     const r = priceOpener({
       listPrice: 79_000,
       realArvMedian: 212_860,
@@ -143,27 +169,24 @@ describe("GUARD A — never-over-list cap (Hole A) — clamps a VALUE-anchored o
       arvPctMax: DETROIT_BUYBOX,
       anchorPct: 0.90,
     });
-    expect(r.cappedToList).toBe(true);
-    expect(r.opener).toBe(67_150); // 0.85 × 79,000, not 79,000
-    expect(r.opener).toBeLessThan(79_000);
+    expect(r.overListTripwire).toBe(true);
+    expect(r.opener).toBeNull(); // was 67,150 = 0.85 × 79,000
   });
 
-  it("FLOOR not round: a capped opener never exceeds 85% of list, so it clears the equal >85% send rail", () => {
-    // list 47,901 → 0.85 × 47,901 = 40,715.85. round → 40,716 (ratio 0.850018,
-    // trips the >85% economics rail → strands the record). floor → 40,715
-    // (ratio 0.849996 ≤ 0.85 → sends). This is exactly the 2026-07-01 poison
-    // the operator's "auto-offer 85%" decision closes.
+  it("an opener at or below the threshold passes through untouched (no clamp, no tripwire)", () => {
+    // 16241 E State Fair: opener $50,750 vs threshold floor(0.85 × 88,500) =
+    // $75,225 — comfortably under, sends value-anchored and unmodified.
     const r = priceOpener({
-      listPrice: 47_901,
-      realArvMedian: 230_120,
-      estRehabMid: 46_024,
+      listPrice: 88_500,
+      realArvMedian: 137_456,
+      estRehabMid: 27_491,
       wholesaleFee: 5_000,
       arvPctMax: DETROIT_BUYBOX,
       anchorPct: 0.90,
     });
-    expect(r.cappedToList).toBe(true);
-    expect(r.opener).toBe(40_715); // floor(47,901 × 0.85), NOT round → 40,716
-    expect(r.opener! / 47_901).toBeLessThanOrEqual(0.85); // clears the send rail
+    expect(r.overListTripwire).toBe(false);
+    expect(r.cappedToList).toBe(false);
+    expect(r.opener).toBe(50_750);
   });
 });
 
@@ -326,8 +349,10 @@ describe("priceOpener — MAO bound (the first offer never sits above your MAO)"
     expect(r.detail).toMatch(/BOUNDED to MAO/);
   });
 
-  it("the 85%-of-list cap can only LOWER a MAO-bounded opener, never raise it", () => {
-    // Mayfield-shaped: tiny list vs big ARV — the cap bites BELOW the bound.
+  it("an over-threshold opener — even MAO-bounded — HOLDS via the tripwire, never lowered to a list fraction", () => {
+    // Mayfield-shaped: tiny list vs big ARV. The RETIRED cap used to bite
+    // BELOW the MAO bound and send floor(0.85 × list); now the tripwire holds
+    // and the operator sees the deal instead of a list-anchored text.
     const r = priceOpener({
       listPrice: 29_900,
       realArvMedian: 102_846,
@@ -335,9 +360,9 @@ describe("priceOpener — MAO bound (the first offer never sits above your MAO)"
       anchorPct: 0.90,
       arvConfidence: "STRONG",
     });
-    expect(r.opener).not.toBeNull();
-    expect(r.opener!).toBeLessThanOrEqual(r.maoBound!);
-    expect(r.opener!).toBeLessThanOrEqual(Math.floor(29_900 * 0.85));
+    expect(r.opener).toBeNull();
+    expect(r.overListTripwire).toBe(true);
+    expect(r.basis).toBe("hold_no_value_basis");
   });
 
   it("with the REAL gut-job rehab, Mayfield never opens (sub-floor → HOLD)", () => {

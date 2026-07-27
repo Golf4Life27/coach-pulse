@@ -167,6 +167,10 @@ export function corroborateOpener(input: CorroborationInput): CorroborationResul
   //    exceeded list. Fine when the ARV is STRONG-corroborated (a real deep
   //    discount); a HOLD when it is not (THIN/STORED — likely inflated).
   //    (110 Leathers, 868 N Main both capped on extrapolated ARVs.)
+  //    NOTE (2026-07-27): the pricer's clamp producer is RETIRED — an over-
+  //    threshold opener now HOLDS upstream (overListTripwire), so cappedToList
+  //    never arrives true from the live path. This signal stays as belt-and-
+  //    suspenders in case a capped number ever reappears from any caller.
   if (input.cappedToList && input.arvConfidence !== "STRONG") {
     flags.push("capped_untrusted_arv");
     reasons.push(
