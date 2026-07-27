@@ -2,7 +2,9 @@ import { describe, it, expect } from "vitest";
 import {
   computeArvIntelligence,
   dedupeDoubleRecordedDeeds,
+  dedupeDuplicateTransactionSignature,
   normalizeStreetLine,
+  DEED_DUP_WINDOW_DAYS,
 } from "./arv-intelligence";
 import type { RentCastSaleComp } from "./rentcast";
 
@@ -30,12 +32,16 @@ describe("computeArvIntelligence — per-call filter override (seed widen)", () 
   // Three near comps + one 1.4mi-away comp (beyond the default 1.0mi clip —
   // widened from 0.5mi per the 2026-07-20 operator distance ruling).
   // Distinct addresses: identical address+price+date rows are collapsed by
-  // the double-recorded-deed dedupe, as they would be in production.
+  // the double-recorded-deed dedupe, as they would be in production. Prices
+  // vary by $1 each so the cross-address duplicate-transaction-signature
+  // dedupe (identical price+sqft+date, different addresses — the Parkdale
+  // fix) doesn't ALSO collapse these; they model 4 independent sales, not
+  // a bulk deed.
   const raw = [
-    comp({ formattedAddress: "1 Near St" }),
-    comp({ formattedAddress: "2 Near St" }),
-    comp({ formattedAddress: "3 Near St" }),
-    comp({ distance: 1.4, formattedAddress: "far" }),
+    comp({ formattedAddress: "1 Near St", price: 150_000 }),
+    comp({ formattedAddress: "2 Near St", price: 150_001 }),
+    comp({ formattedAddress: "3 Near St", price: 150_002 }),
+    comp({ distance: 1.4, formattedAddress: "far", price: 150_003 }),
   ];
 
   it("default filters clip the 1.4mi comp (1.0mi max)", () => {
@@ -215,6 +221,9 @@ describe("dedupeDoubleRecordedDeeds — one sale is one comp", () => {
     // fixture never ages out of the engine's default recency window —
     // see the 2026-07-26 postmortem where fixed 2025-07-22/25 dates aged
     // past max_age_days and silently flipped comp_count_used from 3 to 2.
+    // FISCHER/ELSEWHERE prices differ by $1 so the cross-address duplicate-
+    // transaction dedupe (Parkdale fix) doesn't treat these two unrelated
+    // addresses as a bulk-deed pair — they're independent sales.
     const dup = (daysAgo: number) =>
       comp({
         formattedAddress: "2431 PARKER, Detroit, MI, 48214",
@@ -226,12 +235,92 @@ describe("dedupeDoubleRecordedDeeds — one sale is one comp", () => {
       [
         dup(13),
         dup(10),
-        comp({ formattedAddress: "3466 FISCHER, Detroit, MI, 48214" }),
-        comp({ formattedAddress: "1 ELSEWHERE ST" }),
+        comp({ formattedAddress: "3466 FISCHER, Detroit, MI, 48214", price: 150_000 }),
+        comp({ formattedAddress: "1 ELSEWHERE ST", price: 150_001 }),
       ],
       subject,
     );
     expect(r.comp_count_used).toBe(3);
     expect(r.methodology_notes.join(" ")).toContain("double-recorded");
+  });
+});
+
+// ── THE 2106 PARKDALE CONTAMINATION (2026-07-27) ──────────────────────────
+// recjmZd8yue8sEfhm's ARV_Comp_Details_JSON: 3 of 5 comps in the chosen
+// bimodal-upper cluster were 1515 Oakwood Ave, 1526 Norwood Ave, and 1509
+// Oakwood Ave — three DIFFERENT addresses sharing an IDENTICAL price
+// ($840,000), sqft (1,296), and sale date, i.e. one bulk/portfolio deed
+// recorded across three parcels. dedupeDoubleRecordedDeeds only catches
+// same-address duplicates, so this fed the band three times and inflated
+// ARV toward $740k against a true ZIP signal near $102k.
+describe("dedupeDuplicateTransactionSignature — cross-address duplicate deed", () => {
+  const bulkDeed = (address: string): RentCastSaleComp =>
+    comp({ formattedAddress: address, price: 840_000, squareFootage: 1_296, saleDate: RECENT });
+
+  it("collapses identical price+sqft+date rows across different addresses to one", () => {
+    const { comps, droppedNotes } = dedupeDuplicateTransactionSignature([
+      bulkDeed("1515 Oakwood Ave"),
+      bulkDeed("1526 Norwood Ave"),
+      bulkDeed("1509 Oakwood Ave"),
+      comp({ formattedAddress: "40 Regular St", price: 91_000, squareFootage: 1_300 }),
+    ]);
+    expect(comps).toHaveLength(2);
+    expect(droppedNotes).toHaveLength(2);
+    expect(droppedNotes[0]).toContain("duplicate transaction signature");
+  });
+
+  it("does NOT collapse when sqft differs — price-only coincidence stays plausible", () => {
+    const { comps } = dedupeDuplicateTransactionSignature([
+      bulkDeed("1515 Oakwood Ave"),
+      comp({ formattedAddress: "1526 Norwood Ave", price: 840_000, squareFootage: 1_450, saleDate: RECENT }),
+    ]);
+    expect(comps).toHaveLength(2);
+  });
+
+  it("does NOT collapse when sale dates fall outside the tolerance window", () => {
+    // RECENT is 10 days ago; push far enough past it that the gap from
+    // RECENT (not just from "now") exceeds the tolerance window.
+    const farDate = new Date(Date.now() - (10 + DEED_DUP_WINDOW_DAYS + 5) * 86_400_000).toISOString();
+    const { comps } = dedupeDuplicateTransactionSignature([
+      bulkDeed("1515 Oakwood Ave"),
+      comp({ formattedAddress: "1526 Norwood Ave", price: 840_000, squareFootage: 1_296, saleDate: farDate }),
+    ]);
+    expect(comps).toHaveLength(2);
+  });
+
+  it("rows without price/sqft/date can't be proven duplicates — kept", () => {
+    const { comps } = dedupeDuplicateTransactionSignature([
+      comp({ formattedAddress: "1515 Oakwood Ave", squareFootage: null }),
+      comp({ formattedAddress: "1526 Norwood Ave", squareFootage: null }),
+    ]);
+    expect(comps).toHaveLength(2);
+  });
+});
+
+describe("computeArvIntelligence — Parkdale-shaped fixture: 3 identical-triple + 2 normal comps", () => {
+  it("dedupes the bulk-deed triple to one comp before band math, keeping the median sane", () => {
+    const subject = { zip: "94564", beds: 3, baths: 2, sqft: 1_296, condition_target: "as_is" };
+    const bulkDeed = (address: string): RentCastSaleComp =>
+      comp({ formattedAddress: address, price: 840_000, squareFootage: 1_296, saleDate: RECENT });
+    const raw = [
+      bulkDeed("1515 Oakwood Ave"),
+      bulkDeed("1526 Norwood Ave"),
+      bulkDeed("1509 Oakwood Ave"),
+      comp({ formattedAddress: "40 Regular St", price: 91_000, squareFootage: 1_300, saleDate: RECENT }),
+      comp({ formattedAddress: "42 Regular St", price: 93_600, squareFootage: 1_300, saleDate: RECENT }),
+    ];
+    const r = computeArvIntelligence(raw, subject);
+
+    // 5 raw rows collapse to 3 effective comps (1 representative + 2 normal),
+    // not 5 — the duplicate-transaction signature no longer counts 3x.
+    expect(r.comp_count_used).toBe(3);
+    expect(r.methodology_notes.join(" ")).toContain("cross-address duplicate-transaction");
+
+    // Un-fixed, the tripled $648/sqft row would drag avg_per_sqft to ~$417
+    // (3×648.15 + 70 + 72)/5. Fixed, it's ~$263 ((648.15+70+72)/3) — still
+    // pulled up by the one surviving bulk-deed comp (min_comps_for the
+    // distressed-proxy outlier trim isn't met at only 3 comps), but no
+    // longer triple-weighted.
+    expect(r.avg_per_sqft).toBeLessThan(350);
   });
 });

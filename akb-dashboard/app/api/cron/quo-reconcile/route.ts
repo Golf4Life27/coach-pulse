@@ -41,6 +41,8 @@ import {
 } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { selectThreadListing } from "@/lib/conversation-thread";
+import { nextRehabSweepSlice } from "@/lib/admin/rehab-sweep-cursor";
+import { sortPhonesByFreshness } from "@/lib/quo-phone-rotation";
 import type { Listing } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -49,6 +51,7 @@ export const maxDuration = 60;
 const SCAN_WINDOW_MINUTES = Number(process.env.QUO_RECONCILE_LOOKBACK_MIN ?? "60");
 const MAX_PHONES_PER_RUN = Number(process.env.QUO_RECONCILE_MAX_PHONES ?? "40");
 const LAMBDA_BUDGET_MS = Number(process.env.QUO_RECONCILE_BUDGET_MS ?? "45000");
+const PHONE_CURSOR_KEY = "quo_reconcile_phones";
 
 // Field IDs (mirrors lib/airtable.ts mapping):
 const F_LAST_INBOUND = "fld3IhR1DXzcVuq6F";
@@ -112,7 +115,19 @@ export async function GET(req: Request) {
     arr.push(l);
     phoneToListings.set(e164, arr);
   }
-  const phones = [...phoneToListings.keys()].slice(0, MAX_PHONES_PER_RUN);
+
+  // BACKSTOP STARVATION FIX (2026-07-27): the pool runs 76-79 phones against
+  // a 40-phone cap — an unsorted, un-rotated Map-insertion-order prefix left
+  // ~half the actionable pool permanently unreachable (50 audited runs:
+  // phones_scanned:40, updates:0). Freshest-activity-first sort (mirrors
+  // scan-comms 2026-07-13) puts live conversations first; the KV-backed
+  // rotating cursor (lib/admin/rehab-sweep-cursor.ts, self-healing, wraps at
+  // the end) guarantees every phone is visited within a bounded number of
+  // runs instead of the same head forever. KV-unreachable fails open to the
+  // sorted prefix — still strictly better than today's unsorted one.
+  const phoneCandidates = sortPhonesByFreshness(phoneToListings);
+  const rotation = await nextRehabSweepSlice(PHONE_CURSOR_KEY, phoneCandidates, MAX_PHONES_PER_RUN);
+  const phones = rotation.selected.map((c) => c.id);
 
   // ── Per-phone Quo fetch + per-listing reconciliation ─────────────────
   const updates: PerListingUpdate[] = [];
@@ -193,6 +208,7 @@ export async function GET(req: Request) {
       auth_kind: authKind,
       phones_in_pool: phoneToListings.size,
       phones_scanned: phonesScanned,
+      cursor_wrapped: rotation.wrapped,
       lookback_min: SCAN_WINDOW_MINUTES,
     },
     outputSummary: {
@@ -208,6 +224,7 @@ export async function GET(req: Request) {
     auth_kind: authKind,
     phones_in_pool: phoneToListings.size,
     phones_scanned: phonesScanned,
+    cursor_wrapped: rotation.wrapped,
     listings_considered: listingsConsidered,
     updates,
     update_count: updates.length,

@@ -239,6 +239,46 @@ export function dedupeDoubleRecordedDeeds(
   return { comps: kept, droppedNotes };
 }
 
+/** Bulk/portfolio deeds land in RentCast under DIFFERENT addresses but carry
+ *  an IDENTICAL price + sqft + sale date — one conveyance recorded across
+ *  multiple parcels, not multiple sales (2106 Parkdale: 3 of 5 comps in the
+ *  chosen bimodal-upper cluster were 1515 Oakwood Ave, 1526 Norwood Ave, and
+ *  1509 Oakwood Ave, all $840,000 / 1,296 sqft / same sale date, inflating
+ *  ARV toward $740k against a true ~$102k). Unlike dedupeDoubleRecordedDeeds
+ *  (same street line), this keys on price+sqft with no address requirement —
+ *  matching that triple exactly (date within the same tolerance window) is
+ *  itself the duplicate-transaction signature; a coincidence would have to
+ *  share sqft to the foot as well as price, which legitimate independent
+ *  sales don't. Runs AFTER the same-address pass. */
+export function dedupeDuplicateTransactionSignature(
+  raw: RentCastSaleComp[],
+): { comps: RentCastSaleComp[]; droppedNotes: string[] } {
+  const sorted = [...raw].sort((a, b) => (b.saleDate ?? "").localeCompare(a.saleDate ?? ""));
+  const kept: RentCastSaleComp[] = [];
+  const keptByKey = new Map<string, RentCastSaleComp>();
+  const droppedNotes: string[] = [];
+  for (const c of sorted) {
+    if (c.price == null || c.squareFootage == null || !c.saleDate) {
+      kept.push(c);
+      continue;
+    }
+    const key = `${c.price}|${c.squareFootage}`;
+    const prior = keptByKey.get(key);
+    if (prior?.saleDate) {
+      const gapDays = Math.abs(Date.parse(prior.saleDate) - Date.parse(c.saleDate)) / 86_400_000;
+      if (Number.isFinite(gapDays) && gapDays <= DEED_DUP_WINDOW_DAYS) {
+        droppedNotes.push(
+          `${c.formattedAddress ?? "unknown address"} @ $${c.price.toLocaleString()}/${c.squareFootage}sqft (${c.saleDate.slice(0, 10)} duplicate transaction signature of ${prior.formattedAddress ?? "unknown address"} @ ${prior.saleDate.slice(0, 10)})`,
+        );
+        continue;
+      }
+    }
+    keptByKey.set(key, c);
+    kept.push(c);
+  }
+  return { comps: kept, droppedNotes };
+}
+
 function applyBasicFilters(
   raw: RentCastSaleComp[],
   subject: ArvSubject,
@@ -472,7 +512,16 @@ export function computeArvIntelligence(
     );
   }
 
-  const stage1 = applyBasicFilters(dedup.comps, subject, cf);
+  // Then collapse cross-address duplicate-transaction signatures (bulk/
+  // portfolio deeds recorded under multiple parcels — the Parkdale case).
+  const xdedup = dedupeDuplicateTransactionSignature(dedup.comps);
+  if (xdedup.droppedNotes.length > 0) {
+    notes.push(
+      `Collapsed ${xdedup.droppedNotes.length} cross-address duplicate-transaction row(s) (identical price+sqft+date ≤${DEED_DUP_WINDOW_DAYS}d apart): ${xdedup.droppedNotes.join("; ")}.`,
+    );
+  }
+
+  const stage1 = applyBasicFilters(xdedup.comps, subject, cf);
 
   // Bimodal detection runs BEFORE the distressed_proxy ceiling — if the
   // upper cluster is what we want (renovated retail) we don't want the

@@ -1,6 +1,6 @@
 // @agent: appraiser — rehab read-history median tests.
 import { describe, it, expect } from "vitest";
-import { foldRehabRead, isValidRehabRead, median, type RehabRead } from "./rehab-median";
+import { foldRehabRead, isValidRehabRead, median, shouldPersistRehabRead, type RehabRead } from "./rehab-median";
 
 const read = (conf: number, mid: number, ts = `2026-06-05T0${conf % 9}:00:00.000Z`): RehabRead => ({
   ts,
@@ -98,5 +98,24 @@ describe("foldRehabRead — the persist-median fix", () => {
     const r = foldRehabRead(corrupt as never, read(62, 39000, "new"));
     expect(r.validCount).toBe(2); // only the one valid prior + new
     expect(r.medianConf).toBe(62);
+  });
+});
+
+describe("shouldPersistRehabRead — reported write flag must match the real gate", () => {
+  it("a conf=0 misfire on a bare record (validCount=0) → HOLD, no persist", () => {
+    const r = foldRehabRead([], read(0, 86750, "t1"));
+    expect(r.validCount).toBe(0);
+    expect(r.medianRehabMid).toBeNull(); // nothing trustworthy to report either
+    expect(shouldPersistRehabRead(false, r)).toBe(false);
+  });
+
+  it("a valid read persists (skip_write not set)", () => {
+    const r = foldRehabRead([], read(62, 38170, "t1"));
+    expect(shouldPersistRehabRead(false, r)).toBe(true);
+  });
+
+  it("skip_write=1 always withholds, even with a valid median", () => {
+    const r = foldRehabRead([], read(62, 38170, "t1"));
+    expect(shouldPersistRehabRead(true, r)).toBe(false);
   });
 });

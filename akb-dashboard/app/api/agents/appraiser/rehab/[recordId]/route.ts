@@ -37,7 +37,7 @@ import {
   computeRehabRange,
 } from "@/lib/appraiser/rehab-calibration";
 import { audit } from "@/lib/audit-log";
-import { foldRehabRead, type RehabRead } from "@/lib/rehab-median";
+import { foldRehabRead, shouldPersistRehabRead, type RehabRead } from "@/lib/rehab-median";
 import {
   authenticate,
   hasDashboardSession,
@@ -320,8 +320,14 @@ export async function GET(
   // Only persist when we have ≥1 valid read in the window. A first fire
   // that is itself a misfire (validCount 0) writes nothing — there is no
   // trustworthy number to persist (correct HOLD).
+  //
+  // shouldPersistRehabRead is THE gate — reused below for the reported
+  // airtable_write flag so the audit/API response can never claim a write
+  // that didn't happen (2026-07-27 fix: they used to check range.rehab_mid,
+  // the raw single-read value, which is non-null even on a conf=0 misfire).
   let airtableError: string | null = null;
-  if (!skipWrite && folded.validCount > 0 && folded.medianRehabMid != null) {
+  const airtableWrite = shouldPersistRehabRead(skipWrite, folded);
+  if (airtableWrite) {
     const fieldsToWrite: Record<string, unknown> = {
       Est_Rehab: folded.medianRehabMid,
       Rehab_Est_Low: folded.medianRehabLow,
@@ -371,13 +377,17 @@ export async function GET(
       market_tier: range.market_tier,
       market_multiplier: range.market_multiplier,
       calibrated_rate_per_sqft: range.calibrated_rate_per_sqft,
-      rehab_mid: range.rehab_mid,
-      rehab_low: range.rehab_low,
-      rehab_high: range.rehab_high,
+      // Persisted median, not the raw this-read value — a conf=0 misfire
+      // still produces a non-null range.rehab_mid (the calibration math
+      // doesn't look at confidence), which previously fabricated a rehab
+      // number on records where nothing was actually written.
+      rehab_mid: folded.medianRehabMid,
+      rehab_low: folded.medianRehabLow,
+      rehab_high: folded.medianRehabHigh,
       vision_condition: vision.condition_overall,
       vision_confidence: vision.confidence,
       red_flag_count: vision.red_flags.length,
-      airtable_write: !skipWrite && range.rehab_mid != null,
+      airtable_write: airtableWrite,
       airtable_error: airtableError,
       duration_ms: Date.now() - t0,
     },
@@ -414,7 +424,7 @@ export async function GET(
     red_flags: vision.red_flags,
     audit: {
       estimated_at: nowIso,
-      airtable_write: !skipWrite && range.rehab_mid != null,
+      airtable_write: airtableWrite,
       airtable_error: airtableError,
       duration_ms: Date.now() - t0,
     },

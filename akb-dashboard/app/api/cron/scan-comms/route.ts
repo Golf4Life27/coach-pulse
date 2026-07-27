@@ -14,7 +14,7 @@ import { triageSellerReply } from "@/lib/reply-triage";
 import { sendReplyAlert, type ReplyAlertInput } from "@/lib/reply-alert";
 import { sendAutoClose } from "@/lib/auto-close";
 import { sendAutoAck } from "@/lib/auto-ack";
-import { detectOptOut, applyOptOut } from "@/lib/outreach/opt-out";
+import { detectOptOut, applyOptOut, inboundStampAdvances } from "@/lib/outreach/opt-out";
 import { selectThreadListing } from "@/lib/conversation-thread";
 import { resolveAlertNumbers } from "@/lib/outreach-economics";
 
@@ -238,6 +238,20 @@ export async function GET(req: Request) {
             if (res.failed.length > 0) errors.push(`opt_out_write_failed: ${res.failed.map((f) => f.id).join(",")}`);
           }
           optOutApplied.push({ phone, matched: optOut.matched ?? "stop", records: matchedListings.length, flipped });
+          // INTEGRITY FIX (2026-07-27): this `continue` used to exit before the
+          // Last_Inbound_At stamp further down in this loop, so a genuine STOP
+          // reply never updated the timeline (recxr0LJiqwYQe8lE,
+          // recfnfqn1dw7NeAdR). Stamp it here — the ONE thread listing (an
+          // inbound stamp is property-specific, same as the non-opt-out path;
+          // see lib/conversation-thread.ts), forward-only, never backward.
+          const stopThreadListing = selectThreadListing(matchedListings);
+          if (stopThreadListing && inboundStampAdvances(inbound.createdAt, stopThreadListing.lastInboundAt)) {
+            try {
+              await updateListingRecord(stopThreadListing.id, { Last_Inbound_At: inbound.createdAt });
+            } catch (err) {
+              errors.push(`${stopThreadListing.address}: opt_out_inbound_stamp_failed: ${String(err)}`);
+            }
+          }
           continue; // SUPPRESS the close + proposals for an opt-out; move to next phone.
         }
 

@@ -79,6 +79,7 @@ function loadSeeds(): Map<string, ZipArvSeed> {
 type Mechanism =
   | "buybox_won"
   | "buybox_won_capped"
+  | "buybox_tripwired"
   | "arv_distrusted"
   | "buybox_floored"
   | "seed_dont_price"
@@ -157,6 +158,7 @@ function priceRow(rec: Rec, seeds: Map<string, ZipArvSeed>): Row {
 
   let mechanism: Mechanism;
   if (r.basis === "arv_buybox") mechanism = r.cappedToList ? "buybox_won_capped" : "buybox_won";
+  else if (r.overListTripwire) mechanism = "buybox_tripwired"; // over-list HOLD (clamp retired, ruling recmy2Vwp1wMA1Vs8)
   else if (r.arvDistrusted) mechanism = "arv_distrusted";
   else if (r.flooredToFallback) mechanism = "buybox_floored";
   else if (seed?.dontPrice) mechanism = "seed_dont_price";
@@ -210,7 +212,7 @@ describe("Pricing Evidence Run — ARV path vs 65% rail (CONVEYOR M1.5)", () => 
     lines.push(`Effective ARV source: seed=${arvViaSeed} · stored=${arvViaStored} · suppressed/none=${arvSuppressed}`);
     lines.push("");
     lines.push("Route the FINAL opener took:");
-    for (const k of ["buybox_won", "buybox_won_capped", "arv_distrusted", "buybox_floored", "seed_dont_price", "no_buybox_market", "fallback_other"]) {
+    for (const k of ["buybox_won", "buybox_won_capped", "buybox_tripwired", "arv_distrusted", "buybox_floored", "seed_dont_price", "no_buybox_market", "fallback_other"]) {
       lines.push(`  ${k.padEnd(20)} ${byMech[k] ?? 0}`);
     }
     lines.push("");
@@ -240,6 +242,6 @@ describe("Pricing Evidence Run — ARV path vs 65% rail (CONVEYOR M1.5)", () => 
     for (const r of wonRows) expect(typeof r.final).toBe("number"); // value-anchored → a number
     for (const r of heldRows) expect(r.mechanism === "buybox_won" || r.mechanism === "buybox_won_capped").toBe(false);
     expect(wonRows.length + heldRows.length).toBe(M); // every record either WON or HELD — nothing list-anchored
-    expect(wonRows.length + (byMech["arv_distrusted"] ?? 0) + (byMech["buybox_floored"] ?? 0) + (byMech["seed_dont_price"] ?? 0) + (byMech["no_buybox_market"] ?? 0) + (byMech["fallback_other"] ?? 0)).toBe(M);
+    expect(wonRows.length + (byMech["buybox_tripwired"] ?? 0) + (byMech["arv_distrusted"] ?? 0) + (byMech["buybox_floored"] ?? 0) + (byMech["seed_dont_price"] ?? 0) + (byMech["no_buybox_market"] ?? 0) + (byMech["fallback_other"] ?? 0)).toBe(M);
   });
 });

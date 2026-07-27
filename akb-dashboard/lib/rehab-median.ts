@@ -68,6 +68,21 @@ export interface RehabMedianResult {
 }
 
 /**
+ * Pure: the SAME gate the route uses to decide whether to persist a read
+ * — shared so the reported airtable_write flag (audit + API response) can
+ * never drift from the actual write. 2026-07-27 fix: the reported flag
+ * used to be derived from the raw single-read rehab_mid (non-null even on
+ * a conf=0 misfire), so a correctly-HELD write still reported
+ * airtable_write:true.
+ */
+export function shouldPersistRehabRead(
+  skipWrite: boolean,
+  folded: Pick<RehabMedianResult, "validCount" | "medianRehabMid">,
+): boolean {
+  return !skipWrite && folded.validCount > 0 && folded.medianRehabMid != null;
+}
+
+/**
  * Pure: fold a fresh vision read into the rolling valid-read history and
  * compute the median band + gate.
  *

@@ -142,10 +142,12 @@ export function priceOpenerWithSeed(input: OpenerWithSeedInput): OpenerWithSeedR
     };
   }
 
-  // Compact label for the Opener_Basis receipt.
+  // Compact label for the Opener_Basis receipt. (capped_to_list is retired as
+  // a producible label — ruling recmy2Vwp1wMA1Vs8; it survives only on legacy
+  // records. An over-threshold opener now surfaces as hold_over_list_tripwire.)
   const basisLabel =
     !corr.corroborated && pos(result.opener) ? "hold_failed_corroboration"
-    : finalResult.cappedToList ? "capped_to_list"
+    : finalResult.overListTripwire ? "hold_over_list_tripwire"
     : finalResult.basis === "hold_no_value_basis" ? "hold"
     : arvSource === "seed_renovated"
       ? (finalResult.overArvList ? "arv_buybox_seed_over_arv_list" : "arv_buybox_seed")

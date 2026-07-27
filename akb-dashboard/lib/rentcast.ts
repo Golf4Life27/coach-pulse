@@ -64,6 +64,13 @@ async function paidFetch(
   init: RequestInit,
   recordId?: string,
   breakerInputs?: PaidFetchBreakerInputs,
+  // HTTP statuses that are an honest "no record" answer for THIS call
+  // (RentCast 404 on /properties, /properties/subject, /listings/sale —
+  // see #135) rather than an infrastructure failure. When the response
+  // matches, the audit records confirmed_success and the breaker does not
+  // count it — a stable "not indexed" answer must not trip the loop
+  // breaker and block every other address.
+  honestEmptyStatuses?: number[],
 ): Promise<Response> {
   const shape = breakerInputs ?? { recordId };
   const pre = await checkLoopBreaker(endpoint, shape);
@@ -85,15 +92,17 @@ async function paidFetch(
   const t0 = Date.now();
   try {
     const res = await fetch(url, init);
+    const honestEmpty = !res.ok && (honestEmptyStatuses?.includes(res.status) ?? false);
     await auditPaidCall({
       source: "rentcast",
       endpoint,
       http: res.status,
       ms: Date.now() - t0,
       recordId,
-      error: res.ok ? undefined : `HTTP ${res.status}`,
+      error: res.ok || honestEmpty ? undefined : `HTTP ${res.status}`,
+      forceSuccess: honestEmpty ? true : undefined,
     });
-    await recordCallOutcome(endpoint, shape, res.status);
+    await recordCallOutcome(endpoint, shape, honestEmpty ? 200 : res.status);
     return res;
   } catch (err) {
     await auditPaidCall({
@@ -552,6 +561,7 @@ export async function getRentCastAssessedValue(
       { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" },
       recordId,
       { ...input, recordId: recordId ?? null },
+      [404],
     );
     if (!res.ok) return null;
     const body = (await res.json()) as unknown;
@@ -616,6 +626,16 @@ export async function getSubjectFacts(input: {
     state: input.state,
     zipCode: input.zip,
   });
+  // Per-address breaker shape — without this every subject collapses onto
+  // the same bare "listings/sale|||||" / "properties|||||" global key, so
+  // one address's 404s trip the breaker for every property (2026-07-27 P0).
+  const shape: PaidFetchBreakerInputs = {
+    address: input.address,
+    city: input.city,
+    state: input.state,
+    zip: input.zip,
+    recordId: null,
+  };
 
   // 1. Active sale listing (covers the active cluster).
   try {
@@ -623,6 +643,9 @@ export async function getSubjectFacts(input: {
       "listings/sale",
       `${BASE}/listings/sale?${qp.toString()}&status=active`,
       { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" },
+      undefined,
+      shape,
+      [404],
     );
     if (res.ok) {
       const body = (await res.json()) as unknown;
@@ -640,6 +663,9 @@ export async function getSubjectFacts(input: {
       "properties",
       `${BASE}/properties?${qp.toString()}`,
       { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" },
+      undefined,
+      shape,
+      [404],
     );
     if (res.ok) {
       const body = (await res.json()) as unknown;
@@ -742,6 +768,16 @@ export async function getListingPhotosFromRentCast(
     state: input.state,
     zipCode: input.zip,
   });
+  // Per-address breaker shape — see getSubjectFacts for why this matters
+  // (a bare recordId-less key collapses every address onto one global
+  // breaker counter).
+  const shape: PaidFetchBreakerInputs = {
+    address: input.address,
+    city: input.city,
+    state: input.state,
+    zip: input.zip,
+    recordId: null,
+  };
 
   const debugKeys: string[] = [];
 
@@ -751,6 +787,9 @@ export async function getListingPhotosFromRentCast(
       "listings/sale",
       `${BASE}/listings/sale?${qp.toString()}&status=active`,
       { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" },
+      undefined,
+      shape,
+      [404],
     );
     empty.listingsSaleStatus = res.status;
     if (res.ok) {
@@ -773,6 +812,9 @@ export async function getListingPhotosFromRentCast(
       "properties",
       `${BASE}/properties?${qp.toString()}`,
       { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" },
+      undefined,
+      shape,
+      [404],
     );
     empty.propertiesStatus = res.status;
     if (res.ok) {

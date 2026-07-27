@@ -44,9 +44,11 @@ import { DEFAULT_WHOLESALE_FEE } from "@/lib/pre-contract-math";
 // fraction:
 //
 //   HOLE A — over-list: a garbage-high stored ARV produced an opener ABOVE
-//     asking. NEVER-OVER-LIST CAP clamps the value-anchored opener down to a
-//     fraction of list (only ever bites when ARV ≫ list — a deep-discount
-//     listing, so the clamp is safe). Flags re-seed on low-confidence ARVs.
+//     asking. OVER-LIST TRIPWIRE (Option B, ruling recmy2Vwp1wMA1Vs8): the
+//     record HOLDS and surfaces (Type 2C) — deep discount or broken inputs,
+//     the operator decides. The old clamp-to-0.85×list PRODUCER is retired
+//     (2026-07-27): it laundered inflated ARVs into confident list-anchored
+//     texts (533 Robison, 1122 West Ave). Flags re-seed on low-confidence ARVs.
 //   HOLE B — micro-openers: a tiny-but-positive buy-box ceiling produced an
 //     insulting/broken-looking number. LOW-OPENER FLOOR routes sub-floor
 //     buy-box openers to a HOLD (operator review), not a list-anchored rail.
@@ -78,14 +80,13 @@ export function minOfferFloor(list: number): number {
   return Math.max(LOW_OPENER_FLOOR_PCT_OF_LIST * list, LOW_OPENER_FLOOR_USD);
 }
 
-/** Never-over-list cap: the opener can never exceed this fraction of list.
- *  0.85 (operator 2026-07-01) — auto-offer 85% of list on any deal whose
- *  value-anchored opener would come in above it, instead of holding. Set EQUAL
- *  to the >85%-of-list send-safety rail (OFFER_OVER_LIST_BLOCK_PCT in
- *  lib/outreach-economics): the pricer clamps at 85%, so the opener can never
- *  trip that rail and strand the record. KEEP THE TWO ≤ EACH OTHER — an opener
- *  cap above the send rail produces numbers the send path refuses. Env-tunable;
- *  clamped to (0,1] — but a value above the send rail re-opens that gap. */
+/** Over-list TRIPWIRE threshold: an opener above this fraction of list HOLDS
+ *  for operator review (Type 2C) — it is never clamped to this figure and
+ *  never sent (the "auto-offer 85% of list" producer of 2026-07-01 is retired,
+ *  ruling recmy2Vwp1wMA1Vs8 / operator 2026-07-27: "no value in it"). Kept
+ *  EQUAL to the >85%-of-list send-safety rail (OFFER_OVER_LIST_BLOCK_PCT in
+ *  lib/outreach-economics) so every opener that passes the tripwire also
+ *  clears the send rail. Env-tunable; clamped to (0,1]. */
 export const NEVER_OVER_LIST_PCT = (() => {
   const raw = Number(process.env.NEVER_OVER_LIST_PCT);
   return Number.isFinite(raw) && raw > 0 && raw <= 1 ? raw : 0.85;
@@ -152,9 +153,19 @@ export interface PricerResult {
   /** LOW-OPENER FLOOR (Hole B): a buy-box opener fell below the floor and was
    *  HELD for operator review rather than sending a micro-number. */
   flooredToFallback: boolean;
-  /** NEVER-OVER-LIST CAP (Hole A): the value-anchored opener exceeded list and
-   *  was clamped down to a fraction of list (safe — only bites when ARV≫list). */
+  /** NEVER-OVER-LIST CAP — RETIRED AS A PRODUCER (operator ruling
+   *  recmy2Vwp1wMA1Vs8 2026-07-06; producer path killed 2026-07-27 after
+   *  533 Robison $29,750 / 1122 West Ave $110,499). Permanently false: the
+   *  pricer never substitutes a list fraction for the derived opener. Kept
+   *  only so legacy receipts/displays keep compiling. */
   cappedToList: boolean;
+  /** OVER-LIST TRIPWIRE (Hole A, Option B semantics): the value-anchored
+   *  opener exceeded NEVER_OVER_LIST_PCT × list — either a genuine deep-
+   *  discount listing or broken inputs (an inflated ARV: the Avon, hot-pocket
+   *  seed, and Robison portfolio-deed classes). Both belong to the operator:
+   *  the record HOLDS and surfaces (Type 2C) with the computed number in
+   *  `detail`. The threshold never produces, clamps, or modifies a number. */
+  overListTripwire: boolean;
   /** MAO BOUND (Hole D, operator 2026-07-16): the flip-lane seller offer
    *  (0.70×ARV − rehab − closing − fee) computed from the SAME ARV/rehab this
    *  opener used. The opener NEVER exceeds it — the first offer can never sit
@@ -164,8 +175,9 @@ export interface PricerResult {
   boundedToMao: boolean;
   /** BEST-CASE OPENER (feasibility, operator 2026-07-25): the opener this same
    *  math would produce at ZERO rehab — perfect condition, most generous case
-   *  possible. Same anchor, same buy-box, same flip-MAO bound, same 85%-of-list
-   *  cap. If even THIS number is hopelessly below the ask, no rehab estimate,
+   *  possible. Same anchor, same buy-box, same flip-MAO bound, and still
+   *  bounded at 85% of list (numbers above the tripwire never send, so the
+   *  best SENDABLE case stays below it). If even THIS number is hopelessly below the ask, no rehab estimate,
    *  photo, or walkthrough can ever close the gap — the deal is structurally
    *  infeasible and texting any number just burns the agent relationship
    *  (529 Bina "insane ask" / 2048 Joffre "is that what you mean?" class).
@@ -199,6 +211,7 @@ function holdResult(
     overArvList: false,
     flooredToFallback: extra?.flooredToFallback ?? false,
     cappedToList: false,
+    overListTripwire: false,
     maoBound: null,
     boundedToMao: false,
     bestCaseOpener: null,
@@ -310,7 +323,7 @@ export function priceOpener(input: PricerInput): PricerResult {
           );
         }
       }
-      return applyOverListCap(
+      return overListTripwireGuard(
         {
           opener,
           basis: "arv_buybox",
@@ -325,6 +338,7 @@ export function priceOpener(input: PricerInput): PricerResult {
           overArvList,
           flooredToFallback: false,
           cappedToList: false,
+          overListTripwire: false,
           maoBound,
           boundedToMao,
           bestCaseOpener,
@@ -358,27 +372,38 @@ export function priceOpener(input: PricerInput): PricerResult {
   );
 }
 
-/** GUARD: NEVER-OVER-LIST CAP (Hole A). The value-anchored opener can never
- *  exceed NEVER_OVER_LIST_PCT × list (0.85 — auto-offer 85%, operator
- *  2026-07-01). The cap only bites when the buy-box opener exceeds it, i.e.
- *  ARV ≫ list (a deep-discount listing), so clamping to a fraction of list is
- *  safe here — it is NOT the retired list-anchored fallback (that fired with NO
- *  value basis). FLOOR (not round) the cap: a "never OVER x%" clamp must never
- *  round UP past x% — that would put the offer above the equal >85% send rail
- *  and get it refused. When the cap bites on a low-confidence ARV, flag re-seed. */
-function applyOverListCap(r: PricerResult, list: number | null): PricerResult {
+/** GUARD: OVER-LIST TRIPWIRE (Hole A — Option B, operator ruling
+ *  recmy2Vwp1wMA1Vs8 2026-07-06; the producer path was killed 2026-07-27).
+ *  A value-anchored opener above NEVER_OVER_LIST_PCT × list means one of two
+ *  things: a genuine deep-discount listing (ARV ≫ list) or broken inputs (an
+ *  inflated ARV — the Avon size extrapolation, hot-pocket seed, and Robison
+ *  portfolio-deed classes). Both belong to the operator, so the record HOLDS
+ *  and surfaces (Type 2C) with the computed number preserved in the receipt.
+ *  The RETIRED behavior — substituting floor(0.85 × list) and sending — was a
+ *  laundering step: it converted every upstream ARV corruption into a
+ *  confident, list-anchored text (the 43-record capped_to_list cohort,
+ *  533 Robison $29,750, 1122 West Ave $110,499). A list fraction is not a
+ *  price; nothing sends from this branch. The threshold stays FLOORED so an
+ *  opener exactly at 85% of list still sends (≤ compares against the same
+ *  figure the >85% send rail uses). */
+function overListTripwireGuard(r: PricerResult, list: number | null): PricerResult {
   if (list == null || r.opener == null) return r;
-  const cap = Math.floor(list * NEVER_OVER_LIST_PCT);
-  if (r.opener <= cap) return r;
+  const threshold = Math.floor(list * NEVER_OVER_LIST_PCT);
+  if (r.opener <= threshold) return r;
   const reseedWorthy = r.confidence !== "STRONG";
   return {
     ...r,
-    opener: cap,
-    cappedToList: true,
+    opener: null,
+    basis: "hold_no_value_basis",
+    cappedToList: false,
+    overListTripwire: true,
     flagReseed: reseedWorthy,
-    detail: `${r.detail} | CAPPED to ${Math.round(NEVER_OVER_LIST_PCT * 100)}% of list = $${cap.toLocaleString()} (value-anchored opener exceeded the cap — ` +
+    detail:
+      `${r.detail} | OVER-LIST TRIPWIRE: computed opener $${r.opener.toLocaleString()} exceeds ` +
+      `${Math.round(NEVER_OVER_LIST_PCT * 100)}% of list ($${threshold.toLocaleString()}) — ` +
       (reseedWorthy
-        ? `ARV implausibly high, flagged for re-seed)`
-        : `deep-discount listing: renovated ARV ≫ list, seed trusted (STRONG) — capped, not re-seeded)`),
+        ? `ARV implausibly high on a ${r.confidence} basis, flagged for re-seed; `
+        : `STRONG seed reads as a deep-discount listing; `) +
+      `HELD for operator review (Type 2C) — the 0.85×list clamp is retired and never produces a number (ruling recmy2Vwp1wMA1Vs8)`,
   };
 }

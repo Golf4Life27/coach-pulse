@@ -152,3 +152,16 @@ export async function applyOptOut(
 
   return result;
 }
+
+/** Pure: does `candidateIso` move Last_Inbound_At forward relative to
+ *  `storedIso`? Never backward. Used for the opt-out branch's inbound stamp
+ *  (2026-07-27 integrity fix): the SUPPRESS `continue` above used to exit
+ *  before scan-comms' ordinary Last_Inbound_At write, so a genuine STOP reply
+ *  never updated the timeline (recxr0LJiqwYQe8lE, recfnfqn1dw7NeAdR). */
+export function inboundStampAdvances(candidateIso: string, storedIso: string | null | undefined): boolean {
+  if (!storedIso) return true;
+  const c = Date.parse(candidateIso);
+  if (!Number.isFinite(c)) return false;
+  const s = Date.parse(storedIso);
+  return !Number.isFinite(s) || c > s;
+}
