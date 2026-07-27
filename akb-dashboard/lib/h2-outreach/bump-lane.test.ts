@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  bumpRepriceGate,
   BUMP_MAX_ATTEMPTS,
   BUMP_GAP_DAYS,
   extractStickyOffer,
@@ -346,5 +347,40 @@ describe("buildBumpAbortedNote", () => {
   it("no existing notes → the abort line stands alone", () => {
     const note = buildBumpAbortedNote(null, "2026-07-17T20:15:00Z", null, null);
     expect(note).toContain("bump aborted");
+  });
+});
+
+describe("bumpRepriceGate — recompute-before-queue on the bump lane (963 W 3rd, 2026-07-27)", () => {
+  it("ALLOWS the bump when today's pricer still produces an opener (any value — the sticky number is what gets quoted)", () => {
+    const v = bumpRepriceGate({
+      result: { opener: 41_000 },
+      basisLabel: "arv_buybox_seed",
+      corroborationFlags: [],
+    });
+    expect(v.allowed).toBe(true);
+    expect(v.reason).toBeNull();
+  });
+
+  it("BLOCKS the bump on any pricer hold, carrying the basis label for the audit trail", () => {
+    const v = bumpRepriceGate({
+      result: { opener: null },
+      basisLabel: "hold_over_list_tripwire",
+      corroborationFlags: [],
+    });
+    expect(v.allowed).toBe(false);
+    expect(v.reason).toBe("reprice_hold_hold_over_list_tripwire");
+  });
+
+  it("963 W 3rd class: a corroboration hold (infeasible_ask on a renovated $132,900 ask) blocks with its flags visible", () => {
+    // The exact miss: RentCast intake → renovatedLanguage never set → the
+    // flag veto is blind; the feasibility math is not. Today's pricer HOLDS
+    // the record, so the bump must not re-text the pre-gate $57,000.
+    const v = bumpRepriceGate({
+      result: { opener: null },
+      basisLabel: "hold_failed_corroboration",
+      corroborationFlags: ["infeasible_ask"],
+    });
+    expect(v.allowed).toBe(false);
+    expect(v.reason).toBe("reprice_hold_hold_failed_corroboration [infeasible_ask]");
   });
 });

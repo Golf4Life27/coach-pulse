@@ -179,6 +179,46 @@ export function liveThreadPhoneIndex(listings: Listing[]): Set<string> {
   return index;
 }
 
+// ── Re-price gate (2026-07-27, the 963 W 3rd miss) ───────────────────────
+//
+// A bump re-quotes the sticky number (INVARIANTS §3 — never recomputed),
+// but until now it did so with ZERO current pricing intelligence: none of
+// the gates shipped after the first touch (feasibility/infeasible_ask, the
+// over-list tripwire, ARV distrust, corroboration) ever inspected a bump.
+// 963 W 3rd St: first-touched $57,000 on 2026-07-24 (pre-veto), RentCast
+// intake so renovatedLanguage could never be set (the flag lives in the
+// Firecrawl page-copy classifier), bumped 2026-07-27 into a fully renovated
+// $132,900 listing → "extremely too low" rejection. Doctrine standard 1
+// (recompute before queueing) applies to every opener-class send.
+//
+// The gate: run the canonical pricer (priceOpenerWithSeed) on the record's
+// CURRENT inputs. If TODAY's system would refuse to produce any opener for
+// this listing, it must also refuse to re-text the number it produced under
+// older, dumber rules — skip the bump and surface. The sticky number is
+// never modified and never replaced; this is go/no-go, not re-pricing the
+// quote. Source-independent, so it protects the RentCast-intake records the
+// renovatedLanguage veto is structurally blind to.
+
+export interface BumpRepriceVerdict {
+  allowed: boolean;
+  /** Skip reason for the audit row when not allowed. */
+  reason: string | null;
+}
+
+/** Pure verdict over the canonical pricer's output for the CURRENT record
+ *  state. Any hold (opener null) blocks the bump; a produced opener — at any
+ *  value — allows it (the bump still quotes the STICKY number, never this
+ *  one). */
+export function bumpRepriceGate(pw: {
+  result: { opener: number | null };
+  basisLabel: string;
+  corroborationFlags: readonly string[];
+}): BumpRepriceVerdict {
+  if (pw.result.opener != null) return { allowed: true, reason: null };
+  const flags = pw.corroborationFlags.length ? ` [${pw.corroborationFlags.join(",")}]` : "";
+  return { allowed: false, reason: `reprice_hold_${pw.basisLabel}${flags}` };
+}
+
 // ── Send-time thread truth (2026-07-17, the 7714 E Canfield miss) ────────
 //
 // Airtable state is a CACHE of the thread, not the thread. Two agent
