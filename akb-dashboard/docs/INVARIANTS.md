@@ -100,6 +100,17 @@ underwrite against.
   `[enforced]` `lib/opener-sanity-gate.ts` (`corroborateOpener`), wired as the final
   gate in `lib/opener-pricing.ts` (`priceOpenerWithSeed`) — the ONE choke point both the
   live send path and the read-only dry-run share.
+- `[enforced]` **BUMP RE-PRICE GATE — recompute before queueing on the bump lane**
+  (2026-07-27, the 963 W 3rd miss: RentCast intake → no page copy → `Renovated_Language`
+  never set → the flag veto was blind, and a pre-gate $57,000 was bumped into a fully
+  renovated $132,900 listing). The `Renovated_Language` flag is only as good as the last
+  page scrape, so every bump ALSO re-runs the canonical pricer
+  (`priceOpenerWithSeed`) on the record's CURRENT inputs as a go/no-go check: any hold —
+  feasibility `infeasible_ask`, the over-list tripwire, ARV distrust, failed
+  corroboration — blocks the bump (audited `h2_bump_reprice_hold`). The STICKY number is
+  never modified and never replaced (INVARIANTS §3 unchanged): the gate decides whether
+  we may still SAY it, never what we say. `[enforced]` `bumpRepriceGate`
+  (`lib/h2-outreach/bump-lane.ts`) + `app/api/cron/bump-followup/route.ts`.
 - `[enforced]` **ARV FROM A STRONG SEED IS SIZE-ADJUSTED SALES COMPARISON, NOT FLAT
   $/sqft** (reliability build #2, 2026-07-23). A STRONG seed carries its comps; the ARV
   for a subject is a similarity-weighted (size-proximity × distance) blend of the comp

@@ -56,10 +56,14 @@ import {
   buildBumpSentNote,
   threadInboundTruth,
   buildBumpAbortedNote,
+  bumpRepriceGate,
 } from "@/lib/h2-outreach/bump-lane";
 import { evaluateSendWindow, type WorkingHoursMeta } from "@/lib/h2-working-hours";
 import { listSeededZips } from "@/lib/buyer-median-store";
-import { listArvSeededZips } from "@/lib/zip-arv-seed-store";
+import { listArvSeededZips, getZipArvSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
+import { priceOpenerWithSeed } from "@/lib/opener-pricing";
+import { getMarketForListing, openerArvPctMax } from "@/lib/markets/registry";
+import { resolveAnchorPct } from "@/lib/markets/anchor";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -281,6 +285,8 @@ async function handle(req: Request): Promise<Response> {
   }
 
   const byId = new Map(allListings.map((l) => [l.id, l] as const));
+  const seedCache = new Map<string, ZipArvSeed | null>();
+  const anchorCache = new Map<string, number>();
 
   for (const p of dispatchPlans) {
     const row: ProcessedRow = {
@@ -399,6 +405,64 @@ async function handle(req: Request): Promise<Response> {
           },
         });
         if (claimAcquired) await kvProd.del(claimKey).catch(() => {});
+        processed.push(row);
+        continue;
+      }
+
+      // ── RE-PRICE GATE (doctrine standard 1, the 963 W 3rd miss
+      // 2026-07-27): the sticky number is what we QUOTE (INVARIANTS §3 —
+      // never recomputed); whether we may still SAY it today is decided by
+      // the canonical pricer on the record's CURRENT inputs. Any hold —
+      // feasibility infeasible_ask, the over-list tripwire, ARV distrust,
+      // failed corroboration — means today's system refuses to price this
+      // listing, so it must also refuse to re-text a number produced under
+      // older rules. Source-independent: protects RentCast-intake records
+      // the renovatedLanguage veto can never see (no page copy). Claim is
+      // KEPT on a block (mirrors the economics rail): re-evaluate after the
+      // claim TTL, not on every run.
+      const bumpZip = (fresh.zip ?? "").trim();
+      if (bumpZip && !seedCache.has(bumpZip)) {
+        seedCache.set(bumpZip, await getZipArvSeed(bumpZip).catch(() => null));
+      }
+      const bumpMarket = getMarketForListing({ state: fresh.state, zip: fresh.zip });
+      const bumpMarketId = bumpMarket?.id ?? "";
+      let bumpAnchor = anchorCache.get(bumpMarketId);
+      if (bumpAnchor == null) {
+        bumpAnchor = await resolveAnchorPct(bumpMarketId || null);
+        anchorCache.set(bumpMarketId, bumpAnchor);
+      }
+      const repriced = priceOpenerWithSeed({
+        listPrice: fresh.listPrice ?? null,
+        storedArv: fresh.realArvMedian ?? null,
+        storedArvConfidence: fresh.arvConfidence ?? null,
+        estRehabMid: fresh.estRehabMid ?? null,
+        estRehab: fresh.estRehab ?? null,
+        sqft: fresh.buildingSqFt ?? null,
+        arvPctMax: openerArvPctMax(bumpMarket, fresh.state),
+        wholesaleFee: fresh.wholesaleFeeTarget ?? null,
+        anchorPct: bumpAnchor,
+        seed: bumpZip ? seedCache.get(bumpZip) ?? null : null,
+      });
+      const repriceVerdict = bumpRepriceGate(repriced);
+      if (!repriceVerdict.allowed) {
+        row.error = `reprice_gate: ${repriceVerdict.reason}`;
+        summary.errors++;
+        await audit({
+          agent: "crier",
+          event: "h2_bump_reprice_hold",
+          status: "confirmed_failure",
+          recordId: p.recordId,
+          inputSummary: {
+            sticky_offer: p.stickyOffer,
+            list: fresh.listPrice ?? null,
+            basis: repriced.basisLabel,
+            corroboration_flags: repriced.corroborationFlags,
+          },
+          outputSummary: {
+            reason: repriceVerdict.reason,
+            detail: repriced.result.detail?.slice(0, 300) ?? null,
+          },
+        });
         processed.push(row);
         continue;
       }
