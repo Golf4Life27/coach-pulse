@@ -139,7 +139,15 @@ export async function GET(req: Request) {
         continue;
       }
       const newLive = fc.stillActive ? "Active" : "Off Market";
-      await updateListingRecord(t.listing.id, { Live_Status: newLive, Last_Verified: iso });
+      // RENOVATED-LISTING VETO persist (2026-07-28, audit finding #3 — Spine
+      // recV9zpfSyF6BYbOj): this scrape already computed the renovated
+      // verdict; throwing it away primed records as fresh-and-sendable right
+      // before the next h2 slot with the veto flag blind (the exact
+      // freshness-reverify bug, alive in this sibling). Same formula as
+      // freshness-reverify: renovated language WITHOUT distress copy = veto;
+      // cleared automatically when a later scrape finds distress language.
+      const renovatedVeto = fc.hasRenovatedLanguage && !fc.hasConditionSignal;
+      await updateListingRecord(t.listing.id, { Live_Status: newLive, Last_Verified: iso, Renovated_Language: renovatedVeto });
       results.push({ record_id: t.listing.id, address: t.listing.address, still_active: fc.stillActive, credits: fc.creditsUsed, error: null });
       await audit({
         agent: "scout",
@@ -147,7 +155,7 @@ export async function GET(req: Request) {
         status: "confirmed_success",
         recordId: t.listing.id,
         inputSummary: { list: t.listing.listPrice, prev: t.listing.prevListPrice ?? null, renovated_value: t.seedArv },
-        outputSummary: { still_active: fc.stillActive, headroom_under_arv: t.spread },
+        outputSummary: { still_active: fc.stillActive, headroom_under_arv: t.spread, renovated_language_veto: renovatedVeto },
         decision: fc.stillActive ? "fastlaned_to_sendable" : "cut_but_gone",
       });
     } catch (err) {

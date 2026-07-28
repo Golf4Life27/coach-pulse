@@ -48,6 +48,12 @@ export function emailRecoveryVerdict(l: Listing): EmailRecoveryVerdict {
   if (EMAIL_SENT_RE.test(l.notes ?? "")) return skip("recovery_email_already_sent");
   if (l.sourceVersion !== SOURCE_VERSION_V2) return skip("not_v2");
   if (l.doNotText === true) return skip("opted_out");
+  // RENOVATED-LISTING VETO (2026-07-28, audit finding #4 — Spine
+  // recV9zpfSyF6BYbOj): this lane is an unsolicited FIRST-TOUCH cash offer
+  // by email (the SMS never delivered), so the same veto every opener-class
+  // SMS lane carries applies here. A distress offer at a turnkey ask cannot
+  // convert regardless of channel.
+  if (l.renovatedLanguage === true) return skip("renovated_listing_veto");
   const email = (l.agentEmail ?? "").trim();
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return skip("no_valid_email");
   if ((l.liveStatus ?? "").trim() !== "Active") return skip("not_active");

@@ -17,9 +17,10 @@
 // WHAT THE GATE ENFORCES
 //   (a) Do_Not_Text            — listing.doNotText === true → REFUSE. Always.
 //   (b) Renovated-listing veto — listing.renovatedLanguage === true → REFUSE
-//       when purpose is first_touch or bump. A low cash OPENER on a turnkey /
-//       renovated house is always wrong. Conversational replies (reply /
-//       followup) are ALLOWED — once an agent is talking to us, refusing to
+//       when purpose is first_touch, bump, or followup (any send that states
+//       or restates an offer to a silent thread). A low cash OPENER on a
+//       turnkey / renovated house is always wrong. Conversational replies
+//       (reply) are ALLOWED — once an agent is talking to us, refusing to
 //       answer is its own harm.
 //   (c) Duplicate suppression  — NUMBER-LEVEL. The same E.164 must not receive
 //       an identical body twice inside 30 minutes, no matter which lane or
@@ -42,15 +43,22 @@ import { kvConfigured, kvProd, type KvClient } from "@/lib/maverick/oauth/kv";
 import { audit } from "@/lib/audit-log";
 
 /** Every send must declare WHY it is going out. Opener-class purposes
- *  (first_touch, bump) carry the renovated-listing veto; conversational
- *  purposes (reply, followup) do not. */
+ *  (first_touch, bump, followup) carry the renovated-listing veto; the only
+ *  conversational purpose (reply) does not — once an agent is talking to
+ *  us, refusing to answer is its own harm. */
 export type SendPurpose = "first_touch" | "bump" | "reply" | "followup";
 
 /** Purposes that are an unsolicited OFFER approach and therefore subject to
- *  the renovated-listing veto. */
+ *  the renovated-listing veto. "followup" joined 2026-07-28 (audit finding
+ *  #2, Spine recV9zpfSyF6BYbOj): a parked/cadence re-touch RESTATES a cash
+ *  offer to a silent thread — that is an opener wearing a different tag,
+ *  not a conversation, and the parked-followup lane was re-texting stored
+ *  distress numbers at listings its own pre-send probe had just classified
+ *  as renovated. Every purpose except "reply" now carries the veto. */
 export const OPENER_PURPOSES: ReadonlySet<SendPurpose> = new Set<SendPurpose>([
   "first_touch",
   "bump",
+  "followup",
 ]);
 
 const ALL_PURPOSES: ReadonlySet<string> = new Set<string>([
