@@ -14,7 +14,7 @@ vi.hoisted(() => {
 });
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { getSubjectFacts, getListingPhotosFromRentCast, getRentCastAssessedValue } from "./rentcast";
+import { getSubjectFacts, getListingPhotosFromRentCast, getRentCastAssessedValue, getSaleComparables } from "./rentcast";
 import { _resetMemoryRing, checkLoopBreaker, callShapeKey, RENTCAST_LOOP_TRIP_AFTER } from "./rentcast/failure-loop-breaker";
 import { readMemoryRing } from "./audit-log";
 
@@ -192,5 +192,53 @@ describe("honest-404 handling — a no-record answer is not a failure", () => {
       await getRentCastAssessedValue(ADDR_B, "recXYZ");
     }
     expect((await checkLoopBreaker("properties", { ...ADDR_B, recordId: "recXYZ" })).tripped).toBe(true);
+  });
+});
+
+describe("honest-404 — getSaleComparables (the hot-path ARV comp pull, completed 2026-07-28)", () => {
+  // 825d455 applied the honest-404 pattern to the three sibling functions and
+  // missed this one — the function actually behind attom/rentcast comp pulls.
+  // Every 404 on the subject + comps legs audited confirmed_failure and struck
+  // the breaker twice per invocation (the pairs-every-5-min Pulse pattern).
+  it("404 on both legs returns [] without incrementing the breaker", async () => {
+    const fetchMock = vi.fn(async () => new Response("not found", { status: 404 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const comps = await getSaleComparables(ADDR_A, "recSaleComps404");
+    expect(comps).toEqual([]);
+
+    const shape = { ...ADDR_A, recordId: "recSaleComps404" };
+    const subj = await checkLoopBreaker("properties/subject", shape);
+    const comp = await checkLoopBreaker("properties/comps", shape);
+    expect(subj.count).toBe(0); // 404s never touched the counter
+    expect(comp.count).toBe(0);
+    expect(subj.tripped).toBe(false);
+    expect(comp.tripped).toBe(false);
+  });
+
+  it("404s audit paid_api_call as confirmed_success (an answer, not a failure)", async () => {
+    const fetchMock = vi.fn(async () => new Response("not found", { status: 404 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getSaleComparables(ADDR_B, "recSaleCompsAudit");
+    const entries = readMemoryRing(50).filter(
+      (e) => e.agent === "rentcast" && e.event === "paid_api_call" && e.recordId === "recSaleCompsAudit",
+    );
+    expect(entries.length).toBeGreaterThan(0);
+    for (const e of entries) {
+      expect(e.status).toBe("confirmed_success");
+    }
+  });
+
+  it("a real 5xx still audits confirmed_failure and still throws", async () => {
+    const fetchMock = vi.fn(async () => new Response("upstream error", { status: 502 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getSaleComparables(ADDR_A, "recSaleComps5xx")).rejects.toThrow();
+    const entries = readMemoryRing(50).filter(
+      (e) => e.agent === "rentcast" && e.event === "paid_api_call" && e.recordId === "recSaleComps5xx",
+    );
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries.some((e) => e.status === "confirmed_failure")).toBe(true);
   });
 });

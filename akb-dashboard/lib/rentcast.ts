@@ -349,6 +349,14 @@ export async function getSaleComparables(
     headers,
     recordId,
     shape,
+    // HONEST-404 (#135 pattern, completed 2026-07-28): "no parcel at this
+    // address" is an answer, not an infra failure — without this, every 404
+    // here audited paid_api_call confirmed_failure AND struck the loop
+    // breaker (twice per invocation with the comps call below — the exact
+    // pairs-every-5-min pattern behind the 54% Pulse alarm). The 825d455
+    // reliability wave applied this to all three sibling functions and
+    // missed this one, the hot-path ARV comp pull.
+    [404],
   );
   const subjBody = await subjRes.text();
   if (subjRes.ok) {
@@ -382,6 +390,10 @@ export async function getSaleComparables(
     headers,
     recordId,
     shape,
+    // HONEST-404: same treatment as the subject call above — the explicit
+    // `compRes.status === 404 → return []` below already returns the honest
+    // zero; this arg makes the AUDIT and BREAKER agree with it.
+    [404],
   );
   const compBody = await compRes.text();
   if (compRes.status === 404) {
