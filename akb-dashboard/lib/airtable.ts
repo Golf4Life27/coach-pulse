@@ -73,6 +73,9 @@ const LISTING_FIELD_REGISTRY: ReadonlyArray<ListingFieldRegistryEntry> = [
   { prop: "restrictionText", fieldId: "fldapf2ZXpIWTZfSX", name: "Restriction_Text" },
   { prop: "ddChecklist", fieldId: "fldZVZT98A6cEmJB3", name: "DD_Checklist" },
   { prop: "doNotText", fieldId: "fldoXlPt9s6a1oopo", name: "Do_Not_Text" },
+  // Operator kill (2026-07-28, the 533 Robison digest error) — a killed deal
+  // is a FIELD, not prose; refused by the send gate for every purpose.
+  { prop: "blacklist", fieldId: "fld26h40a81qH7uYP", name: "Blacklist" },
   { prop: "state", fieldId: "fldSlDQvgCyr0J8tI", name: "State" },
   { prop: "sourceVersion", fieldId: SOURCE_VERSION_FIELD_ID, name: SOURCE_VERSION_FIELD_NAME },
   { prop: "actionHoldUntil", fieldId: "fldkYeP8onCHil0pd", name: "Action_Hold_Until" },

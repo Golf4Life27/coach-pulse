@@ -324,3 +324,53 @@ describe("sendGuarded", () => {
     expect(calls[0]).toEqual({ from: "PNMhSUQXFw" });
   });
 });
+
+describe("(a0) OPERATOR KILL — a killed deal gets no message of any purpose (533 Robison, 2026-07-28)", () => {
+  it("Blacklist checkbox refuses every purpose, reply included", async () => {
+    for (const purpose of ["first_touch", "bump", "followup", "reply"] as const) {
+      const s = spySender();
+      const r = await sendGuarded(
+        { ...base, purpose, listing: { blacklist: true } },
+        { kv: makeMemoryKv(), send: s.fn },
+      );
+      expect(r.reason).toBe("operator_kill");
+      expect(s.calls).toHaveLength(0);
+    }
+  });
+
+  it("a NEVER_RESURFACE address refuses even with the checkbox unset — the code-level twin holds when a field write is missed", async () => {
+    const s = spySender();
+    const r = await sendGuarded(
+      { ...base, purpose: "reply", listing: { address: "533 Robison Dr, Birmingham, AL 35215" } },
+      { kv: makeMemoryKv(), send: s.fn },
+    );
+    expect(r.reason).toBe("operator_kill");
+    expect(s.calls).toHaveLength(0);
+  });
+
+  it("operator_kill outranks do_not_text and survives a KV outage", async () => {
+    const brokenKv = {
+      ...makeMemoryKv(),
+      setNx: async () => {
+        throw new Error("KV down");
+      },
+    };
+    const s = spySender();
+    const r = await sendGuarded(
+      { ...base, purpose: "reply", listing: { blacklist: true, doNotText: true } },
+      { kv: brokenKv, send: s.fn },
+    );
+    expect(r.reason).toBe("operator_kill");
+    expect(s.calls).toHaveLength(0);
+  });
+
+  it("a non-killed address with the checkbox false sends normally", async () => {
+    const s = spySender();
+    const r = await sendGuarded(
+      { ...base, purpose: "reply", listing: { blacklist: false, address: "123 Main St, San Antonio, TX 78201" } },
+      { kv: makeMemoryKv(), send: s.fn },
+    );
+    expect(r.sent).toBe(true);
+    expect(s.calls).toHaveLength(1);
+  });
+});

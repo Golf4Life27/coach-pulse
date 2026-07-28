@@ -12,11 +12,16 @@ import {
 } from "./never-resurface";
 
 describe("NEVER_RESURFACE constant", () => {
-  it("contains the locked Canon §9 thirteen addresses (lowercased)", () => {
-    expect(NEVER_RESURFACE.size).toBe(13);
+  it("contains the locked Canon §9 addresses plus the 2026-07-28 operator kills (lowercased)", () => {
+    expect(NEVER_RESURFACE.size).toBe(16);
     expect(NEVER_RESURFACE.has("2715 monterey st")).toBe(true);
     expect(NEVER_RESURFACE.has("910 green st")).toBe(true);
     expect(NEVER_RESURFACE.has("707 n pine st")).toBe(true);
+    // Operator kills promoted from record-notes prose after the 533 Robison
+    // digest error — the send gate refuses these for every purpose.
+    expect(NEVER_RESURFACE.has("533 robison dr")).toBe(true);
+    expect(NEVER_RESURFACE.has("1122 west ave sw")).toBe(true);
+    expect(NEVER_RESURFACE.has("2048 joffre ave")).toBe(true);
   });
 });
 
