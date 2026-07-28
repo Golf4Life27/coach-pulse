@@ -38,6 +38,7 @@
 //   time, so "the dedupe was down" is never invisible.
 
 import { createHash } from "node:crypto";
+import { isNeverResurfaceLoose } from "@/lib/never-resurface";
 import { sendMessageWithId, type QuoSendResult } from "@/lib/quo";
 import { kvConfigured, kvProd, type KvClient } from "@/lib/maverick/oauth/kv";
 import { audit } from "@/lib/audit-log";
@@ -83,9 +84,21 @@ export interface SendGateListing {
    *  detectRenovationLanguage). A low cash opener on a renovated house is
    *  always wrong — see the hard-veto tier in the intake filter. */
   renovatedLanguage?: boolean | null;
+  /** OPERATOR KILL (2026-07-28, the 533 Robison digest error): the record-
+   *  level Blacklist checkbox — an operator-killed deal. Refused for EVERY
+   *  purpose, reply included: a killed deal gets no autonomous message of
+   *  any kind. The one legitimate exception — an operator-approved walk-back
+   *  — is sent by DELIBERATELY clearing the flag first (explicit, audited,
+   *  human), never by a purpose exemption here. */
+  blacklist?: boolean | null;
+  /** Property address, checked against the NEVER_RESURFACE kill list — the
+   *  code-level twin of the Blacklist checkbox, so a kill holds even if a
+   *  field write is missed. */
+  address?: string | null;
 }
 
 export type SendRefusalReason =
+  | "operator_kill"
   | "missing_purpose"
   | "invalid_purpose"
   | "missing_record_id"
@@ -175,6 +188,12 @@ export function evaluateStaticGate(input: {
   if (!input.body || String(input.body).trim() === "") return "empty_body";
 
   // (a) Do_Not_Text — number-level, no purpose escapes it.
+  // (a0) OPERATOR KILL — outranks everything, every purpose. A kill that
+  // lived only in record-notes prose got re-ranked into a digest as the
+  // hottest deal (533 Robison, 2026-07-28); a kill is now a FIELD plus a
+  // code-level address list, and this gate is where both become physical.
+  if (input.listing?.blacklist === true) return "operator_kill";
+  if (isNeverResurfaceLoose(input.listing?.address)) return "operator_kill";
   if (input.listing?.doNotText === true) return "do_not_text";
 
   // (b) Renovated-listing veto — OPENER/BUMP only. A reply to a live

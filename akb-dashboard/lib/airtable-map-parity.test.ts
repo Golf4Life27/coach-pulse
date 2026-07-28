@@ -94,6 +94,8 @@ const EXPECTED_LISTING_FIELDS: Record<string, string> = {
   "fldapf2ZXpIWTZfSX": "restrictionText",
   "fldZVZT98A6cEmJB3": "ddChecklist",
   "fldoXlPt9s6a1oopo": "doNotText",
+  // Operator kill field (2026-07-28) — deliberate snapshot update, same commit as the registry entry.
+  "fld26h40a81qH7uYP": "blacklist",
   "fldSlDQvgCyr0J8tI": "state",
   "fldTaEgWfHMDmfgaV": "sourceVersion",
   "fldkYeP8onCHil0pd": "actionHoldUntil",
@@ -205,6 +207,7 @@ const EXPECTED_LISTING_NAME_MAP: Record<string, string> = {
   "Restriction_Text": "restrictionText",
   "DD_Checklist": "ddChecklist",
   "Do_Not_Text": "doNotText",
+  "Blacklist": "blacklist",
   "State": "state",
   "Source_Version": "sourceVersion",
   "Action_Hold_Until": "actionHoldUntil",

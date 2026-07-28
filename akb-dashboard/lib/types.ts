@@ -42,6 +42,8 @@ export interface Listing {
   restrictionText: string | null;
   ddChecklist: string[] | null;
   doNotText: boolean;
+  /** Operator kill — Blacklist checkbox; send gate refuses every purpose. */
+  blacklist?: boolean | null;
   state: string | null;
   /** v1_legacy | v2_post_2026-05-26 | null (INV-LEGACY-BACKSTOP). */
   sourceVersion: string | null;

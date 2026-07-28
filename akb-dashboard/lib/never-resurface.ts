@@ -14,6 +14,17 @@ export const NEVER_RESURFACE: ReadonlySet<string> = new Set([
   // Mainstay, corporate investor at/near list"). Same precedent as
   // 910 Green St. Not a guess from free text; a recorded reply.
   "336 burwood dr",
+  // 2026-07-28 — operator kills, promoted from record-notes prose to this
+  // machine-enforced list after the 533 Robison digest error (a kill that
+  // lived only in Notes/Spine got re-ranked as the hottest deal by narrative
+  // drift; the send gate now refuses this list for EVERY purpose). Robison:
+  // structural collapse, DO NOT PAPER, operator walk. West Ave: accepted
+  // $110,499 failed property-level reality, killed pre-paper. Joffre:
+  // unbridgeable $100K gap, operator kill. (963 W 3rd joins after its
+  // operator-approved courtesy exit resolves.)
+  "533 robison dr",
+  "1122 west ave sw",
+  "2048 joffre ave",
 ]);
 
 /** Pure: true when an address is on the never-resurface blocklist. */
