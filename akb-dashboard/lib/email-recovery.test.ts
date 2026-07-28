@@ -77,6 +77,11 @@ describe("emailRecoveryVerdict", () => {
 
   it("respects opt-out across channels, era, email validity, liveness, market", () => {
     expect(emailRecoveryVerdict(carrierDead({ doNotText: true })).reason).toBe("opted_out");
+    // Renovated veto applies to the email channel too — this lane is an
+    // unsolicited first-touch cash offer (audit finding #4, 2026-07-28).
+    expect(emailRecoveryVerdict(carrierDead({ renovatedLanguage: true })).reason).toBe(
+      "renovated_listing_veto",
+    );
     expect(emailRecoveryVerdict(carrierDead({ sourceVersion: "v1_legacy" })).reason).toBe("not_v2");
     expect(emailRecoveryVerdict(carrierDead({ agentEmail: "not-an-email" })).reason).toBe("no_valid_email");
     expect(emailRecoveryVerdict(carrierDead({ agentEmail: null })).reason).toBe("no_valid_email");

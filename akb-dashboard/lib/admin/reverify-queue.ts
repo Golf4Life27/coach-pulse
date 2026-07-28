@@ -66,9 +66,18 @@ export function planRequalification(outcome: VerifiedOutcome): RequalAction {
 
 /** The Airtable field write for a demotion action. `keep` / `skip_unverified`
  *  return null (no write). Field NAMES (patchListingsBatch maps to IDs).
- *  Verification_Notes is composed by the caller (needs prior notes to append). */
+ *  Verification_Notes is composed by the caller (needs prior notes to append).
+ *  A renovated demotion ALSO persists Renovated_Language (2026-07-28, audit
+ *  finding #6 — Spine recV9zpfSyF6BYbOj): the Review demotion already kept
+ *  the record out of the send pool, but the structured flag is what every
+ *  send-gate veto reads — without it, a later manual re-promote would send
+ *  blind. */
 export function requalWriteFields(action: RequalAction): Record<string, unknown> | null {
-  if (action.action === "demote_review") return { Outreach_Status: "Review" };
+  if (action.action === "demote_review") {
+    return action.reason === "firecrawl_renovated"
+      ? { Outreach_Status: "Review", Renovated_Language: true }
+      : { Outreach_Status: "Review" };
+  }
   if (action.action === "demote_dead") return { Live_Status: "Off Market" };
   return null; // keep / skip_unverified — no write
 }

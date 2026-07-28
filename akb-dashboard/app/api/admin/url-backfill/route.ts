@@ -134,6 +134,11 @@ export async function GET(req: Request) {
               Verification_URL: fc.url,
               Verification_Source: "firecrawl_url_backfill",
               Last_Verified: new Date().toISOString(),
+              // Persist the renovated verdict this scrape already computed
+              // (2026-07-28, audit finding #6 — Spine recV9zpfSyF6BYbOj):
+              // same formula as freshness-reverify — renovated language
+              // WITHOUT distress copy = veto.
+              Renovated_Language: fc.hasRenovatedLanguage && !fc.hasConditionSignal,
             });
             o.written = true;
           } catch (err) {

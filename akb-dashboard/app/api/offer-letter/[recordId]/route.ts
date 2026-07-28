@@ -23,7 +23,12 @@
 
 import { NextResponse } from "next/server";
 import { getListing } from "@/lib/airtable";
-import { assembleOfferLetter, renderOfferLetterHtml } from "@/lib/offer-letter";
+import {
+  assembleOfferLetter,
+  renderOfferLetterHtml,
+  priceBasisFlagged,
+  priceBasisFlagReasons,
+} from "@/lib/offer-letter";
 import {
   authenticate,
   hasDashboardSession,
@@ -84,6 +89,27 @@ export async function GET(
   // type today; read it defensively so the safety banner works either way.
   const renovatedLanguage =
     (listing as unknown as { renovatedLanguage?: boolean | null }).renovatedLanguage ?? null;
+
+  // HARD REFUSE ON A FLAGGED PRICE BASIS (2026-07-28, audit finding #5 —
+  // Spine recV9zpfSyF6BYbOj): the screen-only banner is invisible in print,
+  // so a formal written offer for a renovated-flagged or size-extrapolation
+  // record used to come out of the printer clean. A flagged basis now 422s
+  // like a missing price does; the operator overrides EXPLICITLY with
+  // ?override=1 (the banner still renders on screen in that case, so the
+  // override is made with the warning in view).
+  const flagged = priceBasisFlagged({ renovatedLanguage, notes: listing.notes });
+  if (flagged && url.searchParams.get("override") !== "1") {
+    return NextResponse.json(
+      {
+        error: "price_basis_flagged",
+        message:
+          "This record's price basis is flagged — re-price before papering, or pass ?override=1 to generate anyway (screen banner stays visible).",
+        reasons: priceBasisFlagReasons({ renovatedLanguage, notes: listing.notes }),
+        recordId,
+      },
+      { status: 422 },
+    );
+  }
 
   const assembled = assembleOfferLetter({
     address: listing.address,

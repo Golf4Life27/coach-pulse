@@ -91,9 +91,15 @@ underwrite against.
   and NEVER bumped — a distress opener at a turnkey ask cannot convert; it only
   burns the agent. The verdict was ALREADY computed by `verifyListingByUrl` on
   every freshness pass and thrown away; it is now persisted to
-  `Renovated_Language` (fldnNSji9OLcDPRu9) by `freshness-reverify` and enforced
-  in `isH2Eligible` / `outreachReadyReason` (first touch) + `bumpVerdict`
-  (bumps). Distress copy still overrides ("investor special — recently
+  `Renovated_Language` (fldnNSji9OLcDPRu9) by EVERY route that scrapes page copy —
+  `freshness-reverify`, `price-drop-fastlane`, `backlog-reprice`, `reverify-queue`,
+  `url-backfill`, and `parked-followup`'s pre-send probe (which also suppresses that
+  send) — and enforced in `isH2Eligible` / `outreachReadyReason` (first touch),
+  `bumpVerdict` (bumps), `emailRecoveryVerdict` (recovery email), the send-gate's
+  `OPENER_PURPOSES` veto (first_touch + bump + followup — every purpose except a
+  conversational reply), and the offer-letter route (hard 422 on a flagged basis
+  unless `?override=1`). (Burn-down 2026-07-28, audit Spine recV9zpfSyF6BYbOj;
+  `admin/outreach-batch` — the last MAO_V1-quoting sender — retired the same day.) Distress copy still overrides ("investor special — recently
   updated"), and the flag clears when a later scrape finds distress language,
   so price-cut re-engagement stays possible. Zero added API cost — the page
   was already being fetched.

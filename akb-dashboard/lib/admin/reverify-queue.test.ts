@@ -41,6 +41,12 @@ describe("requalWriteFields", () => {
   it("maps demote_review → Outreach_Status Review, demote_dead → Live_Status Off Market", () => {
     expect(requalWriteFields({ action: "demote_review", reason: "x" })).toEqual({ Outreach_Status: "Review" });
     expect(requalWriteFields({ action: "demote_dead", reason: "x" })).toEqual({ Live_Status: "Off Market" });
+    // A renovated demotion ALSO persists the structured veto flag (audit
+    // finding #6, 2026-07-28) so a later manual re-promote can't send blind.
+    expect(requalWriteFields({ action: "demote_review", reason: "firecrawl_renovated" })).toEqual({
+      Outreach_Status: "Review",
+      Renovated_Language: true,
+    });
   });
   it("writes nothing for keep / skip_unverified", () => {
     expect(requalWriteFields({ action: "keep", reason: "clean_distress" })).toBeNull();

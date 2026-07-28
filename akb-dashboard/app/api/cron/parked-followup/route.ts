@@ -100,6 +100,8 @@ interface SendOutcome {
     | "skipped_dry_run"
     | "skipped_quiet_hours"
     | "skipped_firecrawl_infra"
+    | "skipped_renovated_veto"
+    | "skipped_content_reject"
     | "skipped_no_phone"
     | "skipped_other"
     | "send_failed"
@@ -444,6 +446,48 @@ export async function GET(req: Request) {
         });
         failed++;
       }
+      acted++;
+      continue;
+    }
+
+    // CONTENT REJECTS (2026-07-28, audit finding #2 — Spine
+    // recV9zpfSyF6BYbOj): these three verdicts were correctly excluded from
+    // the infra-failure class below but had NO handling branch, so execution
+    // fell straight through to the SEND — the probe would classify a listing
+    // as renovated/turnkey and this lane would text the stored distress
+    // number at it anyway. A content reject now SKIPS the send; the
+    // renovated verdict also HEALS the record's Renovated_Language flag so
+    // the send-gate veto (which now covers purpose "followup" too) holds on
+    // every future attempt, from any lane.
+    if (
+      fcVerdict &&
+      fcVerdict.outcome === "reject" &&
+      (fcVerdict.reason === "firecrawl_renovated" ||
+        fcVerdict.reason === "new_construction_excluded" ||
+        fcVerdict.reason === "wholesaler_excluded")
+    ) {
+      const isRenovated = fcVerdict.reason === "firecrawl_renovated";
+      if (effectiveApply && isRenovated) {
+        try {
+          await updateListingRecord(listing.id, {
+            Renovated_Language: true,
+            Verification_Notes: appendNote(
+              listing.notes,
+              "Pre-send Firecrawl: listing now markets as RENOVATED/turnkey — follow-up suppressed, Renovated_Language persisted (veto holds lane-wide).",
+            ),
+          });
+        } catch {
+          // Best-effort heal — the skip below still protects this send.
+        }
+      }
+      outcomes.push({
+        recordId: listing.id,
+        address: listing.address,
+        action: decision.action,
+        status: isRenovated ? "skipped_renovated_veto" : "skipped_content_reject",
+        detail: `firecrawl reason=${fcVerdict.reason} — content verdict, send suppressed; record stays parked${isRenovated ? ", Renovated_Language persisted" : ""}`,
+        firecrawl: { creditsUsed: fc?.creditsUsed ?? 0, stillActive: fc?.stillActive ?? null, outcome: fcVerdict.outcome },
+      });
       acted++;
       continue;
     }

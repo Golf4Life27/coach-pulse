@@ -221,6 +221,13 @@ export async function GET(req: Request) {
       }
 
       // (2b) Live → price off the seed table.
+      // RENOVATED-LISTING VETO persist (2026-07-28, audit finding #3 — Spine
+      // recV9zpfSyF6BYbOj): the verify above already computed the renovated
+      // verdict; this route used to discard it AND write a fresh opener for
+      // a possibly-turnkey listing with no structured signal for the human
+      // reviewer. Persist the flag on every live write, and force a
+      // renovated record to Manual Review — never the sendable Review set.
+      const renovatedVeto = fc.hasRenovatedLanguage && !fc.hasConditionSignal;
       const market = getMarketForListing({ state: l.state, zip: l.zip });
       const anchorPct = anchorCache.get(market?.id ?? "") ?? null;
       const seed = l.zip ? seedCache.get((l.zip ?? "").trim()) ?? null : null;
@@ -239,7 +246,7 @@ export async function GET(req: Request) {
       const priced = pricedW.result;
 
       if (priced.opener == null) {
-        try { await updateListingRecord(l.id, { Live_Status: "Active", Last_Verified: iso }); } catch { /* best-effort */ }
+        try { await updateListingRecord(l.id, { Live_Status: "Active", Last_Verified: iso, Renovated_Language: renovatedVeto }); } catch { /* best-effort */ }
         return { recordId: l.id, address: l.address, zip: l.zip, action: "live_no_opener", basis: priced.basis };
       }
 
@@ -251,9 +258,10 @@ export async function GET(req: Request) {
         Opener_Basis: pricedW.basisLabel,
         Live_Status: "Active",
         Last_Verified: iso,
+        Renovated_Language: renovatedVeto,
       };
       if (priced.flagReseed) fields["Opener_Reseed_Flag"] = true;
-      if (verdict.manualReview) fields["Outreach_Status"] = "Manual Review"; // else left at Review
+      if (verdict.manualReview || renovatedVeto) fields["Outreach_Status"] = "Manual Review"; // else left at Review
       try {
         await updateListingRecord(l.id, fields);
         // DECISION MATH at offer-compute (decision-math build, 2026-07-13):

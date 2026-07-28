@@ -118,25 +118,25 @@ describe("evaluateStaticGate", () => {
     expect(evaluateStaticGate({ ...ok, listing: null })).toBeNull();
   });
 
-  // (b) renovated veto — OPENER/BUMP only
-  it("vetoes a renovated listing for first_touch and bump", () => {
-    for (const purpose of ["first_touch", "bump"]) {
+  // (b) renovated veto — every offer-stating purpose (2026-07-28, audit
+  // finding #2: a followup RESTATES an offer to a silent thread, so it is an
+  // opener wearing a different tag; only a conversational reply is exempt).
+  it("vetoes a renovated listing for first_touch, bump, and followup", () => {
+    for (const purpose of ["first_touch", "bump", "followup"]) {
       expect(evaluateStaticGate({ ...ok, purpose, listing: { renovatedLanguage: true } })).toBe(
         "renovated_listing_veto",
       );
     }
   });
 
-  it("ALLOWS a renovated listing for reply and followup — conversations are not openers", () => {
-    for (const purpose of ["reply", "followup"]) {
-      expect(
-        evaluateStaticGate({ ...ok, purpose, listing: { renovatedLanguage: true } }),
-      ).toBeNull();
-    }
+  it("ALLOWS a renovated listing for reply — a live conversation is not an opener", () => {
+    expect(
+      evaluateStaticGate({ ...ok, purpose: "reply", listing: { renovatedLanguage: true } }),
+    ).toBeNull();
   });
 
-  it("OPENER_PURPOSES is exactly {first_touch, bump}", () => {
-    expect([...OPENER_PURPOSES].sort()).toEqual(["bump", "first_touch"]);
+  it("OPENER_PURPOSES is exactly {first_touch, bump, followup} — every purpose except reply", () => {
+    expect([...OPENER_PURPOSES].sort()).toEqual(["bump", "first_touch", "followup"]);
   });
 
   it("Do_Not_Text outranks the renovated veto", () => {
@@ -230,6 +230,16 @@ describe("sendGuarded", () => {
     );
     expect(reply.sent).toBe(true);
     expect(s.calls).toHaveLength(1);
+  });
+
+  it("(b) refuses a renovated listing on followup too — a re-touch restating an offer is an opener, not a conversation (audit finding #2, 2026-07-28)", async () => {
+    const s = spySender();
+    const followup = await sendGuarded(
+      { ...base, purpose: "followup", listing: { renovatedLanguage: true } },
+      { kv: makeMemoryKv(), send: s.fn },
+    );
+    expect(followup.reason).toBe("renovated_listing_veto");
+    expect(s.calls).toHaveLength(0);
   });
 
   it("(d) refuses a send with no purpose or no recordId", async () => {
