@@ -69,6 +69,11 @@ import {
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import cadenceConfig from "@/lib/config/d3-cadence.json";
 import type { Listing } from "@/lib/types";
+import { priceOpenerWithSeed } from "@/lib/opener-pricing";
+import { getZipArvSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
+import { getMarketForListing, openerArvPctMax } from "@/lib/markets/registry";
+import { resolveAnchorPct } from "@/lib/markets/anchor";
+import { bumpRepriceGate } from "@/lib/h2-outreach/bump-lane";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -102,6 +107,7 @@ interface SendOutcome {
     | "skipped_firecrawl_infra"
     | "skipped_renovated_veto"
     | "skipped_content_reject"
+    | "skipped_reprice_hold"
     | "skipped_no_phone"
     | "skipped_other"
     | "send_failed"
@@ -293,6 +299,9 @@ export async function GET(req: Request) {
   let disposed = 0;
   let failed = 0;
   let firecrawlCreditsUsed = 0;
+  // Per-run caches for the re-price gate (mirrors bump-followup).
+  const seedCache = new Map<string, ZipArvSeed | null>();
+  const anchorCache = new Map<string, number>();
   const reportOnly = decisions.length - actionable.length;
 
   for (const { listing, decision } of actionable) {
@@ -524,6 +533,67 @@ export async function GET(req: Request) {
         action: decision.action,
         status: "skipped_other",
         detail: `text-build refused: ${(built as { reason: string }).reason}`,
+      });
+      acted++;
+      continue;
+    }
+
+    // ── RE-PRICE GATE (doctrine standard 1 — recompute before queueing;
+    // extended to this lane 2026-07-28 after the Outreach_Offer_Price
+    // poisoning finding, Spine recV9zpfSyF6BYbOj #1): the stored number this
+    // lane quotes was, for the surviving cohort, written by the RETIRED
+    // outreach-batch route at 0.65×list — the Blackmoor rail wearing a field.
+    // Same rule as the bump lane: the quoted number is never modified, but
+    // whether we may still SAY it is decided by today's canonical pricer on
+    // the record's CURRENT inputs. Any hold (feasibility, over-list tripwire,
+    // ARV distrust, no value basis) suppresses the follow-up — and a 65%-of-
+    // list relic on a record today's system refuses to price never re-texts.
+    const pfZip = (listing.zip ?? "").trim();
+    if (pfZip && !seedCache.has(pfZip)) {
+      seedCache.set(pfZip, await getZipArvSeed(pfZip).catch(() => null));
+    }
+    const pfMarket = getMarketForListing({ state: listing.state, zip: listing.zip });
+    const pfMarketId = pfMarket?.id ?? "";
+    let pfAnchor = anchorCache.get(pfMarketId);
+    if (pfAnchor == null) {
+      pfAnchor = await resolveAnchorPct(pfMarketId || null);
+      anchorCache.set(pfMarketId, pfAnchor);
+    }
+    const pfRepriced = priceOpenerWithSeed({
+      listPrice: listing.listPrice ?? null,
+      storedArv: listing.realArvMedian ?? null,
+      storedArvConfidence: listing.arvConfidence ?? null,
+      estRehabMid: listing.estRehabMid ?? null,
+      estRehab: listing.estRehab ?? null,
+      sqft: listing.buildingSqFt ?? null,
+      arvPctMax: openerArvPctMax(pfMarket, listing.state),
+      wholesaleFee: listing.wholesaleFeeTarget ?? null,
+      anchorPct: pfAnchor,
+      seed: pfZip ? seedCache.get(pfZip) ?? null : null,
+    });
+    const pfVerdict = bumpRepriceGate(pfRepriced);
+    if (!pfVerdict.allowed) {
+      if (effectiveApply) {
+        await audit({
+          agent: "crier",
+          event: "parked_followup_reprice_hold",
+          status: "confirmed_failure",
+          recordId: listing.id,
+          inputSummary: {
+            quoted_offer: built.offerNum,
+            list: listing.listPrice ?? null,
+            basis: pfRepriced.basisLabel,
+            corroboration_flags: pfRepriced.corroborationFlags,
+          },
+          outputSummary: { reason: pfVerdict.reason },
+        });
+      }
+      outcomes.push({
+        recordId: listing.id,
+        address: listing.address,
+        action: decision.action,
+        status: "skipped_reprice_hold",
+        detail: `reprice_gate: ${pfVerdict.reason} — stored $${built.offerNum.toLocaleString()} not re-validatable today; follow-up suppressed, record stays parked`,
       });
       acted++;
       continue;
