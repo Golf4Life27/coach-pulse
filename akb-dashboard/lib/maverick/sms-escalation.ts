@@ -46,12 +46,25 @@ import type { SourceName } from "./types";
 const DEFAULT_TARGET = "+16302172539";
 const DEFAULT_COOLDOWN_MIN = 30;
 const DEFAULT_DAILY_CAP = 5;
+/** STANDING-CRITICAL RENOTIFY WINDOW (operator 2026-07-28: "fix that now" —
+ *  the paid_api_call standing critical paged his phone at 02:14/04:13/06:21/
+ *  10:14 with the IDENTICAL 20/37 fraction every time; each watch-cycle
+ *  briefing re-fired it once the 30-min cooldown lapsed). A signal whose
+ *  CONTENT has not changed re-pages at most once per this window; any change
+ *  in the rendered content (the metric moving, severity text changing) pages
+ *  immediately after the ordinary cooldown. The phone hears about CHANGES,
+ *  not repeats. */
+const DEFAULT_STANDING_RENOTIFY_H = 24;
 const ROLLING_WINDOW_MS = 24 * 60 * 60 * 1000;
 const KV_DAILY_KEY = "mav:sms:daily:sends";
 const KV_DAILY_TTL_S = 24 * 60 * 60; // GC after 24h of inactivity
 
 function signalKvKey(signalKey: string): string {
   return `mav:sms:signal:${signalKey}`;
+}
+
+function signalFpKey(signalKey: string): string {
+  return `mav:sms:fp:${signalKey}`;
 }
 
 export interface Stage4Env {
@@ -62,6 +75,8 @@ export interface Stage4Env {
   from: string | null;
   cooldownMin: number;
   dailyCap: number;
+  /** Hours before an UNCHANGED standing signal may re-page (default 24). */
+  standingRenotifyH: number;
 }
 
 export function readStage4Env(): Stage4Env {
@@ -70,12 +85,15 @@ export function readStage4Env(): Stage4Env {
     10,
   );
   const cap = parseInt(process.env.MAVERICK_SMS_DAILY_CAP ?? "", 10);
+  const renotify = parseInt(process.env.MAVERICK_SMS_STANDING_RENOTIFY_H ?? "", 10);
   const from = (process.env.ALERT_FROM ?? "").trim();
   return {
     target: process.env.MAVERICK_STAGE4_SMS_TARGET ?? DEFAULT_TARGET,
     from: from !== "" ? from : null,
     cooldownMin: Number.isFinite(cooldown) && cooldown > 0 ? cooldown : DEFAULT_COOLDOWN_MIN,
     dailyCap: Number.isFinite(cap) && cap > 0 ? cap : DEFAULT_DAILY_CAP,
+    standingRenotifyH:
+      Number.isFinite(renotify) && renotify > 0 ? renotify : DEFAULT_STANDING_RENOTIFY_H,
   };
 }
 
@@ -91,6 +109,17 @@ export function deriveSignalKey(signal: PrioritySignal): string {
   if (signal.id) return signal.id.replace(/[^a-zA-Z0-9_:.-]/g, "_").slice(0, 80);
   const parts = [signal.tier, signal.agent ?? "_", signal.title].join("|");
   return simpleHash(parts);
+}
+
+/**
+ * Content fingerprint for the standing-signal suppression layer: hashes
+ * exactly what would render in the SMS (tier + title + reason), so any
+ * visible change — the metric moving, the wording shifting — produces a
+ * new fingerprint and pages, while a byte-identical repeat suppresses.
+ * Pure.
+ */
+export function signalFingerprint(signal: PrioritySignal): string {
+  return simpleHash([signal.tier, signal.title, signal.reason ?? ""].join("|"));
 }
 
 /**
@@ -177,11 +206,19 @@ export interface EvaluateStage4Result {
   sent: number;
   suppressed_cooldown: number;
   suppressed_daily_cap: number;
+  /** Unchanged standing signals suppressed by the fingerprint layer. */
+  suppressed_standing: number;
   failed: number;
   /** Convenience for tests — empty when no signals or non-authorized auth. */
   details: Array<{
     signal_key: string;
-    outcome: "sent" | "cooldown" | "daily_cap" | "failed" | "suppressed_no_alert_from";
+    outcome:
+      | "sent"
+      | "cooldown"
+      | "daily_cap"
+      | "standing_unchanged"
+      | "failed"
+      | "suppressed_no_alert_from";
     error?: string;
     quo_message_id?: string | null;
   }>;
@@ -207,6 +244,7 @@ export async function evaluateStage4Escalation(
     sent: 0,
     suppressed_cooldown: 0,
     suppressed_daily_cap: 0,
+    suppressed_standing: 0,
     failed: 0,
     details: [],
   };
@@ -242,6 +280,29 @@ export async function evaluateStage4Escalation(
         status: "confirmed_success",
         inputSummary: { signal_key: key, reason: "cooldown" },
         outputSummary: { last_sent_at: existing, cooldown_min: opts.env.cooldownMin },
+      });
+      continue;
+    }
+
+    // STANDING-SIGNAL FINGERPRINT gate (operator 2026-07-28): an alert whose
+    // rendered content is byte-identical to what was already paged inside the
+    // renotify window is a REPEAT, not news — suppress it. Any change in the
+    // content (the 20/37 becoming 25/40, warning becoming critical) yields a
+    // different fingerprint and pages normally. First detection always pages
+    // (no fingerprint stored yet); a still-standing unchanged critical
+    // re-pages at most once per standingRenotifyH (KV TTL expiry).
+    const fp = signalFingerprint(signal);
+    const fpKey = signalFpKey(key);
+    const lastFp = await safeKvGet(opts.kv, fpKey);
+    if (lastFp && lastFp === fp) {
+      tally.suppressed_standing++;
+      tally.details.push({ signal_key: key, outcome: "standing_unchanged" });
+      await safeAudit(auditFn, {
+        agent: "maverick",
+        event: "sms_rate_limited",
+        status: "confirmed_success",
+        inputSummary: { signal_key: key, reason: "standing_unchanged" },
+        outputSummary: { fingerprint: fp, renotify_h: opts.env.standingRenotifyH },
       });
       continue;
     }
@@ -288,6 +349,14 @@ export async function evaluateStage4Escalation(
         cooldownKey,
         sendIso,
         opts.env.cooldownMin * 60,
+      );
+      // Remember exactly what was paged so an unchanged repeat suppresses
+      // until the renotify window lapses (or the content changes).
+      await safeKvSetEx(
+        opts.kv,
+        fpKey,
+        fp,
+        opts.env.standingRenotifyH * 3600,
       );
       await safeKvSetEx(
         opts.kv,

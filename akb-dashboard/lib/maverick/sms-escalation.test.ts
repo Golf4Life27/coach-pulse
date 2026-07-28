@@ -2,6 +2,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import {
+  signalFingerprint,
   deriveSignalKey,
   formatStage4Message,
   parseDailySends,
@@ -14,7 +15,7 @@ import type { PrioritySignal, SeverityTier } from "./severity";
 import type { StructuredBriefing, SourceHealth } from "./briefing";
 import type { SourceName } from "./types";
 
-const ENV: Stage4Env = { target: "+16302505865", from: "PNMhSUQXFw", cooldownMin: 30, dailyCap: 5 };
+const ENV: Stage4Env = { target: "+16302505865", from: "PNMhSUQXFw", cooldownMin: 30, dailyCap: 5, standingRenotifyH: 24 };
 const NOW = new Date("2026-05-18T12:00:00Z");
 
 function signal(over: Partial<PrioritySignal> & { tier: SeverityTier; id: string }): PrioritySignal {
@@ -409,8 +410,11 @@ describe("evaluateStage4Escalation — dedup (per-signal cooldown)", () => {
     });
     expect(send).toHaveBeenCalledTimes(1);
 
-    // Simulate KV TTL expiry by clearing the cooldown key.
+    // Simulate KV TTL expiry by clearing the cooldown key AND the standing
+    // fingerprint (2026-07-28: an unchanged repeat inside the renotify window
+    // now deliberately suppresses — see the fingerprint-layer suite below).
     await kv.del("mav:sms:signal:rentcast_exhaustion_imminent");
+    await kv.del("mav:sms:fp:rentcast_exhaustion_imminent");
 
     const later = new Date(NOW.getTime() + 31 * 60_000);
     await evaluateStage4Escalation({
@@ -575,5 +579,105 @@ describe("evaluateStage4Escalation — audit telemetry", () => {
     expect((entry?.outputSummary as Record<string, unknown>).quo_message_id).toBe(
       "quo_msg_abc",
     );
+  });
+});
+
+describe("standing-signal fingerprint layer (operator 2026-07-28 — pages on CHANGES, not repeats)", () => {
+  const pulseSignal = (title: string) => ({
+    id: "pulse:paid_api_call_failure_rate",
+    tier: 3 as const,
+    title,
+    reason: 'Event "paid_api_call" failed 20 of 37 calls in the last 24h.',
+    agent: "pulse",
+    href: "/pulse",
+  });
+  // Reuse the file's canonical briefing fixture (correct full shape) and
+  // graft the Pulse detection onto it.
+  const briefingWith = (signal: ReturnType<typeof pulseSignal>) => {
+    const b = briefingFixture();
+    (b as unknown as Record<string, unknown>).pulse = {
+      active_detections: [
+        {
+          id: "paid_api_call_failure_rate",
+          detector_id: "failure-rate",
+          severity: "critical" as const,
+          title: signal.title,
+          description: signal.reason ?? undefined,
+        },
+      ],
+    };
+    return b;
+  };
+
+  it("first page sends; an UNCHANGED repeat after the cooldown suppresses as standing_unchanged", async () => {
+    const kv = makeMemoryKv();
+    const send = vi.fn(async () => ({ id: "m1", status: "sent" as const, httpStatus: 200, raw: null }));
+    const sig = pulseSignal("paid_api_call failure rate 54% (20/37 over 24h)");
+
+    const first = await evaluateStage4Escalation({
+      briefing: briefingWith(sig), source_health: emptySourceHealth(), authKind: "oauth",
+      kv, env: ENV, send, recordAudit: async () => {},
+    });
+    expect(first.sent).toBe(1);
+
+    // Simulate the 30-min cooldown lapsing (the fingerprint stays).
+    await kv.del("mav:sms:signal:pulse:paid_api_call_failure_rate");
+
+    const second = await evaluateStage4Escalation({
+      briefing: briefingWith(sig), source_health: emptySourceHealth(), authKind: "oauth",
+      kv, env: ENV, send, recordAudit: async () => {},
+    });
+    expect(second.sent).toBe(0);
+    expect(second.suppressed_standing).toBe(1);
+    expect(second.details[0].outcome).toBe("standing_unchanged");
+    expect(send).toHaveBeenCalledTimes(1); // the phone heard about it exactly once
+  });
+
+  it("a CHANGED metric pages again — the fingerprint moves with the content", async () => {
+    const kv = makeMemoryKv();
+    const send = vi.fn(async () => ({ id: "m2", status: "sent" as const, httpStatus: 200, raw: null }));
+
+    await evaluateStage4Escalation({
+      briefing: briefingWith(pulseSignal("paid_api_call failure rate 54% (20/37 over 24h)")),
+      source_health: emptySourceHealth(), authKind: "oauth", kv, env: ENV, send, recordAudit: async () => {},
+    });
+    await kv.del("mav:sms:signal:pulse:paid_api_call_failure_rate");
+
+    const worsened = await evaluateStage4Escalation({
+      briefing: briefingWith(pulseSignal("paid_api_call failure rate 68% (25/37 over 24h)")),
+      source_health: emptySourceHealth(), authKind: "oauth", kv, env: ENV, send, recordAudit: async () => {},
+    });
+    expect(worsened.sent).toBe(1);
+    expect(worsened.suppressed_standing).toBe(0);
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it("fingerprint expiry (renotify window) re-pages a still-standing unchanged critical", async () => {
+    const kv = makeMemoryKv();
+    const send = vi.fn(async () => ({ id: "m3", status: "sent" as const, httpStatus: 200, raw: null }));
+    const sig = pulseSignal("paid_api_call failure rate 54% (20/37 over 24h)");
+
+    await evaluateStage4Escalation({
+      briefing: briefingWith(sig), source_health: emptySourceHealth(), authKind: "oauth",
+      kv, env: ENV, send, recordAudit: async () => {},
+    });
+    // Simulate both the cooldown AND the 24h fingerprint TTL lapsing.
+    await kv.del("mav:sms:signal:pulse:paid_api_call_failure_rate");
+    await kv.del("mav:sms:fp:pulse:paid_api_call_failure_rate");
+
+    const heartbeat = await evaluateStage4Escalation({
+      briefing: briefingWith(sig), source_health: emptySourceHealth(), authKind: "oauth",
+      kv, env: ENV, send, recordAudit: async () => {},
+    });
+    expect(heartbeat.sent).toBe(1);
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it("signalFingerprint is stable for identical content and differs when the numbers move", () => {
+    const a = signalFingerprint(pulseSignal("failure rate 54% (20/37)"));
+    const b = signalFingerprint(pulseSignal("failure rate 54% (20/37)"));
+    const c = signalFingerprint(pulseSignal("failure rate 68% (25/37)"));
+    expect(a).toBe(b);
+    expect(a).not.toBe(c);
   });
 });
