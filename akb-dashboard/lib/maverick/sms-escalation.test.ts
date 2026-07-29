@@ -86,7 +86,7 @@ function briefingFixture(
         days_until_reset: 14,
         probe_latency_ms: 0,
         burn_rate: {
-          pricing_calls_in_window: 0,
+          paid_calls_in_window: 0,
           estimated_calls_in_window: 0,
           window_hours: 24,
           burn_rate_per_day: 0,
@@ -148,7 +148,7 @@ function briefingWithRentcastBurn(): {
         days_until_reset: 14,
         probe_latency_ms: 0,
         burn_rate: {
-          pricing_calls_in_window: 800,
+          paid_calls_in_window: 800,
           estimated_calls_in_window: 800,
           window_hours: 24,
           burn_rate_per_day: 800,

@@ -139,6 +139,16 @@ export const CRAWL_METER_TTL_S = 172_800;
 
 // ── Weekly frontier decisions ────────────────────────────────────────────
 
+/** Consecutive zero-yield ingest runs before a ZIP becomes a retirement
+ *  CANDIDATE (proposal-grade; operator still approves). Matches the
+ *  chewed-cadence threshold's order of magnitude — one empty pass is
+ *  expected noise on a 1-3 day rotation, a sustained streak is signal. */
+export const RETIRE_MIN_ZERO_YIELD_STREAK = 3;
+
+/** Days a paused ZIP rests before the rotation pass revives it to staged
+ *  (operator ruling 2026-07-29: pause is a rest, not an exit). */
+export const REVIVAL_COOLDOWN_DAYS = 30;
+
 export interface FrontierZipRow {
   recordId: string;
   zip: string;
@@ -156,6 +166,12 @@ export interface FrontierZipRow {
   openerHold?: boolean;
   /** Consecutive zero-yield ingest runs (Below_Threshold_Streak_Days). */
   zeroYieldStreak?: number | null;
+  /** When the ZIP was paused (Paused_At). Read by the revival decision —
+   *  paused past the cooldown returns to staged. Null on non-paused rows
+   *  and on rows paused before the field existed (2026-07-29); legacy
+   *  paused rows with no stamp are treated as cooldown-elapsed so they
+   *  are not stranded forever. */
+  pausedAt?: string | null;
   /** Sellers in this ZIP show a recent cluster of hard-negative outreach
    *  signals (lib/crawler/zip-saturation.ts) — blanketed by competing
    *  wholesalers. Idles at the SATURATED_CYCLE_HOURS trickle, same as
@@ -193,6 +209,11 @@ export interface FrontierDecisions {
   /** zero-yield rows proposed for retirement — REPORT/PROPOSAL grade only,
    *  never auto-applied (snapshot stats are not 30d evidence). */
   retireCandidates: Array<{ row: FrontierZipRow; reason: string }>;
+  /** Paused rows whose cooldown has lapsed — revived to STAGED by the
+   *  rotation pass (operator ruling 2026-07-29: ZIPs pause, never die).
+   *  Staged costs zero crawl budget, so revival is auto-applied — it
+   *  re-enters the promotion queue where the budget governor paces it. */
+  reviveCandidates: Array<{ row: FrontierZipRow; reason: string }>;
   /** How many ZIPs the current budget sustains at the target cycle. */
   sustainableZips: number;
   eligibleNow: number;
@@ -246,12 +267,43 @@ export function frontierDecisions(input: {
     if (!r.lastIngestedAt) continue; // never crawled — pacing problem, not a dead ZIP
     const t = Date.parse(r.lastIngestedAt);
     if (!Number.isFinite(t) || t < cutoff) continue; // stale stamp — belt hasn't reached it
-    const ingested = r.recordsIngested30d ?? 0;
-    const accept = r.acceptRate30d ?? 0;
-    if (ingested === 0 && accept === 0) {
+    // Consolidation Night 2026-07-29 (item D): retirement is keyed to the
+    // SUSTAINED zero-yield streak, not the one-run snapshot. The prior test
+    // (recordsIngested30d===0 && acceptRate30d===0) read fields that hold
+    // only the latest pass, so any ZIP whose inventory was captured on an
+    // earlier pass looked "dead" — ground-truthing found 75% of flagged
+    // ZIPs actively producing, including two markets in their FIRST WEEK
+    // (Toledo 43607, Dayton 45402). Below_Threshold_Streak_Days increments
+    // per consecutive empty run and resets on ANY yield — the same signal
+    // the chewed-cadence tier already trusts (CHEWED_STREAK_RUNS).
+    const streak = r.zeroYieldStreak ?? 0;
+    if (streak >= RETIRE_MIN_ZERO_YIELD_STREAK) {
       retireCandidates.push({
         row: r,
-        reason: "zero_yield_latest_snapshot: crawled within 30d, 0 records ingested, 0% accept",
+        reason: `zero_yield_streak: ${streak} consecutive empty ingest runs (min ${RETIRE_MIN_ZERO_YIELD_STREAK}), last crawled within 30d`,
+      });
+    }
+  }
+
+  // Revival (operator ruling 2026-07-29: ZIPs pause, never die). A paused
+  // row whose cooldown has lapsed goes back to STAGED — zero crawl cost,
+  // ordinary promotion queue, budget-governor paced. Legacy paused rows
+  // with no Paused_At stamp (paused before the field existed) revive on
+  // sight rather than being stranded in the one-way door forever.
+  const reviveCandidates: FrontierDecisions["reviveCandidates"] = [];
+  const revivalCutoff = input.now.getTime() - REVIVAL_COOLDOWN_DAYS * DAY_MS;
+  for (const r of input.rows) {
+    if ((r.marketTier ?? "").trim() !== "paused") continue;
+    if (!/^\d{5}$/.test(r.zip)) continue;
+    if (r.wholesaleRestricted) continue;
+    const pausedT = r.pausedAt ? Date.parse(r.pausedAt) : NaN;
+    const cooldownLapsed = !Number.isFinite(pausedT) || pausedT <= revivalCutoff;
+    if (cooldownLapsed) {
+      reviveCandidates.push({
+        row: r,
+        reason: Number.isFinite(pausedT)
+          ? `paused ${Math.floor((input.now.getTime() - pausedT) / DAY_MS)}d >= ${REVIVAL_COOLDOWN_DAYS}d cooldown`
+          : "legacy pause with no Paused_At stamp — reviving rather than stranding",
       });
     }
   }
@@ -259,6 +311,7 @@ export function frontierDecisions(input: {
   return {
     promote,
     retireCandidates,
+    reviveCandidates,
     sustainableZips,
     eligibleNow: eligible.length,
     capacityLeft,

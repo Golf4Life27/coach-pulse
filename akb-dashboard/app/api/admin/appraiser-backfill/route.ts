@@ -50,6 +50,8 @@ import {
   callsAvoided,
   readP2Config,
   rehabStableKey,
+  rehabUnproducibleKey,
+  REHAB_UNPRODUCIBLE_TTL_S,
   legFailureKey,
   STABLE_FLAG_TTL_S,
   FAILURE_COUNT_TTL_S,
@@ -471,16 +473,19 @@ export async function GET(req: Request) {
     const listing = byId.get(o.record.recordId) ?? null;
     let kvAvailable = kvUp;
     let rehabStable = false;
+    let rehabUnproducible = false;
     let failures = { arv: 0, rehab: 0, rent: 0 };
     if (kvUp) {
       try {
-        const [stableFlag, fArv, fRehab, fRent] = await Promise.all([
+        const [stableFlag, unproducibleFlag, fArv, fRehab, fRent] = await Promise.all([
           kvProd.get(rehabStableKey(o.record.recordId)),
+          kvProd.get(rehabUnproducibleKey(o.record.recordId)),
           readFailure(o.record.recordId, "arv"),
           readFailure(o.record.recordId, "rehab"),
           readFailure(o.record.recordId, "rent"),
         ]);
         rehabStable = stableFlag != null;
+        rehabUnproducible = unproducibleFlag != null;
         failures = { arv: fArv, rehab: fRehab, rent: fRent };
       } catch {
         kvAvailable = false; // ledger unreadable → fail toward not spending
@@ -493,6 +498,7 @@ export async function GET(req: Request) {
       force,
       kvAvailable,
       rehabStable,
+      rehabUnproducible,
       failures,
       failureCap: p2.failureCap,
     });
@@ -539,6 +545,29 @@ export async function GET(req: Request) {
     await recordLegResult(o.record.recordId, "arv", arv, failures.arv);
     await recordLegResult(o.record.recordId, "rehab", rehab, failures.rehab);
     await recordLegResult(o.record.recordId, "rent", buyerIntel, failures.rent);
+
+    // ── Terminal no-photo-source answer (item E, 2026-07-29): a rehab 422
+    // of no_photos_available / street_view_only_insufficient is an ANSWER,
+    // not a failure — stamp the 30d flag so the sweep stops re-buying
+    // photo pulls for a property that has no photo source. Without this,
+    // the failure bench looped: 5 paid rounds → 7d bench → 5 more, forever.
+    if (
+      kvAvailable &&
+      rehab.status === "error" &&
+      rehab.http_status === 422 &&
+      typeof rehab.error === "string" &&
+      /no_photos_available|street_view_only_insufficient/.test(rehab.error)
+    ) {
+      try {
+        await kvProd.setEx(
+          rehabUnproducibleKey(o.record.recordId),
+          new Date().toISOString(),
+          REHAB_UNPRODUCIBLE_TTL_S,
+        );
+      } catch {
+        /* flag is an optimization — a write failure just means one more round */
+      }
+    }
 
     // ── Stability mark: when a CONFIRMATION read (a prior read existed)
     // lands and agrees with it (conf equal + mid within ±$5), the record

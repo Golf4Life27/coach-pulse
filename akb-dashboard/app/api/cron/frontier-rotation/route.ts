@@ -23,7 +23,7 @@ import {
   readAuthHeaders,
 } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
-import { getAllRegistryRows, promoteStagedZip, createStagedZips } from "@/lib/zip-registry";
+import { getAllRegistryRows, promoteStagedZip, createStagedZips, reviveZipToStaged } from "@/lib/zip-registry";
 import { getListings } from "@/lib/airtable";
 import { computeZipSaturation } from "@/lib/crawler/zip-saturation";
 import {
@@ -31,6 +31,8 @@ import {
   frontierDecisions,
   DEFAULT_RENTCAST_MONTHLY_PLAN,
   TARGET_CYCLE_DAYS,
+  REVIVAL_COOLDOWN_DAYS,
+  RETIRE_MIN_ZERO_YIELD_STREAK,
 } from "@/lib/crawler/frontier-governor";
 import { decideStaging, targetStagedBacklog } from "@/lib/crawler/frontier-stage";
 import { isActionableMarket } from "@/lib/markets/actionable";
@@ -43,6 +45,10 @@ import {
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
+
+/** Revivals applied per rotation pass — gradual re-staging so a large
+ *  legacy paused backlog re-enters the queue over weeks, not one tick. */
+const MAX_REVIVALS_PER_PASS = 10;
 
 export async function GET(req: Request) {
   const t0 = Date.now();
@@ -125,6 +131,8 @@ export async function GET(req: Request) {
         openerArvPctMax(getMarketForListing({ state: r.state, zip: r.zip }), r.state) == null,
       zeroYieldStreak: r.belowThresholdStreak,
       saturated: saturatedZipSet.has(r.zip),
+      // Revival input (2026-07-29): paused rows carry their pause stamp.
+      pausedAt: r.pausedAt,
     })),
     dailyBudget: budget.dailyBudget,
     now,
@@ -148,6 +156,7 @@ export async function GET(req: Request) {
   };
 
   const promoted: Array<{ zip: string; recordId: string; error: string | null }> = [];
+  const revived: Array<{ zip: string; recordId: string; error: string | null }> = [];
   const proposals = { attempted: 0, created: 0, error: null as string | null };
 
   // ── Auto-stage (chew-and-move-on, 2026-07-22): keep the promotion queue
@@ -187,6 +196,23 @@ export async function GET(req: Request) {
       }
     }
 
+    // ── Revival: paused past cooldown → staged (operator ruling 7/29:
+    // ZIPs pause, never die). Auto-applied because staged costs ZERO
+    // crawl budget — the ZIP re-enters the ordinary promotion queue and
+    // the budget governor paces when it actually crawls again. Bounded
+    // per pass so a large legacy backlog re-stages gradually.
+    for (const c of decisions.reviveCandidates.slice(0, MAX_REVIVALS_PER_PASS)) {
+      try {
+        await reviveZipToStaged(c.row.recordId, {
+          note: `frontier-rotation: paused→staged revival (${c.reason}) — re-testing for ripe inventory per operator ruling 2026-07-29`,
+          existingNotes: byId.get(c.row.recordId)?.notes ?? null,
+        });
+        revived.push({ zip: c.row.zip, recordId: c.row.recordId, error: null });
+      } catch (err) {
+        revived.push({ zip: c.row.zip, recordId: c.row.recordId, error: String(err).slice(0, 160) });
+      }
+    }
+
     // ── Retirement candidates → operator proposals (never auto-pause) ─
     const proposalsTable = process.env.AGENT_PROPOSALS_TABLE_ID ?? null;
     if (decisions.retireCandidates.length > 0 && proposalsTable && process.env.AIRTABLE_PAT) {
@@ -223,8 +249,9 @@ export async function GET(req: Request) {
                   Record_Address: `ZIP ${c.row.zip}`,
                   Reasoning:
                     `Frontier retirement candidate: ZIP ${c.row.zip} — ${c.reason}. ` +
-                    `Approving pauses the ZIP in ZIP_Registry (frees ~${Math.round(30 / TARGET_CYCLE_DAYS)} RentCast calls/mo). ` +
-                    `Snapshot stats only — decline if the ZIP deserves more cycles.`,
+                    `Approving pauses the ZIP (frees ~${Math.round(30 / TARGET_CYCLE_DAYS)} RentCast calls/mo). ` +
+                    `REVERSIBLE since 2026-07-29: paused ZIPs auto-revive to staged after the ${REVIVAL_COOLDOWN_DAYS}d cooldown and re-test for ripe inventory. ` +
+                    `Evidence is a sustained ${RETIRE_MIN_ZERO_YIELD_STREAK}+-run zero-yield streak, not a one-run snapshot.`,
                   Suggested_Action_Payload: JSON.stringify({
                     recordId: c.row.recordId,
                     action: "frontier_retire",
@@ -253,6 +280,8 @@ export async function GET(req: Request) {
     outputSummary: {
       ...health,
       promoted: promoted.filter((p) => !p.error).length,
+      revived: revived.filter((r) => !r.error).length,
+      revive_candidates: decisions.reviveCandidates.length,
       retire_candidates: decisions.retireCandidates.length,
       proposals_created: proposals.created,
       staged_created: stagingResult.created,
@@ -271,6 +300,8 @@ export async function GET(req: Request) {
     saturation,
     promote: decisions.promote.map((r) => ({ zip: r.zip, recordId: r.recordId })),
     promoted,
+    revive_candidates: decisions.reviveCandidates.map((c) => ({ zip: c.row.zip, reason: c.reason })),
+    revived,
     retire_candidates: decisions.retireCandidates.map((c) => ({ zip: c.row.zip, reason: c.reason })),
     proposals,
     staging: {

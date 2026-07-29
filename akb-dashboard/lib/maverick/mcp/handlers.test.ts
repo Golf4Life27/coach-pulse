@@ -78,7 +78,7 @@ function stubBriefing(over: Partial<Briefing> = {}): Briefing {
           days_until_reset: 17,
           probe_latency_ms: 100,
           burn_rate: {
-            pricing_calls_in_window: 0,
+            paid_calls_in_window: 0,
             estimated_calls_in_window: 0,
             window_hours: 24,
             burn_rate_per_day: 0,
