@@ -185,10 +185,15 @@ export function isMarketLive(m: Market | null | undefined): MarketLivenessVerdic
 /** The 12 non-disclosure states (sale prices not public record → ARV source
  *  unprovable). The opener HOLDs there until a source is verified per-state.
  *  (MO/ND also sit in restricted_states; harmless — restricted is checked
- *  first.) */
-export const NON_DISCLOSURE_STATES: ReadonlySet<string> = new Set([
-  "AK", "ID", "KS", "LA", "MS", "MO", "MT", "ND", "NM", "TX", "UT", "WY",
-]);
+ *  first.)
+ *
+ *  Consolidation Night 2026-07-29: re-exported from the single source of
+ *  truth in state-disclosure.ts — this module previously hardcoded its own
+ *  copy, which silently disagreed with lib/markets/disclosure.ts about
+ *  Alabama. See state-disclosure.ts for the documented AL delta and the
+ *  pending operator question. */
+export { NON_DISCLOSURE_STATES } from "@/lib/markets/state-disclosure";
+import { NON_DISCLOSURE_STATES } from "@/lib/markets/state-disclosure";
 
 export function isNonDisclosureState(state: string | null | undefined): boolean {
   return NON_DISCLOSURE_STATES.has((state ?? "").trim().toUpperCase());

@@ -14,12 +14,19 @@
 //
 // Pure + the single source of truth for the branch.
 
-/** US non-disclosure states — sale prices are NOT public record, so an
- *  InvestorBase buyer-median export is mostly zero/unreliable. The classic
- *  12 + the AL/MS partials treated as non-disclosure for pricing safety. */
-export const NON_DISCLOSURE_STATES: ReadonlySet<string> = new Set([
-  "TX", "UT", "ID", "KS", "LA", "MS", "MO", "MT", "NM", "ND", "WY", "AK", "AL",
-]);
+/** US states where an InvestorBase buyer-median export is mostly
+ *  zero/unreliable: the classic legal 12 + Alabama (partial-disclosure).
+ *
+ *  Consolidation Night 2026-07-29: re-exported from the single source of
+ *  truth in state-disclosure.ts — this module previously hardcoded its own
+ *  13-state copy that silently disagreed with lib/markets/registry.ts (12,
+ *  no AL). The name NON_DISCLOSURE_STATES is kept for this module's
+ *  existing consumers, but the semantics here have always been "buyer
+ *  median unreliable", which is the wider set. See state-disclosure.ts. */
+export {
+  BUYER_MEDIAN_UNRELIABLE_STATES as NON_DISCLOSURE_STATES,
+} from "@/lib/markets/state-disclosure";
+import { BUYER_MEDIAN_UNRELIABLE_STATES as NON_DISCLOSURE_STATES } from "@/lib/markets/state-disclosure";
 
 export type PricingPath = "investorbase_median" | "arv_comps";
 
