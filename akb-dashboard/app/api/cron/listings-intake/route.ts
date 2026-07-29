@@ -483,6 +483,11 @@ export async function GET(req: Request) {
     estimatedRemaining,
     callsNeeded: zips.length,
     perRunCap: PER_RUN_CAP,
+    // This run's ZIP count is already clamped by the plan-derived frontier
+    // governor above — with honest metering (2026-07-29), mid-cycle overage
+    // continues at governor pace instead of stalling the funnel until the
+    // billing reset. Audited via the quota decision's reason.
+    governorPaced: true,
   });
   if (!quota.allowed) {
     await audit({

@@ -1,7 +1,7 @@
 // @agent: maverick — RentCast burn-rate synthesis tests.
 
 import { describe, it, expect } from "vitest";
-import { computeBurnRate, countPricingAgentCalls } from "./rentcast-burn-rate";
+import { computeBurnRate, countRentcastPaidCalls, rentcastQuotaAllows } from "./rentcast-burn-rate";
 import type { RentCastState } from "./sources/external-rentcast";
 import type { VercelKvAuditState } from "./sources/vercel-kv-audit";
 
@@ -37,62 +37,98 @@ function audit(by: Record<string, number>): VercelKvAuditState {
   };
 }
 
-describe("countPricingAgentCalls", () => {
-  it("sums events across pricing-agent + phase4a + phase4a-wrapper attribution variants", () => {
+// Consolidation Night 2026-07-29 (item C): the meter counts agent
+// "rentcast" paid_api_call rows 1:1. The old three-agent-names-times-two
+// heuristic was structurally blind to the crons doing ~90% of real spend
+// (vendor billed ~231/day while this meter read near zero).
+describe("countRentcastPaidCalls", () => {
+  it("counts the rentcast agent's audit rows, ignoring every other agent", () => {
     expect(
-      countPricingAgentCalls(
-        audit({ "pricing-agent": 3, phase4a: 2, "phase4a-wrapper": 1, crier: 99 }),
+      countRentcastPaidCalls(
+        audit({ rentcast: 135, "pricing-agent": 3, phase4a: 2, crier: 99 }),
       ),
-    ).toBe(6);
+    ).toBe(135);
   });
 
-  it("returns 0 when no pricing-agent events present", () => {
-    expect(countPricingAgentCalls(audit({ crier: 50, sentry: 30 }))).toBe(0);
+  it("no longer counts legacy pricing-agent names (their calls audit as rentcast now)", () => {
+    expect(
+      countRentcastPaidCalls(audit({ "pricing-agent": 3, phase4a: 2, "phase4a-wrapper": 1 })),
+    ).toBe(0);
   });
 
   it("returns 0 when audit is null (KV unreachable)", () => {
-    expect(countPricingAgentCalls(null)).toBe(0);
+    expect(countRentcastPaidCalls(null)).toBe(0);
+  });
+});
+
+describe("rentcastQuotaAllows — overage semantics (honest meter)", () => {
+  it("hard per-run cap still denies regardless of pacing", () => {
+    const d = rentcastQuotaAllows({ estimatedRemaining: 500, callsNeeded: 20, perRunCap: 10, governorPaced: true });
+    expect(d).toMatchObject({ allowed: false, reason: "exceeds_per_run_cap" });
+  });
+
+  it("non-governor caller is denied on insufficient remaining (unchanged)", () => {
+    const d = rentcastQuotaAllows({ estimatedRemaining: 0, callsNeeded: 5, perRunCap: 10 });
+    expect(d).toMatchObject({ allowed: false, reason: "insufficient_weekly_remaining" });
+  });
+
+  it("governor-paced caller CONTINUES in overage, loudly labeled", () => {
+    // Mid-cycle overage: remaining is honestly 0, but the daily governor
+    // already paces forward spend — halting the funnel would trade deal
+    // flow for ~1.2 cents/call.
+    const d = rentcastQuotaAllows({ estimatedRemaining: 0, callsNeeded: 5, perRunCap: 10, governorPaced: true });
+    expect(d).toMatchObject({ allowed: true, reason: "overage_continue_governor_paced" });
+  });
+
+  it("governor-paced with sufficient remaining is a plain ok", () => {
+    const d = rentcastQuotaAllows({ estimatedRemaining: 500, callsNeeded: 5, perRunCap: 10, governorPaced: true });
+    expect(d).toMatchObject({ allowed: true, reason: "ok" });
+  });
+
+  it("unknown remaining (null) skips the soft check", () => {
+    const d = rentcastQuotaAllows({ estimatedRemaining: null, callsNeeded: 5, perRunCap: 10 });
+    expect(d).toMatchObject({ allowed: true, reason: "ok" });
   });
 });
 
 describe("computeBurnRate", () => {
-  it("doubles audit call count to estimate RentCast quota burns", () => {
+  it("counts paid calls 1:1 — the x2 pricing-agent heuristic is retired", () => {
     const r = computeBurnRate({
       rentcast: rentcast(),
-      audit: audit({ "pricing-agent": 5 }),
+      audit: audit({ rentcast: 5 }),
       windowHours: 24,
       daysElapsedInCycle: 0,
     });
-    expect(r.pricing_calls_in_window).toBe(5);
-    expect(r.estimated_calls_in_window).toBe(10);
+    expect(r.paid_calls_in_window).toBe(5);
+    expect(r.estimated_calls_in_window).toBe(5);
   });
 
   it("projects burn-rate-per-day from the window observation", () => {
     const r = computeBurnRate({
       rentcast: rentcast(),
-      audit: audit({ "pricing-agent": 10 }),
+      audit: audit({ rentcast: 20 }),
       windowHours: 24,
       daysElapsedInCycle: 0,
     });
-    // 10 audit calls × 2 quota credits / 24h × 24h = 20 per day.
+    // 20 paid calls / 24h × 24h = 20 per day. Honest 1:1.
     expect(r.burn_rate_per_day).toBe(20);
   });
 
   it("scales burn-rate when the window is shorter than 24h", () => {
     const r = computeBurnRate({
       rentcast: rentcast(),
-      audit: audit({ "pricing-agent": 5 }),
+      audit: audit({ rentcast: 10 }),
       windowHours: 6,
       daysElapsedInCycle: 0,
     });
-    // 5 × 2 / 6h × 24h = 40 per day.
+    // 10 / 6h × 24h = 40 per day.
     expect(r.burn_rate_per_day).toBe(40);
   });
 
   it("computes days_until_exhaustion against estimated_calls_remaining", () => {
     const r = computeBurnRate({
       rentcast: rentcast({ monthly_cap: 1000 }),
-      audit: audit({ "pricing-agent": 10 }), // 20/day burn
+      audit: audit({ rentcast: 20 }), // 20/day burn
       windowHours: 24,
       daysElapsedInCycle: 5, // 5 × 20 = 100 consumed, 900 remaining
       // → days_until_exhaustion = floor(900 / 20) = 45
@@ -116,7 +152,7 @@ describe("computeBurnRate", () => {
   it("clamps estimated_calls_remaining at 0 when over-consumed", () => {
     const r = computeBurnRate({
       rentcast: rentcast({ monthly_cap: 100 }),
-      audit: audit({ "pricing-agent": 100 }), // 200/day
+      audit: audit({ rentcast: 200 }), // 200/day
       windowHours: 24,
       daysElapsedInCycle: 5, // 5 × 200 = 1000 estimated consumed
     });
@@ -131,7 +167,7 @@ describe("computeBurnRate", () => {
       windowHours: 24,
       daysElapsedInCycle: 0,
     });
-    expect(r.pricing_calls_in_window).toBe(0);
+    expect(r.paid_calls_in_window).toBe(0);
     expect(r.burn_rate_per_day).toBe(0);
     expect(r.estimated_calls_remaining).toBe(1000);
     expect(r.days_until_exhaustion_estimate).toBeNull();

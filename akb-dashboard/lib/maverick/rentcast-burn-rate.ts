@@ -10,16 +10,27 @@
 import type { RentCastState } from "./sources/external-rentcast";
 import type { VercelKvAuditState } from "./sources/vercel-kv-audit";
 
-// Agents whose audit events indicate a RentCast API call. Each call
-// to the Pricing Agent under the hood fires TWO RentCast requests
-// (getSaleComparables + getRentEstimate), so each audit event counts
-// as 2 quota burns. This is the 5/13 observation from Alex.
-const PRICING_AGENT_AGENTS = new Set(["pricing-agent", "phase4a", "phase4a-wrapper"]);
+// ── Consolidation Night 2026-07-29 (item C): HONEST COUNTING ──────────
+// Until tonight this meter counted only three pricing-agent event names
+// and multiplied by 2 (the 5/13 heuristic from before paid calls were
+// individually audited). It was structurally blind to appraiser-backfill,
+// auto-underwrite-engaged, seed-sweep, and federation — the crons doing
+// ~90% of the actual spending — which is why it reported near-zero burn
+// while the vendor billed 6,247 calls against a 1,000/month plan. Every
+// RentCast HTTP call now emits its own paid_api_call audit row with
+// agent="rentcast" (rentcastPaidFetch is the enforced choke point since
+// item B), so the meter simply counts those rows. No multipliers, no
+// agent allowlist. Known small overcount: breaker-skipped rows (synthetic
+// 599, cost 0) are included — conservative in the safe direction.
+const RENTCAST_AUDIT_AGENT = "rentcast";
 
 export interface RentCastBurnRate {
-  // Number of pricing-agent invocations observed in the audit window.
-  pricing_calls_in_window: number;
-  // Each call burns 2 RentCast quota credits.
+  // RentCast paid_api_call audit rows observed in the window. (Renamed
+  // from pricing_calls_in_window, which described the pre-7/29 blind
+  // counting method, not the quantity.)
+  paid_calls_in_window: number;
+  // Kept for shape-compat with briefing consumers; now identical to
+  // paid_calls_in_window (the ×2 pricing-agent heuristic is retired).
   estimated_calls_in_window: number;
   // The window size in hours that pricing_calls_in_window covers.
   window_hours: number;
@@ -50,9 +61,9 @@ export interface ComputeBurnRateInputs {
  * objects and assert the joined output.
  */
 export function computeBurnRate(opts: ComputeBurnRateInputs): RentCastBurnRate {
-  const auditCalls = countPricingAgentCalls(opts.audit);
-  // Each pricing-agent call hits RentCast twice (sale comps + rent).
-  const estimatedCallsInWindow = auditCalls * 2;
+  const auditCalls = countRentcastPaidCalls(opts.audit);
+  // Honest 1:1 — every RentCast call audits itself since 2026-07-29.
+  const estimatedCallsInWindow = auditCalls;
 
   const burnPerDay =
     opts.windowHours > 0
@@ -68,7 +79,7 @@ export function computeBurnRate(opts: ComputeBurnRateInputs): RentCastBurnRate {
     burnPerDay > 0 ? Math.floor(estimatedCallsRemaining / burnPerDay) : null;
 
   return {
-    pricing_calls_in_window: auditCalls,
+    paid_calls_in_window: auditCalls,
     estimated_calls_in_window: estimatedCallsInWindow,
     window_hours: opts.windowHours,
     burn_rate_per_day: burnPerDay,
@@ -78,17 +89,14 @@ export function computeBurnRate(opts: ComputeBurnRateInputs): RentCastBurnRate {
 }
 
 /**
- * Sum of audit events attributed to any pricing-agent-class agent.
- * Reads from VercelKvAuditState.recent_events_by_agent. Returns 0
- * for null audit (graceful when KV is down).
+ * Count of RentCast paid_api_call audit rows in the audit window — the
+ * agent "rentcast" only ever emits paid-call rows (auditPaidCall), so
+ * its per-agent event count IS the call count. Returns 0 for null audit
+ * (graceful when KV is down).
  */
-export function countPricingAgentCalls(audit: VercelKvAuditState | null): number {
+export function countRentcastPaidCalls(audit: VercelKvAuditState | null): number {
   if (!audit) return 0;
-  let total = 0;
-  for (const [agent, count] of Object.entries(audit.recent_events_by_agent)) {
-    if (PRICING_AGENT_AGENTS.has(agent)) total += count;
-  }
-  return total;
+  return audit.recent_events_by_agent[RENTCAST_AUDIT_AGENT] ?? 0;
 }
 
 // ── Cron quota gate (Ship 2 — listings-intake) ──────────────────────
@@ -106,7 +114,13 @@ export function countPricingAgentCalls(audit: VercelKvAuditState | null): number
 export type RentcastQuotaReason =
   | "ok"
   | "exceeds_per_run_cap"
-  | "insufficient_weekly_remaining";
+  | "insufficient_weekly_remaining"
+  // Consolidation Night 2026-07-29 (item C): the meter is honest now, so
+  // mid-cycle overage reads as remaining=0 — which is TRUE, but halting
+  // the crawler over it would trade the deal funnel for ~1.2¢/call in
+  // overage fees while the plan-derived daily governor already enforces
+  // forward pacing. A governor-paced caller CONTINUES in overage, loudly.
+  | "overage_continue_governor_paced";
 
 export interface RentcastQuotaDecision {
   allowed: boolean;
@@ -120,8 +134,16 @@ export function rentcastQuotaAllows(opts: {
   estimatedRemaining: number | null;
   callsNeeded: number;
   perRunCap: number;
+  /** Caller declares its run volume is already clamped by the plan-derived
+   *  frontier governor (computeDailyCrawlBudget/governRunCap). With honest
+   *  metering (2026-07-29) a mid-cycle overage makes remaining=0 until the
+   *  billing reset; a governor-paced caller keeps running — audited as
+   *  overage_continue_governor_paced so the state is visible — instead of
+   *  starving the funnel for the rest of the cycle. Non-governor callers
+   *  keep the hard deny. */
+  governorPaced?: boolean;
 }): RentcastQuotaDecision {
-  const { estimatedRemaining, callsNeeded, perRunCap } = opts;
+  const { estimatedRemaining, callsNeeded, perRunCap, governorPaced } = opts;
   let reason: RentcastQuotaReason = "ok";
   if (callsNeeded > perRunCap) {
     reason = "exceeds_per_run_cap";
@@ -130,7 +152,8 @@ export function rentcastQuotaAllows(opts: {
     Number.isFinite(estimatedRemaining) &&
     estimatedRemaining < callsNeeded
   ) {
-    reason = "insufficient_weekly_remaining";
+    reason = governorPaced ? "overage_continue_governor_paced" : "insufficient_weekly_remaining";
   }
-  return { allowed: reason === "ok", reason, callsNeeded, perRunCap, estimatedRemaining };
+  const allowed = reason === "ok" || reason === "overage_continue_governor_paced";
+  return { allowed, reason, callsNeeded, perRunCap, estimatedRemaining };
 }
