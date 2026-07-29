@@ -29,7 +29,8 @@
 
 import { NextResponse } from "next/server";
 import { getActiveListingsForBrief, getRehabSweepCandidates, getListing } from "@/lib/airtable";
-import { audit } from "@/lib/audit-log";
+import { audit, readRecentFromKv } from "@/lib/audit-log";
+import { countCallsBySource24h } from "@/lib/spend/derive";
 import { noteWorkRun, noteZeroRun } from "@/lib/admin/retire-me-signal";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import {
@@ -74,6 +75,30 @@ const SAFETY_BUFFER_MS = 10_000;
 // params) so successive ticks advance through the pool instead of
 // re-slicing the same top-N every time.
 const REHAB_SWEEP_CURSOR_KEY = "rehab_ready";
+
+/** Hard 24h paid-call ceiling for the BACKFILL SWEEP (2026-07-29).
+ *
+ *  WHY THIS EXISTS. This sweep was the #1 paid-API burner in the system:
+ *  fired every 5 min over a ~1,751-record pool, its rehab leg calls
+ *  collectPhotos(), which tries RentCast FIRST and UNCONDITIONALLY (2 paid
+ *  calls: listings/sale then properties) before Firecrawl. 288 runs/day x
+ *  3 records x 2 calls = 1,728/day — matching the observed 1,709-call
+ *  spike on 2026-07-28 against a ~150/day baseline, on a 1,000-call/mo
+ *  plan. Records that CANNOT produce a rehab (no photos available) never
+ *  get rehab_estimated_at stamped, so they never satisfy the
+ *  already_complete gate and the rotating cursor re-photographs them
+ *  forever. Until the terminal-stamp fix lands, this ceiling is the bound.
+ *
+ *  DELIBERATELY LOWER THAN auto-underwrite-engaged's 150 ceiling, and it
+ *  counts the SAME shared 24h paid-call total on purpose: this graveyard
+ *  sweep must YIELD FIRST so the live-deal lane keeps its budget. Operator
+ *  ruling 2026-07-13 (Spine recT0bGaqgqeh0z4s): ~95% of intake is
+ *  unworkable, so paid data belongs on ENGAGED deals, not on every record.
+ *  auto-underwrite-engaged obeyed that ruling; this sweep never got it. */
+export function backfillPaid24hCeiling(): number {
+  const raw = Number(process.env.BACKFILL_PAID_24H_CEILING);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 60;
+}
 
 async function callEndpoint(
   origin: string,
@@ -333,6 +358,51 @@ export async function GET(req: Request) {
 
   // ── Apply mode ─────────────────────────────────────────────────────────
   const origin = originFromReq(req);
+  // ── Paid-call ceiling (2026-07-29) ───────────────────────────────────
+  // Checked BEFORE any leg fires. See backfillPaid24hCeiling() for why
+  // this sweep yields before the live-deal lane. Fails OPEN on an
+  // unreadable meter — same posture as auto-underwrite-engaged: a KV
+  // outage must not silently stall the pipeline. The loop-breaker and
+  // the per-run `limit` remain the backstops in that case.
+  const sweepCeiling = backfillPaid24hCeiling();
+  let sweepPaid24h: number | null = null;
+  let sweepRentcast24h: number | null = null;
+  try {
+    const entries = await readRecentFromKv(5000);
+    const counts = countCallsBySource24h(entries, new Date());
+    sweepRentcast24h = counts.rentcast;
+    sweepPaid24h = counts.rentcast + counts.attom;
+  } catch {
+    sweepPaid24h = null;
+  }
+  if (sweepPaid24h != null && sweepPaid24h >= sweepCeiling) {
+    await audit({
+      agent: "appraiser",
+      event: "backfill_budget_skip",
+      status: "confirmed_success",
+      inputSummary: {
+        selection: rehabReady ? "rehab_ready" : "brief_active",
+        examined: subset.length,
+        rentcast_24h: sweepRentcast24h,
+        paid_24h: sweepPaid24h,
+        ceiling: sweepCeiling,
+      },
+      outputSummary: { skipped: true, reason: "backfill_paid_calls_24h_ceiling" },
+      decision: "skip_budget",
+      ms: Date.now() - t0,
+    });
+    return NextResponse.json({
+      ok: true,
+      mode: "apply",
+      skipped: true,
+      reason: "backfill_paid_calls_24h_ceiling",
+      rentcast_24h: sweepRentcast24h,
+      paid_24h: sweepPaid24h,
+      ceiling: sweepCeiling,
+      elapsed_ms: Date.now() - t0,
+    });
+  }
+
   const cookie = req.headers.get("cookie");
   // Forward the incoming bearer + x-vercel-cron so a CRON_SECRET fire
   // can drive this end-to-end without a dashboard cookie. (2026-06-04)

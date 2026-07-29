@@ -86,7 +86,7 @@
     },
     {
       "path": "/api/admin/appraiser-backfill?apply=1&selection=rehab_ready&limit=3",
-      "schedule": "*/5 * * * *"
+      "schedule": "*/30 * * * *"
     },
     {
       "path": "/api/cron/quo-sync?limit=40&hours_back=24",
