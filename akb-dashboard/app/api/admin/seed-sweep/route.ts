@@ -35,7 +35,9 @@ import { getActiveIntakeRows } from "@/lib/zip-registry";
 import { listArvSeededZips } from "@/lib/zip-arv-seed-store";
 import { fetchListingsByZip } from "@/lib/crawler/sources/rentcast";
 import { decideAutoSeed, runAutoSeed } from "@/lib/crawler/auto-seed";
-import { audit } from "@/lib/audit-log";
+import { audit, readRecentFromKv } from "@/lib/audit-log";
+import { countCallsBySource24h } from "@/lib/spend/derive";
+import { checkLaneSpend } from "@/lib/spend/paid-call-lanes";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -100,6 +102,45 @@ export async function GET(req: Request) {
       batch: batch.map((r) => ({ zip: r.zip, state: r.state, market: r.market })),
       duration_ms: Date.now() - t0,
     });
+  }
+
+  // ── SHARED PAID-CALL METER (2026-07-29) ──────────────────────────────
+  // This route deliberately bypasses the daily-INTAKE meter (see header:
+  // steady-state pricing must not starve frontier seeding) — that design
+  // stands. What it lacked was any ABSOLUTE bound: MAX_LIMIT is 100, and
+  // each ZIP costs ~2 paid calls, so a single manual ?limit=100 run could
+  // burn 200 calls — a fifth of the monthly plan — with nothing in code
+  // refusing it. It runs as "discovery": it yields only after sweep and
+  // batch have already stopped, preserving the anti-starvation intent
+  // while capping runaway. Fails open on an unreadable meter.
+  {
+    let spent24h: number | null = null;
+    try {
+      const entries = await readRecentFromKv(5000);
+      spent24h = countCallsBySource24h(entries, new Date()).total;
+    } catch {
+      spent24h = null;
+    }
+    const verdict = checkLaneSpend("discovery", spent24h);
+    if (!verdict.allowed) {
+      await audit({
+        agent: "scout",
+        event: "seed_sweep_budget_skip",
+        status: "confirmed_success",
+        inputSummary: { lane: verdict.lane, spent_24h: verdict.spent24h, lane_ceiling: verdict.laneCeiling, ceiling: verdict.ceiling },
+        outputSummary: { skipped: true, reason: verdict.reason, batch_size: batch.length },
+        decision: "skip_budget",
+      });
+      return NextResponse.json({
+        mode: "blocked",
+        reason: "paid_calls_lane_ceiling",
+        lane: verdict.lane,
+        spent_24h: verdict.spent24h,
+        lane_ceiling: verdict.laneCeiling,
+        ceiling: verdict.ceiling,
+        duration_ms: Date.now() - t0,
+      });
+    }
   }
 
   // ── Apply: seed each unseeded ZIP from a representative listing ──────────
