@@ -39,6 +39,9 @@ export const ZR = {
   approvedBy: "fldmFfEGD0u5teM9e",
   approvalMethod: "fldxjsKuNXM3tb74l",
   notes: "fldlnkJyciSJATeeO",
+  // Consolidation Night 2026-07-29 (item D): a pause is a FIELD, not a
+  // Notes stamp. Written by retireZip, cleared by reviveZipToStaged.
+  pausedAt: "fldDYdjd0nqcAtrl8",
 } as const;
 
 export type MarketTier =
@@ -71,6 +74,9 @@ export interface ZipRegistryRow {
    *  maintained by the intake stats write-back; consumed by the tiered
    *  recrawl cadence (lib/crawler/zip-rotation recrawlCycleHours). */
   belowThresholdStreak: number | null;
+  /** When the ZIP was paused (frontier retirement). Null unless tier is
+   *  currently "paused". The revival pass reads this for the cooldown. */
+  pausedAt: string | null;
   approvalRequestedAt: string | null;
   approvalNotifiedChannels: NotifyChannel[];
   approvedBy: string | null;
@@ -134,6 +140,7 @@ function mapRow(rec: { id: string; fields: Record<string, unknown> }): ZipRegist
       typeof f[ZR.saturationThreshold] === "number" ? (f[ZR.saturationThreshold] as number) : null,
     belowThresholdStreak:
       typeof f[ZR.belowThresholdStreak] === "number" ? (f[ZR.belowThresholdStreak] as number) : null,
+    pausedAt: (f[ZR.pausedAt] as string) ?? null,
     approvalRequestedAt: (f[ZR.approvalRequestedAt] as string) ?? null,
     approvalNotifiedChannels: channels,
     approvedBy: (f[ZR.approvedBy] as string) ?? null,
@@ -277,10 +284,42 @@ export async function retireZip(
   // Fetch current notes so the stamp appends instead of overwriting.
   const rows = await fetchRows(`RECORD_ID()='${recordId}'`);
   const existing = rows[0]?.notes ?? null;
-  const stamped = `[${new Date().toISOString()}] ${opts.note}`;
+  const now = new Date().toISOString();
+  const stamped = `[${now}] ${opts.note}`;
   await patchRow(recordId, {
     [ZR.marketTier]: "paused",
+    // A pause is a FIELD (2026-07-29): the revival pass reads Paused_At
+    // for its cooldown — prose stamps alone made "paused" a one-way door.
+    [ZR.pausedAt]: now,
     [ZR.notes]: existing ? `${existing}\n\n${stamped}` : stamped,
+  });
+}
+
+// Frontier revival (Consolidation Night 2026-07-29, operator ruling
+// recHDAMIDUtmPDh8a: "Zips should never be dead, just on pause until they
+// are ripe with inventory again. That's the point of the crawler.").
+//
+// Before this function existed, "paused" was a PERMANENT exit wearing a
+// soft label: promotion only reads tier=staged, auto-stage skips any ZIP
+// already in the registry (any tier), and the crawl set is active+launch —
+// so nothing in the codebase ever moved a ZIP out of "paused". The weekly
+// frontier pass now calls this for paused rows whose cooldown has lapsed.
+//
+// Revives to STAGED, deliberately not launch/active: staged costs zero
+// crawl budget and re-enters the ordinary promotion queue, so the budget
+// governor paces revival automatically and capacity can never be
+// overshot by a thundering herd of revivals. The zero-yield streak resets
+// so the ZIP gets a clean re-test instead of inheriting old strikes.
+export async function reviveZipToStaged(
+  recordId: string,
+  opts: { note: string; existingNotes?: string | null },
+): Promise<void> {
+  const stamped = `[${new Date().toISOString()}] ${opts.note}`;
+  await patchRow(recordId, {
+    [ZR.marketTier]: "staged",
+    [ZR.pausedAt]: null,
+    [ZR.belowThresholdStreak]: 0,
+    [ZR.notes]: opts.existingNotes ? `${opts.existingNotes}\n\n${stamped}` : stamped,
   });
 }
 

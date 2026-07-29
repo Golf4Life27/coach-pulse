@@ -131,15 +131,57 @@ describe("frontierDecisions", () => {
     expect(d.promote).toHaveLength(0);
   });
 
-  it("proposes retirement only for crawled-yet-zero-yield rows", () => {
+  // Consolidation Night 2026-07-29 (item D): retirement is keyed to the
+  // SUSTAINED zero-yield streak, not the one-run *_30d snapshot. Ground
+  // truth found 75% of snapshot-flagged ZIPs actively producing (Toledo
+  // and Dayton would have been retired in their first productive week).
+  it("proposes retirement only on a sustained zero-yield streak, never a one-run snapshot", () => {
     const rows = [
-      row({ recordId: "recDead", zip: "77051", recordsIngested30d: 0, acceptRate30d: 0 }),
-      row({ recordId: "recNeverCrawled", zip: "77052", lastIngestedAt: null, recordsIngested30d: 0, acceptRate30d: 0 }),
-      row({ recordId: "recStaleStamp", zip: "77053", lastIngestedAt: "2026-05-01T00:00:00Z", recordsIngested30d: 0, acceptRate30d: 0 }),
-      row({ recordId: "recProducing", zip: "77054", recordsIngested30d: 5, acceptRate30d: 0.2 }),
+      // Sustained streak — the real dead ZIP.
+      row({ recordId: "recDead", zip: "77051", recordsIngested30d: 0, acceptRate30d: 0, zeroYieldStreak: 4 }),
+      // One quiet pass on a producing ZIP (the 75% false-flag class): the
+      // snapshot reads zero but the streak is fresh — NOT a candidate.
+      row({ recordId: "recQuietPass", zip: "77055", recordsIngested30d: 0, acceptRate30d: 0, zeroYieldStreak: 1 }),
+      row({ recordId: "recNeverCrawled", zip: "77052", lastIngestedAt: null, zeroYieldStreak: 9 }),
+      row({ recordId: "recStaleStamp", zip: "77053", lastIngestedAt: "2026-05-01T00:00:00Z", zeroYieldStreak: 9 }),
+      row({ recordId: "recProducing", zip: "77054", recordsIngested30d: 5, acceptRate30d: 0.2, zeroYieldStreak: 0 }),
     ];
     const d = frontierDecisions({ rows, dailyBudget: 28, now: JUL_11 });
     expect(d.retireCandidates.map((c) => c.row.recordId)).toEqual(["recDead"]);
+    expect(d.retireCandidates[0].reason).toContain("zero_yield_streak: 4");
+  });
+
+  // Operator ruling 2026-07-29 (Spine recHDAMIDUtmPDh8a): "Zips should
+  // never be dead, just on pause until they are ripe with inventory
+  // again." Before the revival decision existed, "paused" was a one-way
+  // door — nothing in the codebase ever moved a ZIP out of it.
+  describe("revival (paused → staged)", () => {
+    it("revives paused rows whose cooldown has lapsed", () => {
+      const rows = [
+        row({ recordId: "recRested", zip: "38109", marketTier: "paused", pausedAt: "2026-06-01T00:00:00Z" }),
+        row({ recordId: "recFresh", zip: "78201", marketTier: "paused", pausedAt: "2026-07-10T00:00:00Z" }),
+      ];
+      const d = frontierDecisions({ rows, dailyBudget: 28, now: JUL_11 });
+      expect(d.reviveCandidates.map((c) => c.row.recordId)).toEqual(["recRested"]);
+      expect(d.reviveCandidates[0].reason).toContain("cooldown");
+    });
+
+    it("revives a legacy pause with no Paused_At stamp rather than stranding it", () => {
+      const rows = [row({ recordId: "recLegacy", zip: "38108", marketTier: "paused", pausedAt: null })];
+      const d = frontierDecisions({ rows, dailyBudget: 28, now: JUL_11 });
+      expect(d.reviveCandidates.map((c) => c.row.recordId)).toEqual(["recLegacy"]);
+      expect(d.reviveCandidates[0].reason).toContain("legacy");
+    });
+
+    it("never revives non-paused, restricted, or malformed rows", () => {
+      const rows = [
+        row({ recordId: "recActive", zip: "30310", marketTier: "active", pausedAt: "2026-01-01T00:00:00Z" }),
+        row({ recordId: "recRestricted", zip: "27601", marketTier: "paused", wholesaleRestricted: true, pausedAt: "2026-01-01T00:00:00Z" }),
+        row({ recordId: "recMalformed", zip: "4412", marketTier: "paused", pausedAt: "2026-01-01T00:00:00Z" }),
+      ];
+      const d = frontierDecisions({ rows, dailyBudget: 28, now: JUL_11 });
+      expect(d.reviveCandidates).toHaveLength(0);
+    });
   });
 });
 
