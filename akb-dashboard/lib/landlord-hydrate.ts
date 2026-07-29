@@ -314,6 +314,12 @@ export interface MaoV21Marker {
    *  CANNOT authorize a contract until the DD loop corroborates. Absent
    *  on a parsed legacy/stale-deal-triage marker → defaults "landlord". */
   lane?: "landlord" | "landlord_provisional";
+  /** UTC date the marker was stamped, "YYYY-MM-DD" — the `@` suffix the
+   *  builder has always written but nothing parsed until 2026-07-29. The
+   *  V2.1 HOLD backoff (lib/v21-writer-decision.ts) reads it to suppress
+   *  re-underwriting a record that just HELD. Null on a legacy marker
+   *  written before the stamp, or an unparseable one. */
+  at?: string | null;
 }
 
 /** Pure: build the single-line provenance marker. */
@@ -351,6 +357,9 @@ export function parseMaoV21Marker(notes: string | null | undefined): MaoV21Marke
     cap: num("cap"),
     rent: num("rent"),
     taxes: num("taxes"),
+    // "@YYYY-MM-DD" trailing stamp. Written since the marker's inception,
+    // parsed since 2026-07-29 (the HOLD backoff needs the age).
+    at: (last.match(/@(\d{4}-\d{2}-\d{2})/) ?? [])[1] ?? null,
   };
 }
 

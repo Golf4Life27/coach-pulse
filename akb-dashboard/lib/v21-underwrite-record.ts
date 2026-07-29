@@ -25,7 +25,7 @@
 // unless forceFreshRent — the re-price path sets it so the recompute is
 // genuinely fresh.
 
-import { getRentEstimate, getAnnualPropertyTaxes, getRentCastAssessedValue } from "@/lib/rentcast";
+import { getRentEstimate, getRentCastPropertyFacts } from "@/lib/rentcast";
 import { updateListingRecord } from "@/lib/airtable";
 import {
   resolveAnnualTaxes,
@@ -111,6 +111,11 @@ export async function underwriteV21Record(
       redFlags: listing.redFlags,
       distressBucket: listing.distressBucket,
       distressScore: listing.distressScore,
+      // Graveyard + HOLD-backoff inputs (2026-07-29 spend audit).
+      outreachStatus: listing.outreachStatus,
+      blacklist: listing.blacklist,
+      doNotText: listing.doNotText,
+      notes: listing.notes,
     },
     { priceable, allowReprice: opts.allowReprice },
   );
@@ -134,8 +139,14 @@ export async function underwriteV21Record(
 
   // Taxes: same resolver precedence the cron uses (RentCast lane; ATTOM
   // null here — the fresh/reply paths don't pay for the ATTOM assessor).
-  const rcTaxes = await getAnnualPropertyTaxes(addr, listing.id).catch(() => null);
-  const rcAssessed = await getRentCastAssessedValue(addr, listing.id).catch(() => null);
+  // ONE /properties call for both halves (2026-07-29 spend audit): these
+  // were two separate paid calls to a byte-identical URL, billed twice for
+  // one response. See getRentCastPropertyFacts.
+  const rcFacts = await getRentCastPropertyFacts(addr, listing.id).catch(
+    () => ({ annualTaxes: null, assessedValue: null }),
+  );
+  const rcTaxes = rcFacts.annualTaxes;
+  const rcAssessed = rcFacts.assessedValue;
   const taxResolution: TaxResolution = resolveAnnualTaxes({
     state: listing.state,
     confirmedTaxes: listing.confirmedTaxes,
@@ -185,6 +196,50 @@ export async function underwriteV21Record(
       });
       written = true;
     } catch (err) {
+      writeError = err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200);
+    }
+  } else if (opts.apply && monthlyRent != null && monthlyRent > 0) {
+    // HOLD PATH — TERMINAL STAMP (2026-07-29 spend audit).
+    //
+    // Previously the ONLY write was the ok-branch above, so a record that
+    // HOLDs (missing rehab / taxes / cap) stamped nothing at all. Because
+    // decideV21Write keys idempotency off Your_MAO_V21 being non-null, that
+    // record stayed null forever and re-entered the 12-slot daily candidate
+    // pool on EVERY run — re-paying for rent and /properties each time, with
+    // no backoff and no cap. As resolvable records drained, the doomed
+    // cohort trended toward consuming the entire daily budget. Same defect
+    // class as the appraiser-backfill photo loop (capped in 0e1729a).
+    //
+    // Two things are salvaged here. (1) The rent value we ALREADY PAID FOR
+    // is persisted, so the "stored preferred" check at the top of this
+    // function short-circuits the rent call on the next pass — previously a
+    // HOLD threw away a fresh paid answer. (2) A dated marker goes into the
+    // notes so selection can apply a backoff instead of re-asking blind.
+    //
+    // Deliberately does NOT write Your_MAO_V21 — a HOLD has no MAO, and
+    // fabricating one to achieve idempotency would put an unbacked number
+    // on a money field. The backoff reads the marker, not the MAO.
+    try {
+      await updateListingRecord(listing.id, {
+        Estimated_Monthly_Rent: monthlyRent,
+        Verification_Notes: upsertMaoV21Marker(
+          listing.notes ?? null,
+          buildMaoV21Marker(
+            {
+              status: result.status,
+              lane,
+              yourMao: null,
+              investorMao: result.investorMao,
+              cap: result.cap,
+              rent: monthlyRent,
+              taxes: taxResolution.annualTaxes,
+            },
+            new Date(),
+          ),
+        ),
+      });
+    } catch (err) {
+      // Advisory stamp — a failure here must not fail the underwrite.
       writeError = err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200);
     }
   }

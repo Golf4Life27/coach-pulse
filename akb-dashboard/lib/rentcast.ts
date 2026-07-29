@@ -551,9 +551,74 @@ export function extractAssessedValue(rec: Record<string, unknown> | undefined): 
   return bestValue;
 }
 
+/** Both halves of ONE RentCast `/properties` record. */
+export interface RentCastPropertyFacts {
+  /** Most-recent year's annual property-tax total. Null when absent. */
+  annualTaxes: number | null;
+  /** Most-recent year's CAD assessed value. Null when absent. */
+  assessedValue: number | null;
+}
+
+/**
+ * Fetch annual taxes AND assessed value in a SINGLE `/properties` call.
+ *
+ * WHY THIS EXISTS (2026-07-29 spend audit). getAnnualPropertyTaxes and
+ * getRentCastAssessedValue below build byte-identical query strings and hit
+ * the identical endpoint — extractAnnualTaxes and extractAssessedValue just
+ * read two different keys off the SAME response object. Every caller that
+ * wanted both was billed twice for one answer. Three call sites paired them
+ * (v21-underwrite-record, stale-deal-triage, resource-bexar-taxes), and the
+ * live one runs on the daily V2.1 cron plus every seller-reply re-price.
+ *
+ * The two single-value functions are kept for callers that genuinely need
+ * only one half (e.g. landlord-mao takes taxes alone) — but any caller
+ * wanting both MUST use this, or it is paying the duplicate tax again.
+ *
+ * Never throws — returns nulls on any failure, so the caller HOLDs rather
+ * than fabricating an economics input.
+ */
+export async function getRentCastPropertyFacts(
+  input: { address: string; city: string; state: string; zip: string },
+  recordId?: string,
+): Promise<RentCastPropertyFacts> {
+  const empty: RentCastPropertyFacts = { annualTaxes: null, assessedValue: null };
+  if (!RENTCAST_API_KEY) return empty;
+  const qp = new URLSearchParams({
+    address: input.address,
+    city: input.city,
+    state: input.state,
+    zipCode: input.zip,
+  });
+  try {
+    const res = await paidFetch(
+      "properties",
+      `${BASE}/properties?${qp.toString()}`,
+      { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" },
+      recordId,
+      { ...input, recordId: recordId ?? null },
+      // HONEST-404: "no parcel at this address" is an answer, not an infra
+      // failure — matches getRentCastAssessedValue's existing posture.
+      [404],
+    );
+    if (!res.ok) return empty;
+    const body = (await res.json()) as unknown;
+    const rec = Array.isArray(body) ? (body[0] as Record<string, unknown> | undefined) : undefined;
+    return {
+      annualTaxes: extractAnnualTaxes(rec),
+      assessedValue: extractAssessedValue(rec),
+    };
+  } catch {
+    return empty;
+  }
+}
+
 /**
  * Fetch the subject's most-recent CAD assessed value from RentCast
  * `/properties`. Never throws — returns null on any failure.
+ *
+ * NOTE: if you also need annual taxes, call getRentCastPropertyFacts()
+ * instead — pairing this with getAnnualPropertyTaxes bills the same
+ * endpoint twice for one answer.
  */
 export async function getRentCastAssessedValue(
   input: { address: string; city: string; state: string; zip: string },

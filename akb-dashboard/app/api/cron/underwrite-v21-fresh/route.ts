@@ -31,7 +31,9 @@
 //   ?zips=a,b    scope to ZIPs (default: all priceable seeded)
 
 import { NextResponse } from "next/server";
-import { audit } from "@/lib/audit-log";
+import { audit, readRecentFromKv } from "@/lib/audit-log";
+import { countCallsBySource24h } from "@/lib/spend/derive";
+import { checkLaneSpend } from "@/lib/spend/paid-call-lanes";
 import { getListings } from "@/lib/airtable";
 import { underwriteV21Record } from "@/lib/v21-underwrite-record";
 import { decideV21Write } from "@/lib/v21-writer-decision";
@@ -113,6 +115,40 @@ export async function GET(req: Request) {
     }
   }
 
+  // ── SHARED PAID-CALL METER (2026-07-29) ──────────────────────────────
+  // This lane had NO budget check of any kind while carrying a ~36
+  // call/day ceiling — more than the entire 1,000-call/month plan's daily
+  // allotment, from one cron. It runs as "batch": it yields before
+  // discovery and well before the live-deal lane. Fails open.
+  if (apply) {
+    let spent24h: number | null = null;
+    try {
+      const entries = await readRecentFromKv(5000);
+      spent24h = countCallsBySource24h(entries, new Date()).total;
+    } catch {
+      spent24h = null;
+    }
+    const verdict = checkLaneSpend("batch", spent24h);
+    if (!verdict.allowed) {
+      await audit({
+        agent: "appraiser",
+        event: "v21_fresh_budget_skip",
+        status: "confirmed_success",
+        inputSummary: { lane: verdict.lane, spent_24h: verdict.spent24h, lane_ceiling: verdict.laneCeiling, ceiling: verdict.ceiling },
+        outputSummary: { skipped: true, reason: verdict.reason },
+        decision: "skip_budget",
+      });
+      return NextResponse.json({
+        mode: "blocked",
+        reason: "paid_calls_lane_ceiling",
+        lane: verdict.lane,
+        spent_24h: verdict.spent24h,
+        lane_ceiling: verdict.laneCeiling,
+        ceiling: verdict.ceiling,
+      });
+    }
+  }
+
   let listings: Listing[];
   let seededZips: Set<string>;
   try {
@@ -131,7 +167,22 @@ export async function GET(req: Request) {
     const market = getMarketForListing({ state: l.state, zip: l.zip });
     const priceable = market?.buyer_params?.arv_pct_max != null && seededZips.has(zip);
     const d = decideV21Write(
-      { liveStatus: l.liveStatus, yourMao: l.yourMao, state: l.state, zip: l.zip, redFlags: l.redFlags, distressBucket: l.distressBucket, distressScore: l.distressScore },
+      {
+        liveStatus: l.liveStatus,
+        yourMao: l.yourMao,
+        state: l.state,
+        zip: l.zip,
+        redFlags: l.redFlags,
+        distressBucket: l.distressBucket,
+        distressScore: l.distressScore,
+        // Graveyard + HOLD-backoff inputs (2026-07-29 spend audit): this
+        // loop previously fed only Live_Status, so killed/opted-out records
+        // and permanently-HOLDing ones kept drawing paid calls every run.
+        outreachStatus: l.outreachStatus,
+        blacklist: l.blacklist,
+        doNotText: l.doNotText,
+        notes: l.notes,
+      },
       { priceable },
     );
     if (d.write) {
@@ -204,7 +255,8 @@ export async function GET(req: Request) {
     skip_breakdown: skipBreakdown,
     results,
     note:
-      "NOT scheduled in vercel.json — activation pending Maverick dry-run review. A-prime: " +
+      "Scheduled in vercel.json at 0 5 * * * with apply=1 (this note previously " +
+      "claimed NOT scheduled — corrected 2026-07-29 during the spend audit). A-prime: " +
       "landlord (scored) authorizes now; landlord_provisional (vision-only redflag) is WRITTEN but " +
       "CANNOT authorize a contract until the DD loop corroborates (lib/v21-contract-authorization).",
     elapsed_ms: Date.now() - t0,
