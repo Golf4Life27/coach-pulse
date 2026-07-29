@@ -58,6 +58,25 @@ function breakerShortCircuitResponse(key: string, lastStatus: number | null): Re
 // failures increment it and edge-trigger an alert audit at the trip
 // threshold. The */10 bexar-taxes cron (recG4GNM2sa0ZYj7p) burned ~6
 // 404s/hr against an unindexed address before this breaker shipped.
+/** THE RentCast HTTP choke point (exported 2026-07-29, Consolidation
+ *  Night item B). Every RentCast HTTP call in the codebase must pass
+ *  through this function — it is the only path that (1) emits the
+ *  paid_api_call audit row the spend meters/dashboards read, and (2)
+ *  consults the failure loop-breaker. lib/crawler/sources/rentcast.ts
+ *  previously used a raw fetch(), which made ~40% of real RentCast spend
+ *  invisible to every meter (audit showed 135/day while the vendor billed
+ *  ~231/day). DO NOT add a new RentCast fetch outside this function. */
+export async function rentcastPaidFetch(
+  endpoint: string,
+  url: string,
+  init: RequestInit,
+  recordId?: string,
+  breakerInputs?: PaidFetchBreakerInputs,
+  honestEmptyStatuses?: number[],
+): Promise<Response> {
+  return paidFetch(endpoint, url, init, recordId, breakerInputs, honestEmptyStatuses);
+}
+
 async function paidFetch(
   endpoint: string,
   url: string,

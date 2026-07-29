@@ -17,6 +17,7 @@
 // snapshot: ~80-135 qualifying/ZIP, well under 500).
 
 import type { IntakeCandidate } from "@/lib/crawler/intake-filter";
+import { rentcastPaidFetch } from "@/lib/rentcast";
 
 const RENTCAST_API_KEY = process.env.RENTCAST_API_KEY;
 const RENTCAST_BASE = "https://api.rentcast.io/v1";
@@ -164,10 +165,30 @@ export async function fetchListingsByZip(zip: string): Promise<RentcastFetchResu
     return { candidates: [], credentialed: false, error: "RENTCAST_API_KEY not set", raw_count: 0 };
   }
   try {
-    const res = await fetch(buildListingsUrl(zip), {
-      headers: { "X-Api-Key": RENTCAST_API_KEY, accept: "application/json" },
-      cache: "no-store",
-    });
+    // Consolidation Night 2026-07-29 (item B): this was a raw fetch() — the
+    // ONLY RentCast call path outside the audited choke point. Every
+    // /listings/sale call from listings-intake, seed-sweep, and
+    // mls-date-backfill was invisible to the paid_api_call audit, the spend
+    // meters, the loop breaker, AND the Pulse burn detector — the reason
+    // the internal meter read ~135/day while the vendor billed ~231/day.
+    // Now routed through rentcastPaidFetch: audited, per-ZIP breaker shape
+    // (one bad ZIP can't block the others), 404 = honest "no listings".
+    const res = await rentcastPaidFetch(
+      "listings/sale",
+      buildListingsUrl(zip),
+      {
+        headers: { "X-Api-Key": RENTCAST_API_KEY, accept: "application/json" },
+        cache: "no-store",
+      },
+      undefined,
+      { zip },
+      [404],
+    );
+    if (res.status === 404) {
+      // Honest empty: RentCast has no sale listings indexed for this ZIP.
+      // Audited as success upstream; not an error for the cron loop.
+      return { candidates: [], credentialed: true, error: null, raw_count: 0 };
+    }
     if (!res.ok) {
       return {
         candidates: [],
