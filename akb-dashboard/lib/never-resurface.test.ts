@@ -13,7 +13,7 @@ import {
 
 describe("NEVER_RESURFACE constant", () => {
   it("contains the locked Canon §9 addresses plus the 2026-07-28 operator kills (lowercased)", () => {
-    expect(NEVER_RESURFACE.size).toBe(16);
+    expect(NEVER_RESURFACE.size).toBe(17);
     expect(NEVER_RESURFACE.has("2715 monterey st")).toBe(true);
     expect(NEVER_RESURFACE.has("910 green st")).toBe(true);
     expect(NEVER_RESURFACE.has("707 n pine st")).toBe(true);
@@ -79,5 +79,14 @@ describe("isNeverResurfaceLoose — substring matcher (Pipeline_State backfill h
     expect(isNeverResurfaceLoose(undefined)).toBe(false);
     expect(isNeverResurfaceLoose("")).toBe(false);
     expect(isNeverResurfaceLoose("   ")).toBe(false);
+  });
+});
+
+// 2026-07-29 — Stanwood, the first condition-kill under the operator's
+// standing delegation. Pins both matchers so the kill survives refactors.
+describe("1848 Stanwood Rd (condition-kill delegation)", () => {
+  it("blocks the exact address and loose variants", () => {
+    expect(isNeverResurface("1848 Stanwood Rd")).toBe(true);
+    expect(isNeverResurfaceLoose("1848 Stanwood Rd, East Cleveland, OH 44112")).toBe(true);
   });
 });

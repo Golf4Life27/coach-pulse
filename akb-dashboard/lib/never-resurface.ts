@@ -25,6 +25,14 @@ export const NEVER_RESURFACE: ReadonlySet<string> = new Set([
   "533 robison dr",
   "1122 west ave sw",
   "2048 joffre ave",
+  // 2026-07-29 — first kill under the CONDITION-KILL DELEGATION (operator:
+  // "I don't need to give you permission to kill evidence-based
+  // rehab/condition riddled properties"). Stanwood: agent-provided document
+  // package proved bowing basement walls (right + back, never repaired),
+  // mostly-knob-and-tube wiring, and a $17,645/14-month maintenance ledger
+  // (~$1,260/mo against $1,450 rent). Realistic MAO ~$25-30K vs $119,900
+  // ask. Evidence-based, spine-logged (recpoqbjTOl2icxwI).
+  "1848 stanwood rd",
 ]);
 
 /** Pure: true when an address is on the never-resurface blocklist. */
