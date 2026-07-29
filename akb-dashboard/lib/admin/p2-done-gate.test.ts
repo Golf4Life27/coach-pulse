@@ -157,3 +157,55 @@ describe("readP2Config", () => {
     });
   });
 });
+
+// ── Terminal no-photo-source flag (Consolidation Night 2026-07-29, item E) ──
+// A rehab 422 of no_photos_available / street_view_only_insufficient is an
+// ANSWER, not a transient failure. Before this state existed, the failure
+// bench looped: 5 paid rounds → 7-day bench → TTL lapse → 5 more rounds,
+// forever — each round re-buying the RentCast photo pulls inside
+// collectPhotos for a property with no photo source.
+describe("planLegs — rehabUnproducible terminal state", () => {
+  const base = {
+    arvValidatedAt: null,
+    rehabEstimatedAt: null,
+    estimatedMonthlyRent: null,
+    force: false,
+    kvAvailable: true,
+    rehabStable: false,
+    failures: { arv: 0, rehab: 0, rent: 0 },
+  };
+
+  it("skips the rehab leg when the no-photo-source flag is set", () => {
+    const p = planLegs({ ...base, rehabUnproducible: true });
+    expect(p.rehab).toBe("skip_unproducible");
+    // Other legs are unaffected — ARV and rent don't need photos.
+    expect(p.arv).toBe("run");
+    expect(p.rent).toBe("run");
+  });
+
+  it("the terminal answer outranks the confirmation-read path", () => {
+    const p = planLegs({
+      ...base,
+      rehabUnproducible: true,
+      rehabEstimatedAt: "2026-07-01T00:00:00Z",
+    });
+    expect(p.rehab).toBe("skip_unproducible");
+  });
+
+  it("force=1 overrides — the operator can always demand a fresh attempt", () => {
+    const p = planLegs({ ...base, rehabUnproducible: true, force: true });
+    expect(p.rehab).toBe("run");
+  });
+
+  it("absent flag → unchanged behavior (first read runs)", () => {
+    const p = planLegs({ ...base, rehabUnproducible: false });
+    expect(p.rehab).toBe("run");
+  });
+
+  it("skip_unproducible counts as an avoided vision call in burn quantification", () => {
+    const avoided = callsAvoided([
+      { arv: "run", rehab: "skip_unproducible", rent: "run" },
+    ]);
+    expect(avoided.anthropic).toBe(1);
+  });
+});

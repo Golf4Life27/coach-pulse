@@ -34,6 +34,17 @@ export const STABLE_FLAG_TTL_S = 30 * 86_400;
 export const FAILURE_COUNT_TTL_S = 7 * 86_400;
 
 export const rehabStableKey = (recordId: string) => `p2:rehab:stable:${recordId}`;
+/** Consolidation Night 2026-07-29 (item E): terminal no-photo-source flag.
+ *  A rehab 422 of no_photos_available / street_view_only_insufficient is an
+ *  ANSWER ("this property has no usable photo source"), not a transient
+ *  failure — the same lesson as the honest-404 pattern. Before this flag,
+ *  the answer was counted as an error: 5 failure rounds → 7-day bench →
+ *  TTL lapse → 5 MORE paid rounds, forever, each round re-buying the
+ *  RentCast photo pulls inside collectPhotos. 30-day TTL = a slow re-test
+ *  (a re-listed property can gain photos), mirroring the pause-not-death
+ *  doctrine rather than a permanent door. */
+export const rehabUnproducibleKey = (recordId: string) => `p2:rehab:no_photo_source:${recordId}`;
+export const REHAB_UNPRODUCIBLE_TTL_S = 30 * 86_400;
 export const legFailureKey = (recordId: string, leg: LegName) => `p2:fail:${leg}:${recordId}`;
 
 export type LegName = "arv" | "rehab" | "rent";
@@ -59,7 +70,11 @@ export type LegPlan =
   | "run"
   | "skip_done"
   | "skip_stable"
-  | "skip_failure_capped";
+  | "skip_failure_capped"
+  // Terminal answer: no usable photo source exists for this record (422
+  // no_photos_available / street_view_only_insufficient). Re-tested only
+  // after the 30d flag lapses.
+  | "skip_unproducible";
 
 export interface RecordLegPlan {
   arv: LegPlan;
@@ -78,6 +93,9 @@ export interface PlanLegsInput {
   kvAvailable: boolean;
   /** KV stable flag for the rehab leg (two agreeing reads recorded). */
   rehabStable: boolean;
+  /** KV no-photo-source flag: a prior run got the terminal "no usable
+   *  photos" answer. Rehab leg skips until the 30d flag lapses. */
+  rehabUnproducible?: boolean;
   /** Consecutive-failure counts per leg (0 when absent). */
   failures: { arv: number; rehab: number; rent: number };
   failureCap?: number;
@@ -102,7 +120,11 @@ export function planLegs(input: PlanLegsInput): RecordLegPlan {
         : "run";
 
   let rehab: LegPlan;
-  if (input.rehabStable) {
+  if (input.rehabUnproducible) {
+    // The terminal answer outranks everything except force: firing again
+    // re-buys photo pulls for a property with no photo source.
+    rehab = "skip_unproducible";
+  } else if (input.rehabStable) {
     rehab = "skip_stable";
   } else if (input.rehabEstimatedAt != null && !input.kvAvailable) {
     // A read exists but there is no ledger to record a confirmation —
