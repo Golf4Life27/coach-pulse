@@ -166,6 +166,7 @@ async function createIntakeListing(
   underwrittenMao: number | null = null,
   underwrittenMaoTrack: string | null = null,
   opener: { amount: number | null; basis: string; reseed: boolean } | null = null,
+  renovated: { detected: boolean; keywords: string[] } | null = null,
 ): Promise<string> {
   if (!AIRTABLE_PAT) throw new Error("AIRTABLE_PAT not set");
   const url = `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}`;
@@ -184,6 +185,8 @@ async function createIntakeListing(
     underwrittenMao,
     underwrittenMaoTrack,
     opener,
+    renovatedLanguage: renovated?.detected ?? false,
+    matchedRenovationKeywords: renovated?.keywords ?? [],
   });
   const res = await fetch(url, {
     method: "POST",
@@ -564,7 +567,7 @@ export async function GET(req: Request) {
       missing_agent_phone: 0,
       reasons_blocked: {} as Record<string, number>,
     },
-    would_write: [] as Array<{ sourceId: string; address: string | null; zip: string | null; listPrice: number | null; firecrawlUrl: string | null; outreachStatus: "" | "Review"; promote: boolean; agentPhonePresent: boolean; portfolioDetected: boolean }>,
+    would_write: [] as Array<{ sourceId: string; address: string | null; zip: string | null; listPrice: number | null; firecrawlUrl: string | null; outreachStatus: "" | "Review"; promote: boolean; agentPhonePresent: boolean; portfolioDetected: boolean; renovatedLanguage: boolean }>,
     reject_reason_counts: {} as Record<string, number>,
     per_zip_errors: [] as Array<{ zip: string; error: string }>,
     credentialed: true,
@@ -1024,8 +1027,9 @@ export async function GET(req: Request) {
     matchedPortfolioKeywords: string[];
     underwrittenMao: number | null;
     underwrittenMaoTrack: BuyerTrack | null;
+    renovated: { detected: boolean; keywords: string[] };
   }> = [];
-  const bumpBlocked = (reason: AutoPromoteBlockReason | "auto_promote_disabled" | "auto_promote_dry_run") => {
+  const bumpBlocked = (reason: AutoPromoteBlockReason | "auto_promote_disabled" | "auto_promote_dry_run" | "renovated_language") => {
     summary.auto_promote.reasons_blocked[reason] = (summary.auto_promote.reasons_blocked[reason] ?? 0) + 1;
   };
 
@@ -1169,7 +1173,14 @@ export async function GET(req: Request) {
     // A record actually writes H2-ready only when intrinsically eligible AND
     // the master flag is on AND not in auto-promote dry-run.
     let promote = ap.promote;
-    if (ap.promote && !autoPromoteLive) { promote = false; bumpBlocked("auto_promote_disabled"); }
+    // RENOVATED DEMOTION (2026-07-30, the 20179 Russell St miss): a distress
+    // signal overrides a renovation match at CLASSIFY (sourcing posture,
+    // unchanged) — but the send-gate vetoes every opener-class send to a
+    // renovated listing, so promoting one is dead weight that can never take
+    // its first text. Route it to Review instead; the operator decides the
+    // play (landlord angle, re-price, or pass). The flag persists either way.
+    if (promote && fc.hasRenovatedLanguage) { promote = false; bumpBlocked("renovated_language"); }
+    else if (ap.promote && !autoPromoteLive) { promote = false; bumpBlocked("auto_promote_disabled"); }
     else if (ap.promote && autoPromoteDryRun) { promote = false; bumpBlocked("auto_promote_dry_run"); }
 
     if (promote) summary.auto_promote.promoted++;
@@ -1181,7 +1192,8 @@ export async function GET(req: Request) {
       `[listings-intake][auto-promote] ${c.sourceId} accepted=${accepted} ` +
       `promote=${promote} reason=${ap.reason ?? "-"} ` +
       `basis=${decision.outcome === "accept" ? decision.acceptBasis : "-"} ` +
-      `phone=${c.agentPhone ? "y" : "n"} state=${c.state ?? "?"}`,
+      `phone=${c.agentPhone ? "y" : "n"} state=${c.state ?? "?"} ` +
+      `reno=${fc.hasRenovatedLanguage ? "y" : "n"}`,
     );
 
     if (dryRun) {
@@ -1190,6 +1202,7 @@ export async function GET(req: Request) {
         firecrawlUrl: fc.url, outreachStatus: promote ? "" : "Review",
         promote, agentPhonePresent: !!c.agentPhone,
         portfolioDetected: fc.portfolioSellerDetected,
+        renovatedLanguage: fc.hasRenovatedLanguage,
       });
     } else {
       toWrite.push({
@@ -1198,6 +1211,7 @@ export async function GET(req: Request) {
         matchedPortfolioKeywords: fc.matchedPortfolioKeywords,
         underwrittenMao,
         underwrittenMaoTrack,
+        renovated: { detected: fc.hasRenovatedLanguage, keywords: fc.matchedKeywords },
       });
     }
   }
@@ -1224,7 +1238,7 @@ export async function GET(req: Request) {
   // Airtable writes / intra-run dup races). ──
   const anchorCacheIntake = new Map<string, number>();
   if (!dryRun) {
-    for (const { candidate: c, zip, promote, firecrawlUrl, portfolioDetected, matchedPortfolioKeywords, underwrittenMao, underwrittenMaoTrack } of toWrite) {
+    for (const { candidate: c, zip, promote, firecrawlUrl, portfolioDetected, matchedPortfolioKeywords, underwrittenMao, underwrittenMaoTrack, renovated } of toWrite) {
       try {
         // Opener-write (gated): price the new record off the renovated-comp
         // ZIP seed (source-swap). New intake records carry no stored ARV, so
@@ -1249,7 +1263,7 @@ export async function GET(req: Request) {
           });
           opener = { amount: priced.result.opener, basis: priced.basisLabel, reseed: priced.result.flagReseed };
         }
-        await createIntakeListing(c, promote, firecrawlUrl, portfolioDetected, matchedPortfolioKeywords, underwrittenMao, underwrittenMaoTrack, opener);
+        await createIntakeListing(c, promote, firecrawlUrl, portfolioDetected, matchedPortfolioKeywords, underwrittenMao, underwrittenMaoTrack, opener, renovated);
         summary.written++;
       } catch (err) {
         summary.per_zip_errors.push({
