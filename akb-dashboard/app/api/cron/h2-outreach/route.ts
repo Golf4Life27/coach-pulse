@@ -93,6 +93,8 @@ import {
   emitSupplyFloorAudit,
   type SupplyFloorVerdict,
 } from "@/lib/h2-outreach/supply-floor";
+import { verifyListing, classifyVerifiedListing } from "@/lib/crawler/sources/firecrawl";
+import { checkFirecrawlBreaker, recordFirecrawlSpend } from "@/lib/crawler/firecrawl-circuit-breaker";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -662,6 +664,17 @@ async function handle(req: Request): Promise<Response> {
      *  undelivered/failed) — the number was auto-quarantined (marked Dead,
      *  no retry). Distinct from bad_phone_quarantined (upfront format reject). */
     delivery_quarantined: number;
+    /** Pre-send Firecrawl content probe (2026-07-30, the 20179 Russell St
+     *  miss). One scrape immediately before the FIRST text — the last look
+     *  at the live page before money-bearing outreach. */
+    presend_probe: {
+      probes: number;
+      credits_used: number;
+      renovated_vetoed: number;
+      content_rejected: number;
+      disposed_inactive: number;
+      infra_skipped: number;
+    };
   } = {
     first_touch_sent: 0,
     prior_contact_stalled: 0,
@@ -672,7 +685,15 @@ async function handle(req: Request): Promise<Response> {
     errors: 0,
     unconfirmed: 0,
     delivery_quarantined: 0,
+    presend_probe: { probes: 0, credits_used: 0, renovated_vetoed: 0, content_rejected: 0, disposed_inactive: 0, infra_skipped: 0 },
   };
+
+  // Pre-send probe spend brake — same rolling-hour bucket as intake
+  // (INVARIANTS: no background process touches Firecrawl without a brake).
+  // Snapshot at run start; creditsUsed accumulates in-run so a slot cannot
+  // blow past the cap mid-flight. Dry runs never probe.
+  const probeBreaker = dryRun ? null : await checkFirecrawlBreaker().catch(() => null);
+  let probeCreditsUsed = 0;
 
   // Run-mutex (live only) — two overlapping invocations both reading the same
   // empty-status pool is what double-fired on 2026-05-27 (Spine
@@ -836,6 +857,99 @@ async function handle(req: Request): Promise<Response> {
             });
             continue;
           }
+          // ── PRE-SEND CONTENT PROBE (2026-07-30, the 20179 Russell St miss:
+          // record created 21:21Z, texted 21:30Z, page said "fully renovated").
+          // Intake's verify can miss renovated/turnkey copy (page variant,
+          // truncated markdown, scoping) and freshness-reverify hasn't touched
+          // a minutes-old record yet — so this is the LAST look at the live
+          // page before the first money-bearing text. Mirrors the parked-
+          // followup pre-send probe (Spine recV9zpfSyF6BYbOj): content
+          // verdicts route the record OUT of the queue (never re-probes every
+          // slot); infra failures skip the send and leave it queued — fail-
+          // closed, a Firecrawl outage pauses openers rather than letting one
+          // through unchecked. Spend rides the shared rolling-hour breaker.
+          const breakerBlocked =
+            !probeBreaker ||
+            probeBreaker.tripped ||
+            probeBreaker.spentRecent + probeCreditsUsed >= probeBreaker.cap;
+          const probeAddr = fresh?.address ?? p.address;
+          const probeFc =
+            breakerBlocked || !probeAddr ? null : await verifyListing(probeAddr).catch(() => null);
+          if (probeFc) {
+            probeCreditsUsed += probeFc.creditsUsed ?? 0;
+            summary.presend_probe.probes++;
+            summary.presend_probe.credits_used += probeFc.creditsUsed ?? 0;
+          }
+          const probeVerdict = probeFc ? classifyVerifiedListing(probeFc) : null;
+          if (probeVerdict?.outcome === "reject" && probeVerdict.reason === "firecrawl_inactive") {
+            // Listing is gone — dispose before any SMS spend.
+            await updateListingRecord(p.recordId, {
+              Outreach_Status: "Dead",
+              Verification_Notes:
+                `${existingNotes ? existingNotes + "\n\n" : ""}[${iso}] Pre-send Firecrawl probe: listing no longer active — disposed before first text.`,
+            });
+            row.airtable_updated = true;
+            row.error = "presend_probe: disposed_inactive";
+            summary.presend_probe.disposed_inactive++;
+            await audit({
+              agent: "crier",
+              event: "h2_presend_probe_disposed_inactive",
+              status: "confirmed_success",
+              recordId: p.recordId,
+              inputSummary: { address: probeAddr },
+              outputSummary: { reason: probeVerdict.reason },
+              decision: probeVerdict.reason,
+            });
+            continue;
+          }
+          if (
+            probeVerdict?.outcome === "reject" &&
+            (probeVerdict.reason === "firecrawl_renovated" ||
+              probeVerdict.reason === "new_construction_excluded" ||
+              probeVerdict.reason === "wholesaler_excluded")
+          ) {
+            const isReno = probeVerdict.reason === "firecrawl_renovated";
+            await updateListingRecord(p.recordId, {
+              ...(isReno ? { Renovated_Language: true } : {}),
+              Outreach_Status: "Review",
+              Verification_Notes:
+                `${existingNotes ? existingNotes + "\n\n" : ""}[${iso}] Pre-send Firecrawl probe: ${probeVerdict.reason} — first text SUPPRESSED, routed to Review${isReno ? "; Renovated_Language persisted (send-gate veto holds lane-wide)" : ""}.`,
+            });
+            row.airtable_updated = true;
+            row.error = `presend_probe: ${probeVerdict.reason}`;
+            if (isReno) summary.presend_probe.renovated_vetoed++;
+            else summary.presend_probe.content_rejected++;
+            await audit({
+              agent: "crier",
+              event: "h2_presend_probe_content_reject",
+              status: "confirmed_success",
+              recordId: p.recordId,
+              inputSummary: { address: probeAddr },
+              outputSummary: { reason: probeVerdict.reason, renovated_language_persisted: isReno },
+              decision: probeVerdict.reason,
+            });
+            continue;
+          }
+          if (!probeVerdict || probeVerdict.outcome === "reject") {
+            // Infra-class failure (breaker blocked, probe threw, 402/429/
+            // unresolved/not-configured) — no verdict on the page. Skip the
+            // send; the record stays queued and the next slot retries.
+            row.error = `presend_probe_infra: ${breakerBlocked ? "breaker_blocked" : probeVerdict?.reason ?? "probe_failed"}`;
+            summary.presend_probe.infra_skipped++;
+            summary.errors++;
+            await audit({
+              agent: "crier",
+              event: "h2_presend_probe_infra_skip",
+              status: "uncertain",
+              recordId: p.recordId,
+              inputSummary: { address: probeAddr, breaker_blocked: breakerBlocked },
+              outputSummary: { reason: breakerBlocked ? "breaker_blocked" : probeVerdict?.reason ?? "probe_failed" },
+            });
+            continue;
+          }
+          // accept / review verdicts → the page is live and not veto-class;
+          // proceed to the send-gate floor.
+
           // ── 1) SEND — through the ONE choke point (lib/outreach/send-gate).
           // The gate is the FLOOR (Do_Not_Text, renovated-opener veto,
           // number-level 30m duplicate suppression, mandatory purpose +
@@ -1026,6 +1140,14 @@ async function handle(req: Request): Promise<Response> {
     // Best-effort — supply-floor is a signal, never a gate. A failure
     // here must not affect the cron's primary work.
     console.error("[h2-outreach] supply-floor evaluator threw:", err);
+  }
+
+  // Persist the pre-send probe's Firecrawl spend into the shared rolling-hour
+  // bucket so the next tick's breaker (here AND in listings-intake) sees it.
+  if (probeCreditsUsed > 0) {
+    await recordFirecrawlSpend(probeCreditsUsed).catch((err) =>
+      console.error("[h2-outreach] probe spend record failed:", err),
+    );
   }
 
   // Release the run-mutex on normal completion; the TTL is the backstop for the

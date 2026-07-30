@@ -26,6 +26,14 @@ export interface IntakeFieldsOpts {
   underwrittenMao?: number | null;
   underwrittenMaoTrack?: string | null;
   opener?: { amount: number | null; basis: string; reseed: boolean } | null;
+  /** Renovated/turnkey language detected on the subject page by the intake
+   *  Firecrawl verify (fc.hasRenovatedLanguage). Persisted to
+   *  Renovated_Language so the send-gate opener veto can see it from the
+   *  record's FIRST minute — freshness-reverify was the only writer before,
+   *  leaving every record textable in the gap between intake and its first
+   *  reverify pass (20179 Russell St: created 21:21Z, texted 21:30Z). */
+  renovatedLanguage?: boolean;
+  matchedRenovationKeywords?: string[];
 }
 
 const posNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v > 0;
@@ -80,6 +88,11 @@ export function buildIntakeListingFields(c: IntakeCandidate, opts: IntakeFieldsO
     fields["Portfolio_Detected"] = true;
     fields["Verification_Notes"] =
       `${fields["Verification_Notes"] ?? ""}\n[${iso}] PORTFOLIO_DETECTED: ${(opts.matchedPortfolioKeywords ?? []).slice(0, 6).join(", ")}.`;
+  }
+  if (opts.renovatedLanguage) {
+    fields["Renovated_Language"] = true;
+    fields["Verification_Notes"] =
+      `${fields["Verification_Notes"] ?? ""}\n[${iso}] RENOVATED_LANGUAGE at intake: ${(opts.matchedRenovationKeywords ?? []).slice(0, 6).join(", ")} — opener-class sends veto at the gate; conversational replies stay allowed.`;
   }
   if (posNum(opts.underwrittenMao)) {
     fields["Underwritten_MAO"] = opts.underwrittenMao;

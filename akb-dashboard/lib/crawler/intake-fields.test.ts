@@ -71,3 +71,32 @@ describe("buildIntakeListingFields — MLS_Date_Raw regression guard", () => {
     expect("Live_Status" in f).toBe(false);
   });
 });
+
+// The 20179 Russell St gap (2026-07-30): intake's Firecrawl verify computed
+// hasRenovatedLanguage but the write dropped it — freshness-reverify was the
+// ONLY Renovated_Language writer, so a record was textable in the window
+// between creation and its first reverify pass (Russell St: 9 minutes).
+// These tests pin the intake write so the send-gate veto sees the flag from
+// the record's first minute.
+describe("buildIntakeListingFields — Renovated_Language persists from intake verify", () => {
+  it("writes Renovated_Language + a keywords note line when detected", () => {
+    const f = buildIntakeListingFields(candidate(), {
+      ...OPTS,
+      renovatedLanguage: true,
+      matchedRenovationKeywords: ["fully renovated", "turnkey"],
+    });
+    expect(f["Renovated_Language"]).toBe(true);
+    expect(String(f["Verification_Notes"])).toContain("RENOVATED_LANGUAGE at intake: fully renovated, turnkey");
+  });
+
+  it("OMITS Renovated_Language when not detected (absence = never classified, false is not written)", () => {
+    expect("Renovated_Language" in buildIntakeListingFields(candidate(), OPTS)).toBe(false);
+    expect("Renovated_Language" in buildIntakeListingFields(candidate(), { ...OPTS, renovatedLanguage: false })).toBe(false);
+  });
+
+  it("keywords note tolerates an empty match list (flag can outlive its keywords)", () => {
+    const f = buildIntakeListingFields(candidate(), { ...OPTS, renovatedLanguage: true });
+    expect(f["Renovated_Language"]).toBe(true);
+    expect(String(f["Verification_Notes"])).toContain("RENOVATED_LANGUAGE at intake:");
+  });
+});
