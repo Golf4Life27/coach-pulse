@@ -10,6 +10,28 @@ These are the as-built truth and the hard rules. Read them before touching anyth
 
 To eyeball the gate + pricing spine without secrets: `npm run dry-run-trace`.
 
+# Send discipline — HARD RULES (incident 2026-07-30, Canfield, Spine recJesmOUJXksQ11V)
+
+An operator manual apology (sent from the Quo app, never ingested into notes) was
+followed by a Claude-driven close-out into the same thread — the batch agent had
+HELD the send and was overridden on a misread ruling. These rules are code and
+contract, not preference:
+
+1. **The live thread outranks record notes — always.** `sendGuarded` enforces
+   this physically (thread-truth check: unrecorded outbound or unseen inbound in
+   the live Quo thread → REFUSE). Any Claude-driven send that bypasses the gate
+   (raw REST from a session) MUST pull the live thread tail for that number in
+   the same turn and read it before sending. Record notes are history, never
+   send-authority.
+2. **Least-send interpretation.** A terse operator statement about a thread maps
+   to the reading that sends LESS. If two plausible readings differ in whether a
+   message fires, ask one line first. (Two misreads on 2026-07-30 — "Contingent"
+   on 8th Ct, "peppered him" on Canfield — both converted context into sends.)
+3. **Agent holds are re-verified, never overruled from memory.** If a subagent
+   refuses or holds a send, overriding requires re-checking the hold's premise
+   against LIVE thread data — a recollection of an operator ruling is not
+   sufficient grounds.
+
 # Write the spine back — the moment you make a durable decision (not at session end)
 
 Continuity failed for months because sessions LOAD Maverick at open but never WRITE
