@@ -39,9 +39,14 @@
 
 import { createHash } from "node:crypto";
 import { isNeverResurfaceLoose } from "@/lib/never-resurface";
-import { sendMessageWithId, type QuoSendResult } from "@/lib/quo";
+import { sendMessageWithId, getMessagesForParticipant, type QuoMessage, type QuoSendResult } from "@/lib/quo";
 import { kvConfigured, kvProd, type KvClient } from "@/lib/maverick/oauth/kv";
 import { audit } from "@/lib/audit-log";
+import {
+  evaluateThreadTruth,
+  parseKnownQuoIds,
+  newestKnownInboundTs,
+} from "@/lib/outreach/thread-truth";
 
 /** Every send must declare WHY it is going out. Opener-class purposes
  *  (first_touch, bump, followup) carry the renovated-listing veto; the only
@@ -95,6 +100,12 @@ export interface SendGateListing {
    *  code-level twin of the Blacklist checkbox, so a kill holds even if a
    *  field write is missed. */
   address?: string | null;
+  /** Record notes — the gate parses recorded Quo message ids out of them for
+   *  the THREAD-TRUTH check (incident 2026-07-30, Canfield: an operator
+   *  manual send invisible to notes must physically block the next send). */
+  notes?: string | null;
+  /** Record's Last_Inbound_At — newest inbound the record knows. */
+  lastInboundAt?: string | null;
 }
 
 export type SendRefusalReason =
@@ -106,7 +117,10 @@ export type SendRefusalReason =
   | "empty_body"
   | "do_not_text"
   | "renovated_listing_veto"
-  | "duplicate_within_window";
+  | "duplicate_within_window"
+  | "unrecorded_outbound_in_thread"
+  | "unseen_inbound_in_thread"
+  | "thread_truth_unavailable";
 
 export interface SendGateRequest {
   /** Destination in E.164. */
@@ -216,7 +230,19 @@ export interface SendGateDeps {
   /** Underlying Quo sender. Defaults to lib/quo's sendMessageWithId. */
   send?: typeof sendMessageWithId;
   now?: () => Date;
+  /** Live-thread fetch for the THREAD-TRUTH check. Defaults to
+   *  getMessagesForParticipant over a 30-day tail. Tests inject. */
+  fetchThread?: (phone: string) => Promise<QuoMessage[]>;
 }
+
+/** 30 days of thread tail (capped at 300 messages by lib/quo pagination) —
+ *  wide enough to catch any manual send that could still confuse a cadence. */
+const THREAD_TAIL_MINUTES = 30 * 24 * 60;
+
+/** Emergency escape hatch ONLY (default ON). Disabling is LOUD: every send
+ *  while disabled emits a console.error + an audit row — a guard silently
+ *  off is the failure mode this gate exists to prevent. */
+const THREAD_TRUTH_ENFORCE = process.env.SEND_THREAD_TRUTH_ENFORCE !== "false";
 
 /**
  * THE choke point. Every outbound SMS goes through here.
@@ -269,6 +295,81 @@ export async function sendGuarded(
     listing: req.listing,
   });
   if (staticReason) return refuse(staticReason, noDedupe);
+
+  // ── THREAD TRUTH (incident 2026-07-30, Canfield — Spine recJesmOUJXksQ11V).
+  // The LIVE Quo thread outranks record notes: an outgoing message the record
+  // has no note of (an operator manual send) or an inbound newer than the
+  // record knows means the system does not hold the real conversation state —
+  // it must not speak. Fail posture: opener-class REFUSES on fetch failure
+  // (fail-closed, next slot retries — same posture as the pre-send probe);
+  // purpose "reply" proceeds degraded-and-audited (refusing to answer a live
+  // conversation on an infra blip is its own harm) and is exempt from the
+  // unseen-inbound rule only (a reply IS the response to fresh inbound).
+  if (THREAD_TRUTH_ENFORCE) {
+    const fetchThread =
+      deps.fetchThread ?? ((phone: string) => getMessagesForParticipant(phone, THREAD_TAIL_MINUTES));
+    const openerClass = OPENER_PURPOSES.has(req.purpose as SendPurpose);
+    let thread: QuoMessage[] | null = null;
+    try {
+      thread = await fetchThread(req.to);
+    } catch (err) {
+      if (openerClass) {
+        await audit({
+          agent,
+          event: "send_gate_thread_truth_unavailable",
+          status: "uncertain",
+          recordId: req.recordId,
+          inputSummary: { purpose: req.purpose, to_masked: maskPhone(req.to) },
+          outputSummary: {
+            refused: true,
+            error: err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200),
+          },
+        });
+        return refuse("thread_truth_unavailable", noDedupe);
+      }
+      console.error("[send-gate] thread-truth fetch failed — reply proceeds DEGRADED:", err);
+      await audit({
+        agent,
+        event: "send_gate_thread_truth_degraded",
+        status: "uncertain",
+        recordId: req.recordId,
+        inputSummary: { purpose: req.purpose, to_masked: maskPhone(req.to) },
+        outputSummary: { failed_open: true },
+      });
+    }
+    if (thread) {
+      const verdict = evaluateThreadTruth({
+        thread,
+        knownQuoIds: parseKnownQuoIds(req.listing?.notes),
+        newestKnownInboundMs: newestKnownInboundTs(req.listing?.lastInboundAt, req.listing?.notes),
+        enforceUnseenInbound: openerClass,
+      });
+      if (!verdict.ok) {
+        await audit({
+          agent,
+          event: "send_gate_thread_truth_refused",
+          status: "confirmed_failure",
+          recordId: req.recordId,
+          inputSummary: { purpose: req.purpose, to_masked: maskPhone(req.to), checked: verdict.checked },
+          outputSummary: { reason: verdict.reason, evidence: verdict.evidence },
+          decision: verdict.reason ?? "thread_truth_refused",
+        });
+        return refuse(verdict.reason as SendRefusalReason, noDedupe);
+      }
+    }
+  } else {
+    console.error(
+      "[send-gate] SEND_THREAD_TRUTH_ENFORCE=false — thread-truth guard DISABLED. Every send is unverified against the live thread.",
+    );
+    await audit({
+      agent,
+      event: "send_gate_thread_truth_disabled",
+      status: "uncertain",
+      recordId: req.recordId,
+      inputSummary: { purpose: req.purpose, to_masked: maskPhone(req.to) },
+      outputSummary: { guard_disabled: true },
+    });
+  }
 
   // (c) Duplicate suppression — number-level, 30-minute window. setNx is the
   // atomic primitive: `true` = we claimed the (phone, body) pair, nobody sent

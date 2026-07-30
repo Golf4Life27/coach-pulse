@@ -12,6 +12,14 @@ import {
 import { makeMemoryKv } from "@/lib/maverick/oauth/kv";
 import type { QuoSendResult } from "@/lib/quo";
 
+// Thread-truth guard (2026-07-30, Canfield incident): these legacy suites
+// exercise the OTHER gate layers, so inject an empty live thread (= clean
+// thread-truth pass). The thread-truth behavior itself is pinned in
+// thread-truth.test.ts and the dedicated gate cases at the bottom here.
+const guarded: typeof sendGuarded = (req, deps = {}) =>
+  sendGuarded(req, { fetchThread: async () => [], ...deps });
+
+
 const OK: QuoSendResult = { id: "msg_1", status: "queued", httpStatus: 202, raw: null };
 
 /** A sender spy that records every dispatch. */
@@ -155,7 +163,7 @@ describe("evaluateStaticGate", () => {
 describe("sendGuarded", () => {
   it("sends a clean first_touch and reports the dedupe claim as enforced", async () => {
     const s = spySender();
-    const r = await sendGuarded(base, { kv: makeMemoryKv(), send: s.fn });
+    const r = await guarded(base, { kv: makeMemoryKv(), send: s.fn });
     expect(r.sent).toBe(true);
     expect(r.refused).toBe(false);
     expect(r.result).toEqual(OK);
@@ -167,8 +175,8 @@ describe("sendGuarded", () => {
   it("(c) REFUSES an identical body to the same number inside the window", async () => {
     const kv = makeMemoryKv();
     const s = spySender();
-    const first = await sendGuarded(base, { kv, send: s.fn });
-    const second = await sendGuarded(base, { kv, send: s.fn });
+    const first = await guarded(base, { kv, send: s.fn });
+    const second = await guarded(base, { kv, send: s.fn });
     expect(first.sent).toBe(true);
     expect(second.sent).toBe(false);
     expect(second.refused).toBe(true);
@@ -179,8 +187,8 @@ describe("sendGuarded", () => {
   it("(c) suppresses ACROSS RECORDS — the two same-phone listings bug", async () => {
     const kv = makeMemoryKv();
     const s = spySender();
-    await sendGuarded({ ...base, recordId: "recAAA", purpose: "reply" }, { kv, send: s.fn });
-    const dup = await sendGuarded(
+    await guarded({ ...base, recordId: "recAAA", purpose: "reply" }, { kv, send: s.fn });
+    const dup = await guarded(
       { ...base, recordId: "recBBB", purpose: "reply" },
       { kv, send: s.fn },
     );
@@ -191,8 +199,8 @@ describe("sendGuarded", () => {
   it("(c) allows a DIFFERENT body to the same number", async () => {
     const kv = makeMemoryKv();
     const s = spySender();
-    await sendGuarded(base, { kv, send: s.fn });
-    const other = await sendGuarded({ ...base, body: "Different message entirely" }, { kv, send: s.fn });
+    await guarded(base, { kv, send: s.fn });
+    const other = await guarded({ ...base, body: "Different message entirely" }, { kv, send: s.fn });
     expect(other.sent).toBe(true);
     expect(s.calls).toHaveLength(2);
   });
@@ -200,15 +208,15 @@ describe("sendGuarded", () => {
   it("(c) allows the same body to a DIFFERENT number", async () => {
     const kv = makeMemoryKv();
     const s = spySender();
-    await sendGuarded(base, { kv, send: s.fn });
-    const other = await sendGuarded({ ...base, to: "+15550001111" }, { kv, send: s.fn });
+    await guarded(base, { kv, send: s.fn });
+    const other = await guarded({ ...base, to: "+15550001111" }, { kv, send: s.fn });
     expect(other.sent).toBe(true);
     expect(s.calls).toHaveLength(2);
   });
 
   it("(a) refuses Do_Not_Text without touching the sender", async () => {
     const s = spySender();
-    const r = await sendGuarded(
+    const r = await guarded(
       { ...base, listing: { doNotText: true } },
       { kv: makeMemoryKv(), send: s.fn },
     );
@@ -218,13 +226,13 @@ describe("sendGuarded", () => {
 
   it("(b) refuses a renovated listing on first_touch but allows it on reply", async () => {
     const s = spySender();
-    const opener = await sendGuarded(
+    const opener = await guarded(
       { ...base, purpose: "first_touch", listing: { renovatedLanguage: true } },
       { kv: makeMemoryKv(), send: s.fn },
     );
     expect(opener.reason).toBe("renovated_listing_veto");
 
-    const reply = await sendGuarded(
+    const reply = await guarded(
       { ...base, purpose: "reply", listing: { renovatedLanguage: true } },
       { kv: makeMemoryKv(), send: s.fn },
     );
@@ -234,7 +242,7 @@ describe("sendGuarded", () => {
 
   it("(b) refuses a renovated listing on followup too — a re-touch restating an offer is an opener, not a conversation (audit finding #2, 2026-07-28)", async () => {
     const s = spySender();
-    const followup = await sendGuarded(
+    const followup = await guarded(
       { ...base, purpose: "followup", listing: { renovatedLanguage: true } },
       { kv: makeMemoryKv(), send: s.fn },
     );
@@ -244,11 +252,11 @@ describe("sendGuarded", () => {
 
   it("(d) refuses a send with no purpose or no recordId", async () => {
     const s = spySender();
-    const noPurpose = await sendGuarded(
+    const noPurpose = await guarded(
       { ...base, purpose: "" as unknown as SendPurpose },
       { kv: makeMemoryKv(), send: s.fn },
     );
-    const noRecord = await sendGuarded({ ...base, recordId: "" }, { kv: makeMemoryKv(), send: s.fn });
+    const noRecord = await guarded({ ...base, recordId: "" }, { kv: makeMemoryKv(), send: s.fn });
     expect(noPurpose.reason).toBe("missing_purpose");
     expect(noRecord.reason).toBe("missing_record_id");
     expect(s.calls).toHaveLength(0);
@@ -262,7 +270,7 @@ describe("sendGuarded", () => {
         throw new Error("KV setNx failed: 503");
       },
     };
-    const r = await sendGuarded(base, { kv: brokenKv, send: s.fn });
+    const r = await guarded(base, { kv: brokenKv, send: s.fn });
     expect(r.sent).toBe(true);
     expect(r.dedupe.degraded).toBe(true);
     expect(r.dedupe.enforced).toBe(false);
@@ -271,7 +279,7 @@ describe("sendGuarded", () => {
 
   it("FAILS OPEN when KV is absent entirely", async () => {
     const s = spySender();
-    const r = await sendGuarded(base, { kv: null, send: s.fn });
+    const r = await guarded(base, { kv: null, send: s.fn });
     expect(r.sent).toBe(true);
     expect(r.dedupe.degraded).toBe(true);
     expect(s.calls).toHaveLength(1);
@@ -285,15 +293,15 @@ describe("sendGuarded", () => {
         throw new Error("KV down");
       },
     };
-    const dnt = await sendGuarded(
+    const dnt = await guarded(
       { ...base, listing: { doNotText: true } },
       { kv: brokenKv, send: s.fn },
     );
-    const reno = await sendGuarded(
+    const reno = await guarded(
       { ...base, purpose: "bump", listing: { renovatedLanguage: true } },
       { kv: brokenKv, send: s.fn },
     );
-    const untagged = await sendGuarded({ ...base, recordId: "" }, { kv: brokenKv, send: s.fn });
+    const untagged = await guarded({ ...base, recordId: "" }, { kv: brokenKv, send: s.fn });
     expect(dnt.reason).toBe("do_not_text");
     expect(reno.reason).toBe("renovated_listing_veto");
     expect(untagged.reason).toBe("missing_record_id");
@@ -305,11 +313,11 @@ describe("sendGuarded", () => {
     const boom = vi.fn(async () => {
       throw new Error("Quo send error 500");
     });
-    await expect(sendGuarded(base, { kv, send: boom })).rejects.toThrow("Quo send error 500");
+    await expect(guarded(base, { kv, send: boom })).rejects.toThrow("Quo send error 500");
 
     // The failed send left no claim behind — the retry goes through.
     const s = spySender();
-    const retry = await sendGuarded(base, { kv, send: s.fn });
+    const retry = await guarded(base, { kv, send: s.fn });
     expect(retry.sent).toBe(true);
     expect(s.calls).toHaveLength(1);
   });
@@ -320,7 +328,7 @@ describe("sendGuarded", () => {
       calls.push(opts);
       return OK;
     });
-    await sendGuarded({ ...base, from: "PNMhSUQXFw" }, { kv: makeMemoryKv(), send });
+    await guarded({ ...base, from: "PNMhSUQXFw" }, { kv: makeMemoryKv(), send });
     expect(calls[0]).toEqual({ from: "PNMhSUQXFw" });
   });
 });
@@ -329,7 +337,7 @@ describe("(a0) OPERATOR KILL — a killed deal gets no message of any purpose (5
   it("Blacklist checkbox refuses every purpose, reply included", async () => {
     for (const purpose of ["first_touch", "bump", "followup", "reply"] as const) {
       const s = spySender();
-      const r = await sendGuarded(
+      const r = await guarded(
         { ...base, purpose, listing: { blacklist: true } },
         { kv: makeMemoryKv(), send: s.fn },
       );
@@ -340,7 +348,7 @@ describe("(a0) OPERATOR KILL — a killed deal gets no message of any purpose (5
 
   it("a NEVER_RESURFACE address refuses even with the checkbox unset — the code-level twin holds when a field write is missed", async () => {
     const s = spySender();
-    const r = await sendGuarded(
+    const r = await guarded(
       { ...base, purpose: "reply", listing: { address: "533 Robison Dr, Birmingham, AL 35215" } },
       { kv: makeMemoryKv(), send: s.fn },
     );
@@ -356,7 +364,7 @@ describe("(a0) OPERATOR KILL — a killed deal gets no message of any purpose (5
       },
     };
     const s = spySender();
-    const r = await sendGuarded(
+    const r = await guarded(
       { ...base, purpose: "reply", listing: { blacklist: true, doNotText: true } },
       { kv: brokenKv, send: s.fn },
     );
@@ -366,11 +374,58 @@ describe("(a0) OPERATOR KILL — a killed deal gets no message of any purpose (5
 
   it("a non-killed address with the checkbox false sends normally", async () => {
     const s = spySender();
-    const r = await sendGuarded(
+    const r = await guarded(
       { ...base, purpose: "reply", listing: { blacklist: false, address: "123 Main St, San Antonio, TX 78201" } },
       { kv: makeMemoryKv(), send: s.fn },
     );
     expect(r.sent).toBe(true);
     expect(s.calls).toHaveLength(1);
+  });
+});
+
+// ── THREAD-TRUTH gate wiring (2026-07-30, Canfield — Spine recJesmOUJXksQ11V) ──
+describe("sendGuarded thread-truth", () => {
+  const base = {
+    to: "+17347093339",
+    body: "Understood, if anything changes feel free to reach out. Have a great day!",
+    purpose: "followup" as const,
+    recordId: "recVNe9yEjTA6Qgx2",
+    listing: {
+      notes: "[H2 sent] Quo msg AC3ded6f3c1a3f4cc8ab667b9a981b59: bump 2",
+      lastInboundAt: "2026-07-17T20:18:27.517Z",
+    },
+  };
+  const okSend = async () => ({ id: "ACSENT", status: "sent" as const, raw: {} }) as never;
+
+  it("REFUSES when the live thread holds an outbound the record never noted (the Canfield case)", async () => {
+    const r = await sendGuarded(base, {
+      kv: makeMemoryKv(),
+      send: okSend as never,
+      fetchThread: async () => [
+        { id: "AC3DED6F3C1A3F4CC8AB667B9A981B59", from: "", to: "", body: "bump 2", direction: "outgoing", createdAt: "2026-07-17T20:15:43.470Z" },
+        { id: "ACFFFF00000000000000000000000000", from: "", to: "", body: "Michael, I'm so sorry!", direction: "outgoing", createdAt: "2026-07-17T21:00:00.000Z" },
+      ],
+    });
+    expect(r.refused).toBe(true);
+    expect(r.reason).toBe("unrecorded_outbound_in_thread");
+  });
+
+  it("opener-class FAILS CLOSED when the thread fetch throws", async () => {
+    const r = await sendGuarded(base, {
+      kv: makeMemoryKv(),
+      send: okSend as never,
+      fetchThread: async () => { throw new Error("quo down"); },
+    });
+    expect(r.refused).toBe(true);
+    expect(r.reason).toBe("thread_truth_unavailable");
+  });
+
+  it("reply purpose proceeds DEGRADED when the thread fetch throws", async () => {
+    const r = await sendGuarded({ ...base, purpose: "reply" as const }, {
+      kv: makeMemoryKv(),
+      send: okSend as never,
+      fetchThread: async () => { throw new Error("quo down"); },
+    });
+    expect(r.sent).toBe(true);
   });
 });
