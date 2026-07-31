@@ -73,6 +73,9 @@ export default function ConveyorCard({ item, nowMs, busy, onAction }: ConveyorCa
   const snooze = item.actions.find((a) => a.kind === "proposal_snooze" || a.kind === "action_item_defer");
   const kill = item.actions.find((a) => a.kind === "proposal_reject");
   const done = item.actions.find((a) => a.kind === "priority_done" || a.kind === "action_item_resolve");
+  // A secondary "open" (the vision lane's spot-check-the-images fallback).
+  // Without this the action existed in the model and rendered nowhere.
+  const secondaryOpen = item.actions.find((a, i) => i > 0 && a.kind === "open");
 
   return (
     <div className={`bg-[#1c2128] border border-[#30363d] border-l-4 ${style.ring} rounded-xl p-4`}>
@@ -174,11 +177,24 @@ export default function ConveyorCard({ item, nowMs, busy, onAction }: ConveyorCa
               ? "Working…"
               : primary.kind === "proposal_approve"
                 ? (primary.label ?? "Approve")
-                : primary.kind === "action_item_resolve"
-                  ? "Resolve"
-                  : "Done"}
+                : primary.kind === "proposal_batch"
+                  ? primary.label
+                  : primary.kind === "vision_rerun"
+                    ? primary.label
+                    : primary.kind === "action_item_resolve"
+                      ? "Resolve"
+                      : "Done"}
           </button>
         ) : null}
+
+        {secondaryOpen && secondaryOpen.kind === "open" && (
+          <Link
+            href={secondaryOpen.href}
+            className="min-h-[48px] px-4 bg-[#161b22] hover:bg-[#30363d] text-gray-300 text-sm font-semibold rounded-xl border border-[#30363d] transition-colors inline-flex items-center justify-center"
+          >
+            {secondaryOpen.label ?? "Open"}
+          </Link>
+        )}
 
         {done && primary !== done && (
           <button

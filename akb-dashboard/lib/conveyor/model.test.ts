@@ -13,6 +13,8 @@ import {
   urgencyRank,
   filterDecisionProposals,
   type ProposalRow,
+  batchFrontierRetire,
+  fromVisionHold,
 } from "./model";
 
 const NOW = "2026-07-11T16:00:00Z";
@@ -215,22 +217,22 @@ describe("dedupe + buildConveyor", () => {
     expect(hidden.stale).toBe(0);
   });
 
-  it("the staleness gate: a cold reply draft (>10d) and an ancient hold (>14d) hide", () => {
+  it("the staleness gate: a cold reply draft (>10d) and an ancient ruling (>14d) hide", () => {
     const { items, hidden } = buildConveyor(
       {
         proposals: [
           proposal({ id: "recCOLD0000000001", createdTime: "2026-06-25T10:00:00Z" }), // 16d-old jarvis_reply
           proposal({
-            id: "recHOLD0000000001",
-            proposalType: "h2_opener_hold",
-            createdTime: "2026-06-20T10:00:00Z", // 21d-old hold
-            actionPayload: JSON.stringify({ action: "h2_opener_hold" }),
+            id: "recOLDRULE00000001",
+            proposalType: "underwater_review",
+            createdTime: "2026-06-20T10:00:00Z", // 21d-old ruling
+            actionPayload: JSON.stringify({ action: "underwater_review" }),
           }),
           proposal({
             id: "recFRESH000000001",
-            proposalType: "h2_opener_hold",
-            createdTime: "2026-07-10T10:00:00Z", // fresh hold — renders
-            actionPayload: JSON.stringify({ action: "h2_opener_hold" }),
+            proposalType: "underwater_review",
+            createdTime: "2026-07-10T10:00:00Z", // fresh ruling — renders
+            actionPayload: JSON.stringify({ action: "underwater_review" }),
           }),
         ],
         actionItems: [],
@@ -242,6 +244,40 @@ describe("dedupe + buildConveyor", () => {
     expect(items.map((i) => i.key)).toEqual(["proposal:recFRESH000000001"]);
     expect(hidden.stale).toBe(2);
     expect(hidden.machineWork).toBe(0);
+  });
+
+  it("opener holds are BACKLOG at any age — never cards, never counted as handled", () => {
+    // Operator 2026-07-31: 533 pending h2_opener_hold against 72 live seller
+    // threads. A price-guard HOLD is maintenance, not a ruling owed an answer.
+    // Age is irrelevant — a fresh hold is backlog too.
+    const { items, hidden } = buildConveyor(
+      {
+        proposals: [
+          proposal({
+            id: "recHOLD0000000001",
+            proposalType: "h2_opener_hold",
+            createdTime: "2026-06-20T10:00:00Z", // ancient
+            actionPayload: JSON.stringify({ action: "h2_opener_hold" }),
+          }),
+          proposal({
+            id: "recHOLD0000000002",
+            proposalType: "h2_opener_hold",
+            createdTime: "2026-07-10T10:00:00Z", // fresh
+            actionPayload: JSON.stringify({ action: "h2_opener_hold" }),
+          }),
+        ],
+        actionItems: [],
+        priorities: [],
+        broCards: [],
+      },
+      NOW,
+    );
+    expect(items).toEqual([]);
+    expect(hidden.backlog).toBe(2);
+    // NOT machine work — the distinction is the point. Machine work is done;
+    // backlog is real work nobody has started.
+    expect(hidden.machineWork).toBe(0);
+    expect(hidden.stale).toBe(0);
   });
 });
 
@@ -267,5 +303,103 @@ describe("underwater_review renders as a decision, not machine-work", () => {
     expect(item.actions[0]).toMatchObject({ kind: "open", label: "Open deal" });
     expect(item.reasoning).toMatch(/underwater/i);
     expect(item.reasoning).not.toMatch(/Pricer HOLD/); // carries its own sentence
+  });
+});
+
+// ── Frontier batching + vision holds (operator 2026-07-31) ─────────────────
+describe("batchFrontierRetire — one ruling, not forty-two cards", () => {
+  const frontier = (id: string, zip: string, reason: string) => ({
+    id,
+    proposalType: "frontier_retire",
+    recordId: "recZIP0000000001",
+    recordAddress: `ZIP ${zip}`,
+    reasoning: reason,
+    actionPayload: JSON.stringify({ action: "frontier_retire", zip }),
+    createdTime: "2026-07-09T10:00:00Z",
+  });
+  const STALE = (z: string) =>
+    `Frontier retirement candidate: ZIP ${z} — zero_yield_latest_snapshot: crawled within 30d, 0 records ingested, 0% accept.`;
+  const STREAK = (z: string) =>
+    `Frontier retirement candidate: ZIP ${z} — zero_yield_streak: 4 consecutive empty ingest runs (min 3).`;
+
+  it("collapses many into one card carrying every proposal id", () => {
+    const rows = ["44307", "78210", "44314", "35206", "44310", "35211"].map((z, i) =>
+      frontier(`recFR000000000${i}`, z, STREAK(z)),
+    );
+    const { batch, rest } = batchFrontierRetire(rows);
+    expect(rest).toEqual([]);
+    expect(batch).not.toBeNull();
+    expect(batch!.title).toBe("Retire 6 zero-yield ZIPs");
+    const action = batch!.actions[0] as { kind: string; proposalIds: string[]; decision: string };
+    expect(action.kind).toBe("proposal_batch");
+    expect(action.proposalIds).toHaveLength(6);
+    expect(action.decision).toBe("approve");
+    // First five ZIPs shown, the remainder counted — not truncated silently.
+    expect(batch!.verbatim).toBe("44307 · 78210 · 44314 · 35206 · 44310 · +1");
+  });
+
+  it("flips to ARCHIVE when any row carries the retired single-snapshot rule", () => {
+    // The 42 pending on 2026-07-31 were written before the 07-29 rule change
+    // (3-run streak + 30d revival). Approving them would retire ZIPs that only
+    // had one slow crawl — the operator's "farm it once and never again".
+    const rows = ["44307", "78210", "44314"].map((z, i) => frontier(`recFR000000000${i}`, z, STALE(z)));
+    const { batch } = batchFrontierRetire(rows);
+    const action = batch!.actions[0] as { decision: string; label: string };
+    expect(action.decision).toBe("reject");
+    expect(action.label).toBe("Archive all 3");
+    expect(batch!.reasoning).toMatch(/single empty crawl/);
+    expect(batch!.reasoning).toMatch(/rests 30 days/);
+  });
+
+  it("leaves a couple of proposals alone — batching two costs more than it saves", () => {
+    const rows = ["44307", "78210"].map((z, i) => frontier(`recFR000000000${i}`, z, STREAK(z)));
+    const { batch, rest } = batchFrontierRetire(rows);
+    expect(batch).toBeNull();
+    expect(rest).toHaveLength(2);
+  });
+
+  it("never touches non-frontier proposals", () => {
+    const rows = [
+      frontier("recFR0000000001", "44307", STREAK("44307")),
+      frontier("recFR0000000002", "78210", STREAK("78210")),
+      frontier("recFR0000000003", "44314", STREAK("44314")),
+      proposal({ id: "recREPLY00000001" }),
+    ];
+    const { batch, rest } = batchFrontierRetire(rows);
+    expect(batch).not.toBeNull();
+    expect(rest.map((r) => r.id)).toEqual(["recREPLY00000001"]);
+  });
+});
+
+describe("fromVisionHold — the 256 Westchester lane", () => {
+  it("says the rehab would be invented, and never renders list price as money in play", () => {
+    const item = fromVisionHold({
+      recordId: "recVIS00000000001",
+      address: "1617 5th St NW, Center Point, AL",
+      listPrice: 124_900,
+      failureReason: "no_photos_available",
+      heldAt: "2026-07-31T09:00:00Z",
+    });
+    expect(item.source).toBe("vision");
+    expect(item.reasoning).toMatch(/no photos/i);
+    expect(item.reasoning).toMatch(/invented/);
+    // Nothing has been offered — a held record must not report dollars in play.
+    expect(item.dollars).toBeNull();
+    expect(item.verbatim).toBe("List $124,900");
+    // Run rehab is PRIMARY — one tap, costs the operator nothing. Looking at
+    // the photos yourself is the fallback for when the machine already failed.
+    expect(item.actions.map((a) => a.kind)).toEqual(["vision_rerun", "open"]);
+  });
+
+  it("distinguishes a thrown vision call from missing photos", () => {
+    const item = fromVisionHold({
+      recordId: "recVIS00000000002",
+      address: "44 Springfield St, Dayton, OH",
+      listPrice: null,
+      failureReason: "vision_error: rate limited",
+      heldAt: null,
+    });
+    expect(item.reasoning).toMatch(/could not resolve/i);
+    expect(item.verbatim).toBeNull();
   });
 });
