@@ -81,6 +81,10 @@ const LISTING_FIELD_REGISTRY: ReadonlyArray<ListingFieldRegistryEntry> = [
   { prop: "actionHoldUntil", fieldId: "fldkYeP8onCHil0pd", name: "Action_Hold_Until" },
   { prop: "actionCardState", fieldId: "fldiNKFpIBUYgg7el", name: "Action_Card_State" },
   { prop: "lastInboundAt", fieldId: "fld3IhR1DXzcVuq6F", name: "Last_Inbound_At" },
+  // Reply-funnel triple (2026-07-31) — see lib/inbound/reply-classification.ts.
+  { prop: "replyClassification", fieldId: "fld7vLOMdLthqccoy", name: "Reply_Classification" },
+  { prop: "replyClassifiedAt", fieldId: "fldoTXHschuUDi2Hx", name: "Reply_Classified_At" },
+  { prop: "replyDecisionKind", fieldId: "fld13azWnqSx2YyoJ", name: "Reply_Decision_Kind" },
   { prop: "gmailThreadIds", fieldId: "flduNZ2G332OdVnp8", name: "Gmail_Thread_Ids" },
   { prop: "lastOutboundAt", fieldId: "fldaK4lR5UNvycg11", name: "Last_Outbound_At" },
   // ── Decision math (2026-07-13/14, the Mayfield counter miss) — machine-

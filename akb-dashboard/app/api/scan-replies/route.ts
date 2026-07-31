@@ -2,10 +2,10 @@ import { getListings, updateListingRecord } from "@/lib/airtable";
 import { getMessagesForParticipant } from "@/lib/quo";
 import { isSelfEchoOrAutoreply } from "@/lib/conversation-check";
 import {
-  classifyReply,
-  determineNewStatus,
+  triageSellerReply,
   type ReplyClassification,
 } from "@/lib/reply-triage";
+import { buildReplyClassificationFieldsById } from "@/lib/inbound/reply-classification";
 import {
   autoRunOnEngaged,
   originFromRequest,
@@ -156,11 +156,18 @@ async function handleScan(req: Request) {
 
         const matchedListings = phoneToListings.get(phone) ?? [];
         for (const listing of matchedListings) {
-          const { classification, matchedPattern } = classifyReply(inbound.body);
-          const newStatus = determineNewStatus(classification, listing.outreachStatus);
+          // ONE classifier: triageSellerReply wraps classifyReply +
+          // determineNewStatus and additionally yields decisionKind, which we
+          // now PERSIST (2026-07-31). The label used to reach Airtable only as
+          // prose inside the note below — unqueryable, so the reply funnel was
+          // uncomputable. See lib/inbound/reply-classification.ts.
+          const triage = triageSellerReply(inbound.body, listing.outreachStatus ?? null);
+          const { classification, matchedPattern } = triage;
+          const newStatus = triage.queueStatus;
 
           const fields: Record<string, unknown> = {
             [F.lastInboundAt]: new Date().toISOString(),
+            ...buildReplyClassificationFieldsById(triage, inbound.createdAt),
           };
 
           // Build note

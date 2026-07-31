@@ -11,6 +11,7 @@ import {
 } from "@/lib/recommended-reply";
 import { isSelfEchoOrAutoreply } from "@/lib/conversation-check";
 import { triageSellerReply } from "@/lib/reply-triage";
+import { buildReplyClassificationFields } from "@/lib/inbound/reply-classification";
 import { sendReplyAlert, type ReplyAlertInput } from "@/lib/reply-alert";
 import { sendAutoClose } from "@/lib/auto-close";
 import { sendAutoAck } from "@/lib/auto-ack";
@@ -325,6 +326,11 @@ export async function GET(req: Request) {
                   Outreach_Status: "Dead",
                   Last_Inbound_At: inbound.createdAt,
                   Verification_Notes: listing.notes ? `${listing.notes}\n\n${deadNote}` : deadNote,
+                  // Persist the triage (2026-07-31). tier-0 auto-closes are the
+                  // single biggest reply bucket; without this they land as a
+                  // bare "Dead" and the funnel cannot tell a hard rejection
+                  // from a thread that simply went quiet.
+                  ...buildReplyClassificationFields(triage, inbound.createdAt),
                 });
                 deadFlipped++;
               } catch (err) {
@@ -432,6 +438,10 @@ export async function GET(req: Request) {
             await updateListingRecord(listing.id, {
               Draft_Reply_Text: draftResponse ?? "",
               Draft_Reply_Meta: draftMetaJson,
+              // The triage rode ONLY on the jarvis_reply proposal until now —
+              // a queue ITEM, consumed and gone. Mirror it onto the record so
+              // the classification outlives the operator's decision.
+              ...buildReplyClassificationFields(triage, inbound.createdAt),
             });
           } catch (err) {
             console.error("[scan-comms] draft mirror write failed:", err);
