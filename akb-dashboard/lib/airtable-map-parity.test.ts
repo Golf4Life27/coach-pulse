@@ -46,6 +46,7 @@ const BOTH_PATH_PROPS = [
   "roughOpenerAmount",
   "contractOfferPrice",
   "lastInboundAt",
+  "visionQueueState",
   "replyClassification",
   "replyClassifiedAt",
   "replyDecisionKind",
@@ -104,6 +105,8 @@ const EXPECTED_LISTING_FIELDS: Record<string, string> = {
   "fldkYeP8onCHil0pd": "actionHoldUntil",
   "fldiNKFpIBUYgg7el": "actionCardState",
   "fld3IhR1DXzcVuq6F": "lastInboundAt",
+  // Vision queue (2026-07-31) — see lib/pricing/vision-queue.ts.
+  "fldqgrBDtoRceShP2": "visionQueueState",
   // Reply-funnel triple (2026-07-31) — two-sided, so both derived maps carry it.
   "fld7vLOMdLthqccoy": "replyClassification",
   "fldoTXHschuUDi2Hx": "replyClassifiedAt",
@@ -220,6 +223,7 @@ const EXPECTED_LISTING_NAME_MAP: Record<string, string> = {
   "Action_Hold_Until": "actionHoldUntil",
   "Action_Card_State": "actionCardState",
   "Last_Inbound_At": "lastInboundAt",
+  "Vision_Queue_State": "visionQueueState",
   "Reply_Classification": "replyClassification",
   "Reply_Classified_At": "replyClassifiedAt",
   "Reply_Decision_Kind": "replyDecisionKind",

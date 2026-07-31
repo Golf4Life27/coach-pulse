@@ -82,6 +82,8 @@ const LISTING_FIELD_REGISTRY: ReadonlyArray<ListingFieldRegistryEntry> = [
   { prop: "actionCardState", fieldId: "fldiNKFpIBUYgg7el", name: "Action_Card_State" },
   { prop: "lastInboundAt", fieldId: "fld3IhR1DXzcVuq6F", name: "Last_Inbound_At" },
   // Reply-funnel triple (2026-07-31) — see lib/inbound/reply-classification.ts.
+  // Vision queue (2026-07-31) — see lib/pricing/vision-queue.ts.
+  { prop: "visionQueueState", fieldId: "fldqgrBDtoRceShP2", name: "Vision_Queue_State" },
   { prop: "replyClassification", fieldId: "fld7vLOMdLthqccoy", name: "Reply_Classification" },
   { prop: "replyClassifiedAt", fieldId: "fldoTXHschuUDi2Hx", name: "Reply_Classified_At" },
   { prop: "replyDecisionKind", fieldId: "fld13azWnqSx2YyoJ", name: "Reply_Decision_Kind" },
