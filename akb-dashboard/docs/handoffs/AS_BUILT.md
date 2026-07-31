@@ -796,6 +796,79 @@ which is right for auto-close but leaves warm leads in the generic bucket.
 reply-classification backfill (§8i) re-pulls from Quo and would cover them — **still
 not run.**
 
+## 8n. NEW 2026-07-31 — THE FIRST-TOUCH COLLAPSE (read this before adding any gate)
+
+**Counting only `[H2 sent` markers — actual NEW offers, not follow-ups:**
+
+| 7/22 | 7/23 | 7/24 | 7/25 | 7/26 | 7/27 | 7/28 | 7/29 | 7/30 | 7/31 |
+|---|---|---|---|---|---|---|---|---|---|
+| 22 | **37** | 24 | 15 | 6 | 9 | 12 | 11 | 11 | **3** |
+
+**Peak 37 → 3. Down 92%.** An earlier count in this session reported "ramping, 7/30 = 35"
+— that used `Last_Outbound_At`, which `parked-followup` and the bump lane also stamp.
+**Follow-ups masked the collapse entirely. Count `[H2 sent`, never `Last_Outbound_At`.**
+
+### Where the supply dies
+
+Pure gate stack replayed over all **1,640** never-texted Active records (freshness values
+real; seed $/sqft held constant, so this **models** the stack rather than reproducing
+live per-ZIP pricing):
+
+| gate | n | share |
+|---|---|---|
+| **freshness `verify_stale`** | **1,284** | **78%** |
+| lowball `not_eligible_clean` | 262 | 16% |
+| missing sqft or list price | 94 | 6% |
+
+**Freshness is the binding constraint by a wide margin.** 1,284 records are eligible in
+every respect except a `Last_Verified` stamp older than 48h.
+
+### The exact ceiling on first-touch
+
+```
+2 freshness-reverify slots × limit=40      =  80 re-verifies/day
+BUMP_REVERIFY_SHARE = 0.4 (already-Texted) = −32
+                                   virgin  ≈  48/day  ← the number that must move
+```
+
+Everything downstream (lowball gate, coverage, per-zip caps, pricer holds, min-offer
+floor) can only shrink 48. **Cost to move it: 1 Firecrawl credit per re-verify**, against
+~420/day current burn and an **800-per-rolling-hour** cap. Re-verify does **not** touch
+RentCast.
+
+> **Correction to a theory floated in this session:** the 7/25–7/30 hardening wave
+> (#165–#182) was suggested as the cause. The model does **not** support that as the
+> primary driver. The better fit is a **stock drawdown** — 7/22–7/25 spent an accumulated
+> fresh cohort (98 sends in four days), and from 7/26 the system has run at its refill
+> rate. No added gate is needed to explain the curve.
+
+### Placeholder-rehab hold NARROWED the same day (supersedes §8k)
+
+The blanket hold from §8k would have blocked **1,266 of 1,555** never-texted records
+(81%) against a drain clearing 12/day — **106 days**. With first-touch at 3/day that is
+zero. *A correct guard that stops the business is not a correct guard.*
+
+`placeholderRehabIsUnsafe(list, arv)` — the placeholder **assumes** rehab =
+`ROUGH_REHAB_PCT_OF_ARV × ARV`, so a house needing that work cannot be worth more than
+the remainder. An ask at or above `(1 − ROUGH_REHAB_PCT_OF_ARV) × ARV` contradicts the
+assumption:
+
+```
+256 Westchester  $234,900 / $223,750 = 105% ≥ 70%  → HOLD
+Detroit shell     $30,000 / $150,000 =  20% <  70% → SEND
+```
+
+Threshold is **1 − the placeholder itself**, so the two cannot drift. Unknown ask or
+unknown ARV **fails closed**. Distressed cohort flows at full volume; only the turnkey
+shape holds. No vision, no drain backlog, no new spend.
+
+**PROPOSED, not approved:** 4 re-verify slots × limit=50 = 200/day (~120/day virgin)
+against the 1,284-record stale cohort.
+
+**FLAGGED, unmeasured:** an opener at 94% of list trips `NEVER_OVER_LIST_PCT` (0.85) and
+HOLDs. On genuinely cheap asks the value-anchored opener can land above 85% of list, so
+the over-list tripwire may be eating supply in the cheapest markets.
+
 ## 9. Pointers
 
 - Hard rules / invariants: **[`docs/INVARIANTS.md`](../INVARIANTS.md)** — load every session.
