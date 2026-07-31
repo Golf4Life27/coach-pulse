@@ -11,6 +11,8 @@ import {
 } from "@/lib/recommended-reply";
 import { isSelfEchoOrAutoreply } from "@/lib/conversation-check";
 import { triageSellerReply } from "@/lib/reply-triage";
+import { AUTO_ANSWERABLE } from "@/lib/reply-triage/auto-answer";
+import { sendAutoAnswer } from "@/lib/reply-triage/auto-answer-send";
 import { buildReplyClassificationFields } from "@/lib/inbound/reply-classification";
 import { sendReplyAlert, type ReplyAlertInput } from "@/lib/reply-alert";
 import { sendAutoClose } from "@/lib/auto-close";
@@ -184,6 +186,7 @@ export async function GET(req: Request) {
     // response so the daily digest + audit trail have the full picture.
     const autoCloseResults: Array<{ recordId: string; sent: boolean; reason: string | null }> = [];
     const autoAckResults: Array<{ recordId: string; sent: boolean; reason: string | null }> = [];
+    const autoAnswerResults: Array<{ recordId: string; sent: boolean; reason: string | null; classification: string }> = [];
     // Tier-0 rejections whose Outreach_Status this run flipped to Dead (P3).
     let deadFlipped = 0;
     // M8 / Gate 3 — STOP/opt-out (operator 2026-06-18).
@@ -359,6 +362,53 @@ export async function GET(req: Request) {
             autoAckResults.push({ recordId: listing.id, sent: ak.sent, reason: ak.reason });
           }
 
+          // ── AUTO-ANSWER (operator 2026-07-31, the missing middle) ────────
+          // Two procedural buckets the machine can answer without judgement:
+          //   seller_costs — a POLICY answer, identical every time, no numbers
+          //   offer_format — restates the STICKY number, unchanged
+          // disclosure_step and appointment are permanently excluded (the
+          // machine never acknowledges a legal disclosure, and cannot commit
+          // the operator's calendar). Dark by default: REPLY_AUTO_ANSWER_LIVE.
+          //
+          // Does NOT `continue` — the needs-decision proposal below STILL
+          // fires either way, so the operator keeps the thread even when the
+          // machine has answered the procedural part of it.
+          let autoAnswered = false;
+          if (AUTO_ANSWERABLE.has(triage.classification)) {
+            const aa = await sendAutoAnswer({
+              recordId: listing.id,
+              toE164: phone,
+              classification: triage.classification,
+              inboundBody: inbound.body,
+              state: listing.state ?? null,
+              doNotText: listing.doNotText === true,
+              address: listing.address ?? null,
+              // Sticky only (INVARIANTS §3) — never a fresh computation.
+              stickyOfferUsd: listing.outreachOfferPrice ?? listing.roughOpenerAmount ?? null,
+            });
+            autoAnswered = aa.sent;
+            autoAnswerResults.push({
+              recordId: listing.id,
+              sent: aa.sent,
+              reason: aa.reason,
+              classification: triage.classification,
+            });
+            if (aa.sent) {
+              // Stamp the thread so the dry-run replay and the loop guard can
+              // both see it, and so the operator reading notes knows a machine
+              // spoke here.
+              try {
+                const stamp = new Date().toISOString();
+                const line = `[${stamp}] [Auto-answer] ${triage.classification}: "${aa.body}"`;
+                await updateListingRecord(listing.id, {
+                  Verification_Notes: listing.notes ? `${listing.notes}\n\n${line}` : line,
+                });
+              } catch (err) {
+                console.error("[scan-comms] auto-answer note write failed:", err);
+              }
+            }
+          }
+
           // ── TIER 1 / 2: needs-decision proposal + decision-first alert. ──
           // Soft-no keeps the PURE pre-built re-engagement draft (sticky-
           // number rule enforced in lib/reply-triage). Everything else routes
@@ -524,6 +574,12 @@ export async function GET(req: Request) {
       autoAckAttempted: autoAckResults.length,
       autoAckSent: autoAckResults.filter((r) => r.sent).length,
       autoAckResults: autoAckResults.length > 0 ? autoAckResults : undefined,
+      // Auto-answer lane (2026-07-31). Dark unless REPLY_AUTO_ANSWER_LIVE
+      // === "true"; the attempted/sent split makes a dark lane visibly dark
+      // rather than silently absent.
+      autoAnswerAttempted: autoAnswerResults.length,
+      autoAnswerSent: autoAnswerResults.filter((r) => r.sent).length,
+      autoAnswerResults: autoAnswerResults.length > 0 ? autoAnswerResults : undefined,
       optOutDetected,
       optOutFlipped,
       optOutEnforced: process.env.STOP_OPT_OUT_LIVE === "true",
