@@ -461,6 +461,82 @@ clamp ≤ send rail, distress-sourcing gate (tier-8 doctrine #151), Firecrawl
 breaker + hourly cap, RentCast quota gate, restricted-state exclusions, Memphis
 pause, H2 hard-disable master kill, per-record idempotency + run mutex.
 
+## 8i. NEW 2026-07-31 — Reply classification persists; the reply funnel becomes computable
+
+**The hole.** `lib/reply-triage.triageSellerReply` has classified every genuine
+inbound since it shipped, and nothing ever wrote the answer down. The label
+reached three lossy places only: a `Verification_Notes` prose blob
+(scan-replies), a `jarvis_reply` proposal (scan-comms — a queue ITEM, consumed
+then gone), and the 6-way `Outreach_Status`, which collapses ten distinct
+classifications onto "Response Received". **Measured: of 121 records carrying
+`Last_Inbound_At`, exactly 3 had a classification recoverable from note prose.**
+So the only question that matters — reply rate 11.5%, contract rate 0.1%, so
+WHERE do threads die? — was unanswerable without re-reading raw Quo by hand.
+
+**Shipped** (branch `claude/outbound-text-targeting-f3h19g`, commit `32c5656`;
+3601 tests green, `tsc` clean — **not yet merged**):
+
+- `lib/inbound/reply-classification.ts` (pure) — builds the persisted triple.
+  Stamps the **inbound's own** timestamp, not now, so a backfill records
+  history instead of relabelling it. Name-keyed + id-keyed variants (scan-comms
+  writes by name, scan-replies by id).
+- `scan-replies` now calls `triageSellerReply` (one classifier, and it yields
+  `decisionKind`) instead of `classifyReply` + `determineNewStatus`.
+- `scan-comms` writes the triple on **both** paths — the tier-0 auto-close (the
+  biggest reply bucket, previously landing as a bare "Dead") and the draft mirror.
+- `lib/outreach/reply-funnel.ts` + `GET /api/admin/reply-funnel` — cohort rollup:
+  outcome mix, classification × outcome, reply→contract pct, and the **dropped**
+  work-list (replied, never advanced past the send-side status). Reports its own
+  `classificationCoveragePct`, so a partial backfill cannot read as a complete funnel.
+- `GET /api/admin/reply-triage-backfill` — dry-run by default, `?apply=1` to write,
+  `?limit=N` (default 40, max 150). Re-pulls the Quo thread and re-runs the SAME
+  classifier over the original body: recovery, not re-interpretation.
+  **Deliberately NOT a cron** — a standing sweep over a closed hole is the
+  paid-call bleed #178 capped.
+
+**Airtable schema** (Listings_V1 `tbldMjKBgPiq45Jjs`) — three new two-sided fields:
+`Reply_Classification` `fld7vLOMdLthqccoy` (singleSelect, 10 choices) ·
+`Reply_Classified_At` `fldoTXHschuUDi2Hx` (dateTime, utc) ·
+`Reply_Decision_Kind` `fld13azWnqSx2YyoJ` (singleLineText). Registered in
+`LISTING_FIELD_REGISTRY`; the airtable-map-parity snapshot was updated.
+
+**OPEN — the backfill has NOT been run.** 118 records still report
+`(unclassified)` until `/api/admin/reply-triage-backfill?apply=1` is called
+repeatedly until `remaining_after_run` reaches 0.
+
+### 8i-bis. Diagnostic finding — why the operator is still hands-on (no code change)
+
+Recorded so it is not re-derived. Spine `rec21K0wT6BhuMIpB`.
+
+- **Nine of ten** `ReplyClassification` branches return `needsDecision: true`;
+  **eight** also return `suggestedReply: null` as a hardcoded literal. Only
+  `rejection` self-resolves (tier-0 auto-close); only `soft_no` carries a draft,
+  and that still lands in a *Pending* proposal. The operator's stated design —
+  *reply to those replies when capable* — **was never written**. It is not dark
+  and not flag-gated. That is the code-level reason every deal reaches his desk.
+- **ARV auto-run is NOT the problem** (corrects a standing operator belief): of
+  the 47 currently-engaged records, **zero** lack an ARV stamp and only 2 are
+  stale >14d. The 2026-06-10 `autoRunOnEngaged` ruling shipped and fires.
+  The real gap is **rehab — 12 of 47 engaged records have no `Rehab_Estimated_At`**
+  — and it is *by design*: `lib/appraiser/auto-run-on-engaged.ts` skips rehab when
+  the caller's lambda budget can't fit it, naming the manual "Run rehab" button as
+  "the prepared one-click fallback per the ruling." A ruling made the operator's
+  hand the fallback path. `rehab-vision-retry` **is** scheduled, so why those 12
+  remain bare is **UNVERIFIED** — own investigation needed.
+- Two coverage holes: `autoRunOnEngaged` is wired into `scan-replies` but **not**
+  `scan-comms` (whichever cron sees the reply first decides whether the underwrite
+  fires); and the backstop `auto-underwrite-engaged` (6 slots × limit=4 = 24
+  records/day) filters on `Execution_Path === "Auto Proceed"`, leaving 7 of 47
+  engaged records invisible to it.
+
+**Proposed, NOT approved** (awaiting operator go): (1) build the auto-reply lane
+for the four procedural buckets — `offer_format`, `disclosure_step`,
+`appointment`, `seller_costs` — behind a dark flag with a dry-run route first;
+(2) wire `autoRunOnEngaged` into scan-comms and drop the Auto-Proceed filter;
+(3) give rehab its own queue; (4) **keep** `counter` and `acceptance` on the
+operator's desk — that part of the design is correct. Item (1) puts a model on
+the outbound wire and was explicitly not started.
+
 ## 9. Pointers
 
 - Hard rules / invariants: **[`docs/INVARIANTS.md`](../INVARIANTS.md)** — load every session.
