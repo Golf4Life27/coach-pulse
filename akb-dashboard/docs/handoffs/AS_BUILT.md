@@ -862,8 +862,18 @@ Threshold is **1 − the placeholder itself**, so the two cannot drift. Unknown 
 unknown ARV **fails closed**. Distressed cohort flows at full volume; only the turnkey
 shape holds. No vision, no drain backlog, no new spend.
 
-**PROPOSED, not approved:** 4 re-verify slots × limit=50 = 200/day (~120/day virgin)
-against the 1,284-record stale cohort.
+**DONE (operator approved, commit `d3ee40a`)** — re-verify raised **80/day → 200/day**:
+4 slots × `limit=50` at **13:45, 16:00, 18:45, 21:00 UTC**, placed *ahead of* the h2 send
+clusters so records are fresh when the sender runs rather than replenished in two bursts.
+`limit=50` is the route's own `MAX_LIMIT`; no code ceiling was raised. After the 40% bump
+reservation that is **~120/day virgin** against the 1,284-record stale cohort, feeding an
+h2 send meter capped at 100/day. Cost: **1 Firecrawl credit each — 200/day against an
+800-per-rolling-hour cap.** Re-verify never touches RentCast.
+
+**Watch after deploy, in order:** (1) does first-touch rise from 3/day — count `[H2 sent`,
+never `Last_Outbound_At`; if it doesn't, freshness wasn't the only constraint and coverage
+/ per-zip caps are next. (2) the over-list tripwire below. (3) RentCast burn, which grows
+with REPLIES not sends.
 
 **FLAGGED, unmeasured:** an opener at 94% of list trips `NEVER_OVER_LIST_PCT` (0.85) and
 HOLDs. On genuinely cheap asks the value-anchored opener can land above 85% of list, so
