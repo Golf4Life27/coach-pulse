@@ -537,6 +537,78 @@ for the four procedural buckets — `offer_format`, `disclosure_step`,
 operator's desk — that part of the design is correct. Item (1) puts a model on
 the outbound wire and was explicitly not started.
 
+## 8j. NEW 2026-07-31 — RentCast spend ceiling at the choke point
+
+**The incident, reconstructed from vendor payment history.** RentCast auto-charges
+whenever accrued overage crosses **$250**. June crossed it **four times** —
+~**$1,125**, roughly **18,750 requests**, about **3× July's entire volume** — in
+the same window as the documented Firecrawl runaway. Firecrawl got a circuit
+breaker out of that incident. **RentCast did not.** July reconciles exactly to
+plan (6,520 used → 5,520 × $0.06 + $74 = ~$405): no billing error, and the
+trend is down 64% because #175 and #178 landed.
+
+**Why the existing guards missed it** `[verified — read this session]`:
+- `RENTCAST_24H_HARD_CEILING` was read in **one place** (the
+  `auto-underwrite-engaged` cron). ~20 other call sites — the reply-triggered
+  inline `autoRunOnEngaged` path, the manual dashboard buttons, every admin
+  route — had no ceiling.
+- `RENTCAST_MONTHLY_CAP` was enforced only in `lib/federation/rentcast-hydrate.ts`
+  and `lib/maverick/sources/external-rentcast.ts` — never on the appraiser or
+  underwrite paths.
+- `lib/rentcast/failure-loop-breaker` bounds repeated **failures** of one call
+  shape. A runaway making **successful** calls is invisible to it, and success bills.
+
+**Shipped** (commit `367f0e1`; 3612 tests green, `tsc` clean — **not yet merged
+or deployed**): `lib/rentcast/spend-ceiling.ts`, consulted inside
+`lib/rentcast.paidFetch` — the single HTTP choke point every RentCast call
+already passes through. **One gate, all call sites, nothing to wire up.**
+
+Three windows, cheapest-first: **per-invocation** (in-memory, no I/O) ·
+**per UTC day** (KV) · **per UTC month** (KV). Refusal returns a synthetic
+**598**, deliberately distinct from the loop-breaker's 599 — "we stopped
+spending" and "this shape keeps failing" have opposite remedies. Non-2xx either
+way, so every caller fails closed unchanged. Refusals emit **both** a
+`paid_api_call` row (cost 0, so refused work stays visible on the spend
+dashboard) and a `rentcast_spend_ceiling_reached` audit.
+
+**Fail posture, split deliberately.** The KV windows **fail OPEN** when KV is
+unavailable (the Firecrawl breaker's doctrine — a monitoring outage must not
+silently halt the pipeline), auditing `rentcast_spend_ceiling_degraded` every
+time. The per-invocation window needs no infrastructure, always runs, and
+**fails CLOSED**. *An outage degrades the ceiling; it never removes it.*
+
+The counter increments **before** dispatch and is **awaited, not detached** —
+the vendor bills on the request, and an un-awaited increment lets a tight loop
+fire hundreds of calls before the first write lands.
+
+| Env | Default | Note |
+|---|---|---|
+| `RENTCAST_PER_INVOCATION_CAP` | 60 | new; the KV-independent backstop |
+| `RENTCAST_24H_HARD_CEILING` | **300** | **raised from 150** |
+| `RENTCAST_MONTHLY_CAP` | 1000 | = Foundation plan's included requests |
+
+The daily raise is deliberate: observed July baseline is **~120 calls/day**, so a
+150 *global* ceiling would trip on an ordinary busy day and silently starve ARV
+runs. 300 is ~2.5× baseline and a runaway still reaches it within the first hour.
+Side effect stated in code: `auto-underwrite-engaged`'s ceiling loosens 150 → 300
+because it now reads the shared constant instead of a second local reader of the
+same env. That lane keeps its own check — it counts RentCast **+ ATTOM**, while
+the choke point sees RentCast only.
+
+**KNOWN IMPRECISION:** the month window buckets by **UTC calendar month**, while
+RentCast bills on its own subscription cycle (which *resets on plan change*). The
+two drift by up to weeks. Fine for a safety brake; **never** read it as "requests
+left this billing period" — the vendor dashboard is authority.
+
+**OPERATOR NOTE:** the KV month bucket starts **empty**. This does not
+retroactively account for July's 6,520 — it counts from first deploy forward.
+
+**Plan ruling (2026-07-31): stay on Foundation ($74).** Break-evens at real
+rates — Foundation wins below ~3,100 calls/month, Growth ($199) from ~3,100 to
+~13,300, Scale ($449) only above ~13,300. Peak month was 6,520. Scale was
+briefly recommended off a wrongly-derived $0.33/request rate and **withdrawn**;
+the real Foundation overage is **$0.06**.
+
 ## 9. Pointers
 
 - Hard rules / invariants: **[`docs/INVARIANTS.md`](../INVARIANTS.md)** — load every session.
