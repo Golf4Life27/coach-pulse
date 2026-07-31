@@ -735,6 +735,67 @@ pair existed in the model and only one drew.
   Today, Funnel, Agents). `/queue` and `/` already render the identical feed by
   construction — consolidation is real but is its own change.
 
+## 8m. NEW 2026-07-31 — Auto-answer lane (DARK), and the replay that reframed it
+
+**Shipped** (commit `d34e6a6`; 3647 tests green, `tsc` clean, build compiles —
+**not merged, not deployed, lane DARK**): `lib/reply-triage/auto-answer.ts` (pure
+decision + deterministic composers), `auto-answer-send.ts` (I/O; mirrors
+`lib/auto-ack` guard-for-guard), `/api/admin/auto-reply-dry-run` (**no apply mode,
+cannot send**), wired into `scan-comms`. Flag: `REPLY_AUTO_ANSWER_LIVE`.
+
+**Scope narrowed mid-build.** The approved proposal named **four** buckets. Two are
+already forbidden by rules written in the triage itself:
+- `disclosure_step` — *"the machine NEVER acknowledges legal disclosures for the
+  operator; personal acknowledgment required."*
+- `appointment` — *"operator owns the calendar commitment."*
+
+Only **`seller_costs`** (a policy answer naming **no** number) and **`offer_format`**
+(restates the delivery-stamped **sticky** number; no sticky → HOLD, per INVARIANTS §3)
+survived. Composers are deterministic string builders, not model calls. The **amount
+veto** outranks every other check — a seller who names a number is countering, whatever
+else the sentence says (the 9360 Cheyenne shape).
+
+### THE REPLAY — read this before extending the lane
+
+Replayed through the real modules over the **121 recorded reply threads** (100
+parseable, 21 with no recoverable inbound):
+
+| classification | n |
+|---|---|
+| **unknown** | **50** |
+| soft_no | 19 |
+| interest | 14 |
+| rejection | 14 |
+| offer_format | 2 |
+| counter | 1 |
+| seller_costs / appointment / disclosure_step | **0** |
+
+**The lane would have answered 2 of 100.** The premise behind the build — that these
+were "the highest-volume non-rejection buckets" — was **wrong**. The build is correct
+and safe; it is simply not where the volume is.
+
+**Where the volume actually is: classification.** Sampling the 50 `unknown` bodies shows
+three populations collapsed into one generic queue:
+1. **Trivial acks needing no reply** — "Will do", "Ok, thank you.", "Not at all",
+   "emailed". These should self-close, not queue.
+2. **Mis-classified `offer_format`** — a bare email address *is* the answer to "what's
+   the best email", and reads as `unknown`.
+3. **Hot and urgent, sitting in a generic bucket** —
+   *"Alex, did you receive my email with contract?"* ·
+   *"Alex, what is going on with the contract I sent you?"* ·
+   *"Hey Alex! That sounds like a great offer… probate… my client wanted this closed
+   months ago"* — the last is near an acceptance; the first two are agents chasing the
+   operator at **contract stage**.
+
+**Recommended next (NOT approved, NOT started):** the classifier, not more auto-answer
+buckets — (a) a *no-reply-needed* class so trivial acks self-close, (b) contract-stage
+patterns, (c) softer acceptance patterns. `ACCEPTANCE_PATTERNS` is deliberately narrow,
+which is right for auto-close but leaves warm leads in the generic bucket.
+
+**Also unresolved:** 21 of 121 threads have no recoverable inbound body. The
+reply-classification backfill (§8i) re-pulls from Quo and would cover them — **still
+not run.**
+
 ## 9. Pointers
 
 - Hard rules / invariants: **[`docs/INVARIANTS.md`](../INVARIANTS.md)** — load every session.
