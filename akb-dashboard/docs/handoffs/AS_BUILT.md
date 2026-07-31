@@ -684,6 +684,57 @@ SENDS above $130,000 once a real vision rehab exists.
 - **The `no vision needed` shortcut on aged DOM is untouched.** Time-on-market
   should earn *eligibility*, not a *price*.
 
+## 8l. NEW 2026-07-31 — Conveyor rebalanced (opener holds off, vision on, ZIPs batched)
+
+**The surface was already right.** `components/conveyor/ConveyorFeed.tsx` (operator
+2026-07-11) is the one ranked feed; `removeItem` already pulls a card **out of state**
+on action rather than crossing it off; the machine-work gate already hid all 235
+`kill_dead_deal`. The problem was what it was being **fed**.
+
+> **Correction to an earlier claim in this session:** "985 pending, 93% housekeeping,
+> 190 HIGH dead deals" described the Airtable **table**, not the operator's screen.
+> The real clutter was **`h2_opener_hold`: 533 in the decision feed against 72
+> `jarvis_reply` — 8:1 burial of the only lane with a human in it.**
+
+Mockup approved before any code changed (artifact `22d48240`).
+
+**1. Opener holds are BACKLOG, not decisions.** New `BACKLOG_PROPOSAL_TYPES` =
+`{h2_opener_hold}`. Counted as `hidden.backlog`, surfaced as a linked badge → `/system`,
+never as cards. Reported **separately** from `machineWorkHidden` — machine work is
+handled and forgotten, backlog is real work nobody has started — and checked **before**
+the machine-work branch so 533 records can never be reported as "handled".
+
+**2. `batchFrontierRetire`** (pure). 42 proposals with identical reasoning is **one**
+coverage ruling. `FRONTIER_BATCH_MIN = 3`. Batching exposed a second problem: those 42
+were written by the **old** governor (retire on a single empty crawl). The rule changed
+2026-07-29 — `RETIRE_MIN_ZERO_YIELD_STREAK = 3`, `REVIVAL_COOLDOWN_DAYS = 30`,
+*"pause is a rest, not an exit"* — and their reason string `zero_yield_latest_snapshot`
+**no longer exists in the codebase**. When any row still carries it the card flips
+"Retire all N" → **"Archive all N"** and says why. New `proposal_batch` action kind
+(not a `proposalIds` array on the singular actions) so no handler can half-apply a
+batch; the handler counts real writes and reports *"Archived 38 of 42"*, never a false
+success.
+
+**3. `/api/vision-holds`** returns **only** `Vision_Queue_State=vision_failed`.
+`needs_vision` is deliberately excluded — the drain cron clears those twice daily with
+nobody looking, and surfacing them would recreate the pile the lane exists to prevent
+(*"if it renders, it needs you"*). Actions: **Run rehab** (primary — one tap, costs the
+operator nothing) then **Spot-check images** (fallback for when the machine already
+failed). List price is context text, **never** `dollars` — nothing has been offered on
+a held record. `needs_vision` returns as a count for the rail only.
+
+`ConveyorCard` gained a secondary-open render; without it the Run rehab / Spot-check
+pair existed in the model and only one drew.
+
+**Expected effect:** ~660 cards → **~126**, of which **72 are live seller threads**.
+
+**NOT DONE, deliberately:**
+- The 42 stale frontier proposals were **not archived**. The card is wired; pressing it
+  is the operator's call (a 42-record production write).
+- The **nine nav tabs** are untouched (Act Now, Pipeline, Deals, Buyers, Queue, System,
+  Today, Funnel, Agents). `/queue` and `/` already render the identical feed by
+  construction — consolidation is real but is its own change.
+
 ## 9. Pointers
 
 - Hard rules / invariants: **[`docs/INVARIANTS.md`](../INVARIANTS.md)** — load every session.
