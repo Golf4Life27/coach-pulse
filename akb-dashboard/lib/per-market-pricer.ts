@@ -204,6 +204,47 @@ const pos = (v: unknown): v is number => typeof v === "number" && Number.isFinit
  *  opener. The opener is null and the record routes to operator review. This
  *  REPLACES the retired flat-65%-of-list fallback (operator 2026-06-28): we
  *  never text a number anchored to the seller's list price. */
+// ── Placeholder-rehab TURNKEY TEST (2026-07-31, revised same day) ────────
+//
+// The first version of this guard HELD every opener built on a placeholder
+// rehab. Measured against the live pool that was 1,266 of 1,555 never-texted
+// records — 81% — against a vision drain that clears 12/day, i.e. 106 days to
+// catch up. First-touch offers had ALREADY fallen 37/day (7/23) to 3/day
+// (7/31); a blanket hold would have taken them to zero. A correct guard that
+// stops the business is not a correct guard.
+//
+// The real defect at 256 Westchester was never "no vision ran" — it was a
+// RENOVATED house. And there is a free, deterministic signal for that, which
+// the pricer already holds both halves of at decision time.
+//
+// THE TEST, derived rather than guessed: the placeholder ASSUMES rehab =
+// ROUGH_REHAB_PCT_OF_ARV × ARV. A house needing that much work cannot be
+// worth more than the remainder, so a seller asking at or above
+// (1 − ROUGH_REHAB_PCT_OF_ARV) × ARV is asking more than a house needing that
+// rehab could possibly be worth. At that point the assumption contradicts the
+// ask, and the number built on it is not defensible.
+//
+//   256 Westchester   $234,900 / $223,750 = 105% ≥ 70%  → HOLD  ✓
+//   Detroit shell      $30,000 / $150,000 =  20% <  70% → SEND  ✓
+//
+// The threshold is not a knob — it is 1 − the placeholder itself, so the two
+// can never drift apart.
+export const PLACEHOLDER_TURNKEY_RATIO = 1 - ROUGH_REHAB_PCT_OF_ARV;
+
+/** Pure: is a placeholder-rehab opener unsafe for THIS listing?
+ *  Unknown list price fails CLOSED — without the ask we cannot rule out a
+ *  turnkey house, and that is the exact case this exists to catch. */
+export function placeholderRehabIsUnsafe(
+  listPrice: number | null | undefined,
+  arvUsed: number | null | undefined,
+): boolean {
+  const list = typeof listPrice === "number" && Number.isFinite(listPrice) && listPrice > 0 ? listPrice : null;
+  const arv = typeof arvUsed === "number" && Number.isFinite(arvUsed) && arvUsed > 0 ? arvUsed : null;
+  if (arv == null) return true;   // no value basis → cannot judge → hold
+  if (list == null) return true;  // no ask → cannot judge → hold
+  return list >= arv * PLACEHOLDER_TURNKEY_RATIO;
+}
+
 function holdResult(
   ceilingSource: RoughCeilingResult["source"],
   detail: string,
@@ -399,7 +440,8 @@ export function priceOpener(input: PricerInput): PricerResult {
       // labelling them "needs vision" would route them to a drain cron that
       // can never clear them. The send paths convert this flag to a HOLD
       // only once a number has survived everything else.
-      return rough.source === PLACEHOLDER_REHAB_SOURCE
+      return rough.source === PLACEHOLDER_REHAB_SOURCE &&
+        placeholderRehabIsUnsafe(list, rough.arvUsed)
         ? { ...guarded, placeholderRehab: true }
         : guarded;
     }

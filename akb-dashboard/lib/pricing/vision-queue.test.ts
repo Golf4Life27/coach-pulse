@@ -8,6 +8,7 @@ import {
   PLACEHOLDER_REHAB_SOURCE,
 } from "./vision-queue";
 import { priceOpenerWithSeed } from "@/lib/opener-pricing";
+import { placeholderRehabIsUnsafe } from "@/lib/per-market-pricer";
 import type { ZipArvSeed } from "@/lib/zip-arv-seed-store";
 
 describe("256 Westchester Dr — the defect this exists to stop", () => {
@@ -121,5 +122,60 @@ describe("drainOutcome", () => {
     expect(drainOutcome(null)).toBe("vision_failed");
     expect(drainOutcome(undefined)).toBe("vision_failed");
     expect(drainOutcome(0)).toBe("vision_failed");
+  });
+});
+
+// ── The turnkey test (revised 2026-07-31) ─────────────────────────────────
+// A blanket placeholder-rehab HOLD blocked 1,266 of 1,555 never-texted
+// records (81%) against a drain that clears 12/day. First-touch had already
+// fallen 37/day → 3/day; a blanket hold would have ended it. The gate now
+// fires only where the assumption contradicts the ask.
+describe("placeholderRehabIsUnsafe — holds turnkey, lets the distressed cohort flow", () => {
+  it("HOLDS 256 Westchester: asking ABOVE renovated ARV", () => {
+    // $234,900 ask vs ~$223,750 ARV = 105%. A house needing a 30%-of-ARV gut
+    // cannot be worth more than the ask implies.
+    expect(placeholderRehabIsUnsafe(234_900, 223_750)).toBe(true);
+  });
+
+  it("SENDS a genuine distressed shell: asking a fifth of renovated value", () => {
+    expect(placeholderRehabIsUnsafe(30_000, 150_000)).toBe(false);
+  });
+
+  it("the boundary is 1 − the placeholder itself, so the two cannot drift", () => {
+    // ROUGH_REHAB_PCT_OF_ARV = 0.30 → threshold 0.70 of ARV.
+    expect(placeholderRehabIsUnsafe(69_999, 100_000)).toBe(false); // just under
+    expect(placeholderRehabIsUnsafe(70_000, 100_000)).toBe(true);  // exactly at
+  });
+
+  it("fails CLOSED on a missing ask or a missing value basis", () => {
+    // Without the ask we cannot rule out a turnkey house — which is the whole
+    // case this exists to catch.
+    expect(placeholderRehabIsUnsafe(null, 150_000)).toBe(true);
+    expect(placeholderRehabIsUnsafe(0, 150_000)).toBe(true);
+    expect(placeholderRehabIsUnsafe(30_000, null)).toBe(true);
+  });
+});
+
+describe("end-to-end: the distressed cohort keeps sending on a placeholder rehab", () => {
+  const detroitSeed: ZipArvSeed = {
+    zip: "48227", renovatedPerSqft: 150, arvLowPerSqft: 110, compCount: 7,
+    confidence: "STRONG", dontPrice: false, source: "rentcast_avm", market: "Detroit",
+    state: "MI", fetchedAt: null, receiptsJson: null, recordId: "recSeedD",
+  };
+
+  it("prices and SENDS a $60k ask against a $150k renovated ARV, no vision needed", () => {
+    const r = priceOpenerWithSeed({
+      listPrice: 60_000,
+      storedArv: null,
+      estRehabMid: null,   // ← placeholder rehab, exactly as before
+      estRehab: null,
+      sqft: 1_000,
+      arvPctMax: 0.6461,
+      wholesaleFee: 5_000,
+      anchorPct: 0.90,
+      seed: detroitSeed,
+    });
+    expect(r.result.opener).not.toBeNull();
+    expect(r.result.basis).toBe("arv_buybox");
   });
 });
