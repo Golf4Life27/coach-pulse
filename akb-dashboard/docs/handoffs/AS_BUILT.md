@@ -609,6 +609,81 @@ rates — Foundation wins below ~3,100 calls/month, Growth ($199) from ~3,100 to
 briefly recommended off a wrongly-derived $0.33/request rate and **withdrawn**;
 the real Foundation overage is **$0.06**.
 
+## 8k. NEW 2026-07-31 — Placeholder-rehab HOLD + the vision queue (256 Westchester)
+
+**The defect** `[verified — record read this session]`. `rec reckHdag4kCuTyNj1`,
+256 Westchester Dr, Birmingham AL 35215. Renovated 4/2 (quartz waterfall island,
+refinished hardwoods), 1,902 sqft, list **$234,900**, **DOM 380**,
+Distress_Bucket "Extreme". RentCast auto-intake 09:12 → auto-promoted Auto
+Proceed → **texted 15:01**, with `Real_ARV_Median`, `ARV_Validated_At`,
+`Est_Rehab` and `Est_Rehab_Mid` **all empty**. Opener **$74,500**. Agent: *"No
+where close, their bottom line is $230k."*
+
+**The ARV was not wrong.** Reconstructed to the dollar:
+
+```
+ARV     = seed $/sqft × 1,902 sqft   ≈ $223,750   (~$117/sqft — agent said $230k)
+rehab   = 0.30 × ARV                 =  $67,125   ← GUESSED
+ceiling = 0.70 × 223,750 − 67,125 − 15,000 fee
+opener                               =  $74,500   ✓
+```
+
+The system subtracted a **$67,125 gut renovation from a turnkey house.**
+
+**Root cause — two defensible rules, lethal together:**
+1. `lib/lowball-eligibility.ts:81` — DOM ≥ 60 is eligible *"on time-on-market
+   alone **(no vision needed)**"*. The condition read is skipped for aged listings.
+2. `lib/rough-opener-ceiling.ts:99` — with no vision rehab, rehab =
+   `ROUGH_REHAB_PCT_OF_ARV` (0.30) × ARV.
+
+A renovated house that sits is the *most common* way a listing reaches 380 DOM.
+380 days at $234,900 means **overpriced, not distressed** — and the only signal
+separating those is the one the eligibility gate skips.
+
+**AMENDMENT: rehab is the largest term in the opener after ARV. Guessing it IS
+guessing the offer. An opener resting on a placeholder rehab never reaches a seller.**
+
+Carried as a **flag** (`PricerResult.placeholderRehab`), **not** an early return,
+and converted to a HOLD **last** — in `priceOpenerWithSeed`, after the over-list
+tripwire and corroboration gate have spoken. (Two earlier placements swallowed the
+size-extrapolation and tripwire diagnostics; 4 existing tests caught it.) Those are
+**ARV** problems — vision cannot fix an ARV problem, and labelling them "needs
+vision" would route them to a drain that can never clear them.
+
+**The bucket** (operator: *"not get buried in hundreds of other dead properties…
+a bucket for me to either spot check images or run rehab with the system vision"*).
+A held opener normally writes an `h2_opener_hold` proposal — a queue **533 pending**
+deep. These are **machine work**, so they route away from the proposal writer
+entirely into `Vision_Queue_State` (`fldqgrBDtoRceShP2`: `needs_vision` /
+`vision_failed` / `cleared`). `routeHolds` splits on an **exact** reason match,
+never a prefix — a permissive test re-buries them.
+
+**`/api/cron/opener-vision-drain`** (new; 2 slots/day, `limit=6`, 13:20 + 20:20 UTC)
+runs the appraiser's existing `collectPhotos` → `callRehabVision` →
+`computeRehabRange` pipeline over `needs_vision`, writes `Est_Rehab_Mid` +
+`Rehab_Estimated_At`, sets `cleared` — which **releases** the record so the next h2
+pass prices it off a real rehab and may send. **Zero operator involvement.** Only a
+genuine vision failure becomes `vision_failed` — the spot-check bucket, reported on
+every drain run so it can never quietly grow.
+
+Regression test reproduces the address end-to-end: HOLDs instead of texting $74,500;
+SENDS above $130,000 once a real vision rehab exists.
+
+### 8k-bis. STILL OPEN from this trace (found, NOT fixed)
+
+- **h2's pre-send probe discards `review` verdicts.** It acts only on reject
+  reasons `firecrawl_renovated` / `new_construction_excluded` /
+  `wholesaler_excluded` / `firecrawl_inactive`. A `classifyVerifiedListing`
+  outcome of **`review`** — including `condition_signal_missing_flagged` and
+  `sqft_mismatch_flagged` — **falls through and sends.** On this listing the
+  classifier correctly said "no distress signal on this page" and h2 ignored it.
+- **Two floors, one concept.** `LOW_OPENER_FLOOR_PCT_OF_LIST` = **0.30** (h2 send
+  path via `minOfferFloor`) vs `LOWBALL_FLOOR_PCT_OF_LIST` = **0.35**
+  (`outreach-economics`). The looser one is live on the send path; at 35% the
+  $74,500 opener would have held on the floor alone.
+- **The `no vision needed` shortcut on aged DOM is untouched.** Time-on-market
+  should earn *eligibility*, not a *price*.
+
 ## 9. Pointers
 
 - Hard rules / invariants: **[`docs/INVARIANTS.md`](../INVARIANTS.md)** — load every session.
