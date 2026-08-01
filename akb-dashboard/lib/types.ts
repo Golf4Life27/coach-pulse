@@ -50,6 +50,16 @@ export interface Listing {
   actionHoldUntil: string | null;
   actionCardState: "Open" | "Held" | "Cleared" | null;
   lastInboundAt: string | null;
+  /** Vision-queue state (2026-07-31). Set when an opener HELD because its
+   *  rehab was a placeholder rather than a vision read. Machine work — the
+   *  drain cron clears it; only "vision_failed" needs the operator. */
+  visionQueueState?: string | null;
+  /** Persisted lib/reply-triage classification of the most recent genuine
+   *  inbound (2026-07-31). Null on a record whose reply predates the
+   *  persistence fix — that gap IS the backfill's work-list. */
+  replyClassification?: string | null;
+  replyClassifiedAt?: string | null;
+  replyDecisionKind?: string | null;
   lastOutboundAt: string | null;
   /** Space-separated Gmail thread ids linked to this deal. Once linked, the
    *  gmail-sync sweep ingests ANY new message on the thread regardless of

@@ -26,6 +26,7 @@ import {
   type ConveyorItem,
   type PriorityRow,
   type ProposalRow,
+  type VisionHoldRow,
 } from "@/lib/conveyor/model";
 import { fetchFastSources, fetchBriefCards } from "@/lib/conveyor/sources";
 
@@ -38,6 +39,8 @@ export default function ConveyorFeed() {
   const [priorities, setPriorities] = useState<PriorityRow[]>([]);
   const [broCards, setBroCards] = useState<BroCardRow[]>([]);
   const [contractItems, setContractItems] = useState<ConveyorItem[]>([]);
+  const [visionHolds, setVisionHolds] = useState<VisionHoldRow[]>([]);
+  const [needsVision, setNeedsVision] = useState(0);
   const [loading, setLoading] = useState(true);
   const [briefLoading, setBriefLoading] = useState(true);
   const [busy, setBusy] = useState<Set<string>>(new Set());
@@ -54,6 +57,8 @@ export default function ConveyorFeed() {
     if (s.actionItems) setActionItems(s.actionItems);
     if (s.priorities) setPriorities(s.priorities);
     if (s.contractItems) setContractItems(s.contractItems);
+    if (s.visionHolds) setVisionHolds(s.visionHolds);
+    if (s.needsVisionCount != null) setNeedsVision(s.needsVisionCount);
     setNowMs(Date.now());
     setLoading(false);
   }, []);
@@ -78,14 +83,19 @@ export default function ConveyorFeed() {
   }, [loadFast, loadBrief]);
 
   const { items, hidden } = useMemo(
-    () => buildConveyor({ proposals, actionItems, priorities, broCards, contractItems }, new Date(nowMs).toISOString()),
-    [proposals, actionItems, priorities, broCards, contractItems, nowMs],
+    () =>
+      buildConveyor(
+        { proposals, actionItems, priorities, broCards, contractItems, visionHolds },
+        new Date(nowMs).toISOString(),
+      ),
+    [proposals, actionItems, priorities, broCards, contractItems, visionHolds, nowMs],
   );
 
   const removeItem = useCallback((item: ConveyorItem) => {
     if (item.source === "proposal") setProposals((prev) => prev.filter((p) => `proposal:${p.id}` !== item.key));
     else if (item.source === "action_item") setActionItems((prev) => prev.filter((a) => `action_item:${a.id}` !== item.key));
     else if (item.source === "priority") setPriorities((prev) => prev.filter((p) => `priority:${p.id}` !== item.key));
+    else if (item.source === "vision") setVisionHolds((prev) => prev.filter((v) => `vision:${v.recordId}` !== item.key));
     else setBroCards((prev) => prev.filter((b) => `brocard:${b.recordId}` !== item.key));
   }, []);
 
@@ -93,6 +103,11 @@ export default function ConveyorFeed() {
     async (item: ConveyorItem, action: ConveyorAction, opts?: { editedBody?: string }) => {
       if (action.kind === "open") return; // links navigate on their own
       if (action.kind === "proposal_reject" && !window.confirm("Kill this card? The proposal is rejected.")) return;
+      if (
+        action.kind === "proposal_batch" &&
+        !window.confirm(`${action.label}? This rules on ${action.proposalIds.length} proposals at once.`)
+      )
+        return;
       setBusy((prev) => new Set(prev).add(item.key));
       try {
         let ok = false;
@@ -124,6 +139,32 @@ export default function ConveyorFeed() {
                   ? "Snoozed until 9am"
                   : "Killed"
             : data.skipReason || data.error || "Failed";
+        } else if (action.kind === "proposal_batch") {
+          // ONE ruling over N proposals (frontier batching). Applied
+          // sequentially and counted honestly: a partial failure reports the
+          // real number written, never "done" — a batch that half-applies and
+          // says "Approved" is how a coverage decision silently drifts.
+          let done = 0;
+          for (const id of action.proposalIds) {
+            const r = await fetch("/api/proposals", {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ proposalId: id, action: action.decision }),
+            });
+            if (r.ok) done += 1;
+          }
+          ok = done === action.proposalIds.length;
+          const verb = action.decision === "reject" ? "Archived" : "Retired";
+          message = ok
+            ? `${verb} ${done}`
+            : `${verb} ${done} of ${action.proposalIds.length} — the rest failed, card stays`;
+        } else if (action.kind === "vision_rerun") {
+          const res = await fetch("/api/cron/opener-vision-drain?limit=1", { cache: "no-store" });
+          const data = await res.json().catch(() => ({}));
+          ok = res.ok && (data.summary?.cleared ?? 0) > 0;
+          message = ok
+            ? "Rehab priced — record released to the send path"
+            : "Vision still can't read it — spot-check the images";
         } else if (action.kind === "action_item_resolve" || action.kind === "action_item_defer") {
           const res = await fetch("/api/operator-actions", {
             method: "PATCH",
@@ -179,6 +220,23 @@ export default function ConveyorFeed() {
               title="Housekeeping proposals the machine handles itself (bump lane, d3 disposal) and stale items past the decision-age gates — hidden by the UX law: if it renders, it needs you."
             >
               {hidden.machineWork} machine-work · {hidden.stale} stale hidden
+            </span>
+          )}
+          {hidden.backlog > 0 && (
+            <a
+              href="/system"
+              className="ml-2 text-[10px] text-amber-600/80 hover:text-amber-400 font-normal underline decoration-dotted underline-offset-2"
+              title="Price-guard opener HOLDs. Real work, but maintenance — not rulings you owe an answer to. Kept off the belt so live seller threads are visible."
+            >
+              {hidden.backlog} opener holds →
+            </a>
+          )}
+          {needsVision > 0 && (
+            <span
+              className="ml-2 text-[10px] text-gray-600 font-normal"
+              title="Openers held because their rehab would be a guess. The vision drain cron clears these twice a day — you only see the ones vision cannot read."
+            >
+              {needsVision} awaiting vision
             </span>
           )}
         </h2>

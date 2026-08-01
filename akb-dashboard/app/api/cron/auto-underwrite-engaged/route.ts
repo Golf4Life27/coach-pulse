@@ -48,6 +48,7 @@ import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { countCallsBySource24h } from "@/lib/spend/derive";
 import { selectEngagedUnderwriteTargets } from "@/lib/appraiser/engaged-underwrite-select";
 import { autoRunOnEngaged, originFromRequest } from "@/lib/appraiser/auto-run-on-engaged";
+import { RENTCAST_DAILY_CAP } from "@/lib/rentcast/spend-ceiling";
 import { persistDecisionMath } from "@/lib/decision-persist";
 import type { Listing } from "@/lib/types";
 
@@ -70,10 +71,16 @@ const PER_TARGET_BUDGET_MS = 60_000;
  *  ATTOM promotion (2026-07-20) comp pulls bill ATTOM, not RentCast, so
  *  the guard counts BOTH sources — otherwise the lane's only whole-run
  *  spend bound would never see its own comp calls. Env name kept for
- *  the already-deployed Vercel setting. */
+ *  the already-deployed Vercel setting.
+ *
+ *  ONE TRUTH (2026-07-31): the value now comes from
+ *  lib/rentcast/spend-ceiling.RENTCAST_DAILY_CAP — the same constant the
+ *  global choke point enforces — instead of a second local reader of the
+ *  same env with its own default. This lane keeps its OWN check because it
+ *  counts RentCast + ATTOM together (the choke point sees RentCast only),
+ *  so it remains the stricter guard on a mixed-source run. */
 export function paidCalls24hHardCeiling(): number {
-  const raw = Number(process.env.RENTCAST_24H_HARD_CEILING);
-  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 150;
+  return RENTCAST_DAILY_CAP;
 }
 
 export async function GET(req: Request) {

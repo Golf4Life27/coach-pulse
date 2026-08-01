@@ -18,6 +18,7 @@
 import { priceOpener, type PricerResult } from "@/lib/per-market-pricer";
 import { arvForSubjectFromSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import { corroborateOpener, type CorroborationFlag } from "@/lib/opener-sanity-gate";
+import { PLACEHOLDER_REHAB_HOLD_REASON } from "@/lib/pricing/vision-queue";
 
 export type ArvSource = "seed_renovated" | "stored" | "none";
 
@@ -142,11 +143,41 @@ export function priceOpenerWithSeed(input: OpenerWithSeedInput): OpenerWithSeedR
     };
   }
 
+  // ── PLACEHOLDER-REHAB HOLD (256 Westchester, operator 2026-07-31) ────────
+  // LAST, after the corroboration gate has had its say — a record that failed
+  // corroboration keeps THAT reason (an ARV problem vision cannot fix; routing
+  // it to a vision drain would park it somewhere that can never clear it).
+  // What lands here is a number that survived every guard and is wrong for
+  // exactly one reason: its rehab was invented.
+  //
+  //   ARV     ≈ $223,750  (correct — the agent said $230k)
+  //   rehab   = 0.30×ARV = $67,125  on a house needing $0
+  //   opener  = $74,500   texted against a $234,900 turnkey listing
+  //
+  // Rehab is the largest term after ARV; guessing it is guessing the offer.
+  // HOLD and route to the vision queue — MACHINE work, drained by cron, and
+  // deliberately not an h2_opener_hold operator proposal.
+  let heldForVision = false;
+  if (pos(finalResult.opener) && finalResult.placeholderRehab === true) {
+    heldForVision = true;
+    finalResult = {
+      ...finalResult,
+      opener: null,
+      basis: "hold_no_value_basis",
+      cappedToList: false,
+      detail:
+        `${PLACEHOLDER_REHAB_HOLD_REASON} — computed opener $${finalResult.opener.toLocaleString()} rests on a ` +
+        `placeholder rehab ($${(finalResult.rehabUsed ?? 0).toLocaleString()}, no vision read). ` +
+        `Number is otherwise sendable; the renovation is invented. Run vision, then price. | ${finalResult.detail}`,
+    };
+  }
+
   // Compact label for the Opener_Basis receipt. (capped_to_list is retired as
   // a producible label — ruling recmy2Vwp1wMA1Vs8; it survives only on legacy
   // records. An over-threshold opener now surfaces as hold_over_list_tripwire.)
   const basisLabel =
     !corr.corroborated && pos(result.opener) ? "hold_failed_corroboration"
+    : heldForVision ? PLACEHOLDER_REHAB_HOLD_REASON
     : finalResult.overListTripwire ? "hold_over_list_tripwire"
     : finalResult.basis === "hold_no_value_basis" ? "hold"
     : arvSource === "seed_renovated"

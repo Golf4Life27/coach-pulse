@@ -33,15 +33,20 @@ export type ConveyorAction =
   | { kind: "proposal_approve"; proposalId: string; label?: string }
   | { kind: "proposal_snooze"; proposalId: string }
   | { kind: "proposal_reject"; proposalId: string }
+  /** One ruling over many proposals of the same shape (frontier batching,
+   *  2026-07-31). Its own kind rather than a proposalId array on the singular
+   *  actions, so no existing handler can silently half-apply a batch. */
+  | { kind: "proposal_batch"; proposalIds: string[]; decision: "approve" | "reject"; label: string }
   | { kind: "action_item_resolve"; itemId: string }
   | { kind: "action_item_defer"; itemId: string }
   | { kind: "priority_done"; priorityId: string }
+  | { kind: "vision_rerun"; recordId: string; label: string }
   | { kind: "open"; href: string; label?: string };
 
 export interface ConveyorItem {
   /** Unique key: `${source}:${id}`. */
   key: string;
-  source: "proposal" | "action_item" | "priority" | "brocard" | "contract";
+  source: "proposal" | "action_item" | "priority" | "brocard" | "contract" | "vision";
   type: ConveyorType;
   title: string;
   /** One-sentence reasoning — the card never renders more than this. */
@@ -132,14 +137,24 @@ export interface ProposalRow {
 // lane does the re-touching, the d3 lanes do the disposing. They never
 // render. Only decision-grade proposal types reach the conveyor:
 //   jarvis_reply    — a live seller waiting on a drafted reply (2A)
-//   h2_opener_hold  — price-guard HOLD needing a sourcing/skip ruling (2C)
 //   frontier_retire — coverage-reduction ruling (2C)
+// (h2_opener_hold was in this set until 2026-07-31; see BACKLOG_PROPOSAL_TYPES.)
 // Age gates on top (a stale "decision" is not a decision): jarvis_reply
 // older than 10 days is a cold thread (the 7/08 staleness doctrine — the
 // re-engagement lane owns it); other decision types cap at 14 days.
+/** BACKLOG, not decisions (operator 2026-07-31). A price-guard HOLD is
+ *  maintenance: the record needs sourcing work or a pricing input, not a
+ *  ruling the operator owes an answer to. There were 533 pending against 72
+ *  live seller threads — an 8:1 burial of the only lane with a human in it.
+ *  These are counted and surfaced as a backlog badge (→ /system), never as
+ *  conveyor cards. Distinct from machine work: machine work is handled
+ *  autonomously and forgotten; backlog is real work nobody is doing yet. */
+export const BACKLOG_PROPOSAL_TYPES: ReadonlySet<string> = new Set([
+  "h2_opener_hold",
+]);
+
 export const DECISION_PROPOSAL_TYPES: ReadonlySet<string> = new Set([
   "jarvis_reply",
-  "h2_opener_hold",
   "frontier_retire",
   // Post-vision park (2026-07-16): a sent-opener deal went underwater when the
   // real rehab landed — the operator rules it (pass / re-verify / creative).
@@ -154,6 +169,11 @@ export interface ProposalGateResult {
   machineWorkHidden: number;
   /** Decision-grade proposals hidden as stale (cold threads / dead holds). */
   staleHidden: number;
+  /** Price-guard HOLDs held off the belt as a BACKLOG. Reported separately
+   *  from machineWorkHidden because the two mean different things: machine
+   *  work is done and forgotten, backlog is real work still waiting. Surfaced
+   *  as a count badge, never as cards. */
+  backlogHidden: number;
 }
 
 export function filterDecisionProposals(rows: ProposalRow[], nowIso: string): ProposalGateResult {
@@ -161,7 +181,15 @@ export function filterDecisionProposals(rows: ProposalRow[], nowIso: string): Pr
   const kept: ProposalRow[] = [];
   let machineWorkHidden = 0;
   let staleHidden = 0;
+  let backlogHidden = 0;
   for (const p of rows) {
+    // Backlog checked BEFORE machine work: an opener hold is neither a
+    // decision nor something the machine already handled, and collapsing it
+    // into machineWorkHidden would report 533 records as "handled".
+    if (BACKLOG_PROPOSAL_TYPES.has(p.proposalType)) {
+      backlogHidden++;
+      continue;
+    }
     if (!DECISION_PROPOSAL_TYPES.has(p.proposalType)) {
       machineWorkHidden++;
       continue;
@@ -174,7 +202,7 @@ export function filterDecisionProposals(rows: ProposalRow[], nowIso: string): Pr
     }
     kept.push(p);
   }
-  return { kept, machineWorkHidden, staleHidden };
+  return { kept, machineWorkHidden, staleHidden, backlogHidden };
 }
 
 export interface ActionItemRow {
@@ -405,10 +433,139 @@ export function dedupeConveyor(items: ConveyorItem[]): ConveyorItem[] {
   return items.filter((i) => !(i.source === "brocard" && i.recordId && proposalRecords.has(i.recordId)));
 }
 
+// ── Vision holds (operator 2026-07-31) ───────────────────────────────────
+// The 256 Westchester lane. An opener HELD because its rehab would have been
+// a 30%-of-ARV guess routes to Vision_Queue_State; the drain cron runs vision
+// twice a day and releases most of them with nobody looking.
+//
+// ONLY `vision_failed` reaches this feed. `needs_vision` is machine work and
+// must never render — that is the surface's own law ("if it renders, it needs
+// you"), and violating it here would recreate the pile this lane exists to
+// prevent. A vision_failed record is the narrow case where the machine tried
+// and could not see the house: no photos, or the vision call threw.
+
+export interface VisionHoldRow {
+  recordId: string;
+  address: string | null;
+  listPrice: number | null;
+  /** Why vision could not resolve it — "no_photos_available", an error tail. */
+  failureReason: string | null;
+  heldAt: string | null;
+}
+
+/** Pure: a vision failure as a conveyor card. Two real actions — look at the
+ *  pictures yourself, or make the machine try again. */
+export function fromVisionHold(v: VisionHoldRow): ConveyorItem {
+  const noPhotos = (v.failureReason ?? "").includes("no_photos");
+  return {
+    key: `vision:${v.recordId}`,
+    source: "vision",
+    type: "2C",
+    title: v.address ?? "Listing needs a condition read",
+    reasoning: noPhotos
+      ? "Held before sending — no photos to read, so any rehab number would be invented."
+      : "Held before sending — vision could not resolve the condition, so any rehab number would be invented.",
+    recordId: v.recordId,
+    href: `/pipeline/${v.recordId}`,
+    // The list price is NOT money in play — nothing is offered yet. Rendering
+    // it as dollars would misreport a held record as a live deal.
+    dollars: null,
+    deadlineAt: null,
+    deadlineImplied: false,
+    postedAt: v.heldAt,
+    verbatim: v.listPrice != null ? `List $${v.listPrice.toLocaleString()}` : null,
+    // Run rehab first: it is the ONE-TAP machine attempt and costs the
+    // operator nothing. Spot-checking images is the fallback for when the
+    // machine has already failed on this record.
+    actions: [
+      { kind: "vision_rerun", recordId: v.recordId, label: "Run rehab" },
+      { kind: "open", href: `/pipeline/${v.recordId}`, label: "Spot-check images" },
+    ],
+  };
+}
+
+// ── Frontier batching (operator 2026-07-31) ──────────────────────────────
+// 42 pending frontier_retire proposals, every one carrying identical
+// reasoning ("crawled within 30d, 0 records ingested, 0% accept"). That is
+// ONE coverage ruling, not 42 — and rendering it 42 times pushed the lanes
+// with a human in them off the screen.
+//
+// Batching also makes a second problem visible. Those 42 were written by the
+// OLD governor, which retired on a single empty crawl; the rule changed
+// 2026-07-29 (RETIRE_MIN_ZERO_YIELD_STREAK = 3 consecutive empty runs, and
+// REVIVAL_COOLDOWN_DAYS = 30 — "pause is a rest, not an exit"). Their reason
+// string, `zero_yield_latest_snapshot`, no longer exists anywhere in the
+// codebase. One card can say that once. Forty-two cards say it never.
+
+/** Below this count the proposals render individually — batching two cards
+ *  into one costs more clarity than it saves. */
+export const FRONTIER_BATCH_MIN = 3;
+
+/** Pure: collapse a run of frontier_retire proposals into a single card.
+ *  Returns the batch item (null when under the threshold) plus the rows that
+ *  should still render individually. */
+export function batchFrontierRetire(
+  rows: ProposalRow[],
+): { batch: ConveyorItem | null; rest: ProposalRow[] } {
+  const frontier = rows.filter((p) => p.proposalType === "frontier_retire");
+  const rest = rows.filter((p) => p.proposalType !== "frontier_retire");
+  if (frontier.length < FRONTIER_BATCH_MIN) return { batch: null, rest: rows };
+
+  // ZIPs read off the reasoning text — the payload shape varies by governor
+  // version, the prose has carried the ZIP throughout.
+  const zips: string[] = [];
+  for (const p of frontier) {
+    const m = (p.reasoning ?? "").match(/ZIP\s+(\d{5})/);
+    if (m) zips.push(m[1]);
+  }
+  const shown = zips.slice(0, 5).join(" · ");
+  const more = zips.length > 5 ? ` · +${zips.length - 5}` : "";
+  // A single empty-crawl snapshot is the retired rule. If ANY row still
+  // carries it, the batch is stale evidence and the honest action is to
+  // archive and let the next rotation re-derive under the streak rule.
+  const stale = frontier.some((p) => (p.reasoning ?? "").includes("zero_yield_latest_snapshot"));
+
+  const oldest = frontier
+    .map((p) => p.createdTime)
+    .filter((t): t is string => Boolean(t))
+    .sort()[0] ?? null;
+
+  return {
+    batch: {
+      key: `proposal:frontier-batch-${frontier.length}`,
+      source: "proposal",
+      type: "2C",
+      title: stale
+        ? `${frontier.length} ZIP retirements written by the old rule`
+        : `Retire ${frontier.length} zero-yield ZIPs`,
+      reasoning: stale
+        ? `These fired on a single empty crawl. The rule changed 29 Jul — retirement now needs ${3} consecutive empty runs, and a paused ZIP rests 30 days then revives itself to staged and re-tests. Approving these would retire ZIPs that only had a slow week.`
+        : `Sustained zero-yield streak across ${frontier.length} ZIPs. Pausing is a 30-day rest — each one revives to staged and re-tests for ripe inventory.`,
+      recordId: null,
+      href: "/system",
+      dollars: null,
+      deadlineAt: null,
+      deadlineImplied: false,
+      postedAt: oldest,
+      verbatim: shown ? `${shown}${more}` : null,
+      actions: [
+        {
+          kind: "proposal_batch",
+          proposalIds: frontier.map((p) => p.id),
+          decision: stale ? "reject" : "approve",
+          label: stale ? `Archive all ${frontier.length}` : `Retire all ${frontier.length}`,
+        },
+        { kind: "open", href: "/system", label: "Review the list" },
+      ],
+    },
+    rest,
+  };
+}
+
 export interface ConveyorBuildResult {
   items: ConveyorItem[];
   /** Proof of the machine-work gate — what did NOT render, and why. */
-  hidden: { machineWork: number; stale: number };
+  hidden: { machineWork: number; stale: number; backlog: number };
 }
 
 export function buildConveyor(
@@ -421,19 +578,27 @@ export function buildConveyor(
      *  pure lib/contract-lifecycle model (they carry their own type/dollars/
      *  deadline/actions). Optional so existing callers/tests are unaffected. */
     contractItems?: ConveyorItem[];
+    /** Vision_Queue_State=vision_failed records (2026-07-31). Optional so
+     *  existing callers/tests are unaffected. */
+    visionHolds?: VisionHoldRow[];
   },
   nowIso: string,
 ): ConveyorBuildResult {
   const gate = filterDecisionProposals(input.proposals, nowIso);
+  // Batch AFTER the age gate: a stale frontier proposal should drop out on
+  // age like any other, and only what survives gets collapsed into the card.
+  const { batch, rest } = batchFrontierRetire(gate.kept);
   const items = [
-    ...gate.kept.map(fromProposal),
+    ...rest.map(fromProposal),
+    ...(batch ? [batch] : []),
     ...input.actionItems.map(fromActionItem),
     ...input.priorities.map(fromPriority),
     ...input.broCards.map(fromBroCard),
+    ...(input.visionHolds ?? []).map(fromVisionHold),
     ...(input.contractItems ?? []),
   ];
   return {
     items: rankConveyor(dedupeConveyor(items), nowIso),
-    hidden: { machineWork: gate.machineWorkHidden, stale: gate.staleHidden },
+    hidden: { machineWork: gate.machineWorkHidden, stale: gate.staleHidden, backlog: gate.backlogHidden },
   };
 }

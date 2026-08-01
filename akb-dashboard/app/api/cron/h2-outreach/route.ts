@@ -45,6 +45,11 @@ import { evaluateLowballEligibility } from "@/lib/lowball-eligibility";
 import { listingLanguageDistress, visionDistress } from "@/lib/lowball-signals";
 import { resolveCumulativeDom } from "@/lib/attom/cumulative-dom";
 import { checkFirstOutreachHydration, checkOfferOverList } from "@/lib/outreach-economics";
+import {
+  routeHolds,
+  PLACEHOLDER_REHAB_HOLD_REASON,
+  VISION_QUEUE_FIELD,
+} from "@/lib/pricing/vision-queue";
 import { persistDecisionMath } from "@/lib/decision-persist";
 import { priceOpenerWithSeed } from "@/lib/opener-pricing";
 import { getZipArvSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
@@ -453,7 +458,14 @@ async function handle(req: Request): Promise<Response> {
         // chasing market config. hold_no_value_basis here almost always
         // means the ARV-sanity gate distrusted an over-ARV ask (the
         // creative-lane class), not a market problem.
-        reason: priced.basis === "hold_no_value_basis" ? "opener_hold_no_value_basis" : "opener_hold",
+        // The placeholder-rehab hold gets its OWN reason so routeHolds can
+        // send it to the vision queue instead of the operator's proposal
+        // pile — it is machine work (run vision), not a judgement call.
+        // pw.basisLabel is the pricer's compact receipt for the same fact.
+        reason:
+          pw.basisLabel === PLACEHOLDER_REHAB_HOLD_REASON
+            ? PLACEHOLDER_REHAB_HOLD_REASON
+            : priced.basis === "hold_no_value_basis" ? "opener_hold_no_value_basis" : "opener_hold",
         ceiling: priced.ceiling,
         ceilingSource: priced.basis,
         anchorPct: priced.anchorPct,
@@ -512,7 +524,32 @@ async function handle(req: Request): Promise<Response> {
   // hold for the same record is not re-created on the next daily tick.
   // Best-effort — a proposals-write failure never blocks the send loop.
   const holdProposals = { attempted: 0, created: 0, deduped: 0, error: null as string | null };
-  const skippedHolds = openerGuarded.filter((g) => g.action === "skipped");
+  const allSkipped = openerGuarded.filter((g) => g.action === "skipped");
+  // ── VISION QUEUE SPLIT (256 Westchester, operator 2026-07-31) ────────
+  // A placeholder-rehab hold is MACHINE work: the record needs a vision read,
+  // not a decision. Dropping it into h2_opener_hold would bury it in a queue
+  // already 533 deep AND mislabel it as something the operator must answer.
+  // These get Vision_Queue_State=needs_vision and are drained by the
+  // opener-vision-drain cron; only a vision FAILURE ever reaches the operator.
+  const { toVisionQueue, toOperatorProposals: skippedHolds } = routeHolds(allSkipped);
+  const visionQueued = { attempted: toVisionQueue.length, marked: 0, error: null as string | null };
+  for (const g of toVisionQueue) {
+    try {
+      await updateListingRecord(g.recordId, { [VISION_QUEUE_FIELD]: "needs_vision" });
+      visionQueued.marked++;
+    } catch (err) {
+      visionQueued.error = err instanceof Error ? err.message : String(err);
+    }
+  }
+  if (visionQueued.marked > 0) {
+    await audit({
+      agent: "crier",
+      event: "opener_held_needs_vision",
+      status: "confirmed_success",
+      decision: `${visionQueued.marked} opener(s) held on a placeholder rehab → vision queue (not operator proposals)`,
+      outputSummary: { marked: visionQueued.marked, attempted: visionQueued.attempted },
+    }).catch(() => {});
+  }
   const proposalsTable = process.env.AGENT_PROPOSALS_TABLE_ID ?? null;
   if (skippedHolds.length > 0 && proposalsTable && process.env.AIRTABLE_PAT) {
     try {
@@ -1169,6 +1206,10 @@ async function handle(req: Request): Promise<Response> {
     // each refusal landed in (lib/lowball-eligibility, now live).
     lowball_gate: lowballGate,
     hold_proposals: holdProposals,
+    // Machine-work holds. Deliberately reported separately from
+    // hold_proposals so "how many need vision" is never read as "how many
+    // decisions are waiting on Alex".
+    vision_queued: visionQueued,
     supply_floor: supplyFloor,
     auth_kind: authKind,
     duration_ms: Date.now() - t0,

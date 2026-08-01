@@ -9,8 +9,16 @@
       "schedule": "0 13 * * *"
     },
     {
-      "path": "/api/admin/freshness-reverify?apply=1&limit=40",
-      "schedule": "15 14 * * *"
+      "path": "/api/admin/freshness-reverify?apply=1&limit=50",
+      "schedule": "45 13 * * *"
+    },
+    {
+      "path": "/api/admin/freshness-reverify?apply=1&limit=50",
+      "schedule": "0 16 * * *"
+    },
+    {
+      "path": "/api/admin/freshness-reverify?apply=1&limit=50",
+      "schedule": "0 21 * * *"
     },
     {
       "path": "/api/cron/propose-actions",
@@ -77,6 +85,14 @@
       "schedule": "0 15 * * *"
     },
     {
+      "path": "/api/cron/opener-vision-drain?limit=6",
+      "schedule": "20 13 * * *"
+    },
+    {
+      "path": "/api/cron/opener-vision-drain?limit=6",
+      "schedule": "20 20 * * *"
+    },
+    {
       "path": "/api/cron/data-federation-pull",
       "schedule": "0 16 * * *"
     },
@@ -113,7 +129,7 @@
       "schedule": "0 6 * * 1"
     },
     {
-      "path": "/api/admin/freshness-reverify?apply=1&limit=40",
+      "path": "/api/admin/freshness-reverify?apply=1&limit=50",
       "schedule": "45 18 * * *"
     },
     {
