@@ -33,6 +33,8 @@ import { isPriceableMarket } from "@/lib/markets/actionable";
 import { listSeededZips } from "@/lib/buyer-median-store";
 import { listArvSeededZips } from "@/lib/zip-arv-seed-store";
 import { isOutreachFresh, DEFAULT_FRESHNESS_HOURS } from "@/lib/outreach-freshness";
+import { judgeSpread, isSpreadWatchRecord } from "@/lib/contract-lifecycle/spread-watch";
+import { parkDeal } from "@/lib/conveyor/park";
 import { isH2Eligible } from "@/lib/h2-outreach";
 import { SOURCE_VERSION_V2 } from "@/lib/source-version";
 import {
@@ -155,10 +157,18 @@ export async function GET(req: Request) {
     if (zipScope.size > 0 && !zipScope.has(zip)) { outOfScope++; return false; }
     if (stateScope && (l.state ?? "").trim().toUpperCase() !== stateScope) { outOfScope++; return false; }
     if (!(l.verificationUrl && l.verificationUrl.trim() !== "")) return false;
-    const market = isPriceableMarket({ state: l.state, city: l.city, zip: l.zip }, seededZips);
-    if (!market.actionable) {
-      skippedNonActionable.push({ recordId: l.id, reason: market.reason ?? "non_priceable" });
-      return false;
+    // DEAL-PROTECT EXEMPTION (2026-08-01, the Sunbeam receipt): the priceable-
+    // market gate exists to not spend Firecrawl where we cannot SEND — but a
+    // record we are negotiating or have under contract is not a send-candidate,
+    // it is a live deal. Houston is not a sendable market, and that is exactly
+    // why a $60K cut on a record UNDER CONTRACT went invisible for 17 days.
+    // Protecting a live spread is worth a credit in any market on the map.
+    if (!isSpreadWatchRecord(l)) {
+      const market = isPriceableMarket({ state: l.state, city: l.city, zip: l.zip }, seededZips);
+      if (!market.actionable) {
+        skippedNonActionable.push({ recordId: l.id, reason: market.reason ?? "non_priceable" });
+        return false;
+      }
     }
     return !isOutreachFresh({ lastVerified: l.lastVerified, liveStatus: l.liveStatus }, now, maxAgeHours).fresh;
   });
@@ -201,6 +211,7 @@ export async function GET(req: Request) {
 
   // ── Apply: 1-credit known-URL re-scrape per record ────────────────
   const results: Array<{ recordId: string; address: string | null; stillActive: boolean | null; credits: number; newLiveStatus: string | null; error: string | null }> = [];
+  const spreadWatch = { watched: 0, alerts: 0 };
   let creditsUsed = 0;
   let paymentRequired = false;
   for (const l of batch) {
@@ -233,6 +244,60 @@ export async function GET(req: Request) {
         Last_Verified: iso,
         Renovated_Language: renovatedVeto,
       });
+
+      // ── ENGAGED-RECORD SPREAD WATCH (operator-mandated 2026-07-30) ──────
+      // The Sunbeam/8th Ct watcher: judge the fresh scrape against the deal
+      // we are protecting. Alert verdicts mint a spread_threat park (renders
+      // as a HIGH underwater_review decision card) + a CRITICAL-grade audit,
+      // and the fresh ask is STAMPED onto the record (List_Price truth was
+      // 17 days stale on Sunbeam; Prev_List_Price preserves the evidence
+      // trail the 7/30 session worried about losing). Best-effort — a watch
+      // failure never fails the verify pass that carried it.
+      if (isSpreadWatchRecord(l)) {
+        try {
+          const verdict = judgeSpread({
+            protectPriceUsd: l.contractOfferPrice ?? l.outreachOfferPrice ?? l.roughOpenerAmount ?? null,
+            storedListUsd: l.listPrice ?? null,
+            scrapedListUsd: fc.scrapedPrice ?? null,
+            stillActive: fc.stillActive,
+            inactiveMarkers: fc.matchedInactiveMarkers,
+          });
+          spreadWatch.watched++;
+          if (verdict.freshAskUsd != null && l.listPrice != null && verdict.freshAskUsd !== l.listPrice) {
+            await updateListingRecord(l.id, {
+              Prev_List_Price: l.listPrice,
+              List_Price: verdict.freshAskUsd,
+            });
+          }
+          if (verdict.alert) {
+            spreadWatch.alerts++;
+            await parkDeal({
+              recordId: l.id,
+              address: l.address ?? l.id,
+              reason: "spread_threat",
+              priority: "HIGH",
+              reasoning: verdict.detail,
+              payload: {
+                verdict: verdict.kind,
+                fresh_ask: verdict.freshAskUsd,
+                stored_list: l.listPrice ?? null,
+                protect_price: l.contractOfferPrice ?? l.outreachOfferPrice ?? l.roughOpenerAmount ?? null,
+              },
+            });
+            await audit({
+              agent: "sentinel",
+              event: "engaged_spread_alert",
+              status: "confirmed_success",
+              recordId: l.id,
+              inputSummary: { address: l.address, status: l.outreachStatus, under_contract: Boolean(l.contractExecutedAt) },
+              outputSummary: { verdict: verdict.kind, fresh_ask: verdict.freshAskUsd, detail: verdict.detail.slice(0, 200) },
+              decision: verdict.kind,
+            });
+          }
+        } catch (err) {
+          console.error("[freshness-reverify] spread watch failed:", err);
+        }
+      }
       results.push({ recordId: l.id, address: l.address, stillActive: fc.stillActive, credits: fc.creditsUsed, newLiveStatus: newLive, error: null });
       await audit({
         agent: "scout",
@@ -260,6 +325,11 @@ export async function GET(req: Request) {
       unresolved: results.filter((r) => r.error && r.stillActive === null).length,
       credits_used: creditsUsed,
       payment_required: paymentRequired,
+      // Engaged-record spread watch (2026-08-01). watched counts records the
+      // deal-protect class carried through this batch; alerts are minted
+      // spread_threat cards. 0/0 on a batch with engaged records due means
+      // they lost the budget race — check the partition, not the watcher.
+      spread_watch: spreadWatch,
       bump_partition: {
         bump_due: bumpPool.length,
         core_due: corePool.length,

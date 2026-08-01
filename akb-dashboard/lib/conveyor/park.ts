@@ -32,6 +32,14 @@ const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
 
 export type ParkReason =
   | "no_arv"
+  /** Engaged-record spread watch (operator-mandated 2026-07-30, built
+   *  2026-08-01 — the Sunbeam/8th Ct receipts). The seller's public ask or
+   *  listing status moved against a deal we are negotiating or have under
+   *  contract. Maps to underwater_review — DECISION-grade, renders HIGH —
+   *  deliberately NOT surface_stale, which the conveyor hides as machine
+   *  work; a spread death that does not render is the failure this watcher
+   *  exists to end. */
+  | "spread_threat"
   | "math_fails_floor"
   | "listing_changed_mid_negotiation"
   /** Post-vision park (operator 2026-07-16): the real rehab landed and the
@@ -93,6 +101,7 @@ const PROPOSAL_TYPE_BY_PARK_REASON: Record<ParkReason, string> = {
   math_fails_floor: "flag_price_drop",
   listing_changed_mid_negotiation: "surface_stale",
   underwater_post_vision: "underwater_review",
+  spread_threat: "underwater_review",
 };
 
 const PARK_TITLE_PREFIX: Record<ParkReason, string> = {
@@ -100,6 +109,7 @@ const PARK_TITLE_PREFIX: Record<ParkReason, string> = {
   math_fails_floor: "Math fails floor — watch for price cut",
   listing_changed_mid_negotiation: "Listing status changed mid-negotiation",
   underwater_post_vision: "Went UNDERWATER post-vision — pass, re-verify, or go creative",
+  spread_threat: "SPREAD THREAT — seller moved the listing against our live deal",
 };
 
 function getProposalsTableId(): string | null {

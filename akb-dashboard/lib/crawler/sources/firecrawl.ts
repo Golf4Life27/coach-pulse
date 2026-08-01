@@ -21,7 +21,7 @@
 // ⚠️ FIRECRAWL_API_KEY must be set in prod env (operator action) — the
 // adapter returns credentialed=false when absent.
 
-import { evaluateListingContent, extractScrapedSqft, crossCheckSqft, INTAKE_DISTRESS_DOM_MARK } from "@/lib/crawler/intake-filter";
+import { evaluateListingContent, extractScrapedSqft, extractScrapedPrice, crossCheckSqft, INTAKE_DISTRESS_DOM_MARK } from "@/lib/crawler/intake-filter";
 import { scopeSubjectText, scopeStatusText } from "@/lib/crawler/sources/listing-text-scope";
 
 const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY;
@@ -212,6 +212,9 @@ export interface FirecrawlVerifyResult {
    *  → inflated seed ARV → overshot opener). Optional so existing result
    *  literals/tests stay valid; absent ⇒ fail open. */
   scrapedSqft?: number | null;
+  /** List price stated on the scraped page (2026-08-01 Sunbeam receipt) —
+   *  the spread-watch's ground truth for engaged/under-contract records. */
+  scrapedPrice?: number | null;
   creditsUsed: number;
   /** true when Firecrawl returned 429 even after exhausting retries —
    *  distinct from a generic error (caller → firecrawl_rate_limited). */
@@ -420,6 +423,7 @@ export function buildResolvedResult(
     hasConditionSignal: content.hasConditionSignal,
     matchedDistressKeywords: content.matchedDistressKeywords,
     scrapedSqft: extractScrapedSqft(subjectText),
+    scrapedPrice: extractScrapedPrice(subjectText),
     isNewConstruction: newConstruction.isNew,
     matchedNewConstructionSignals: newConstruction.signals,
     matchedInactiveMarkers: inactiveMarkers,
