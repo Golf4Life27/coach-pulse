@@ -479,6 +479,37 @@ export function extractScrapedSqft(text: string | null | undefined): number | nu
   return null;
 }
 
+/** Pure: extract the LIST PRICE from a scraped listing page's markdown.
+ *  (2026-08-01, the Sunbeam receipt — a $60K cut on a record UNDER CONTRACT
+ *  sat invisible for 17 days because the scrape read sqft and threw the
+ *  price away.)
+ *
+ *  Heuristics, in order of the traps they dodge:
+ *   - comma-formatted 5-7 digit amounts only ($115,000 / $1,250,000) — this
+ *     alone excludes monthly payments ($1,427), "Price cut: $60K" badges,
+ *     and tax lines;
+ *   - skip amounts trailed by a per-period marker (/mo, per month);
+ *   - skip amounts preceded by estimate/valuation labels (Est., Zestimate,
+ *     RentCast AVM prose) within a short window;
+ *  First surviving match wins — portals render the ask before the model
+ *  values. Null when nothing survives; the caller treats null as "page did
+ *  not state a price", never as $0. */
+export function extractScrapedPrice(text: string | null | undefined): number | null {
+  if (!text) return null;
+  const re = /\$\s*(\d{2,3}(?:,\d{3})+|\d{1,3},\d{3},\d{3})/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const n = Number(m[1].replace(/,/g, ""));
+    if (!Number.isFinite(n) || n < 10_000 || n > 5_000_000) continue;
+    const after = text.slice(m.index + m[0].length, m.index + m[0].length + 12);
+    if (/^\s*(?:\/|per\s)\s*mo/i.test(after)) continue;
+    const before = text.slice(Math.max(0, m.index - 24), m.index);
+    if (/(?:est\.?|estimated|zestimate|rent)\s*[:\-]?\s*$/i.test(before)) continue;
+    return n;
+  }
+  return null;
+}
+
 export interface SqftCrossCheck {
   sourceSqft: number | null;
   scrapedSqft: number | null;
