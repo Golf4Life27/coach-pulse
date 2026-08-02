@@ -782,6 +782,58 @@ export async function getAnnualPropertyTaxes(
   }
 }
 
+// ── Subject deed print (2026-08-02, the 9360 Cheyenne receipt) ──────────
+//
+// The subject's own most-recent recorded sale is the strongest as-is value
+// evidence there is, and this codebase was ALREADY paying for it: every
+// getSaleComparables pull fetches the subject's /properties record — which
+// carries lastSalePrice/lastSaleDate from public deed data — and read only
+// its coordinates. Cheyenne's February $45,000 sale was in that response on
+// intake day and nothing looked; the operator found it on Redfin by hand
+// after we had an accepted offer at 94% of it. This helper is the deliberate
+// read. Judged by lib/pricing/subject-history.judgeSubjectPrint.
+
+export interface SubjectRecordedSaleResult {
+  /** True iff RentCast answered (2xx or honest-404). False = infra failure —
+   *  the caller must record "unchecked", never treat it as "no history". */
+  checked: boolean;
+  /** Newest recorded deed sale, or null when the parcel has none. */
+  sale: { price: number; date: string } | null;
+  error: string | null;
+}
+
+/** One paid /properties call. Honest-404 (no parcel = an answer). Never
+ *  throws — infra failures return checked:false so gaps stay visible. */
+export async function getSubjectRecordedSale(
+  input: { address: string; city: string; state: string; zip: string },
+  recordId?: string,
+): Promise<SubjectRecordedSaleResult> {
+  if (!RENTCAST_API_KEY) return { checked: false, sale: null, error: "RENTCAST_API_KEY not set" };
+  const qp = new URLSearchParams({
+    address: input.address,
+    city: input.city,
+    state: input.state,
+    zipCode: input.zip,
+  });
+  try {
+    const res = await paidFetch(
+      "properties/subject-sale",
+      `${BASE}/properties?${qp.toString()}`,
+      { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" },
+      recordId,
+      { ...input, recordId: recordId ?? null },
+      [404],
+    );
+    if (res.status === 404) return { checked: true, sale: null, error: null };
+    if (!res.ok) return { checked: false, sale: null, error: `HTTP ${res.status}` };
+    const bodyText = await res.text();
+    const rec = parsePropertiesBody(res.status, bodyText)[0];
+    return { checked: true, sale: rec ? newestRecordedSale(rec) : null, error: null };
+  } catch (err) {
+    return { checked: false, sale: null, error: String(err).slice(0, 200) };
+  }
+}
+
 export async function getSubjectFacts(input: {
   address: string;
   city: string;

@@ -40,6 +40,13 @@ export type ParkReason =
    *  work; a spread death that does not render is the failure this watcher
    *  exists to end. */
   | "spread_threat"
+  /** Subject-print gate (2026-08-02, the 9360 Cheyenne receipt): the
+   *  subject's own recorded deed sale is fresh enough and close enough to
+   *  our number that the wholesale spread presumptively does not exist —
+   *  Cheyenne sat at 94% of its February print with an accepted offer and
+   *  nothing looked until the operator read Redfin by hand. Decision-grade:
+   *  the operator verifies dispo or walks. */
+  | "recent_print_conflict"
   | "math_fails_floor"
   | "listing_changed_mid_negotiation"
   /** Post-vision park (operator 2026-07-16): the real rehab landed and the
@@ -102,6 +109,7 @@ const PROPOSAL_TYPE_BY_PARK_REASON: Record<ParkReason, string> = {
   listing_changed_mid_negotiation: "surface_stale",
   underwater_post_vision: "underwater_review",
   spread_threat: "underwater_review",
+  recent_print_conflict: "underwater_review",
 };
 
 const PARK_TITLE_PREFIX: Record<ParkReason, string> = {
@@ -110,6 +118,7 @@ const PARK_TITLE_PREFIX: Record<ParkReason, string> = {
   listing_changed_mid_negotiation: "Listing status changed mid-negotiation",
   underwater_post_vision: "Went UNDERWATER post-vision — pass, re-verify, or go creative",
   spread_threat: "SPREAD THREAT — seller moved the listing against our live deal",
+  recent_print_conflict: "RECENT PRINT CONFLICT — subject's own deed sale leaves no spread at our number",
 };
 
 function getProposalsTableId(): string | null {

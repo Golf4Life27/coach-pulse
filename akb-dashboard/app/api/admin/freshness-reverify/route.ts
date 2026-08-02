@@ -34,6 +34,8 @@ import { listSeededZips } from "@/lib/buyer-median-store";
 import { listArvSeededZips } from "@/lib/zip-arv-seed-store";
 import { isOutreachFresh, DEFAULT_FRESHNESS_HOURS } from "@/lib/outreach-freshness";
 import { judgeSpread, isSpreadWatchRecord } from "@/lib/contract-lifecycle/spread-watch";
+import { judgeSubjectPrint } from "@/lib/pricing/subject-history";
+import { getSubjectRecordedSale } from "@/lib/rentcast";
 import { parkDeal } from "@/lib/conveyor/park";
 import { isH2Eligible } from "@/lib/h2-outreach";
 import { SOURCE_VERSION_V2 } from "@/lib/source-version";
@@ -212,6 +214,7 @@ export async function GET(req: Request) {
   // ── Apply: 1-credit known-URL re-scrape per record ────────────────
   const results: Array<{ recordId: string; address: string | null; stillActive: boolean | null; credits: number; newLiveStatus: string | null; error: string | null }> = [];
   const spreadWatch = { watched: 0, alerts: 0 };
+  const subjectPrint = { checked: 0, alerts: 0, skipped_flagged: 0, unchecked: 0 };
   let creditsUsed = 0;
   let paymentRequired = false;
   for (const l of batch) {
@@ -297,6 +300,84 @@ export async function GET(req: Request) {
         } catch (err) {
           console.error("[freshness-reverify] spread watch failed:", err);
         }
+
+        // ── SUBJECT-PRINT GATE (2026-08-02, the 9360 Cheyenne receipt) ──
+        // Once per engaged record (90-day KV flag, acquired BEFORE the paid
+        // call so retries can't double-bill): pull the subject's own deed
+        // print from RentCast /properties — the field the comp pull was
+        // already paying for and discarding — and judge our protect price
+        // against it. Cheyenne's accepted $42,499 sat at 94% of its
+        // February $45,000 public-record sale for three weeks while the
+        // operator negotiated on modeled ARV; he found the print on Redfin
+        // by hand. Cost: engaged records only, one credit per record per
+        // 90 days. No KV → skip (never meter-blind spend), visibly counted.
+        try {
+          if (!kvConfigured()) {
+            subjectPrint.unchecked++;
+          } else {
+            const flagKey = `subject-print:v1:${l.id}`;
+            const acquired = await kvProd.setNx(flagKey, iso, 90 * 86_400);
+            if (!acquired) {
+              subjectPrint.skipped_flagged++;
+            } else if (!l.address || !l.city || !l.state || !l.zip) {
+              subjectPrint.unchecked++;
+            } else {
+              const protect = l.contractOfferPrice ?? l.outreachOfferPrice ?? l.roughOpenerAmount ?? null;
+              const deed = await getSubjectRecordedSale(
+                { address: l.address, city: l.city, state: l.state, zip: l.zip },
+                l.id,
+              );
+              if (!deed.checked) {
+                // Infra failure ≠ "no history". Release the flag so the
+                // next pass retries instead of silently never checking.
+                subjectPrint.unchecked++;
+                await kvProd.del(flagKey).catch(() => {});
+              } else {
+                subjectPrint.checked++;
+                const verdict = judgeSubjectPrint({
+                  offerUsd: protect,
+                  listUsd: fc.scrapedPrice ?? l.listPrice ?? null,
+                  saleUsd: deed.sale?.price ?? null,
+                  saleDateIso: deed.sale?.date ?? null,
+                  asOfIso: iso,
+                });
+                if (verdict.alert) {
+                  subjectPrint.alerts++;
+                  await parkDeal({
+                    recordId: l.id,
+                    address: l.address ?? l.id,
+                    reason: "recent_print_conflict",
+                    priority: verdict.kind === "recent_print_conflict" ? "HIGH" : "MEDIUM",
+                    reasoning: verdict.detail,
+                    payload: {
+                      verdict: verdict.kind,
+                      subject_sale: verdict.saleUsd,
+                      subject_sale_date: verdict.saleDateIso,
+                      protect_price: protect,
+                      list_price: fc.scrapedPrice ?? l.listPrice ?? null,
+                    },
+                  });
+                }
+                await audit({
+                  agent: "sentinel",
+                  event: "subject_print_check",
+                  status: "confirmed_success",
+                  recordId: l.id,
+                  inputSummary: { address: l.address, protect_price: protect },
+                  outputSummary: {
+                    verdict: verdict.kind,
+                    subject_sale: verdict.saleUsd,
+                    subject_sale_date: verdict.saleDateIso,
+                    detail: verdict.detail.slice(0, 200),
+                  },
+                  decision: verdict.kind,
+                });
+              }
+            }
+          }
+        } catch (err) {
+          console.error("[freshness-reverify] subject-print gate failed:", err);
+        }
       }
       results.push({ recordId: l.id, address: l.address, stillActive: fc.stillActive, credits: fc.creditsUsed, newLiveStatus: newLive, error: null });
       await audit({
@@ -330,6 +411,11 @@ export async function GET(req: Request) {
       // spread_threat cards. 0/0 on a batch with engaged records due means
       // they lost the budget race — check the partition, not the watcher.
       spread_watch: spreadWatch,
+      // Subject-print gate (2026-08-02). checked bills a credit; skipped_flagged
+      // is the 90-day KV dedupe working; unchecked = missing KV/address or an
+      // infra miss (retried next pass) — a persistent unchecked count is a gap
+      // to investigate, not a quiet success.
+      subject_print: subjectPrint,
       bump_partition: {
         bump_due: bumpPool.length,
         core_due: corePool.length,
