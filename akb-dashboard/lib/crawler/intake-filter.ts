@@ -61,15 +61,17 @@ const INTAKE_DOM_FLOOR =
 //   the 17→2 census proved the spread term was masking that. Set ="false" to
 //   restore the old fire-on-everything behavior.
 const INTAKE_REQUIRE_DISTRESS = process.env.INTAKE_REQUIRE_DISTRESS !== "false";
-// INTAKE_DISTRESS_DOM_MARK: the aged-DOM bar. DEFAULT 90 (operator 2026-06-22)
-//   to align with A1's distress threshold (DOM/30 ≥ 3 ⇒ DOM ≥ 90) so intake
-//   doesn't source aged-but-sub-90 listings the distress score then rejects.
+// INTAKE_DISTRESS_DOM_MARK: the aged-DOM bar. DEFAULT 60 (operator 2026-08-03,
+//   volume proving window — supersedes the 90 of 2026-06-22; ~94% of the active
+//   book in current markets carries 60d+ DOM, so this widens the tap without
+//   opening it to market-rate listings). Note: A1's distress score still keys
+//   on DOM/30 ≥ 3, so 60-89d records score softer downstream — accepted cost.
 //   Exported: the post-scrape classifier (firecrawl.classifyVerifiedListing)
 //   uses the SAME bar for its aged-DOM accept tier — one knob, no drift.
 export const INTAKE_DISTRESS_DOM_MARK =
   process.env.INTAKE_DISTRESS_DOM_MARK && /^\d+$/.test(process.env.INTAKE_DISTRESS_DOM_MARK)
     ? Number(process.env.INTAKE_DISTRESS_DOM_MARK)
-    : 90;
+    : 60;
 
 export interface IntakeCandidate {
   /** Vendor-stable id for trace/dedup (e.g. ATTOM attomId). */
