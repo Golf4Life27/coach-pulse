@@ -121,6 +121,11 @@ export interface Listing {
   propertyType?: string | null;
   priceDropCount?: number | null;
   lastVerified?: string | null;
+  /** Last time the source feed (RentCast) still returned this address as an
+   *  active listing. Absence from a crawl of its ZIP is the strongest
+   *  off-market signal available, and it costs nothing — the call is already
+   *  being made. Null on any record not crawled since 2026-08-04. */
+  lastSeen?: string | null;
   pipelineStage?: string | null;
   // Prev_List_Price drives list-drift detection in D3 math filter — if
   // current List_Price has fallen substantially since the Texted record
