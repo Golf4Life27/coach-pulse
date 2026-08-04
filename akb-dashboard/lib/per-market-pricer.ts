@@ -231,6 +231,19 @@ const pos = (v: unknown): v is number => typeof v === "number" && Number.isFinit
 // can never drift apart.
 export const PLACEHOLDER_TURNKEY_RATIO = 1 - ROUGH_REHAB_PCT_OF_ARV;
 
+/** Absolute dollar ceiling for an opener whose rehab term is a PLACEHOLDER.
+ *  The turnkey ratio above is scale-free, so a large ARV makes a guessed
+ *  renovation look safer the bigger it gets — 1909 Flat Shoals passed the
+ *  ratio at 55% of list and autonomously texted $266,250 carrying a ~$203,000
+ *  invented rehab. This business wholesales $30-70k houses; an autonomous
+ *  six-figure offer built on a guess is a different risk class than the one
+ *  the operator signed up for. Above this, HOLD for a real vision read.
+ *  Env-tunable (PLACEHOLDER_REHAB_MAX_OPENER_USD). */
+export const PLACEHOLDER_REHAB_MAX_OPENER_USD = (() => {
+  const raw = Number(process.env.PLACEHOLDER_REHAB_MAX_OPENER_USD);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 75_000;
+})();
+
 /** Pure: is a placeholder-rehab opener unsafe for THIS listing?
  *  Unknown list price fails CLOSED — without the ask we cannot rule out a
  *  turnkey house, and that is the exact case this exists to catch. */
@@ -440,8 +453,20 @@ export function priceOpener(input: PricerInput): PricerResult {
       // labelling them "needs vision" would route them to a drain cron that
       // can never clear them. The send paths convert this flag to a HOLD
       // only once a number has survived everything else.
+      // TWO independent ways a placeholder-rehab opener is unsafe:
+      //  (a) TURNKEY RATIO — the ask contradicts the assumed rehab (256
+      //      Westchester). Catches renovated houses at any price.
+      //  (b) ABSOLUTE EXPOSURE (1909 Flat Shoals, 2026-08-04) — the ratio test
+      //      PASSED (list $375,000 vs a seed ARV ≈ $678,000 = 55%) and the
+      //      system autonomously texted $266,250 on a house nobody had
+      //      assessed, with a GUESSED $203,000 renovation inside it. A ratio
+      //      cannot catch this: the bigger the ARV, the safer it looks, while
+      //      the invented rehab term — and the dollars we commit — grow with
+      //      it. Above this ceiling a placeholder rehab must be replaced by a
+      //      real vision read before any number reaches a seller.
       return rough.source === PLACEHOLDER_REHAB_SOURCE &&
-        placeholderRehabIsUnsafe(list, rough.arvUsed)
+        (placeholderRehabIsUnsafe(list, rough.arvUsed) ||
+          (pos(guarded.opener) && guarded.opener > PLACEHOLDER_REHAB_MAX_OPENER_USD))
         ? { ...guarded, placeholderRehab: true }
         : guarded;
     }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { priceOpener, NEVER_OVER_LIST_PCT, minOfferFloor } from "./per-market-pricer";
+import { priceOpener, NEVER_OVER_LIST_PCT, minOfferFloor, placeholderRehabIsUnsafe } from "./per-market-pricer";
 
 const DETROIT_BUYBOX = 0.6461;
 
@@ -411,5 +411,44 @@ describe("priceOpener — MAO bound (the first offer never sits above your MAO)"
     expect(r.boundedToMao).toBe(false);
     expect(r.maoBound).not.toBeNull();
     expect(r.opener!).toBeLessThanOrEqual(r.maoBound!);
+  });
+});
+
+describe("1909 Flat Shoals — absolute exposure ceiling on placeholder rehab (2026-08-04)", () => {
+  // The record that got away: Atlanta 30316, list $375,000, 1,945 sqft, NO
+  // vision read. Seed ARV ≈ $678k made the turnkey RATIO look safe (55% of
+  // list) while the placeholder invented a ~$203k renovation — and the system
+  // autonomously texted $266,250. The ratio cannot catch this class; the
+  // dollar ceiling must.
+  it("flags a placeholder-rehab opener above the dollar ceiling even when the ratio passes", () => {
+    const r = priceOpener({
+      listPrice: 375_000,
+      realArvMedian: 678_000,
+      estRehabMid: null,
+      estRehab: null,
+      arvPctMax: 0.7,
+      anchorPct: 1,
+      wholesaleFee: 5_000,
+      arvConfidence: "THIN",
+    });
+    // ratio test alone would pass: 375,000 < 678,000 * 0.70
+    expect(placeholderRehabIsUnsafe(375_000, 678_000)).toBe(false);
+    // but the opener is far above the placeholder exposure ceiling → flagged
+    expect(r.placeholderRehab).toBe(true);
+  });
+
+  it("still lets a normal cheap distressed opener through on placeholder rehab", () => {
+    const r = priceOpener({
+      listPrice: 90_000,
+      realArvMedian: 150_000,
+      estRehabMid: null,
+      estRehab: null,
+      arvPctMax: 0.7,
+      anchorPct: 1,
+      wholesaleFee: 5_000,
+      arvConfidence: "THIN",
+    });
+    expect(r.opener).not.toBeNull();
+    expect(r.placeholderRehab).toBeFalsy();
   });
 });
