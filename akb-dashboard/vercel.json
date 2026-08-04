@@ -235,6 +235,26 @@
     {
       "path": "/api/cron/frontier-rotation?apply=1",
       "schedule": "10 7 * * 4"
+    },
+    {
+      "path": "/api/cron/h2-outreach?dry_run=false&limit=25&send_cap_per_run=20&send_cap_per_zip=5",
+      "schedule": "0 13 * * *"
+    },
+    {
+      "path": "/api/cron/h2-outreach?dry_run=false&limit=25&send_cap_per_run=20&send_cap_per_zip=5",
+      "schedule": "0 14 * * *"
+    },
+    {
+      "path": "/api/cron/h2-outreach?dry_run=false&limit=25&send_cap_per_run=20&send_cap_per_zip=5",
+      "schedule": "0 16 * * *"
+    },
+    {
+      "path": "/api/cron/h2-outreach?dry_run=false&limit=25&send_cap_per_run=20&send_cap_per_zip=5",
+      "schedule": "30 20 * * *"
+    },
+    {
+      "path": "/api/cron/h2-outreach?dry_run=false&limit=25&send_cap_per_run=20&send_cap_per_zip=5",
+      "schedule": "30 23 * * *"
     }
   ]
 }

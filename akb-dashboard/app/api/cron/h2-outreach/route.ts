@@ -110,6 +110,9 @@ const DEFAULT_SEND_DELAY_MS = 60_000;
 // Stop starting NEW work this late into the 300s lambda so in-flight writes
 // finish cleanly instead of being killed. Remaining records roll to next run.
 const WALL_CLOCK_BUDGET_MS = 270_000;
+// Candidate selection (pricing walk) must finish well before the send budget —
+// sends are the point of the run, and each one costs the inter-send delay.
+const SCAN_BUDGET_MS = 60_000;
 
 // Idempotency locks (KV — strongly-consistent, unlike the Airtable status gate
 // which has write-propagation lag). See Spine recWwIMc7V15p968k.
@@ -356,7 +359,14 @@ async function handle(req: Request): Promise<Response> {
   // plan, bounded by a scan cap so a hold-heavy cohort can't eat the
   // lambda budget. Holds still surface (deduped h2_opener_hold proposals);
   // they just stop blocking the records behind them.
-  const scanCap = Math.max(limit * 5, 50);
+  // 2026-08-04 RECURRENCE: limit*5 (=125) was still far too small. The ranked
+  // queue's head is a standing wall of legacy holds — on 8/4 the 15:00Z slot
+  // scanned its 125, planned 2, sent 0, while 104 fully-priceable records
+  // (ARV + rehab + DOM≥60 + fresh + phone) sat deeper in a 360-record queue.
+  // Each scanned record is cheap (pure pricing; anchor/seed reads are cached
+  // per market/ZIP), so the walk can go much deeper — with a wall-clock guard
+  // below so a pathological cohort still can't eat the lambda.
+  const scanCap = Math.max(limit * 20, 300);
   let scanned = 0;
   // ── LOWBALL-ELIGIBILITY FRONT GATE, NOW LIVE (2026-07-26) ─────────────
   // lib/lowball-eligibility is the operator-ruled doctrine for WHO receives
@@ -380,6 +390,9 @@ async function handle(req: Request): Promise<Response> {
   const filteredQueue: typeof queue = [];
   for (const l of queue) {
     if (filteredQueue.length >= limit || scanned >= scanCap) break;
+    // Wall-clock guard on the deep scan: never let candidate selection eat the
+    // budget the actual SENDS need (each send costs the inter-send delay).
+    if (Date.now() - t0 > SCAN_BUDGET_MS) break;
     scanned += 1;
 
     // FRONT GATE — runs BEFORE the opener is priced (it decides WHO gets an

@@ -58,6 +58,20 @@ export const RENTCAST_NOT_FOUND_TTL_S = (() => {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 7 * 24 * 3600; // 7d
 })();
 
+/** Cooldown for AUTH failures (401/403) — an invalid/expired/suspended key.
+ *  Unlike a 5xx these heal ONLY by an external fix (operator repairs the key),
+ *  which the breaker cannot observe: it short-circuits every probe until the
+ *  TTL expires. The 2026-08-03 receipt: the key was fixed ~15:40Z and the
+ *  17:20Z intake slot still went dark on a 599 from a 13:00Z trip — hours of
+ *  proving-window volume lost to our own plumbing. 403s are unbilled at the
+ *  vendor, so a short window costs probes, not money: 30 min ≈ ≤6 probes/hour
+ *  per shape on a genuinely broken key, and recovery within one cron slot on a
+ *  fixed one. Env-tunable. */
+export const RENTCAST_AUTH_TTL_S = (() => {
+  const raw = Number(process.env.RENTCAST_AUTH_TTL_S);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 30 * 60;
+})();
+
 const KV_PREFIX = "rc:loop:";
 
 interface CounterState {
@@ -150,9 +164,13 @@ export interface BreakerState {
 }
 
 /** The cooldown a given HTTP status earns: a 404 is a stable "not indexed"
- *  and is parked for the long window; everything else is treated as transient. */
+ *  (long window); a 401/403 is an auth failure that only an external key fix
+ *  can heal (short window, so a fixed key recovers within a cron slot);
+ *  everything else is treated as transient. */
 function cooldownForStatus(httpStatus: number | null): number {
-  return httpStatus === 404 ? RENTCAST_NOT_FOUND_TTL_S : COUNTER_TTL_S;
+  if (httpStatus === 404) return RENTCAST_NOT_FOUND_TTL_S;
+  if (httpStatus === 401 || httpStatus === 403) return RENTCAST_AUTH_TTL_S;
+  return COUNTER_TTL_S;
 }
 
 /** Read-only check — call this BEFORE the paid fetch to decide whether
