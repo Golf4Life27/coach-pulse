@@ -74,7 +74,7 @@
     },
     {
       "path": "/api/agents/pulse/scan",
-      "schedule": "0 12 * * *"
+      "schedule": "25 * * * *"
     },
     {
       "path": "/api/cron/outreach-status-reconcile",

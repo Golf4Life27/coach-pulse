@@ -26,6 +26,7 @@ import { forwardInventorySplit } from "@/lib/forward-inventory";
 import { fetchCodebaseMetadataState } from "@/lib/maverick/sources/codebase-metadata";
 import { readPulseState } from "@/lib/pulse/active-store";
 import { runPulseScan } from "@/lib/pulse/runner";
+import { RENTCAST_MONTHLY_CAP, readKvSpend } from "@/lib/rentcast/spend-ceiling";
 import { getDeals } from "@/lib/airtable";
 import { buildMeterSnapshot, type ClosedDeal } from "@/lib/progress-meter/compute";
 import type { ProgressMeterSnapshot } from "@/lib/pulse/detector-input";
@@ -33,7 +34,13 @@ import type { ProgressMeterSnapshot } from "@/lib/pulse/detector-input";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const DEFAULT_AUDIT_LIMIT = 500;
+// The vendor-health + error-rate detectors reason over a ROLLING WINDOW, so
+// the audit slice has to actually span it. At 500 the slice covered well under
+// an hour of live cron volume while the detectors believed they were reading
+// 6-24h — a structurally truncated denominator. 5,000 is the full retained
+// list (lib/audit-log ltrims there) and is what the paid-call ceiling checks
+// already read, so this matches proven-safe usage rather than inventing a cap.
+const DEFAULT_AUDIT_LIMIT = 5000;
 
 export async function GET() {
   const t0 = Date.now();
@@ -47,7 +54,7 @@ export async function GET() {
     const nowMs = Date.now();
     const since24Iso = new Date(nowMs - 24 * 3_600_000).toISOString();
     const since48Iso = new Date(nowMs - 48 * 3_600_000).toISOString();
-    const [audit, listingsAllEras, metadata, previousState, urlCoverage, spine24, spine48, deals] = await Promise.all([
+    const [audit, listingsAllEras, metadata, previousState, urlCoverage, spine24, spine48, deals, rentcastSpend] = await Promise.all([
       readRecentFromKv(DEFAULT_AUDIT_LIMIT),
       getActiveListingsForBrief({ recentDays: 14 }),
       fetchCodebaseMetadataState({ timeoutMs: 3_000 }).catch(() => null),
@@ -59,6 +66,10 @@ export async function GET() {
       // movement detector goes silent (no false positive), but the rest
       // of Pulse keeps running.
       getDeals().catch(() => null),
+      // RentCast month-to-date burn for the 80%-of-plan warning. Best-effort:
+      // an unreadable meter yields null and the cap check goes silent rather
+      // than guessing a number (INVARIANTS §1).
+      readKvSpend(new Date()).catch(() => null),
     ]);
 
     // FORWARD-ONLY GAUGES (#38 — The Forward Ruling): every Pulse detector
@@ -103,6 +114,10 @@ export async function GET() {
       spine_writes_48h: spine48,
       progress_meter: progressMeter,
       previous_progress_meter: previousState.progress_meter_anchor,
+      rentcast_month_spend: {
+        used: rentcastSpend?.kvAvailable ? rentcastSpend.month : null,
+        cap: RENTCAST_MONTHLY_CAP,
+      },
       now: () => new Date(),
     });
 
@@ -122,6 +137,7 @@ export async function GET() {
         steady: result.steady_ids,
       },
       spine_writes: result.spine_writes,
+      paged: result.paged_ids,
       detections: result.detections,
       state: result.state,
     });

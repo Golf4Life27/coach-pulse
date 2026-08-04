@@ -3,6 +3,7 @@ import type { AuditEntry } from "@/lib/audit-log";
 import {
   countCallsByDeal24h,
   countCallsBySource24h,
+  isBilledCall,
   splitRunaway,
 } from "./derive";
 
@@ -89,5 +90,57 @@ describe("splitRunaway", () => {
     const split = splitRunaway(rows, 10);
     expect(split.runaway.map((r) => r.recordId)).toEqual(["hot"]);
     expect(split.rest.map((r) => r.recordId)).toEqual(["warm", "cold"]);
+  });
+});
+
+// Unbilled-call accounting (2026-08-04). A spend meter that counts calls the
+// vendor never billed clamps the pipeline shut exactly when it should stay
+// open — during an outage.
+describe("isBilledCall — unbilled calls must not consume budget", () => {
+  function call(agent: string, http: number, hoursBefore = 1): AuditEntry {
+    return {
+      ts: new Date(NOW.getTime() - hoursBefore * 3_600_000).toISOString(),
+      agent,
+      event: "paid_api_call",
+      status: http >= 200 && http < 300 ? "confirmed_success" : "confirmed_failure",
+      outputSummary: { endpoint: "listings/sale", http },
+    };
+  }
+
+  it("counts a real billed call", () => {
+    expect(isBilledCall(call("rentcast", 200))).toBe(true);
+  });
+
+  it("does not count vendor auth rejections (401/403 are unbilled)", () => {
+    expect(isBilledCall(call("rentcast", 403))).toBe(false);
+    expect(isBilledCall(call("rentcast", 401))).toBe(false);
+  });
+
+  it("does not count synthetic rows where no request was ever made", () => {
+    // 598 = spend ceiling refused it; 599 = loop breaker tripped.
+    expect(isBilledCall(call("rentcast", 598))).toBe(false);
+    expect(isBilledCall(call("rentcast", 599))).toBe(false);
+  });
+
+  it("still counts a thrown request — the vendor bills on the request", () => {
+    expect(isBilledCall(call("rentcast", -1))).toBe(true);
+  });
+
+  it("still counts a 404 — an honest empty answer that is billed", () => {
+    expect(isBilledCall(call("rentcast", 404))).toBe(true);
+  });
+
+  it("counts a row with no http recorded (conservative: assume billed)", () => {
+    expect(isBilledCall(mk(1, "rentcast"))).toBe(true);
+  });
+
+  it("a full outage leaves the 24h meter at zero, so ceilings stay open", () => {
+    const outage = Array.from({ length: 50 }, () => call("rentcast", 403));
+    expect(countCallsBySource24h(outage, NOW)).toEqual({ rentcast: 0, attom: 0, total: 0 });
+  });
+
+  it("a ceiling trip cannot sustain itself via synthetic refusal rows", () => {
+    const audit = [...Array.from({ length: 40 }, () => call("rentcast", 598)), call("rentcast", 200)];
+    expect(countCallsBySource24h(audit, NOW).rentcast).toBe(1);
   });
 });

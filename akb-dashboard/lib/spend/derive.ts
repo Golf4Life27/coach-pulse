@@ -15,8 +15,42 @@ import type { PaidApiSource } from "./audit-paid-call";
 const HOURS_24_MS = 24 * 3_600_000;
 const PAID_SOURCES: PaidApiSource[] = ["rentcast", "attom"];
 
+/** HTTP codes on a `paid_api_call` row that the vendor did NOT bill for.
+ *
+ *  Two distinct kinds, both genuinely free:
+ *
+ *  - 598 / 599 are SYNTHETIC — lib/rentcast.ts stamps them when the spend
+ *    ceiling refused the call (598) or the failure-loop breaker was tripped
+ *    (599). No HTTP request ever left the process. Counting these is not
+ *    merely inaccurate, it is self-sustaining: hitting a ceiling writes rows
+ *    that keep the meter above that ceiling, so a lane that trips once stays
+ *    locked out long after real spend has decayed.
+ *  - 401 / 403 are vendor auth rejections, unbilled at the vendor — the same
+ *    fact lib/rentcast/failure-loop-breaker.ts already relies on to justify
+ *    its short 30-minute auth cooldown ("403s are unbilled at the vendor").
+ *
+ *  Deliberately NOT here: http -1 (the request threw before a response). The
+ *  vendor bills on the request, not the response, so a thrown call may well
+ *  have cost money — counting it is the conservative read. 404 is likewise
+ *  absent because it is already recorded as an honest empty answer
+ *  (forceSuccess) and IS billed. */
+const UNBILLED_HTTP = new Set([401, 403, 598, 599]);
+
+/** Pure: did this paid-call row cost money? Rows the vendor never billed
+ *  must not consume a spend budget — during the 2026-08-01 RentCast outage
+ *  every call 403'd, which is exactly when the ceilings should be OPEN so
+ *  work resumes the moment the key is fixed, not clamped shut by a meter
+ *  full of free failures. */
+export function isBilledCall(e: AuditEntry): boolean {
+  if (e.event !== "paid_api_call") return false;
+  if (!PAID_SOURCES.includes(e.agent as PaidApiSource)) return false;
+  const http = (e.outputSummary as Record<string, unknown> | undefined)?.http;
+  if (typeof http === "number" && UNBILLED_HTTP.has(http)) return false;
+  return true;
+}
+
 function isPaidCall(e: AuditEntry): boolean {
-  return e.event === "paid_api_call" && PAID_SOURCES.includes(e.agent as PaidApiSource);
+  return isBilledCall(e);
 }
 
 function within24h(e: AuditEntry, nowMs: number): boolean {

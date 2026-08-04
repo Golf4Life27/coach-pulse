@@ -48,6 +48,12 @@ export interface PulseDetectorInput {
    *  successful scan; null on first run. Material movement is the
    *  current vs previous diff. */
   previous_progress_meter?: ProgressMeterSnapshot | null;
+  /** RentCast month-to-date call count vs its configured cap, read from the
+   *  KV spend meter by the scan route. Null (or a null `used`) when the meter
+   *  is unreadable — the cap check then goes SILENT rather than guessing a
+   *  number (INVARIANTS §1). Drives the 80%-of-plan warning that did not
+   *  exist while the cap tripped silently at 100%. */
+  rentcast_month_spend?: { used: number | null; cap: number } | null;
   /** Now-clock for deterministic detection timestamps + age
    *  computations. */
   now: () => Date;
