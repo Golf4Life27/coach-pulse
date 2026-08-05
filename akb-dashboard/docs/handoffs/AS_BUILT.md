@@ -461,6 +461,424 @@ clamp ≤ send rail, distress-sourcing gate (tier-8 doctrine #151), Firecrawl
 breaker + hourly cap, RentCast quota gate, restricted-state exclusions, Memphis
 pause, H2 hard-disable master kill, per-record idempotency + run mutex.
 
+## 8i. NEW 2026-07-31 — Reply classification persists; the reply funnel becomes computable
+
+**The hole.** `lib/reply-triage.triageSellerReply` has classified every genuine
+inbound since it shipped, and nothing ever wrote the answer down. The label
+reached three lossy places only: a `Verification_Notes` prose blob
+(scan-replies), a `jarvis_reply` proposal (scan-comms — a queue ITEM, consumed
+then gone), and the 6-way `Outreach_Status`, which collapses ten distinct
+classifications onto "Response Received". **Measured: of 121 records carrying
+`Last_Inbound_At`, exactly 3 had a classification recoverable from note prose.**
+So the only question that matters — reply rate 11.5%, contract rate 0.1%, so
+WHERE do threads die? — was unanswerable without re-reading raw Quo by hand.
+
+**Shipped** (branch `claude/outbound-text-targeting-f3h19g`, commit `32c5656`;
+3601 tests green, `tsc` clean — **not yet merged**):
+
+- `lib/inbound/reply-classification.ts` (pure) — builds the persisted triple.
+  Stamps the **inbound's own** timestamp, not now, so a backfill records
+  history instead of relabelling it. Name-keyed + id-keyed variants (scan-comms
+  writes by name, scan-replies by id).
+- `scan-replies` now calls `triageSellerReply` (one classifier, and it yields
+  `decisionKind`) instead of `classifyReply` + `determineNewStatus`.
+- `scan-comms` writes the triple on **both** paths — the tier-0 auto-close (the
+  biggest reply bucket, previously landing as a bare "Dead") and the draft mirror.
+- `lib/outreach/reply-funnel.ts` + `GET /api/admin/reply-funnel` — cohort rollup:
+  outcome mix, classification × outcome, reply→contract pct, and the **dropped**
+  work-list (replied, never advanced past the send-side status). Reports its own
+  `classificationCoveragePct`, so a partial backfill cannot read as a complete funnel.
+- `GET /api/admin/reply-triage-backfill` — dry-run by default, `?apply=1` to write,
+  `?limit=N` (default 40, max 150). Re-pulls the Quo thread and re-runs the SAME
+  classifier over the original body: recovery, not re-interpretation.
+  **Deliberately NOT a cron** — a standing sweep over a closed hole is the
+  paid-call bleed #178 capped.
+
+**Airtable schema** (Listings_V1 `tbldMjKBgPiq45Jjs`) — three new two-sided fields:
+`Reply_Classification` `fld7vLOMdLthqccoy` (singleSelect, 10 choices) ·
+`Reply_Classified_At` `fldoTXHschuUDi2Hx` (dateTime, utc) ·
+`Reply_Decision_Kind` `fld13azWnqSx2YyoJ` (singleLineText). Registered in
+`LISTING_FIELD_REGISTRY`; the airtable-map-parity snapshot was updated.
+
+**OPEN — the backfill has NOT been run.** 118 records still report
+`(unclassified)` until `/api/admin/reply-triage-backfill?apply=1` is called
+repeatedly until `remaining_after_run` reaches 0.
+
+### 8i-bis. Diagnostic finding — why the operator is still hands-on (no code change)
+
+Recorded so it is not re-derived. Spine `rec21K0wT6BhuMIpB`.
+
+- **Nine of ten** `ReplyClassification` branches return `needsDecision: true`;
+  **eight** also return `suggestedReply: null` as a hardcoded literal. Only
+  `rejection` self-resolves (tier-0 auto-close); only `soft_no` carries a draft,
+  and that still lands in a *Pending* proposal. The operator's stated design —
+  *reply to those replies when capable* — **was never written**. It is not dark
+  and not flag-gated. That is the code-level reason every deal reaches his desk.
+- **ARV auto-run is NOT the problem** (corrects a standing operator belief): of
+  the 47 currently-engaged records, **zero** lack an ARV stamp and only 2 are
+  stale >14d. The 2026-06-10 `autoRunOnEngaged` ruling shipped and fires.
+  The real gap is **rehab — 12 of 47 engaged records have no `Rehab_Estimated_At`**
+  — and it is *by design*: `lib/appraiser/auto-run-on-engaged.ts` skips rehab when
+  the caller's lambda budget can't fit it, naming the manual "Run rehab" button as
+  "the prepared one-click fallback per the ruling." A ruling made the operator's
+  hand the fallback path. `rehab-vision-retry` **is** scheduled, so why those 12
+  remain bare is **UNVERIFIED** — own investigation needed.
+- Two coverage holes: `autoRunOnEngaged` is wired into `scan-replies` but **not**
+  `scan-comms` (whichever cron sees the reply first decides whether the underwrite
+  fires); and the backstop `auto-underwrite-engaged` (6 slots × limit=4 = 24
+  records/day) filters on `Execution_Path === "Auto Proceed"`, leaving 7 of 47
+  engaged records invisible to it.
+
+**Proposed, NOT approved** (awaiting operator go): (1) build the auto-reply lane
+for the four procedural buckets — `offer_format`, `disclosure_step`,
+`appointment`, `seller_costs` — behind a dark flag with a dry-run route first;
+(2) wire `autoRunOnEngaged` into scan-comms and drop the Auto-Proceed filter;
+(3) give rehab its own queue; (4) **keep** `counter` and `acceptance` on the
+operator's desk — that part of the design is correct. Item (1) puts a model on
+the outbound wire and was explicitly not started.
+
+## 8j. NEW 2026-07-31 — RentCast spend ceiling at the choke point
+
+**The incident, reconstructed from vendor payment history.** RentCast auto-charges
+whenever accrued overage crosses **$250**. June crossed it **four times** —
+~**$1,125**, roughly **18,750 requests**, about **3× July's entire volume** — in
+the same window as the documented Firecrawl runaway. Firecrawl got a circuit
+breaker out of that incident. **RentCast did not.** July reconciles exactly to
+plan (6,520 used → 5,520 × $0.06 + $74 = ~$405): no billing error, and the
+trend is down 64% because #175 and #178 landed.
+
+**Why the existing guards missed it** `[verified — read this session]`:
+- `RENTCAST_24H_HARD_CEILING` was read in **one place** (the
+  `auto-underwrite-engaged` cron). ~20 other call sites — the reply-triggered
+  inline `autoRunOnEngaged` path, the manual dashboard buttons, every admin
+  route — had no ceiling.
+- `RENTCAST_MONTHLY_CAP` was enforced only in `lib/federation/rentcast-hydrate.ts`
+  and `lib/maverick/sources/external-rentcast.ts` — never on the appraiser or
+  underwrite paths.
+- `lib/rentcast/failure-loop-breaker` bounds repeated **failures** of one call
+  shape. A runaway making **successful** calls is invisible to it, and success bills.
+
+**Shipped** (commit `367f0e1`; 3612 tests green, `tsc` clean — **not yet merged
+or deployed**): `lib/rentcast/spend-ceiling.ts`, consulted inside
+`lib/rentcast.paidFetch` — the single HTTP choke point every RentCast call
+already passes through. **One gate, all call sites, nothing to wire up.**
+
+Three windows, cheapest-first: **per-invocation** (in-memory, no I/O) ·
+**per UTC day** (KV) · **per UTC month** (KV). Refusal returns a synthetic
+**598**, deliberately distinct from the loop-breaker's 599 — "we stopped
+spending" and "this shape keeps failing" have opposite remedies. Non-2xx either
+way, so every caller fails closed unchanged. Refusals emit **both** a
+`paid_api_call` row (cost 0, so refused work stays visible on the spend
+dashboard) and a `rentcast_spend_ceiling_reached` audit.
+
+**Fail posture, split deliberately.** The KV windows **fail OPEN** when KV is
+unavailable (the Firecrawl breaker's doctrine — a monitoring outage must not
+silently halt the pipeline), auditing `rentcast_spend_ceiling_degraded` every
+time. The per-invocation window needs no infrastructure, always runs, and
+**fails CLOSED**. *An outage degrades the ceiling; it never removes it.*
+
+The counter increments **before** dispatch and is **awaited, not detached** —
+the vendor bills on the request, and an un-awaited increment lets a tight loop
+fire hundreds of calls before the first write lands.
+
+| Env | Default | Note |
+|---|---|---|
+| `RENTCAST_PER_INVOCATION_CAP` | 60 | new; the KV-independent backstop |
+| `RENTCAST_24H_HARD_CEILING` | **300** | **raised from 150** |
+| `RENTCAST_MONTHLY_CAP` | 1000 | = Foundation plan's included requests |
+
+The daily raise is deliberate: observed July baseline is **~120 calls/day**, so a
+150 *global* ceiling would trip on an ordinary busy day and silently starve ARV
+runs. 300 is ~2.5× baseline and a runaway still reaches it within the first hour.
+Side effect stated in code: `auto-underwrite-engaged`'s ceiling loosens 150 → 300
+because it now reads the shared constant instead of a second local reader of the
+same env. That lane keeps its own check — it counts RentCast **+ ATTOM**, while
+the choke point sees RentCast only.
+
+**KNOWN IMPRECISION:** the month window buckets by **UTC calendar month**, while
+RentCast bills on its own subscription cycle (which *resets on plan change*). The
+two drift by up to weeks. Fine for a safety brake; **never** read it as "requests
+left this billing period" — the vendor dashboard is authority.
+
+**OPERATOR NOTE:** the KV month bucket starts **empty**. This does not
+retroactively account for July's 6,520 — it counts from first deploy forward.
+
+**Plan ruling (2026-07-31): stay on Foundation ($74).** Break-evens at real
+rates — Foundation wins below ~3,100 calls/month, Growth ($199) from ~3,100 to
+~13,300, Scale ($449) only above ~13,300. Peak month was 6,520. Scale was
+briefly recommended off a wrongly-derived $0.33/request rate and **withdrawn**;
+the real Foundation overage is **$0.06**.
+
+## 8k. NEW 2026-07-31 — Placeholder-rehab HOLD + the vision queue (256 Westchester)
+
+**The defect** `[verified — record read this session]`. `rec reckHdag4kCuTyNj1`,
+256 Westchester Dr, Birmingham AL 35215. Renovated 4/2 (quartz waterfall island,
+refinished hardwoods), 1,902 sqft, list **$234,900**, **DOM 380**,
+Distress_Bucket "Extreme". RentCast auto-intake 09:12 → auto-promoted Auto
+Proceed → **texted 15:01**, with `Real_ARV_Median`, `ARV_Validated_At`,
+`Est_Rehab` and `Est_Rehab_Mid` **all empty**. Opener **$74,500**. Agent: *"No
+where close, their bottom line is $230k."*
+
+**The ARV was not wrong.** Reconstructed to the dollar:
+
+```
+ARV     = seed $/sqft × 1,902 sqft   ≈ $223,750   (~$117/sqft — agent said $230k)
+rehab   = 0.30 × ARV                 =  $67,125   ← GUESSED
+ceiling = 0.70 × 223,750 − 67,125 − 15,000 fee
+opener                               =  $74,500   ✓
+```
+
+The system subtracted a **$67,125 gut renovation from a turnkey house.**
+
+**Root cause — two defensible rules, lethal together:**
+1. `lib/lowball-eligibility.ts:81` — DOM ≥ 60 is eligible *"on time-on-market
+   alone **(no vision needed)**"*. The condition read is skipped for aged listings.
+2. `lib/rough-opener-ceiling.ts:99` — with no vision rehab, rehab =
+   `ROUGH_REHAB_PCT_OF_ARV` (0.30) × ARV.
+
+A renovated house that sits is the *most common* way a listing reaches 380 DOM.
+380 days at $234,900 means **overpriced, not distressed** — and the only signal
+separating those is the one the eligibility gate skips.
+
+**AMENDMENT: rehab is the largest term in the opener after ARV. Guessing it IS
+guessing the offer. An opener resting on a placeholder rehab never reaches a seller.**
+
+Carried as a **flag** (`PricerResult.placeholderRehab`), **not** an early return,
+and converted to a HOLD **last** — in `priceOpenerWithSeed`, after the over-list
+tripwire and corroboration gate have spoken. (Two earlier placements swallowed the
+size-extrapolation and tripwire diagnostics; 4 existing tests caught it.) Those are
+**ARV** problems — vision cannot fix an ARV problem, and labelling them "needs
+vision" would route them to a drain that can never clear them.
+
+**The bucket** (operator: *"not get buried in hundreds of other dead properties…
+a bucket for me to either spot check images or run rehab with the system vision"*).
+A held opener normally writes an `h2_opener_hold` proposal — a queue **533 pending**
+deep. These are **machine work**, so they route away from the proposal writer
+entirely into `Vision_Queue_State` (`fldqgrBDtoRceShP2`: `needs_vision` /
+`vision_failed` / `cleared`). `routeHolds` splits on an **exact** reason match,
+never a prefix — a permissive test re-buries them.
+
+**`/api/cron/opener-vision-drain`** (new; 2 slots/day, `limit=6`, 13:20 + 20:20 UTC)
+runs the appraiser's existing `collectPhotos` → `callRehabVision` →
+`computeRehabRange` pipeline over `needs_vision`, writes `Est_Rehab_Mid` +
+`Rehab_Estimated_At`, sets `cleared` — which **releases** the record so the next h2
+pass prices it off a real rehab and may send. **Zero operator involvement.** Only a
+genuine vision failure becomes `vision_failed` — the spot-check bucket, reported on
+every drain run so it can never quietly grow.
+
+Regression test reproduces the address end-to-end: HOLDs instead of texting $74,500;
+SENDS above $130,000 once a real vision rehab exists.
+
+### 8k-bis. STILL OPEN from this trace (found, NOT fixed)
+
+- **h2's pre-send probe discards `review` verdicts.** It acts only on reject
+  reasons `firecrawl_renovated` / `new_construction_excluded` /
+  `wholesaler_excluded` / `firecrawl_inactive`. A `classifyVerifiedListing`
+  outcome of **`review`** — including `condition_signal_missing_flagged` and
+  `sqft_mismatch_flagged` — **falls through and sends.** On this listing the
+  classifier correctly said "no distress signal on this page" and h2 ignored it.
+- **Two floors, one concept.** `LOW_OPENER_FLOOR_PCT_OF_LIST` = **0.30** (h2 send
+  path via `minOfferFloor`) vs `LOWBALL_FLOOR_PCT_OF_LIST` = **0.35**
+  (`outreach-economics`). The looser one is live on the send path; at 35% the
+  $74,500 opener would have held on the floor alone.
+- **The `no vision needed` shortcut on aged DOM is untouched.** Time-on-market
+  should earn *eligibility*, not a *price*.
+
+## 8l. NEW 2026-07-31 — Conveyor rebalanced (opener holds off, vision on, ZIPs batched)
+
+**The surface was already right.** `components/conveyor/ConveyorFeed.tsx` (operator
+2026-07-11) is the one ranked feed; `removeItem` already pulls a card **out of state**
+on action rather than crossing it off; the machine-work gate already hid all 235
+`kill_dead_deal`. The problem was what it was being **fed**.
+
+> **Correction to an earlier claim in this session:** "985 pending, 93% housekeeping,
+> 190 HIGH dead deals" described the Airtable **table**, not the operator's screen.
+> The real clutter was **`h2_opener_hold`: 533 in the decision feed against 72
+> `jarvis_reply` — 8:1 burial of the only lane with a human in it.**
+
+Mockup approved before any code changed (artifact `22d48240`).
+
+**1. Opener holds are BACKLOG, not decisions.** New `BACKLOG_PROPOSAL_TYPES` =
+`{h2_opener_hold}`. Counted as `hidden.backlog`, surfaced as a linked badge → `/system`,
+never as cards. Reported **separately** from `machineWorkHidden` — machine work is
+handled and forgotten, backlog is real work nobody has started — and checked **before**
+the machine-work branch so 533 records can never be reported as "handled".
+
+**2. `batchFrontierRetire`** (pure). 42 proposals with identical reasoning is **one**
+coverage ruling. `FRONTIER_BATCH_MIN = 3`. Batching exposed a second problem: those 42
+were written by the **old** governor (retire on a single empty crawl). The rule changed
+2026-07-29 — `RETIRE_MIN_ZERO_YIELD_STREAK = 3`, `REVIVAL_COOLDOWN_DAYS = 30`,
+*"pause is a rest, not an exit"* — and their reason string `zero_yield_latest_snapshot`
+**no longer exists in the codebase**. When any row still carries it the card flips
+"Retire all N" → **"Archive all N"** and says why. New `proposal_batch` action kind
+(not a `proposalIds` array on the singular actions) so no handler can half-apply a
+batch; the handler counts real writes and reports *"Archived 38 of 42"*, never a false
+success.
+
+**3. `/api/vision-holds`** returns **only** `Vision_Queue_State=vision_failed`.
+`needs_vision` is deliberately excluded — the drain cron clears those twice daily with
+nobody looking, and surfacing them would recreate the pile the lane exists to prevent
+(*"if it renders, it needs you"*). Actions: **Run rehab** (primary — one tap, costs the
+operator nothing) then **Spot-check images** (fallback for when the machine already
+failed). List price is context text, **never** `dollars` — nothing has been offered on
+a held record. `needs_vision` returns as a count for the rail only.
+
+`ConveyorCard` gained a secondary-open render; without it the Run rehab / Spot-check
+pair existed in the model and only one drew.
+
+**Expected effect:** ~660 cards → **~126**, of which **72 are live seller threads**.
+
+**NOT DONE, deliberately:**
+- The 42 stale frontier proposals were **not archived**. The card is wired; pressing it
+  is the operator's call (a 42-record production write).
+- The **nine nav tabs** are untouched (Act Now, Pipeline, Deals, Buyers, Queue, System,
+  Today, Funnel, Agents). `/queue` and `/` already render the identical feed by
+  construction — consolidation is real but is its own change.
+
+## 8m. NEW 2026-07-31 — Auto-answer lane (DARK), and the replay that reframed it
+
+**Shipped** (commit `d34e6a6`; 3647 tests green, `tsc` clean, build compiles —
+**not merged, not deployed, lane DARK**): `lib/reply-triage/auto-answer.ts` (pure
+decision + deterministic composers), `auto-answer-send.ts` (I/O; mirrors
+`lib/auto-ack` guard-for-guard), `/api/admin/auto-reply-dry-run` (**no apply mode,
+cannot send**), wired into `scan-comms`. Flag: `REPLY_AUTO_ANSWER_LIVE`.
+
+**Scope narrowed mid-build.** The approved proposal named **four** buckets. Two are
+already forbidden by rules written in the triage itself:
+- `disclosure_step` — *"the machine NEVER acknowledges legal disclosures for the
+  operator; personal acknowledgment required."*
+- `appointment` — *"operator owns the calendar commitment."*
+
+Only **`seller_costs`** (a policy answer naming **no** number) and **`offer_format`**
+(restates the delivery-stamped **sticky** number; no sticky → HOLD, per INVARIANTS §3)
+survived. Composers are deterministic string builders, not model calls. The **amount
+veto** outranks every other check — a seller who names a number is countering, whatever
+else the sentence says (the 9360 Cheyenne shape).
+
+### THE REPLAY — read this before extending the lane
+
+Replayed through the real modules over the **121 recorded reply threads** (100
+parseable, 21 with no recoverable inbound):
+
+| classification | n |
+|---|---|
+| **unknown** | **50** |
+| soft_no | 19 |
+| interest | 14 |
+| rejection | 14 |
+| offer_format | 2 |
+| counter | 1 |
+| seller_costs / appointment / disclosure_step | **0** |
+
+**The lane would have answered 2 of 100.** The premise behind the build — that these
+were "the highest-volume non-rejection buckets" — was **wrong**. The build is correct
+and safe; it is simply not where the volume is.
+
+**Where the volume actually is: classification.** Sampling the 50 `unknown` bodies shows
+three populations collapsed into one generic queue:
+1. **Trivial acks needing no reply** — "Will do", "Ok, thank you.", "Not at all",
+   "emailed". These should self-close, not queue.
+2. **Mis-classified `offer_format`** — a bare email address *is* the answer to "what's
+   the best email", and reads as `unknown`.
+3. **Hot and urgent, sitting in a generic bucket** —
+   *"Alex, did you receive my email with contract?"* ·
+   *"Alex, what is going on with the contract I sent you?"* ·
+   *"Hey Alex! That sounds like a great offer… probate… my client wanted this closed
+   months ago"* — the last is near an acceptance; the first two are agents chasing the
+   operator at **contract stage**.
+
+**Recommended next (NOT approved, NOT started):** the classifier, not more auto-answer
+buckets — (a) a *no-reply-needed* class so trivial acks self-close, (b) contract-stage
+patterns, (c) softer acceptance patterns. `ACCEPTANCE_PATTERNS` is deliberately narrow,
+which is right for auto-close but leaves warm leads in the generic bucket.
+
+**Also unresolved:** 21 of 121 threads have no recoverable inbound body. The
+reply-classification backfill (§8i) re-pulls from Quo and would cover them — **still
+not run.**
+
+## 8n. NEW 2026-07-31 — THE FIRST-TOUCH COLLAPSE (read this before adding any gate)
+
+**Counting only `[H2 sent` markers — actual NEW offers, not follow-ups:**
+
+| 7/22 | 7/23 | 7/24 | 7/25 | 7/26 | 7/27 | 7/28 | 7/29 | 7/30 | 7/31 |
+|---|---|---|---|---|---|---|---|---|---|
+| 22 | **37** | 24 | 15 | 6 | 9 | 12 | 11 | 11 | **3** |
+
+**Peak 37 → 3. Down 92%.** An earlier count in this session reported "ramping, 7/30 = 35"
+— that used `Last_Outbound_At`, which `parked-followup` and the bump lane also stamp.
+**Follow-ups masked the collapse entirely. Count `[H2 sent`, never `Last_Outbound_At`.**
+
+### Where the supply dies
+
+Pure gate stack replayed over all **1,640** never-texted Active records (freshness values
+real; seed $/sqft held constant, so this **models** the stack rather than reproducing
+live per-ZIP pricing):
+
+| gate | n | share |
+|---|---|---|
+| **freshness `verify_stale`** | **1,284** | **78%** |
+| lowball `not_eligible_clean` | 262 | 16% |
+| missing sqft or list price | 94 | 6% |
+
+**Freshness is the binding constraint by a wide margin.** 1,284 records are eligible in
+every respect except a `Last_Verified` stamp older than 48h.
+
+### The exact ceiling on first-touch
+
+```
+2 freshness-reverify slots × limit=40      =  80 re-verifies/day
+BUMP_REVERIFY_SHARE = 0.4 (already-Texted) = −32
+                                   virgin  ≈  48/day  ← the number that must move
+```
+
+Everything downstream (lowball gate, coverage, per-zip caps, pricer holds, min-offer
+floor) can only shrink 48. **Cost to move it: 1 Firecrawl credit per re-verify**, against
+~420/day current burn and an **800-per-rolling-hour** cap. Re-verify does **not** touch
+RentCast.
+
+> **Correction to a theory floated in this session:** the 7/25–7/30 hardening wave
+> (#165–#182) was suggested as the cause. The model does **not** support that as the
+> primary driver. The better fit is a **stock drawdown** — 7/22–7/25 spent an accumulated
+> fresh cohort (98 sends in four days), and from 7/26 the system has run at its refill
+> rate. No added gate is needed to explain the curve.
+
+### Placeholder-rehab hold NARROWED the same day (supersedes §8k)
+
+The blanket hold from §8k would have blocked **1,266 of 1,555** never-texted records
+(81%) against a drain clearing 12/day — **106 days**. With first-touch at 3/day that is
+zero. *A correct guard that stops the business is not a correct guard.*
+
+`placeholderRehabIsUnsafe(list, arv)` — the placeholder **assumes** rehab =
+`ROUGH_REHAB_PCT_OF_ARV × ARV`, so a house needing that work cannot be worth more than
+the remainder. An ask at or above `(1 − ROUGH_REHAB_PCT_OF_ARV) × ARV` contradicts the
+assumption:
+
+```
+256 Westchester  $234,900 / $223,750 = 105% ≥ 70%  → HOLD
+Detroit shell     $30,000 / $150,000 =  20% <  70% → SEND
+```
+
+Threshold is **1 − the placeholder itself**, so the two cannot drift. Unknown ask or
+unknown ARV **fails closed**. Distressed cohort flows at full volume; only the turnkey
+shape holds. No vision, no drain backlog, no new spend.
+
+**DONE (operator approved, commit `d3ee40a`)** — re-verify raised **80/day → 200/day**:
+4 slots × `limit=50` at **13:45, 16:00, 18:45, 21:00 UTC**, placed *ahead of* the h2 send
+clusters so records are fresh when the sender runs rather than replenished in two bursts.
+`limit=50` is the route's own `MAX_LIMIT`; no code ceiling was raised. After the 40% bump
+reservation that is **~120/day virgin** against the 1,284-record stale cohort, feeding an
+h2 send meter capped at 100/day. Cost: **1 Firecrawl credit each — 200/day against an
+800-per-rolling-hour cap.** Re-verify never touches RentCast.
+
+**Watch after deploy, in order:** (1) does first-touch rise from 3/day — count `[H2 sent`,
+never `Last_Outbound_At`; if it doesn't, freshness wasn't the only constraint and coverage
+/ per-zip caps are next. (2) the over-list tripwire below. (3) RentCast burn, which grows
+with REPLIES not sends.
+
+**FLAGGED, unmeasured:** an opener at 94% of list trips `NEVER_OVER_LIST_PCT` (0.85) and
+HOLDs. On genuinely cheap asks the value-anchored opener can land above 85% of list, so
+the over-list tripwire may be eating supply in the cheapest markets.
+
 ## 9. Pointers
 
 - Hard rules / invariants: **[`docs/INVARIANTS.md`](../INVARIANTS.md)** — load every session.

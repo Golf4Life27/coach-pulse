@@ -32,8 +32,13 @@
 
 import {
   computeRoughOpenerCeiling,
+  ROUGH_REHAB_PCT_OF_ARV,
   type RoughCeilingResult,
 } from "@/lib/rough-opener-ceiling";
+import {
+  PLACEHOLDER_REHAB_SOURCE,
+  PLACEHOLDER_REHAB_HOLD_REASON,
+} from "@/lib/pricing/vision-queue";
 import { anchoredOpenerGate } from "@/lib/h2-outreach/your-mao-opener-gate";
 import { computeFlipOffer } from "@/lib/pricing/mao-flip";
 import { DEFAULT_WHOLESALE_FEE } from "@/lib/pre-contract-math";
@@ -133,6 +138,13 @@ export interface PricerResult {
   ceilingSource: RoughCeilingResult["source"];
   arvUsed: number | null;
   rehabUsed: number | null;
+  /** TRUE when rehabUsed is a ROUGH_REHAB_PCT_OF_ARV guess rather than a
+   *  vision read (256 Westchester, 2026-07-31). The opener is arithmetically
+   *  valid but its largest term after ARV was invented, so it must not reach
+   *  a seller — the send paths convert this to a HOLD and route the record to
+   *  the vision queue. Carried as a flag rather than an early hold so every
+   *  downstream diagnostic still runs and keeps its own, more specific reason. */
+  placeholderRehab?: boolean;
   /** Anchor actually applied (buy-box path only; null on a hold). */
   anchorPct: number | null;
   /** ARV-SANITY GATE (Hole C): stored ARV was below list → distrusted as
@@ -192,6 +204,60 @@ const pos = (v: unknown): v is number => typeof v === "number" && Number.isFinit
  *  opener. The opener is null and the record routes to operator review. This
  *  REPLACES the retired flat-65%-of-list fallback (operator 2026-06-28): we
  *  never text a number anchored to the seller's list price. */
+// ── Placeholder-rehab TURNKEY TEST (2026-07-31, revised same day) ────────
+//
+// The first version of this guard HELD every opener built on a placeholder
+// rehab. Measured against the live pool that was 1,266 of 1,555 never-texted
+// records — 81% — against a vision drain that clears 12/day, i.e. 106 days to
+// catch up. First-touch offers had ALREADY fallen 37/day (7/23) to 3/day
+// (7/31); a blanket hold would have taken them to zero. A correct guard that
+// stops the business is not a correct guard.
+//
+// The real defect at 256 Westchester was never "no vision ran" — it was a
+// RENOVATED house. And there is a free, deterministic signal for that, which
+// the pricer already holds both halves of at decision time.
+//
+// THE TEST, derived rather than guessed: the placeholder ASSUMES rehab =
+// ROUGH_REHAB_PCT_OF_ARV × ARV. A house needing that much work cannot be
+// worth more than the remainder, so a seller asking at or above
+// (1 − ROUGH_REHAB_PCT_OF_ARV) × ARV is asking more than a house needing that
+// rehab could possibly be worth. At that point the assumption contradicts the
+// ask, and the number built on it is not defensible.
+//
+//   256 Westchester   $234,900 / $223,750 = 105% ≥ 70%  → HOLD  ✓
+//   Detroit shell      $30,000 / $150,000 =  20% <  70% → SEND  ✓
+//
+// The threshold is not a knob — it is 1 − the placeholder itself, so the two
+// can never drift apart.
+export const PLACEHOLDER_TURNKEY_RATIO = 1 - ROUGH_REHAB_PCT_OF_ARV;
+
+/** Absolute dollar ceiling for an opener whose rehab term is a PLACEHOLDER.
+ *  The turnkey ratio above is scale-free, so a large ARV makes a guessed
+ *  renovation look safer the bigger it gets — 1909 Flat Shoals passed the
+ *  ratio at 55% of list and autonomously texted $266,250 carrying a ~$203,000
+ *  invented rehab. This business wholesales $30-70k houses; an autonomous
+ *  six-figure offer built on a guess is a different risk class than the one
+ *  the operator signed up for. Above this, HOLD for a real vision read.
+ *  Env-tunable (PLACEHOLDER_REHAB_MAX_OPENER_USD). */
+export const PLACEHOLDER_REHAB_MAX_OPENER_USD = (() => {
+  const raw = Number(process.env.PLACEHOLDER_REHAB_MAX_OPENER_USD);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 75_000;
+})();
+
+/** Pure: is a placeholder-rehab opener unsafe for THIS listing?
+ *  Unknown list price fails CLOSED — without the ask we cannot rule out a
+ *  turnkey house, and that is the exact case this exists to catch. */
+export function placeholderRehabIsUnsafe(
+  listPrice: number | null | undefined,
+  arvUsed: number | null | undefined,
+): boolean {
+  const list = typeof listPrice === "number" && Number.isFinite(listPrice) && listPrice > 0 ? listPrice : null;
+  const arv = typeof arvUsed === "number" && Number.isFinite(arvUsed) && arvUsed > 0 ? arvUsed : null;
+  if (arv == null) return true;   // no value basis → cannot judge → hold
+  if (list == null) return true;  // no ask → cannot judge → hold
+  return list >= arv * PLACEHOLDER_TURNKEY_RATIO;
+}
+
 function holdResult(
   ceilingSource: RoughCeilingResult["source"],
   detail: string,
@@ -261,9 +327,22 @@ export function priceOpener(input: PricerInput): PricerResult {
     wholesaleFee: input.wholesaleFee ?? null,
   });
 
+  // ── PLACEHOLDER-REHAB HOLD (256 Westchester, operator 2026-07-31) ──────
+  // A rough ceiling built on ROUGH_REHAB_PCT_OF_ARV is a GUESSED rehab, and
+  // rehab is the largest term in the opener after ARV itself — so guessing it
+  // is guessing the offer. 256 Westchester: ARV ≈ $223,750 (right — the agent
+  // said $230k), placeholder rehab 0.30×ARV = $67,125 (the house needed $0),
+  // opener $74,500 on a $234,900 renovated listing. The ARV was never the
+  // problem; the invented renovation was.
+  //
+  // This branch used to accept `..._placeholder_rehab` as a SEND basis
+  // alongside the vision-backed one. It no longer does. The record HOLDs and
+  // is routed to the VISION QUEUE (lib/pricing/vision-queue) — machine work
+  // that a drain cron clears autonomously, deliberately NOT an
+  // h2_opener_hold operator proposal.
   // ── BUY-BOX ARV PATH ── the ONLY path that produces a sent opener. Ceiling
   // from a trusted ARV + sourced buy-box.
-  if (rough.source === "rough_buybox_arv" || rough.source === "rough_buybox_arv_placeholder_rehab") {
+  if (rough.source === "rough_buybox_arv" || rough.source === PLACEHOLDER_REHAB_SOURCE) {
     const gate = anchoredOpenerGate({ ceiling: rough.ceiling, anchorPct: input.anchorPct ?? null, priceable: true });
     const confidence: OpenerConfidence =
       input.arvConfidence === "STRONG" ? "STRONG"
@@ -323,7 +402,20 @@ export function priceOpener(input: PricerInput): PricerResult {
           );
         }
       }
-      return overListTripwireGuard(
+      // ── PLACEHOLDER-REHAB HOLD (256 Westchester, operator 2026-07-31) ──
+      // LAST guard in this branch, deliberately: every more-specific
+      // diagnostic above (size-band extrapolation, over-list tripwire, MAO
+      // bound, sub-floor) must keep its own hold reason. Those are ARV
+      // problems, and vision will not fix an ARV problem — mislabelling them
+      // "needs vision" would route them to a drain cron that can never clear
+      // them. Only a number that is otherwise SENDABLE, and fails solely
+      // because its rehab was invented, belongs in the vision queue.
+      //
+      // The defect: ARV ≈ $223,750 (correct — the agent said $230k), but
+      // rehab = 0.30×ARV = $67,125 on a house needing $0, giving a $74,500
+      // opener against a $234,900 turnkey listing. Rehab is the largest term
+      // after ARV; guessing it is guessing the offer.
+      const guarded: PricerResult = overListTripwireGuard(
         {
           opener,
           basis: "arv_buybox",
@@ -353,6 +445,30 @@ export function priceOpener(input: PricerInput): PricerResult {
         },
         list,
       );
+      // PLACEHOLDER-REHAB MARK (256 Westchester, operator 2026-07-31).
+      // A FLAG, deliberately — not an early return. Every downstream
+      // diagnostic (the over-list tripwire here, the corroboration gate in
+      // priceOpenerWithSeed) must still run and keep its own hold reason:
+      // those are ARV problems, and vision cannot fix an ARV problem, so
+      // labelling them "needs vision" would route them to a drain cron that
+      // can never clear them. The send paths convert this flag to a HOLD
+      // only once a number has survived everything else.
+      // TWO independent ways a placeholder-rehab opener is unsafe:
+      //  (a) TURNKEY RATIO — the ask contradicts the assumed rehab (256
+      //      Westchester). Catches renovated houses at any price.
+      //  (b) ABSOLUTE EXPOSURE (1909 Flat Shoals, 2026-08-04) — the ratio test
+      //      PASSED (list $375,000 vs a seed ARV ≈ $678,000 = 55%) and the
+      //      system autonomously texted $266,250 on a house nobody had
+      //      assessed, with a GUESSED $203,000 renovation inside it. A ratio
+      //      cannot catch this: the bigger the ARV, the safer it looks, while
+      //      the invented rehab term — and the dollars we commit — grow with
+      //      it. Above this ceiling a placeholder rehab must be replaced by a
+      //      real vision read before any number reaches a seller.
+      return rough.source === PLACEHOLDER_REHAB_SOURCE &&
+        (placeholderRehabIsUnsafe(list, rough.arvUsed) ||
+          (pos(guarded.opener) && guarded.opener > PLACEHOLDER_REHAB_MAX_OPENER_USD))
+        ? { ...guarded, placeholderRehab: true }
+        : guarded;
     }
     // Buy-box ceiling did not pencil (≤0 — rehab ate the value) → HOLD. A non-
     // deal correctly holds; we never paper over it with a list fraction.

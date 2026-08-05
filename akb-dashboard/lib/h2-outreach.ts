@@ -39,6 +39,7 @@ import { normalizePhone } from "@/lib/phone-normalize";
 import { SOURCE_VERSION_V2 } from "@/lib/source-version";
 import { isActionableMarket } from "@/lib/markets/actionable";
 import { isOutreachFresh, DEFAULT_FRESHNESS_HOURS } from "@/lib/outreach-freshness";
+import { agentInventoryAsk } from "@/lib/pricing/bounded-ratio-opener";
 
 export const AUTO_PROCEED = "Auto Proceed";
 export const LIVE_ACTIVE = "Active";
@@ -263,10 +264,17 @@ export function buildH2Message(
   const listingClause = cityName
     ? `I am interested in your listing at ${street} in ${cityName}.`
     : `I am interested in your listing at ${street}.`;
+  // THE AGENT-INVENTORY ASK (operator 2026-08-05). Costs nothing and gives the
+  // agent a SECOND way to say yes. The agent who passes on this listing may
+  // have three others in a drawer — pocket listings, expireds, a seller who has
+  // gone unrealistic — and that inventory is invisible to every portal we
+  // scrape. It is also the only line here that cannot draw the reply the
+  // 8203 Brace lowball drew, because it names no number.
   return (
     `Hi ${name}, this is Alex with AKB Solutions. ${listingClause} ` +
     `I would like to make a cash offer at ${offer} with a quick close and ` +
-    `no financing contingencies. Is the seller open to offers in that range?`
+    `no financing contingencies. Is the seller open to offers in that range?` +
+    `\n\n${agentInventoryAsk()}`
   );
 }
 

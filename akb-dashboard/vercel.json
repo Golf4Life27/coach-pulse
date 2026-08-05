@@ -9,8 +9,16 @@
       "schedule": "0 13 * * *"
     },
     {
-      "path": "/api/admin/freshness-reverify?apply=1&limit=40",
-      "schedule": "15 14 * * *"
+      "path": "/api/admin/freshness-reverify?apply=1&limit=50",
+      "schedule": "45 13 * * *"
+    },
+    {
+      "path": "/api/admin/freshness-reverify?apply=1&limit=50",
+      "schedule": "0 16 * * *"
+    },
+    {
+      "path": "/api/admin/freshness-reverify?apply=1&limit=50",
+      "schedule": "0 21 * * *"
     },
     {
       "path": "/api/cron/propose-actions",
@@ -66,7 +74,11 @@
     },
     {
       "path": "/api/agents/pulse/scan",
-      "schedule": "0 12 * * *"
+      "schedule": "25 * * * *"
+    },
+    {
+      "path": "/api/cron/discovery-sweep?apply=1&zips=8",
+      "schedule": "15 */3 * * *"
     },
     {
       "path": "/api/cron/outreach-status-reconcile",
@@ -75,6 +87,14 @@
     {
       "path": "/api/cron/rehab-vision-retry",
       "schedule": "0 15 * * *"
+    },
+    {
+      "path": "/api/cron/opener-vision-drain?limit=6",
+      "schedule": "20 13 * * *"
+    },
+    {
+      "path": "/api/cron/opener-vision-drain?limit=6",
+      "schedule": "20 20 * * *"
     },
     {
       "path": "/api/cron/data-federation-pull",
@@ -113,7 +133,7 @@
       "schedule": "0 6 * * 1"
     },
     {
-      "path": "/api/admin/freshness-reverify?apply=1&limit=40",
+      "path": "/api/admin/freshness-reverify?apply=1&limit=50",
       "schedule": "45 18 * * *"
     },
     {
@@ -219,6 +239,26 @@
     {
       "path": "/api/cron/frontier-rotation?apply=1",
       "schedule": "10 7 * * 4"
+    },
+    {
+      "path": "/api/cron/h2-outreach?dry_run=false&limit=25&send_cap_per_run=20&send_cap_per_zip=5",
+      "schedule": "0 13 * * *"
+    },
+    {
+      "path": "/api/cron/h2-outreach?dry_run=false&limit=25&send_cap_per_run=20&send_cap_per_zip=5",
+      "schedule": "0 14 * * *"
+    },
+    {
+      "path": "/api/cron/h2-outreach?dry_run=false&limit=25&send_cap_per_run=20&send_cap_per_zip=5",
+      "schedule": "0 16 * * *"
+    },
+    {
+      "path": "/api/cron/h2-outreach?dry_run=false&limit=25&send_cap_per_run=20&send_cap_per_zip=5",
+      "schedule": "30 20 * * *"
+    },
+    {
+      "path": "/api/cron/h2-outreach?dry_run=false&limit=25&send_cap_per_run=20&send_cap_per_zip=5",
+      "schedule": "30 23 * * *"
     }
   ]
 }

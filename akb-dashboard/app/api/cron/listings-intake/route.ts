@@ -33,7 +33,8 @@
 //     on live write so H2 Crier picks it up.
 
 import { NextResponse } from "next/server";
-import { getListings } from "@/lib/airtable";
+import { getListings, patchListingsBatch } from "@/lib/airtable";
+import { selectLastSeenWrites } from "@/lib/crawler/last-seen";
 import { audit } from "@/lib/audit-log";
 import { writeState } from "@/lib/maverick/write-state";
 import {
@@ -532,8 +533,11 @@ export async function GET(req: Request) {
   if (kvConfigured() && zips.length > 0) {
     try {
       const key = crawlMeterKey(new Date());
-      const cur = Number((await kvProd.get(key)) ?? 0) || 0;
-      await kvProd.setEx(key, String(cur + zips.length), CRAWL_METER_TTL_S);
+      // ATOMIC (2026-08-04): was get→add→setEx, the same lost-update race as
+      // recordKvSpend. Overlapping intake slots each read the same `cur` and
+      // wrote the same total, so concurrent runs recorded one run's spend.
+      const total = await kvProd.incrBy(key, zips.length);
+      if (total === zips.length) await kvProd.expire(key, CRAWL_METER_TTL_S);
     } catch {
       /* advisory meter — never blocks the run */
     }
@@ -542,6 +546,17 @@ export async function GET(req: Request) {
   // ── Existing-address dedup set (reuses the listings loaded up-front
   // for the SATURATION signal — no second Airtable fetch) ─────────────
   const existingKeys: Set<string> = new Set(listings.map((l) => normalizeAddressKey(l.address)));
+  // Address key → existing record, for Last_Seen stamping (lib/crawler/last-seen).
+  // The feed still returning an address is positive proof it is listed; that
+  // fact was being counted as `duplicates++` and thrown away.
+  const existingByKey = new Map<string, { id: string; lastSeen?: string | null }>();
+  for (const l of listings) {
+    const k = normalizeAddressKey(l.address);
+    if (k && !existingByKey.has(k)) existingByKey.set(k, { id: l.id, lastSeen: l.lastSeen ?? null });
+  }
+  /** Existing records the feed returned this run, in encounter order. */
+  const feedMatched: Array<{ id: string; lastSeen?: string | null }> = [];
+  const feedMatchedIds = new Set<string>();
 
   const summary = {
     source: "rentcast",
@@ -553,6 +568,9 @@ export async function GET(req: Request) {
     rejected: 0,
     duplicates: 0,
     written: 0,
+    // Liveness telemetry: how many held records the source feed still returned
+    // this run, and how many got a fresh Last_Seen stamp.
+    last_seen: { feed_matched: 0, stamped: 0, would_stamp: 0, errors: 0 },
     per_zip: [] as Array<{ zip: string; raw: number; accepted: number; review: number }>,
     // Auto-promote accounting (INV-CRAWLER-AGENT-ENRICHMENT). Counts span every
     // record that reached the write stage; on a dry intake run they are the
@@ -726,6 +744,20 @@ export async function GET(req: Request) {
         perZipRepresentative.set(zip, fetchResult.candidates[0]);
       }
 
+      // LAST_SEEN (2026-08-04): the feed returned these addresses as ACTIVE.
+      // Matched against every candidate BEFORE the distress filter on purpose —
+      // "still listed" and "still interesting" are different questions, and a
+      // listing that falls out of the price band is still for sale.
+      for (const c of fetchResult.candidates) {
+        const k = normalizeAddressKey(c.address);
+        if (!k) continue;
+        const hit = existingByKey.get(k);
+        if (hit && !feedMatchedIds.has(hit.id)) {
+          feedMatchedIds.add(hit.id);
+          feedMatched.push(hit);
+        }
+      }
+
       const { accepted, rejected } = filterIntakeCandidates(fetchResult.candidates, now, { seededZips, requirePriceable });
       summary.rejected += rejected.length;
       for (const r of rejected) {
@@ -748,6 +780,34 @@ export async function GET(req: Request) {
   }
 
   const collectMs = Date.now() - tCollectStart;
+
+  // ── LAST_SEEN STAMP (2026-08-04, the 8203 Brace incident) ──────────────
+  // Zero vendor cost: every id here came back in a `listings/sale` response
+  // this run already paid for. Dry runs report the count and write nothing.
+  const lastSeenWrites = selectLastSeenWrites(feedMatched, now);
+  summary.last_seen.feed_matched = feedMatched.length;
+  summary.last_seen.stamped = dryRun ? 0 : lastSeenWrites.length;
+  summary.last_seen.would_stamp = lastSeenWrites.length;
+  if (!dryRun && lastSeenWrites.length > 0) {
+    const stampIso = now.toISOString();
+    for (let i = 0; i < lastSeenWrites.length; i += 10) {
+      const chunk = lastSeenWrites.slice(i, i + 10);
+      try {
+        await patchListingsBatch(chunk.map((id) => ({ recordId: id, fields: { Last_Seen: stampIso } })));
+      } catch (e) {
+        // Never fail the intake run over a liveness stamp — the crawl and the
+        // writes that matter already happened. Audited, not silent.
+        summary.last_seen.errors += chunk.length;
+        await audit({
+          agent: "scout",
+          event: "last_seen_stamp_failed",
+          status: "confirmed_failure",
+          inputSummary: { batch_size: chunk.length },
+          outputSummary: { error: e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200) },
+        }).catch(() => {});
+      }
+    }
+  }
 
   // ── AUTO-SEED PASS (Maverick 2026-06-14, root-cause fix) ───────────────
   // The contaminated Real_ARV_Median field is repaired at the ZIP level: for

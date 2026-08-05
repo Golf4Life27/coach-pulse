@@ -34,8 +34,10 @@ import { detectProgressMeterMovement } from "./detectors/progress-meter-movement
 import { detectUnbackedReplyStatus } from "./detectors/unbacked-reply-status";
 import { detectIntakeRunDuration } from "./detectors/intake-run-duration";
 import { detectFirecrawlPaymentRequired } from "./detectors/firecrawl-payment-required";
+import { detectVendorHealth } from "./detectors/vendor-health";
 
 import { audit } from "@/lib/audit-log";
+import { sendMessage } from "@/lib/quo";
 import { writeState, type WriteStateDeps } from "@/lib/maverick/write-state";
 
 export interface PulseScanResult {
@@ -50,6 +52,8 @@ export interface PulseScanResult {
   spine_writes: string[];
   /** Snapshot of the state Pulse just persisted. */
   state: PulseActiveState;
+  /** Detection IDs that paged the operator by SMS this scan. */
+  paged_ids: string[];
   elapsed_ms: number;
 }
 
@@ -73,7 +77,92 @@ export function runAllDetectors(input: PulseDetectorInput): PulseDetection[] {
     ...detectUnbackedReplyStatus(input),
     ...detectIntakeRunDuration(input),
     ...detectFirecrawlPaymentRequired(input),
+    ...detectVendorHealth(input),
   ];
+}
+
+// ── Operator paging (operator 2026-08-04, the silent-403 incident) ─────────
+//
+// Pulse has always written Spine + audit and NOTHING else, so a detection was
+// only ever as loud as someone choosing to go read it. RentCast 403'd for two
+// days, every failure was recorded, and the operator still found it by feel.
+// Detections that mean "a vendor the business stands on is down" now page him.
+//
+// Deliberately NARROW. Pulse runs 17 detectors and most are advisory (test
+// count drift, voice drift, meter movement) — paging on all of them trains
+// him to ignore the channel, which is how the next real outage gets missed.
+// Widen via PULSE_PAGING_DETECTORS (comma-separated detector_ids) rather than
+// by loosening this default.
+const DEFAULT_PAGING_DETECTORS = ["vendor_health", "firecrawl_payment_required"];
+
+function pagingDetectors(env: Record<string, string | undefined>): Set<string> {
+  const raw = env.PULSE_PAGING_DETECTORS;
+  if (!raw) return new Set(DEFAULT_PAGING_DETECTORS);
+  const ids = raw.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+  return new Set(ids.length > 0 ? ids : DEFAULT_PAGING_DETECTORS);
+}
+
+/** Best-effort operator SMS. Never throws — a paging failure must not abort
+ *  the scan that produced the detection (the Spine row is the durable record;
+ *  the page is the courtesy).
+ *
+ *  CHANNEL SEPARATION (operator 2026-06-10, mirrored from sendReplyAlert):
+ *  operator alerts send FROM the dedicated Maverick line (ALERT_FROM), NEVER
+ *  from the agent-facing outreach line. Unset ALERT_FROM REFUSES rather than
+ *  falling back — the hard rule beats delivery. This path is deliberately
+ *  OUTSIDE sendGuarded per INVARIANTS §7: it carries no listing and no
+ *  seller, and the active-set diff is its dedupe. */
+async function pageOperator(
+  det: PulseDetection,
+  env: Record<string, string | undefined>,
+  auditFn: typeof audit,
+  sendFn: typeof sendMessage,
+): Promise<boolean> {
+  const to = (env.ALERT_PHONE ?? "").trim();
+  const from = (env.ALERT_FROM ?? "").trim();
+  if (!to || !from) {
+    await auditFn({
+      agent: "pulse",
+      event: "pulse_page_skipped",
+      status: "uncertain",
+      inputSummary: {
+        detection_id: det.id,
+        reason: !to
+          ? "ALERT_PHONE not set"
+          : "ALERT_FROM not set — refusing to send from the agent-facing outreach line (channel separation)",
+      },
+      outputSummary: { sent: false },
+    });
+    return false;
+  }
+  const body = `${det.severity === "critical" ? "CRITICAL" : "WARNING"}: ${det.title}${
+    det.suggested_action ? ` — ${det.suggested_action}` : ""
+  }`.slice(0, 480);
+  try {
+    await sendFn(to, body, { from });
+    await auditFn({
+      agent: "pulse",
+      event: "pulse_page_sent",
+      status: "confirmed_success",
+      inputSummary: {
+        detection_id: det.id,
+        to_masked: `${to.slice(0, 4)}…${to.slice(-4)}`,
+        body_len: body.length,
+      },
+      outputSummary: { sent: true },
+      decision: det.severity,
+    });
+    return true;
+  } catch (err) {
+    await auditFn({
+      agent: "pulse",
+      event: "pulse_page_failed",
+      status: "confirmed_failure",
+      inputSummary: { detection_id: det.id, to_masked: `${to.slice(0, 4)}…${to.slice(-4)}` },
+      outputSummary: { sent: false, error: String(err).slice(0, 200) },
+    });
+    return false;
+  }
 }
 
 /** Pure: split a fresh detection set against a previously-active map
@@ -115,6 +204,8 @@ export interface PulseRunnerDeps {
   /** Active-state I/O — same testability seam. */
   readState?: typeof readPulseState;
   writeStateStore?: typeof writePulseState;
+  /** Operator-paging SMS sender — same testability seam. */
+  sendFn?: typeof sendMessage;
 }
 
 const FIRST_SEEN_FALLBACK = (now: Date) => now.toISOString();
@@ -130,6 +221,9 @@ export async function runPulseScan(
   const writeFn = deps.writeStateStore ?? writePulseState;
   const writeStateFn = deps.writeStateFn ?? writeState;
   const auditFn = deps.auditFn ?? audit;
+  const sendFn = deps.sendFn ?? sendMessage;
+  const pageable = pagingDetectors(input.env);
+  const pagedIds: string[] = [];
 
   const previousState = await readFn();
   const detections = runAllDetectors(input);
@@ -170,6 +264,11 @@ export async function runPulseScan(
       },
       decision: det.severity,
     });
+    // Edge-triggered by construction: this loop is the off→on transition, so
+    // a standing outage pages ONCE, not on every scan.
+    if (pageable.has(det.detector_id)) {
+      if (await pageOperator(det, input.env, auditFn, sendFn)) pagedIds.push(id);
+    }
   }
 
   // Write Spine + audit for resolutions.
@@ -238,6 +337,7 @@ export async function runPulseScan(
     steady_ids,
     spine_writes: spineWrites,
     state: nextState,
+    paged_ids: pagedIds,
     elapsed_ms: Date.now() - t0,
   };
 }

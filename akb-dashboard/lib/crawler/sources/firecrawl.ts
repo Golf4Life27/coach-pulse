@@ -21,7 +21,7 @@
 // ⚠️ FIRECRAWL_API_KEY must be set in prod env (operator action) — the
 // adapter returns credentialed=false when absent.
 
-import { evaluateListingContent, extractScrapedSqft, crossCheckSqft, INTAKE_DISTRESS_DOM_MARK } from "@/lib/crawler/intake-filter";
+import { evaluateListingContent, extractScrapedSqft, extractScrapedPrice, crossCheckSqft, INTAKE_DISTRESS_DOM_MARK } from "@/lib/crawler/intake-filter";
 import { scopeSubjectText, scopeStatusText } from "@/lib/crawler/sources/listing-text-scope";
 
 const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY;
@@ -173,8 +173,27 @@ const PREFERRED_DOMAINS = ["redfin.com", "zillow.com", "realtor.com", "homes.com
  *  boilerplate on pages whose subject listing is still active, and a
  *  full-page substring scan false-flags them as inactive (dropped 3 live
  *  distress listings, e.g. 3719 W Houston). */
+// SUBJECT-SCOPED ADDITIONS (2026-08-04, the 8203 Brace St incident): the
+// system texted an agent a $35,250 offer on a house that was not for sale.
+// Every gate passed because `stillActive` is the ABSENCE of a marker, and the
+// three phrases above are not the words any major portal uses for an
+// off-market home — Zillow says "not currently listed", Redfin "this home
+// last sold for", realtor.com "this property is off market".
+//
+// These are chosen to survive the 2026-05-26 regression that removed bare
+// "off market" / "sold on": every phrase below names the SUBJECT explicitly
+// ("this home", "this property") or is a status word that never describes a
+// neighbouring home in comps boilerplate. So they cannot re-flag a live
+// distress listing the way an unscoped "off market" substring did to
+// 3719 W Houston, even though scopeStatusText now strips comps + history
+// anyway (that stripping is why the original exclusion is stale — it was
+// written for a FULL-PAGE scan that no longer exists).
 const INACTIVE_MARKERS = [
   "no longer available", "listing removed", "no longer on the market",
+  "this home is not currently listed", "not currently listed for sale",
+  "this property is off market", "this home is off market",
+  "this home last sold for", "no longer listed",
+  "delisted", "removed from market",
 ];
 
 export interface FirecrawlVerifyResult {
@@ -212,6 +231,9 @@ export interface FirecrawlVerifyResult {
    *  → inflated seed ARV → overshot opener). Optional so existing result
    *  literals/tests stay valid; absent ⇒ fail open. */
   scrapedSqft?: number | null;
+  /** List price stated on the scraped page (2026-08-01 Sunbeam receipt) —
+   *  the spread-watch's ground truth for engaged/under-contract records. */
+  scrapedPrice?: number | null;
   creditsUsed: number;
   /** true when Firecrawl returned 429 even after exhausting retries —
    *  distinct from a generic error (caller → firecrawl_rate_limited). */
@@ -420,6 +442,7 @@ export function buildResolvedResult(
     hasConditionSignal: content.hasConditionSignal,
     matchedDistressKeywords: content.matchedDistressKeywords,
     scrapedSqft: extractScrapedSqft(subjectText),
+    scrapedPrice: extractScrapedPrice(subjectText),
     isNewConstruction: newConstruction.isNew,
     matchedNewConstructionSignals: newConstruction.signals,
     matchedInactiveMarkers: inactiveMarkers,

@@ -11,6 +11,17 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "d=\"$(git rev-parse --show-toplevel 2>/dev/null)\"; bash \"${d:-$CLAUDE_PROJECT_DIR}/.claude/hooks/maverick-load-check.sh\""
+          }
+        ]
+      }
     ]
   }
 }

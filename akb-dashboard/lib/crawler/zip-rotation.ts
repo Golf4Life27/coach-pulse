@@ -193,6 +193,25 @@ export const COOLING_CYCLE_HOURS = 72;
 export const CHEWED_CYCLE_HOURS = 168;
 /** Opener-HOLD trickle — market can't price/send; biweekly stats-warming. */
 export const OPENER_HOLD_CYCLE_HOURS = 336;
+
+/** Crawl opener-HOLD markets at all? DEFAULT OFF (operator 2026-08-04,
+ *  "conserve cost wherever it does not reduce output").
+ *
+ *  MEASURED 2026-08-04: 3 of the day's 11 ZIP crawls went to Houston TX
+ *  (77048, 77051, 77053) — 262 raw listings, ZERO accepted, 100% rejected
+ *  `market_not_priceable`. That is not a bug in the trickle; the trickle was
+ *  working exactly as designed. It is the aggregate cost of the design: a
+ *  biweekly cadence across many held ZIPs still lands ~3 crawls a day, and an
+ *  opener-HOLD market CANNOT yield by construction — `openerArvPctMax` returns
+ *  null for non-disclosure states, so every listing found is rejected before
+ *  it can ever be priced or sent.
+ *
+ *  The stated benefit was keeping registry stats warm "for the day the market
+ *  unlocks." That is speculative; the cost is measured, and it was consuming
+ *  ~27% of crawl slots on a plan running 2.3x over. Re-enable with
+ *  OPENER_HOLD_CRAWL_ENABLED=true when a held market is actually being
+ *  onboarded (i.e. a verified ARV source makes it priceable). */
+export const OPENER_HOLD_CRAWL_ENABLED = process.env.OPENER_HOLD_CRAWL_ENABLED === "true";
 /** Consecutive zero-yield ingest runs before a ZIP counts as chewed. */
 export const CHEWED_STREAK_RUNS = 3;
 /** SATURATED cycle (lib/crawler/zip-saturation.ts, operator /goal
@@ -230,8 +249,19 @@ export interface ZipCadenceRow {
  *  and the zero-yield streak are independent COOLING inputs — when more
  *  than one applies, the ZIP earns the LONGEST (most conservative) of the
  *  applicable cycles, never a shorter one. */
-export function recrawlCycleHours(row: ZipCadenceRow, baseCycleHours: number): number {
+export function recrawlCycleHours(
+  row: ZipCadenceRow,
+  baseCycleHours: number,
+  /** Injectable so both paths stay testable without module re-import;
+   *  defaults to the env flag in production. */
+  openerHoldEnabled: boolean = OPENER_HOLD_CRAWL_ENABLED,
+): number {
   let cycle = baseCycleHours;
+  // An un-priceable market never becomes due: Infinity means the freshness
+  // comparison always treats the row as fresh, so it is skipped rather than
+  // excluded — no separate exclusion path, and flipping the env restores the
+  // biweekly trickle exactly as before.
+  if (row.openerHold && !openerHoldEnabled) return Number.POSITIVE_INFINITY;
   if (row.openerHold) cycle = Math.max(cycle, OPENER_HOLD_CYCLE_HOURS);
   if (row.saturated) cycle = Math.max(cycle, SATURATED_CYCLE_HOURS);
   if (row.lastIngestedAt == null) return cycle; // never crawled — always due anyway (modulo above)

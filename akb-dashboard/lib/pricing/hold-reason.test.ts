@@ -68,6 +68,52 @@ describe("classifyHold — creative-lane holds (a different pipeline, not a per-
   });
 });
 
+describe("classifyHold — over-list tripwire (Hole A, 0.85×list) gets its own category", () => {
+  it("overListTripwire=true → over_list_tripwire / operator / NOT automatable", () => {
+    const r = classifyHold(base({ overListTripwire: true, arvSource: "seed_renovated" }));
+    expect(r.category).toBe("over_list_tripwire");
+    expect(r.owner).toBe("operator");
+    expect(r.automatable).toBe(false);
+  });
+
+  it("is read BEFORE arvDistrusted — the pricer never sets arvDistrusted for this guard, but a caller passing both must not misroute to cash_no_pencil/needs_seed", () => {
+    const r = classifyHold(base({ overListTripwire: true, arvDistrusted: true, flagReseed: true }));
+    expect(r.category).toBe("over_list_tripwire");
+  });
+
+  it("omitting overListTripwire (existing dry-run caller) falls through unchanged — value known + buybox → cash_no_pencil", () => {
+    const r = classifyHold(base({ arvSource: "seed_renovated", marketHasBuybox: true }));
+    expect(r.category).toBe("cash_no_pencil");
+  });
+});
+
+describe("classifyHold — failed pre-send corroboration gets its own category", () => {
+  it("non-empty corroborationFlags → failed_corroboration / operator / NOT automatable", () => {
+    const r = classifyHold(base({ corroborationFlags: ["size_extrapolation"], arvDistrusted: true, flagReseed: true }));
+    expect(r.category).toBe("failed_corroboration");
+    expect(r.owner).toBe("operator");
+    expect(r.automatable).toBe(false);
+  });
+
+  it("is read BEFORE arvDistrusted — opener-pricing.ts sets arvDistrusted=true on a corroboration failure too, which would otherwise misclassify it as needs_seed or cash_no_pencil", () => {
+    const asNeedsSeed = classifyHold(base({ corroborationFlags: ["psf_out_of_range"], arvDistrusted: true, flagReseed: true }));
+    expect(asNeedsSeed.category).toBe("failed_corroboration");
+    const asCashNoPencil = classifyHold(base({ corroborationFlags: ["infeasible_ask"], arvDistrusted: true, flagReseed: false }));
+    expect(asCashNoPencil.category).toBe("failed_corroboration");
+  });
+
+  it("empty corroborationFlags array behaves like omitted — falls through to the existing buckets", () => {
+    const r = classifyHold(base({ corroborationFlags: [], arvSource: "none", marketHasBuybox: true }));
+    expect(r.category).toBe("needs_seed");
+  });
+
+  it("omitting corroborationFlags (existing dry-run caller) is unaffected", () => {
+    const r = classifyHold(base({ arvDistrusted: true, flagReseed: true, arvSource: "stored" }));
+    expect(r.category).toBe("needs_seed");
+    expect(r.owner).toBe("auto_seed");
+  });
+});
+
 describe("classifyHold — one-time config holds", () => {
   it("market has no buy-box → no_market_buybox / configure_market (one-time, unlocks the whole market)", () => {
     const r = classifyHold(base({ marketHasBuybox: false, arvSource: "none" }));
@@ -103,6 +149,8 @@ describe("classifyHold — the operator's headline: most holds never reach the d
     const needsAttention = [
       classifyHold(base({ arvDistrusted: true, flagReseed: false, arvSource: "seed_renovated" })), // creative
       classifyHold(base({ marketHasBuybox: false })),                                              // config
+      classifyHold(base({ overListTripwire: true })),                                              // over-list, operator
+      classifyHold(base({ corroborationFlags: ["size_extrapolation"] })),                           // failed corroboration, operator
     ];
     for (const r of needsAttention) expect(r.automatable).toBe(false);
   });

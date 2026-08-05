@@ -46,6 +46,10 @@ const BOTH_PATH_PROPS = [
   "roughOpenerAmount",
   "contractOfferPrice",
   "lastInboundAt",
+  "visionQueueState",
+  "replyClassification",
+  "replyClassifiedAt",
+  "replyDecisionKind",
   "lastOutboundAt",
   // Back-half contract lifecycle (2026-07-14, the 3123 Sunbeam blind spot).
   "contractExecutedAt",
@@ -101,6 +105,12 @@ const EXPECTED_LISTING_FIELDS: Record<string, string> = {
   "fldkYeP8onCHil0pd": "actionHoldUntil",
   "fldiNKFpIBUYgg7el": "actionCardState",
   "fld3IhR1DXzcVuq6F": "lastInboundAt",
+  // Vision queue (2026-07-31) — see lib/pricing/vision-queue.ts.
+  "fldqgrBDtoRceShP2": "visionQueueState",
+  // Reply-funnel triple (2026-07-31) — two-sided, so both derived maps carry it.
+  "fld7vLOMdLthqccoy": "replyClassification",
+  "fldoTXHschuUDi2Hx": "replyClassifiedAt",
+  "fld13azWnqSx2YyoJ": "replyDecisionKind",
   "fldaK4lR5UNvycg11": "lastOutboundAt",
   // 2026-07-26 backfill of the five formerly name-only fields (IDs pulled
   // from the live schema; they were NULL on bulk reads until then):
@@ -136,6 +146,9 @@ const EXPECTED_LISTING_FIELDS: Record<string, string> = {
   "fldrlbePeS9glaFQu": "propertyType",
   "fldg1j5wHJzoGJB0I": "priceDropCount",
   "fld2eUkKaC4pMjIdd": "lastVerified",
+  // Added 2026-08-04 with the Last_Seen writer (lib/crawler/last-seen). The
+  // field existed in the Airtable schema all along with no reader OR writer.
+  "fldNDdcGayTxVuYYL": "lastSeen",
   "fldJt2pSCHiXqBxwj": "pipelineStage",
   "fld3lxWDerPs3rSNM": "rehabConfidenceScore",
   "fld0fWZGiFS73PPB7": "agentPriorOutreachCount",
@@ -213,6 +226,10 @@ const EXPECTED_LISTING_NAME_MAP: Record<string, string> = {
   "Action_Hold_Until": "actionHoldUntil",
   "Action_Card_State": "actionCardState",
   "Last_Inbound_At": "lastInboundAt",
+  "Vision_Queue_State": "visionQueueState",
+  "Reply_Classification": "replyClassification",
+  "Reply_Classified_At": "replyClassifiedAt",
+  "Reply_Decision_Kind": "replyDecisionKind",
   "Gmail_Thread_Ids": "gmailThreadIds",
   "Draft_Reply_Text": "draftReplyText",
   "Draft_Reply_Meta": "draftReplyMeta",
@@ -234,6 +251,7 @@ const EXPECTED_LISTING_NAME_MAP: Record<string, string> = {
   "Property_Type": "propertyType",
   "Price_Drop_Count": "priceDropCount",
   "Last_Verified": "lastVerified",
+  "Last_Seen": "lastSeen",
   "Pipeline_Stage": "pipelineStage",
   "Contract_Executed_At": "contractExecutedAt",
   "EMD_Due_At": "emdDueAt",

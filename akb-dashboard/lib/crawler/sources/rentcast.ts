@@ -41,7 +41,7 @@ interface RentCastHistoryEvent {
   listingType?: string;
   listedDate?: string;
 }
-interface RentCastListing {
+export interface RentCastListing {
   id?: string;
   formattedAddress?: string;
   city?: string;

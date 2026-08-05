@@ -9,6 +9,13 @@ import {
   recordCallError,
   recordCallOutcome,
 } from "@/lib/rentcast/failure-loop-breaker";
+import {
+  checkSpendCeiling,
+  noteInvocationCall,
+  recordKvSpend,
+  type CeilingVerdict,
+} from "@/lib/rentcast/spend-ceiling";
+import { audit } from "@/lib/audit-log";
 
 const RENTCAST_API_KEY = process.env.RENTCAST_API_KEY;
 const BASE = "https://api.rentcast.io/v1";
@@ -29,6 +36,23 @@ export interface PaidFetchBreakerInputs {
  *  real range), so error-handling paths fail closed without misreading
  *  it as a real 4xx/5xx — caller logs already match "non-2xx → propagate
  *  an error". The body carries the breaker key for diagnosis. */
+/** Spend-ceiling refusal. A DISTINCT synthetic status (598) from the loop
+ *  breaker's 599 so "we stopped spending" is never misdiagnosed as "this
+ *  call shape keeps failing" — they have opposite remedies. Non-2xx either
+ *  way, so every existing caller fails closed without a change. */
+function ceilingShortCircuitResponse(verdict: CeilingVerdict): Response {
+  return new Response(
+    JSON.stringify({
+      error: "rentcast_spend_ceiling_reached",
+      message: verdict.reason,
+      blocked_by: verdict.blockedBy,
+      spent: verdict.spent,
+      caps: verdict.caps,
+    }),
+    { status: 598, headers: { "Content-Type": "application/json" } },
+  );
+}
+
 function breakerShortCircuitResponse(key: string, lastStatus: number | null): Response {
   return new Response(
     JSON.stringify({
@@ -91,6 +115,49 @@ async function paidFetch(
   // breaker and block every other address.
   honestEmptyStatuses?: number[],
 ): Promise<Response> {
+  // ── SPEND CEILING (2026-07-31) ────────────────────────────────────
+  // Checked FIRST: a call we refuse on cost must not even consult the
+  // loop breaker, and must never reach fetch(). See the June reconstruction
+  // in lib/rentcast/spend-ceiling.ts — four $250 overage auto-charges in one
+  // month, ~18,750 requests, with no ceiling on any of ~20 call sites.
+  const ceiling = await checkSpendCeiling();
+  if (!ceiling.allowed) {
+    // Emit the paid-call row (cost 0) so a refused call is VISIBLE to the
+    // spend dashboard — same reasoning as the loop-breaker row below. A
+    // ceiling that silently drops work is its own incident.
+    await auditPaidCall({
+      source: "rentcast",
+      endpoint,
+      http: 598,
+      ms: 0,
+      recordId,
+      error: `spend_ceiling_${ceiling.blockedBy} (invocation=${ceiling.spent.invocation}, day=${ceiling.spent.day}, month=${ceiling.spent.month})`,
+    });
+    await audit({
+      agent: "sentry",
+      event: "rentcast_spend_ceiling_reached",
+      status: "confirmed_success",
+      decision: ceiling.reason ?? "refused",
+      recordId,
+      outputSummary: { endpoint, blocked_by: ceiling.blockedBy, spent: ceiling.spent, caps: ceiling.caps },
+    }).catch(() => {});
+    return ceilingShortCircuitResponse(ceiling);
+  }
+  if (!ceiling.kvAvailable) {
+    // Fail-OPEN half of the posture (matches the Firecrawl breaker doctrine):
+    // the distributed meter is blind, so only the in-memory per-invocation cap
+    // is holding. Never silent — "the ceiling was degraded" must be a fact
+    // someone can find afterwards.
+    await audit({
+      agent: "sentry",
+      event: "rentcast_spend_ceiling_degraded",
+      status: "uncertain",
+      decision: "KV unavailable — day/month windows blind; per-invocation cap still enforced",
+      recordId,
+      outputSummary: { endpoint, invocation_spent: ceiling.spent.invocation, invocation_cap: ceiling.caps.invocation },
+    }).catch(() => {});
+  }
+
   const shape = breakerInputs ?? { recordId };
   const pre = await checkLoopBreaker(endpoint, shape);
   if (pre.tripped) {
@@ -107,6 +174,20 @@ async function paidFetch(
     });
     return breakerShortCircuitResponse(pre.key, pre.lastStatus);
   }
+
+  // Count the call BEFORE dispatching. The vendor bills on the request, not
+  // the response — a call that throws still cost money, so a post-hoc
+  // increment would undercount exactly during an outage-driven runaway.
+  // (The loop-breaker short-circuit above returns before this point and is
+  // correctly NOT counted: it never reached the wire.)
+  // AWAITED, not fire-and-forget: a detached write can be aborted when the
+  // lambda freezes (the failure mode the Positive Confirmation Principle
+  // forbids), and worse, an un-awaited increment lets a tight loop fire
+  // hundreds of calls before the first write lands — defeating the very cap
+  // it feeds. Two KV round-trips against a ~228ms vendor call is a fair
+  // price for a meter that is actually true.
+  noteInvocationCall();
+  await recordKvSpend();
 
   const t0 = Date.now();
   try {
@@ -698,6 +779,58 @@ export async function getAnnualPropertyTaxes(
     return extractAnnualTaxes(rec);
   } catch {
     return null;
+  }
+}
+
+// ── Subject deed print (2026-08-02, the 9360 Cheyenne receipt) ──────────
+//
+// The subject's own most-recent recorded sale is the strongest as-is value
+// evidence there is, and this codebase was ALREADY paying for it: every
+// getSaleComparables pull fetches the subject's /properties record — which
+// carries lastSalePrice/lastSaleDate from public deed data — and read only
+// its coordinates. Cheyenne's February $45,000 sale was in that response on
+// intake day and nothing looked; the operator found it on Redfin by hand
+// after we had an accepted offer at 94% of it. This helper is the deliberate
+// read. Judged by lib/pricing/subject-history.judgeSubjectPrint.
+
+export interface SubjectRecordedSaleResult {
+  /** True iff RentCast answered (2xx or honest-404). False = infra failure —
+   *  the caller must record "unchecked", never treat it as "no history". */
+  checked: boolean;
+  /** Newest recorded deed sale, or null when the parcel has none. */
+  sale: { price: number; date: string } | null;
+  error: string | null;
+}
+
+/** One paid /properties call. Honest-404 (no parcel = an answer). Never
+ *  throws — infra failures return checked:false so gaps stay visible. */
+export async function getSubjectRecordedSale(
+  input: { address: string; city: string; state: string; zip: string },
+  recordId?: string,
+): Promise<SubjectRecordedSaleResult> {
+  if (!RENTCAST_API_KEY) return { checked: false, sale: null, error: "RENTCAST_API_KEY not set" };
+  const qp = new URLSearchParams({
+    address: input.address,
+    city: input.city,
+    state: input.state,
+    zipCode: input.zip,
+  });
+  try {
+    const res = await paidFetch(
+      "properties/subject-sale",
+      `${BASE}/properties?${qp.toString()}`,
+      { headers: { "X-Api-Key": RENTCAST_API_KEY }, cache: "no-store" },
+      recordId,
+      { ...input, recordId: recordId ?? null },
+      [404],
+    );
+    if (res.status === 404) return { checked: true, sale: null, error: null };
+    if (!res.ok) return { checked: false, sale: null, error: `HTTP ${res.status}` };
+    const bodyText = await res.text();
+    const rec = parsePropertiesBody(res.status, bodyText)[0];
+    return { checked: true, sale: rec ? newestRecordedSale(rec) : null, error: null };
+  } catch (err) {
+    return { checked: false, sale: null, error: String(err).slice(0, 200) };
   }
 }
 

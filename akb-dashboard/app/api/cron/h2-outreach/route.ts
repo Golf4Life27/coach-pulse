@@ -45,10 +45,16 @@ import { evaluateLowballEligibility } from "@/lib/lowball-eligibility";
 import { listingLanguageDistress, visionDistress } from "@/lib/lowball-signals";
 import { resolveCumulativeDom } from "@/lib/attom/cumulative-dom";
 import { checkFirstOutreachHydration, checkOfferOverList } from "@/lib/outreach-economics";
+import {
+  routeHolds,
+  PLACEHOLDER_REHAB_HOLD_REASON,
+  VISION_QUEUE_FIELD,
+} from "@/lib/pricing/vision-queue";
 import { persistDecisionMath } from "@/lib/decision-persist";
 import { priceOpenerWithSeed } from "@/lib/opener-pricing";
 import { getZipArvSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import { minOfferFloor } from "@/lib/per-market-pricer";
+import { classifyHold } from "@/lib/pricing/hold-reason";
 import { getMarketForListing, openerArvPctMax } from "@/lib/markets/registry";
 import { resolveAnchorPct } from "@/lib/markets/anchor";
 import {
@@ -105,6 +111,9 @@ const DEFAULT_SEND_DELAY_MS = 60_000;
 // Stop starting NEW work this late into the 300s lambda so in-flight writes
 // finish cleanly instead of being killed. Remaining records roll to next run.
 const WALL_CLOCK_BUDGET_MS = 270_000;
+// Candidate selection (pricing walk) must finish well before the send budget —
+// sends are the point of the run, and each one costs the inter-send delay.
+const SCAN_BUDGET_MS = 60_000;
 
 // Idempotency locks (KV — strongly-consistent, unlike the Airtable status gate
 // which has write-propagation lag). See Spine recWwIMc7V15p968k.
@@ -351,7 +360,14 @@ async function handle(req: Request): Promise<Response> {
   // plan, bounded by a scan cap so a hold-heavy cohort can't eat the
   // lambda budget. Holds still surface (deduped h2_opener_hold proposals);
   // they just stop blocking the records behind them.
-  const scanCap = Math.max(limit * 5, 50);
+  // 2026-08-04 RECURRENCE: limit*5 (=125) was still far too small. The ranked
+  // queue's head is a standing wall of legacy holds — on 8/4 the 15:00Z slot
+  // scanned its 125, planned 2, sent 0, while 104 fully-priceable records
+  // (ARV + rehab + DOM≥60 + fresh + phone) sat deeper in a 360-record queue.
+  // Each scanned record is cheap (pure pricing; anchor/seed reads are cached
+  // per market/ZIP), so the walk can go much deeper — with a wall-clock guard
+  // below so a pathological cohort still can't eat the lambda.
+  const scanCap = Math.max(limit * 20, 300);
   let scanned = 0;
   // ── LOWBALL-ELIGIBILITY FRONT GATE, NOW LIVE (2026-07-26) ─────────────
   // lib/lowball-eligibility is the operator-ruled doctrine for WHO receives
@@ -372,9 +388,51 @@ async function handle(req: Request): Promise<Response> {
     not_eligible: 0,
     by_tier: {} as Record<string, number>,
   };
+  // ── HOLD-reason instrument, wired into the LIVE cron (2026-08-04) ──────
+  // The candidate scan already computes every signal lib/pricing/hold-reason
+  // needs (arvDistrusted, flooredToFallback, flagReseed, arvSource,
+  // seedDontPrice, marketHasBuybox, plus the over-list tripwire + failed-
+  // corroboration flags it previously had no input for) and then discarded
+  // them — every distinct hold cause collapsed into the single reason string
+  // "opener_hold_no_value_basis" below. classifyHold is called ALONGSIDE
+  // that existing 3-bucket reason derivation (never replacing it — no send/
+  // gate behavior changes) purely to accumulate counts, so the operator can
+  // finally see WHICH cause is costing volume and whether it is system-owned
+  // (auto-seed / cached-skip, no human) or operator-owned.
+  const byHoldReason: Record<string, number> = {
+    over_list_tripwire: 0,
+    failed_corroboration: 0,
+    needs_seed: 0,
+    no_market_buybox: 0,
+    seed_dont_price: 0,
+    cash_no_pencil: 0,
+    operator_review: 0,
+  };
+  const byHoldOwner: Record<string, number> = {
+    auto_seed: 0,
+    configure_market: 0,
+    data_limited: 0,
+    creative_lane: 0,
+    operator: 0,
+  };
+  // ── SCAN-STOP-REASON (operator visibility, 2026-08-04) ── which of the
+  // scan loop's three brakes ended candidate selection this run, so a "sent
+  // almost nothing" run can be diagnosed without guessing. Overwritten only
+  // on an actual break below; a loop that walks the whole ranked queue
+  // without tripping any brake keeps the default.
+  let scanStopReason: "limit_reached" | "scan_cap" | "scan_budget_ms" | "queue_exhausted" = "queue_exhausted";
   const filteredQueue: typeof queue = [];
   for (const l of queue) {
-    if (filteredQueue.length >= limit || scanned >= scanCap) break;
+    if (filteredQueue.length >= limit || scanned >= scanCap) {
+      scanStopReason = filteredQueue.length >= limit ? "limit_reached" : "scan_cap";
+      break;
+    }
+    // Wall-clock guard on the deep scan: never let candidate selection eat the
+    // budget the actual SENDS need (each send costs the inter-send delay).
+    if (Date.now() - t0 > SCAN_BUDGET_MS) {
+      scanStopReason = "scan_budget_ms";
+      break;
+    }
     scanned += 1;
 
     // FRONT GATE — runs BEFORE the opener is priced (it decides WHO gets an
@@ -453,13 +511,41 @@ async function handle(req: Request): Promise<Response> {
         // chasing market config. hold_no_value_basis here almost always
         // means the ARV-sanity gate distrusted an over-ARV ask (the
         // creative-lane class), not a market problem.
-        reason: priced.basis === "hold_no_value_basis" ? "opener_hold_no_value_basis" : "opener_hold",
+        // The placeholder-rehab hold gets its OWN reason so routeHolds can
+        // send it to the vision queue instead of the operator's proposal
+        // pile — it is machine work (run vision), not a judgement call.
+        // pw.basisLabel is the pricer's compact receipt for the same fact.
+        reason:
+          pw.basisLabel === PLACEHOLDER_REHAB_HOLD_REASON
+            ? PLACEHOLDER_REHAB_HOLD_REASON
+            : priced.basis === "hold_no_value_basis" ? "opener_hold_no_value_basis" : "opener_hold",
         ceiling: priced.ceiling,
         ceilingSource: priced.basis,
         anchorPct: priced.anchorPct,
         opener: null,
         source: pw.arvSource,
       });
+      // MEASUREMENT ONLY — does not affect the reason/label above or any
+      // gate/route decision. Alongside the 3-bucket reason string just
+      // pushed, classify WHY + WHO owns it via the same instrument the
+      // opener-dry-run route already proved (lib/pricing/hold-reason),
+      // now extended with the over-list tripwire + failed-corroboration
+      // signals this scan already computes but previously discarded.
+      const hold = classifyHold({
+        opener: priced.opener,
+        arvDistrusted: priced.arvDistrusted,
+        flooredToFallback: priced.flooredToFallback,
+        flagReseed: priced.flagReseed,
+        arvSource: pw.arvSource,
+        seedDontPrice: !!seed?.dontPrice,
+        marketHasBuybox: openerArvPctMax(market, l.state) != null,
+        overListTripwire: priced.overListTripwire,
+        corroborationFlags: pw.corroborationFlags,
+      });
+      if (hold.category !== "value_send") {
+        byHoldReason[hold.category] = (byHoldReason[hold.category] ?? 0) + 1;
+        byHoldOwner[hold.owner] = (byHoldOwner[hold.owner] ?? 0) + 1;
+      }
       continue;
     }
     // ── MIN-OFFER FLOOR (relationship-protector, operator 2026-06-30) ──
@@ -503,6 +589,19 @@ async function handle(req: Request): Promise<Response> {
   }
   queue = filteredQueue;
 
+  // ── SILENT-KILLER HISTOGRAM (operator visibility, 2026-08-04) ──────────
+  // Every reason string already gets attached to a skipped openerGuarded
+  // entry above (lowball_not_eligible_<tier> at the front gate,
+  // opener_hold_no_value_basis/opener_hold and placeholder_rehab_needs_vision
+  // at the pricer gate, below_min_offer_floor at the relationship-protector
+  // guard) — none of that was NEW computation, it just was never tallied
+  // into one countable summary. One pass over the already-built array.
+  const byReason: Record<string, number> = {};
+  for (const g of openerGuarded) {
+    const key = g.reason ?? "unknown";
+    byReason[key] = (byReason[key] ?? 0) + 1;
+  }
+
   // ── HOLD surface (operator 2026-06-11): a guard-SKIPPED record is a
   // decision waiting on the operator (send the deep lowball anyway / skip /
   // watch for a price cut). Until tonight it lived only in this response's
@@ -512,7 +611,32 @@ async function handle(req: Request): Promise<Response> {
   // hold for the same record is not re-created on the next daily tick.
   // Best-effort — a proposals-write failure never blocks the send loop.
   const holdProposals = { attempted: 0, created: 0, deduped: 0, error: null as string | null };
-  const skippedHolds = openerGuarded.filter((g) => g.action === "skipped");
+  const allSkipped = openerGuarded.filter((g) => g.action === "skipped");
+  // ── VISION QUEUE SPLIT (256 Westchester, operator 2026-07-31) ────────
+  // A placeholder-rehab hold is MACHINE work: the record needs a vision read,
+  // not a decision. Dropping it into h2_opener_hold would bury it in a queue
+  // already 533 deep AND mislabel it as something the operator must answer.
+  // These get Vision_Queue_State=needs_vision and are drained by the
+  // opener-vision-drain cron; only a vision FAILURE ever reaches the operator.
+  const { toVisionQueue, toOperatorProposals: skippedHolds } = routeHolds(allSkipped);
+  const visionQueued = { attempted: toVisionQueue.length, marked: 0, error: null as string | null };
+  for (const g of toVisionQueue) {
+    try {
+      await updateListingRecord(g.recordId, { [VISION_QUEUE_FIELD]: "needs_vision" });
+      visionQueued.marked++;
+    } catch (err) {
+      visionQueued.error = err instanceof Error ? err.message : String(err);
+    }
+  }
+  if (visionQueued.marked > 0) {
+    await audit({
+      agent: "crier",
+      event: "opener_held_needs_vision",
+      status: "confirmed_success",
+      decision: `${visionQueued.marked} opener(s) held on a placeholder rehab → vision queue (not operator proposals)`,
+      outputSummary: { marked: visionQueued.marked, attempted: visionQueued.attempted },
+    }).catch(() => {});
+  }
   const proposalsTable = process.env.AGENT_PROPOSALS_TABLE_ID ?? null;
   if (skippedHolds.length > 0 && proposalsTable && process.env.AIRTABLE_PAT) {
     try {
@@ -1104,7 +1228,19 @@ async function handle(req: Request): Promise<Response> {
     event: dryRun ? "h2_outreach_dry_run" : "h2_outreach_live",
     status: summary.errors > 0 ? "uncertain" : "confirmed_success",
     inputSummary: { auth_kind: authKind, dry_run: dryRun, limit, record_id: recordId, live_env: liveEnv },
-    outputSummary: { eligible_count: eligibleCount, processed: processed.length, ...summary, send_cap: sendCapSummary },
+    outputSummary: {
+      eligible_count: eligibleCount,
+      processed: processed.length,
+      ...summary,
+      send_cap: sendCapSummary,
+      // ── volume-worry instrument (2026-08-04): why ~354 eligible plans
+      // 1-5 sends/slot. Landed in the audit trail so it's queryable later,
+      // not just visible on the one JSON response that happened to be read.
+      queue_scan: { scanned, scan_cap: scanCap, planned: queue.length, scan_stop_reason: scanStopReason },
+      by_hold_reason: byHoldReason,
+      by_hold_owner: byHoldOwner,
+      by_reason: byReason,
+    },
     ms: Date.now() - t0,
   });
 
@@ -1159,7 +1295,25 @@ async function handle(req: Request): Promise<Response> {
     started_at: startedAt,
     finished_at: new Date().toISOString(),
     eligible_count: eligibleCount,
-    queue_scan: { scanned, scan_cap: scanCap, planned: queue.length },
+    // scan_stop_reason (operator visibility, 2026-08-04): which of the three
+    // brakes ended candidate selection — "limit_reached" (the healthy case:
+    // enough sendable records were found), "scan_cap" or "scan_budget_ms"
+    // (the scan ran out of runway before it found `limit` sendable records —
+    // the hold pile is deep), or "queue_exhausted" (the whole ranked queue
+    // was walked and still came up short of `limit`).
+    queue_scan: { scanned, scan_cap: scanCap, planned: queue.length, scan_stop_reason: scanStopReason },
+    // WHY the pricer/corroboration/tripwire guards HELD, and WHO owns the
+    // next step (lib/pricing/hold-reason — same instrument the opener-dry-run
+    // route already used, now wired into the live cron). Every distinct hold
+    // cause used to collapse into "opener_hold_no_value_basis" below; this
+    // splits it back out.
+    by_hold_reason: byHoldReason,
+    by_hold_owner: byHoldOwner,
+    // Every silent-killer reason string already attached to a skipped
+    // openerGuarded row (lowball_not_eligible_<tier>, opener_hold_no_value_basis
+    // / opener_hold, placeholder_rehab_needs_vision, below_min_offer_floor),
+    // tallied into one histogram.
+    by_reason: byReason,
     processed,
     summary,
     send_cap: sendCapSummary,
@@ -1169,6 +1323,10 @@ async function handle(req: Request): Promise<Response> {
     // each refusal landed in (lib/lowball-eligibility, now live).
     lowball_gate: lowballGate,
     hold_proposals: holdProposals,
+    // Machine-work holds. Deliberately reported separately from
+    // hold_proposals so "how many need vision" is never read as "how many
+    // decisions are waiting on Alex".
+    vision_queued: visionQueued,
     supply_floor: supplyFloor,
     auth_kind: authKind,
     duration_ms: Date.now() - t0,

@@ -111,8 +111,11 @@ describe("evaluateIntakeCandidate", () => {
     expect(r.reasons).toContain("no_distress_signal");
     expect(r.accept).toBe(false);
   });
-  it("rejects an aged-but-sub-90 listing (86d) — aligns with A1's ≥90", () => {
-    expect(evaluateIntakeCandidate(cand({ daysOnMarket: 86 }), NOW).reasons).toContain("no_distress_signal");
+  it("rejects an aged-but-sub-mark listing (45d) — below the 60d bar (operator 2026-08-03)", () => {
+    expect(evaluateIntakeCandidate(cand({ daysOnMarket: 45 }), NOW).reasons).toContain("no_distress_signal");
+  });
+  it("sources an aged listing at the 60d mark — proving-window ruling (was 90, operator 2026-08-03)", () => {
+    expect(evaluateIntakeCandidate(cand({ daysOnMarket: 61 }), NOW).accept).toBe(true);
   });
   it("sources an aged listing (DOM ≥ 90)", () => {
     expect(evaluateIntakeCandidate(cand({ daysOnMarket: 120 }), NOW).accept).toBe(true);

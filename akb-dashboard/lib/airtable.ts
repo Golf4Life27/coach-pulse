@@ -81,6 +81,12 @@ const LISTING_FIELD_REGISTRY: ReadonlyArray<ListingFieldRegistryEntry> = [
   { prop: "actionHoldUntil", fieldId: "fldkYeP8onCHil0pd", name: "Action_Hold_Until" },
   { prop: "actionCardState", fieldId: "fldiNKFpIBUYgg7el", name: "Action_Card_State" },
   { prop: "lastInboundAt", fieldId: "fld3IhR1DXzcVuq6F", name: "Last_Inbound_At" },
+  // Reply-funnel triple (2026-07-31) — see lib/inbound/reply-classification.ts.
+  // Vision queue (2026-07-31) — see lib/pricing/vision-queue.ts.
+  { prop: "visionQueueState", fieldId: "fldqgrBDtoRceShP2", name: "Vision_Queue_State" },
+  { prop: "replyClassification", fieldId: "fld7vLOMdLthqccoy", name: "Reply_Classification" },
+  { prop: "replyClassifiedAt", fieldId: "fldoTXHschuUDi2Hx", name: "Reply_Classified_At" },
+  { prop: "replyDecisionKind", fieldId: "fld13azWnqSx2YyoJ", name: "Reply_Decision_Kind" },
   { prop: "gmailThreadIds", fieldId: "flduNZ2G332OdVnp8", name: "Gmail_Thread_Ids" },
   { prop: "lastOutboundAt", fieldId: "fldaK4lR5UNvycg11", name: "Last_Outbound_At" },
   // ── Decision math (2026-07-13/14, the Mayfield counter miss) — machine-
@@ -114,6 +120,13 @@ const LISTING_FIELD_REGISTRY: ReadonlyArray<ListingFieldRegistryEntry> = [
   { prop: "propertyType", fieldId: "fldrlbePeS9glaFQu", name: "Property_Type" },
   { prop: "priceDropCount", fieldId: "fldg1j5wHJzoGJB0I", name: "Price_Drop_Count" },
   { prop: "lastVerified", fieldId: "fld2eUkKaC4pMjIdd", name: "Last_Verified" },
+  // Last_Seen — the last time the SOURCE FEED still returned this address as
+  // an active listing. Distinct from Last_Verified (when we last scraped the
+  // page): the feed dropping an address is positive evidence it is gone,
+  // whereas page text only says "gone" if it happens to print one of a small
+  // set of phrases (the 8203 Brace incident). Field existed since the schema
+  // was written and had NO writer anywhere in the codebase until 2026-08-04.
+  { prop: "lastSeen", fieldId: "fldNDdcGayTxVuYYL", name: "Last_Seen" },
   { prop: "pipelineStage", fieldId: "fldJt2pSCHiXqBxwj", name: "Pipeline_Stage" },
   // ── Back-half contract lifecycle (2026-07-14, the 3123 Sunbeam blind spot):
   // the deadline fields that drive under_contract/dispo surfacing + clocks in

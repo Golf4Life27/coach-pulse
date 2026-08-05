@@ -32,7 +32,9 @@
 // market context the caller already has.
 
 export type HoldCategory =
-  | "value_send"        // NOT a hold — a value-anchored opener was produced
+  | "value_send"           // NOT a hold — a value-anchored opener was produced
+  | "over_list_tripwire"   // computed opener exceeded the 0.85×list never-over-list cap
+  | "failed_corroboration" // computed opener failed the pre-send corroboration allowlist gate
   | "needs_seed"        // no/contaminated ARV in a priceable market → auto-seed fixes it
   | "no_market_buybox"  // market has no arv_pct_max → one-time market config
   | "seed_dont_price"   // ZIP comps too thin/noisy (DONT_PRICE) → cached skip
@@ -62,6 +64,18 @@ export interface HoldClassifyInput {
   seedDontPrice: boolean;
   /** The market has a sourced arv_pct_max (is priceable at all). */
   marketHasBuybox: boolean;
+  /** lib/per-market-pricer PricerResult.overListTripwire — the value-anchored
+   *  opener exceeded NEVER_OVER_LIST_PCT (0.85) × list and was HELD rather
+   *  than clamped/sent (the retired 0.85×list producer). Optional + defaults
+   *  to false so the existing opener-dry-run caller (which does not pass it)
+   *  keeps classifying these under the prior generic buckets unchanged. */
+  overListTripwire?: boolean;
+  /** OpenerWithSeedResult.corroborationFlags — non-empty means the computed
+   *  opener failed lib/opener-sanity-gate's pre-send allowlist and was
+   *  converted to a HOLD (independent of the ARV-sanity gate above).
+   *  Optional + defaults to empty so the existing opener-dry-run caller
+   *  (which does not pass it) is unaffected. */
+  corroborationFlags?: readonly string[];
 }
 
 export interface HoldClassification {
@@ -83,6 +97,43 @@ export function classifyHold(i: HoldClassifyInput): HoldClassification {
       owner: "none",
       automatable: true,
       detail: "value-anchored opener produced — sends autonomously",
+    };
+  }
+
+  // OVER-LIST TRIPWIRE (Hole A): the value-anchored opener exceeded 0.85×list
+  // and was held rather than clamped/sent. Checked BEFORE arvDistrusted
+  // because the pricer never sets arvDistrusted for this guard — without
+  // this branch the record would fall through to the generic cash_no_pencil
+  // bucket at the bottom and be indistinguishable from a rehab-ate-the-
+  // buybox hold. Both the reseed-worthy and STRONG-seed cases surface to
+  // the operator (per-market-pricer's overListTripwireGuard: "Both belong
+  // to the operator").
+  if (i.overListTripwire) {
+    return {
+      category: "over_list_tripwire",
+      owner: "operator",
+      automatable: false,
+      detail:
+        "computed opener exceeded the 0.85×list never-over-list tripwire — a genuine deep-discount " +
+        "listing or an inflated/broken ARV input; HELD for operator review (Type 2C); the 0.85 clamp is " +
+        "retired and never produces a number",
+    };
+  }
+
+  // FAILED CORROBORATION (pre-send allowlist gate): a computed opener that
+  // survived every pricer guard still failed an independent sanity check
+  // (e.g. size extrapolation, $/sqft out of range) and was converted to a
+  // HOLD. Checked BEFORE arvDistrusted because opener-pricing.ts marks
+  // these arvDistrusted=true too (to route them through the same "no value
+  // basis" send-guard label) — without this branch they are indistinguishable
+  // from a genuine ARV-below-list hold, even though the root cause and the
+  // fix (re-run corroboration inputs, not necessarily re-seed) differ.
+  if (i.corroborationFlags && i.corroborationFlags.length > 0) {
+    return {
+      category: "failed_corroboration",
+      owner: "operator",
+      automatable: false,
+      detail: `computed opener failed the pre-send corroboration allowlist gate [${i.corroborationFlags.join(", ")}] — an independent sanity signal red-flagged it; HELD for operator review`,
     };
   }
 
