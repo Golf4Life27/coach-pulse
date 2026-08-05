@@ -36,6 +36,15 @@ import {
   type SweepScreen,
 } from "@/lib/crawler/discovery-sweep";
 import { METRO_ZIPS } from "@/lib/crawler/metro-zips";
+import {
+  parseAddressFromListingUrl,
+  isTextable,
+  summarizeEnrichment,
+  type EnrichOutcome,
+} from "@/lib/crawler/sweep-enrich";
+import { rentcastPaidFetch } from "@/lib/rentcast";
+import { mapListingToCandidate, type RentCastListing } from "@/lib/crawler/sources/rentcast";
+import { buildIntakeListingFields } from "@/lib/crawler/intake-fields";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -47,6 +56,10 @@ const SEARCH_LIMIT = 20;
 const MAX_SCRAPES_PER_RUN = 40;
 /** Leave the lambda room to write its audit row. */
 const WALL_CLOCK_BUDGET_MS = 240_000;
+/** RentCast lookups per run — the scarce-call bound. ONE per qualifier, and a
+ *  qualifier has already cleared the buy box and every hard veto. At ~10/run
+ *  and 8 runs/day this is bounded well under the daily plan share. */
+const MAX_ENRICH_PER_RUN = Math.max(0, Number(process.env.SWEEP_MAX_ENRICH_PER_RUN) || 10);
 
 const sweepKey = (zip: string) => `sweep:zip:${zip}`;
 const SWEEP_TTL_S = 60 * 86_400;
@@ -179,9 +192,94 @@ export async function GET(req: Request) {
     }
   }
 
+  // ── ENRICHMENT — the ONLY place a RentCast call is spent ────────────────
+  // One lookup per QUALIFIER, never per scanned property. A qualifier has
+  // already passed the buy box, the distress test and every hard veto, so this
+  // is the call the old intake belt was spending blind on whole ZIPs.
+  const enrichOutcomes: EnrichOutcome[] = [];
+  if (!dryRun) {
+    for (const q of qualified) {
+      if (enrichOutcomes.filter((o) => o.recordId).length >= MAX_ENRICH_PER_RUN) {
+        enrichOutcomes.push({ url: q.url, address: null, recordId: null, skipped: "enrich_budget_reached" });
+        continue;
+      }
+      if (Date.now() - t0 > WALL_CLOCK_BUDGET_MS) break;
+
+      const parsed = parseAddressFromListingUrl(q.url);
+      if (!parsed) {
+        enrichOutcomes.push({ url: q.url, address: null, recordId: null, skipped: "url_unparseable" });
+        continue;
+      }
+
+      let listing: RentCastListing | null = null;
+      try {
+        // Routed through rentcastPaidFetch so the spend ceiling and loop
+        // breaker apply exactly as they do everywhere else.
+        const res = await rentcastPaidFetch(
+          "listings/sale",
+          `https://api.rentcast.io/v1/listings/sale?address=${encodeURIComponent(parsed.formatted)}&status=Active&limit=1`,
+          { headers: { "X-Api-Key": process.env.RENTCAST_API_KEY ?? "" } },
+          undefined,
+          undefined,
+          [404],
+        );
+        if (res.ok) {
+          const body = (await res.json()) as RentCastListing[] | RentCastListing;
+          listing = Array.isArray(body) ? (body[0] ?? null) : body;
+        }
+      } catch {
+        /* a vendor blip is a skip, never a failed run */
+      }
+
+      if (!listing) {
+        enrichOutcomes.push({ url: q.url, address: parsed.formatted, recordId: null, skipped: "no_rentcast_match" });
+        continue;
+      }
+
+      const candidate = mapListingToCandidate(listing);
+      if (!isTextable(candidate.agentPhone)) {
+        enrichOutcomes.push({ url: q.url, address: parsed.formatted, recordId: null, skipped: "no_agent_phone" });
+        continue;
+      }
+
+      // Born H2-ready: same field builder intake uses, so a swept lead and an
+      // intake lead are the SAME THING downstream and no gate has to learn
+      // about two kinds. Verification_URL carries the page we already scraped,
+      // so freshness and the off-market re-check work on it immediately.
+      try {
+        const fields = buildIntakeListingFields(candidate, {
+          iso: new Date().toISOString(),
+          promote: true,
+          firecrawlUrl: q.url,
+          portfolioDetected: false,
+          matchedPortfolioKeywords: [],
+          underwrittenMao: null,
+          underwrittenMaoTrack: null,
+          opener: null,
+          renovatedLanguage: false,
+          matchedRenovationKeywords: [],
+        });
+        const res = await fetch(`https://api.airtable.com/v0/${process.env.AIRTABLE_BASE_ID}/${process.env.AIRTABLE_LISTINGS_TABLE}`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.AIRTABLE_PAT}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ records: [{ fields }], typecast: true }),
+        });
+        const body = (await res.json().catch(() => null)) as { records?: Array<{ id: string }> } | null;
+        const recordId = body?.records?.[0]?.id ?? null;
+        enrichOutcomes.push({ url: q.url, address: parsed.formatted, recordId, skipped: recordId ? null : "no_rentcast_match" });
+      } catch {
+        enrichOutcomes.push({ url: q.url, address: parsed.formatted, recordId: null, skipped: "no_rentcast_match" });
+      }
+    }
+  }
+
   const summary = {
     metro: leg.metro,
     zips_swept: perZip.length,
+    enrichment: summarizeEnrichment(enrichOutcomes),
     ...summarizeScreens(screens),
     qualified_urls: qualified.length,
     credits: { search: searchCredits, scrape: scrapeCredits, total: searchCredits + scrapeCredits },
