@@ -169,4 +169,15 @@ describe("detectEndpointErrorRate", () => {
     expect(dets.find((d) => d.id === "endpoint_error_rate_high:h2_outreach_delivery_quarantine")).toBeUndefined();
     expect(dets).toEqual([]);
   });
+
+  it("REGRESSION 2026-08-05: reprice-gate holds working-as-designed never fire a critical", () => {
+    // 10/10 h2_bump_reprice_hold (bumpRepriceGate correctly blocking bumps —
+    // the hold is the event's ONLY emit path, always confirmed_failure) fired
+    // a false critical + Tier-3 SMS. Gate health belongs to the bump-followup
+    // run summary, not a rate alarm that is structurally pinned at 100%.
+    const auditLog = Array(10).fill(0).map(() => audit("h2_bump_reprice_hold", "confirmed_failure"));
+    const dets = detectEndpointErrorRate({ ...baseInput, audit_log: auditLog });
+    expect(dets.find((d) => d.id === "endpoint_error_rate_high:h2_bump_reprice_hold")).toBeUndefined();
+    expect(dets).toEqual([]);
+  });
 });

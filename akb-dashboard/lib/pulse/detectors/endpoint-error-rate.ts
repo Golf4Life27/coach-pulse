@@ -66,6 +66,12 @@ const DEFAULT_FAILURE_ONLY_EXCLUSIONS = [
   // SMS on 2026-07-12 (5/5 during ~55-msg/48h live traffic). Belt health for
   // sends is the send-slot summary, not this event.
   "h2_outreach_delivery_quarantine",
+  // Reprice-gate-working-as-designed: fired only when bumpRepriceGate BLOCKS
+  // a bump (INVARIANTS §H2 bump lane) — the hold IS the success. Audited
+  // confirmed_failure with no success counterpart, so any held bump pins the
+  // rate at 100%; fired a false critical + Tier-3 SMS on 2026-08-05 (10/10).
+  // Gate health lives in the bump-followup run summary and audit-tail.
+  "h2_bump_reprice_hold",
 ];
 
 function readExclusions(env: Record<string, string | undefined>): Set<string> {
