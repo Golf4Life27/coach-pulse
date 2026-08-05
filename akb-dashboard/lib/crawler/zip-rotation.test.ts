@@ -299,9 +299,18 @@ describe("recrawlCycleHours — the cadence policy", () => {
     expect(recrawlCycleHours(chewed, 24)).toBe(CHEWED_CYCLE_HOURS);
   });
 
-  it("opener-HOLD markets idle at the biweekly trickle regardless of yield", () => {
+  it("opener-HOLD markets are NOT crawled at all by default (2026-08-04)", () => {
+    // The trickle was working as designed and still cost 3 of 11 crawl slots
+    // on 8/4 for 262 raw listings and ZERO accepted — an opener-HOLD market
+    // cannot yield, because openerArvPctMax is null and every listing is
+    // rejected market_not_priceable before it can be priced.
     const tx = row({ zip: "78210", lastIngestedAt: hrsAgoT(30), recordsIngested: 3, acceptRate: 0.1, openerHold: true });
-    expect(recrawlCycleHours(tx, 24)).toBe(OPENER_HOLD_CYCLE_HOURS);
+    expect(recrawlCycleHours(tx, 24, false)).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it("opener-HOLD markets resume the biweekly trickle when re-enabled", () => {
+    const tx = row({ zip: "78210", lastIngestedAt: hrsAgoT(30), recordsIngested: 3, acceptRate: 0.1, openerHold: true });
+    expect(recrawlCycleHours(tx, 24, true)).toBe(OPENER_HOLD_CYCLE_HOURS);
   });
 
   it("never-crawled ZIPs use the base cycle (always due anyway)", () => {
@@ -345,13 +354,17 @@ describe("selectDueZipsTiered — fresh metros first, chewed metros later", () =
     expect(r2.dueByCadence.chewed).toBe(1);
   });
 
-  it("opener-HOLD (TX) ZIPs only surface past the biweekly trickle", () => {
+  it("opener-HOLD (TX) ZIPs never surface while the trickle is off (default)", () => {
     const tx = row({ zip: "78210", lastIngestedAt: hrsAgoT(200), openerHold: true });
     expect(selectDueZipsTiered([tx], 5, T0, 24).selected).toEqual([]);
+    // Even long past the old biweekly window, an un-priceable market stays out
+    // of the rotation — this is the 3-crawls-a-day Houston spend that bought
+    // 262 raw listings and zero accepted records on 2026-08-04.
     const lapsed = { ...tx, lastIngestedAt: hrsAgoT(OPENER_HOLD_CYCLE_HOURS + 1) };
-    const r = selectDueZipsTiered([lapsed], 5, T0, 24);
-    expect(r.selected).toEqual(["78210"]);
-    expect(r.dueByCadence.opener_hold).toBe(1);
+    expect(selectDueZipsTiered([lapsed], 5, T0, 24).selected).toEqual([]);
+    // A never-crawled held ZIP is also excluded, not treated as always-due.
+    const fresh = row({ zip: "78211", openerHold: true });
+    expect(selectDueZipsTiered([fresh], 5, T0, 24).selected).toEqual([]);
   });
 
   it("producing ZIPs keep the base 24h cadence (chewed metros still trickle new DOM-gated inventory)", () => {
@@ -409,7 +422,10 @@ describe("recrawlCycleHours — SATURATED cadence (operator /goal 2026-07-26, ZI
 
   it("saturated + opener-HOLD also takes the max (both 336 by default, still correct if tuned apart)", () => {
     const both = row({ zip: "78210", lastIngestedAt: hrsAgoT(30), openerHold: true, saturated: true });
-    expect(recrawlCycleHours(both, 24)).toBe(Math.max(OPENER_HOLD_CYCLE_HOURS, SATURATED_CYCLE_HOURS));
+    expect(recrawlCycleHours(both, 24, true)).toBe(Math.max(OPENER_HOLD_CYCLE_HOURS, SATURATED_CYCLE_HOURS));
+    // With the trickle off, opener-HOLD wins outright — it is an exclusion,
+    // not a cadence.
+    expect(recrawlCycleHours(both, 24, false)).toBe(Number.POSITIVE_INFINITY);
   });
 
   it("a base cycle longer than SATURATED_CYCLE_HOURS still wins (never shortens)", () => {
