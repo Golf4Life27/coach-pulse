@@ -119,7 +119,7 @@ describe("inferPrioritySignals — RentCast burn rate", () => {
         quo: { api_responsive: true, api_key_configured: true },
         rentcast: {
           api_responsive: true,
-          burn_rate: { days_until_exhaustion_estimate: 2 },
+          burn_rate: { days_until_exhaustion_estimate: 2, window_hours: 24 },
         },
       },
     });
@@ -133,7 +133,7 @@ describe("inferPrioritySignals — RentCast burn rate", () => {
         quo: { api_responsive: true, api_key_configured: true },
         rentcast: {
           api_responsive: true,
-          burn_rate: { days_until_exhaustion_estimate: 5 },
+          burn_rate: { days_until_exhaustion_estimate: 5, window_hours: 24 },
         },
       },
     });
@@ -143,6 +143,23 @@ describe("inferPrioritySignals — RentCast burn rate", () => {
 
   it("null days_until_exhaustion → no signal (insufficient burn data)", () => {
     expect(inferPrioritySignals(brief()).find((s) => s.id.startsWith("rentcast"))).toBeUndefined();
+  });
+
+  it("REGRESSION 2026-08-05: sub-24h burn window never fires exhaustion, even at ~0d", () => {
+    // A 2h briefing anchor caught one cron burst, annualized it to 300/day,
+    // read "remaining 0 / ~0d," and sent a false Tier-3 SMS — while the
+    // honest 24h burn was ~93/day (≈6d). Short windows can't average over
+    // the daily cron mix and must not alarm.
+    const b = brief({
+      external_signals: {
+        quo: { api_responsive: true, api_key_configured: true },
+        rentcast: {
+          api_responsive: true,
+          burn_rate: { days_until_exhaustion_estimate: 0, window_hours: 2 },
+        },
+      },
+    });
+    expect(inferPrioritySignals(b).find((s) => s.id.startsWith("rentcast"))).toBeUndefined();
   });
 });
 

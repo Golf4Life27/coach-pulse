@@ -107,7 +107,12 @@ interface MinimalBriefingShape {
       quo: { api_responsive: boolean; api_key_configured: boolean };
       rentcast: {
         api_responsive: boolean;
-        burn_rate: { days_until_exhaustion_estimate: number | null };
+        burn_rate: {
+          days_until_exhaustion_estimate: number | null;
+          // Hours of audit data the burn extrapolation is based on.
+          // Optional for legacy callers; treated as untrusted when absent.
+          window_hours?: number;
+        };
       };
     };
     /** Phase 14 / O.2 — Pulse self-monitoring signals. Optional so
@@ -181,8 +186,17 @@ export function inferPrioritySignals(b: MinimalBriefingShape): PrioritySignal[] 
   }
 
   // RentCast burn-rate — Appraiser/Pulse signal.
+  //
+  // Exhaustion math extrapolates the audit window's burn across the whole
+  // billing cycle (rentcast-burn-rate.ts). A sub-24h window — e.g. a 2h
+  // watch-cycle briefing anchor that happens to catch one cron burst —
+  // annualizes that burst (2026-08-05: a 2h slice read as 300/day →
+  // "remaining 0 / ~0d" and fired a false Tier-3 SMS, while the honest
+  // 24h count was ~93/day ≈ 6d). Only alarm from a window big enough to
+  // average over the daily cron mix.
   const rent = b.structured.external_signals.rentcast;
-  const days = rent.burn_rate.days_until_exhaustion_estimate;
+  const rentWindowTrusted = (rent.burn_rate.window_hours ?? 0) >= 24;
+  const days = rentWindowTrusted ? rent.burn_rate.days_until_exhaustion_estimate : null;
   if (days != null && days <= 3) {
     signals.push({
       id: "rentcast_exhaustion_imminent",
