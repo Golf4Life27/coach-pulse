@@ -202,9 +202,26 @@ export async function readKvSpend(now: Date = new Date()): Promise<{ day: number
   return { day, month, kvAvailable: ok };
 }
 
-/** Increment both KV windows by one call. Best-effort get+add+setEx, same
- *  non-atomic shape as recordFirecrawlSpend — a slight undercount is
- *  acceptable for a safety brake, and the invocation counter is exact. */
+/** Increment both KV windows by one call — ATOMICALLY (fixed 2026-08-04).
+ *
+ *  WAS: get → add → setEx in application space, documented as "a slight
+ *  undercount is acceptable for a safety brake." It is not slight, and an
+ *  undercounting brake is the one failure mode a spend ceiling cannot have.
+ *  Every overlapping lambda that read the same `prev` wrote the same `prev+1`,
+ *  so N concurrent calls recorded ONE. This system runs 13 outreach slots, a
+ *  10-minute intake and a 30-minute backfill that routinely overlap, plus
+ *  per-record appraiser legs — collisions are the normal case, not the edge.
+ *
+ *  OBSERVED 2026-08-04: the month meter read ~27 calls used while the audit
+ *  log showed 63-106 RentCast calls in a SINGLE day. The ceiling therefore
+ *  never tripped (zero HTTP-598 rows all day) — the brake was reading roughly
+ *  an order of magnitude low against a 1,000-call plan, which is the same
+ *  shape as the June overage ($1,470 in auto-charges).
+ *
+ *  INCRBY is atomic server-side, so concurrent callers each get their own
+ *  increment. TTL is attached only on the first write of a period (INCRBY
+ *  creates a key with no expiry); a later EXPIRE would reset the window and
+ *  is deliberately not issued. */
 export async function recordKvSpend(now: Date = new Date()): Promise<void> {
   if (!kvConfigured()) return;
   for (const [key, ttl] of [
@@ -212,8 +229,8 @@ export async function recordKvSpend(now: Date = new Date()): Promise<void> {
     [monthKey(now), MONTH_TTL_S],
   ] as const) {
     try {
-      const prev = Number((await kvProd.get(key)) ?? "0") || 0;
-      await kvProd.setEx(key, String(prev + 1), ttl);
+      const total = await kvProd.incrBy(key, 1);
+      if (total === 1) await kvProd.expire(key, ttl);
     } catch {
       /* best-effort — see the fail posture note in the header */
     }

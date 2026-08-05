@@ -533,8 +533,11 @@ export async function GET(req: Request) {
   if (kvConfigured() && zips.length > 0) {
     try {
       const key = crawlMeterKey(new Date());
-      const cur = Number((await kvProd.get(key)) ?? 0) || 0;
-      await kvProd.setEx(key, String(cur + zips.length), CRAWL_METER_TTL_S);
+      // ATOMIC (2026-08-04): was get→add→setEx, the same lost-update race as
+      // recordKvSpend. Overlapping intake slots each read the same `cur` and
+      // wrote the same total, so concurrent runs recorded one run's spend.
+      const total = await kvProd.incrBy(key, zips.length);
+      if (total === zips.length) await kvProd.expire(key, CRAWL_METER_TTL_S);
     } catch {
       /* advisory meter — never blocks the run */
     }
