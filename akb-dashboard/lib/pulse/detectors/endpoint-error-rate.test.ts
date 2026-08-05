@@ -180,4 +180,17 @@ describe("detectEndpointErrorRate", () => {
     expect(dets.find((d) => d.id === "endpoint_error_rate_high:h2_bump_reprice_hold")).toBeUndefined();
     expect(dets).toEqual([]);
   });
+
+  it("REGRESSION 2026-08-05: send-gate refusals working-as-designed never fire a critical", () => {
+    // sendGuarded audits send_gate_refused / send_gate_thread_truth_refused
+    // ONLY on refusal (never on a successful send), so both are structurally
+    // pinned at 100% and read as a false "full outreach stoppage" (5/5 each).
+    // Refusing sends — DNT, dedupe, thread-truth holds — is the gate's job.
+    for (const ev of ["send_gate_refused", "send_gate_thread_truth_refused"]) {
+      const auditLog = Array(5).fill(0).map(() => audit(ev, "confirmed_failure"));
+      const dets = detectEndpointErrorRate({ ...baseInput, audit_log: auditLog });
+      expect(dets.find((d) => d.id === `endpoint_error_rate_high:${ev}`)).toBeUndefined();
+      expect(dets).toEqual([]);
+    }
+  });
 });

@@ -72,6 +72,15 @@ const DEFAULT_FAILURE_ONLY_EXCLUSIONS = [
   // rate at 100%; fired a false critical + Tier-3 SMS on 2026-08-05 (10/10).
   // Gate health lives in the bump-followup run summary and audit-tail.
   "h2_bump_reprice_hold",
+  // Send-gate-working-as-designed: sendGuarded audits these ONLY when it
+  // REFUSES a send (do-not-text, dedupe, thread-truth, outside-hours…) —
+  // the refusal is the gate doing its job, and includes deliberate holds
+  // like the thread-truth freeze on operator-driven threads. A successful
+  // send never emits either event, so any refusal in the window pins the
+  // rate at 100% ("full outreach stoppage" false critical, 2026-08-05,
+  // 5/5 on both). Send-belt health lives in the slot run summaries.
+  "send_gate_refused",
+  "send_gate_thread_truth_refused",
 ];
 
 function readExclusions(env: Record<string, string | undefined>): Set<string> {
