@@ -31,6 +31,11 @@ import { NextResponse } from "next/server";
 import { getActiveListingsForBrief, getRehabSweepCandidates, getListing } from "@/lib/airtable";
 import { audit, readRecentFromKv } from "@/lib/audit-log";
 import { countCallsBySource24h } from "@/lib/spend/derive";
+import {
+  backfillDayKey,
+  checkBackfillBudget,
+  BACKFILL_DAY_TTL_S,
+} from "@/lib/admin/backfill-budget";
 import { noteWorkRun, noteZeroRun } from "@/lib/admin/retire-me-signal";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import {
@@ -78,9 +83,25 @@ const SAFETY_BUFFER_MS = 10_000;
 // re-slicing the same top-N every time.
 const REHAB_SWEEP_CURSOR_KEY = "rehab_ready";
 
-/** Hard 24h paid-call ceiling for the BACKFILL SWEEP (2026-07-29).
+/** RETIRED AS A GATE 2026-08-04 — kept only so the historical value and its
+ *  characterization test remain readable. The sweep now runs against a
+ *  dedicated daily record budget (lib/admin/backfill-budget), because a
+ *  shared-TOTAL threshold cannot work here: sibling lanes burn ~79/day, so any
+ *  value below that locks the sweep out permanently (every slot of 8/4:
+ *  examined 3, processed 0) and any value above it bounds nothing.
  *
- *  WHY THIS EXISTS. This sweep was the #1 paid-API burner in the system:
+ *  Two premises below have also expired since it was written:
+ *  (1) the 5-minute cadence it was sized against is now 30 minutes (48 runs/day,
+ *      not 288);
+ *  (2) "Until the terminal-stamp fix lands, this ceiling is the bound" — that
+ *      fix LANDED the same day (Consolidation Night item E): a rehab 422 of
+ *      no_photos_available now stamps `p2:rehab:no_photo_source:<id>` for 30
+ *      days and the sweep skips the record, so the forever-re-photograph loop
+ *      is already closed. The sentence was never updated, and it is why later
+ *      sessions kept believing that waste was still live.
+ *
+ *  ── historical rationale, preserved ──
+ *  WHY THIS EXISTED. This sweep was the #1 paid-API burner in the system:
  *  fired every 5 min over a ~1,751-record pool, its rehab leg calls
  *  collectPhotos(), which tries RentCast FIRST and UNCONDITIONALLY (2 paid
  *  calls: listings/sale then properties) before Firecrawl. 288 runs/day x
@@ -366,18 +387,33 @@ export async function GET(req: Request) {
   // unreadable meter — same posture as auto-underwrite-engaged: a KV
   // outage must not silently stall the pipeline. The loop-breaker and
   // the per-run `limit` remain the backstops in that case.
-  const sweepCeiling = backfillPaid24hCeiling();
-  let sweepPaid24h: number | null = null;
-  let sweepRentcast24h: number | null = null;
+  // DEDICATED DAILY SLICE (2026-08-04) — replaces the shared-total ceiling.
+  // The old gate compared TOTAL 24h paid calls across every lane against 60,
+  // while sibling lanes alone burn ~79/day, so the sweep was locked out on
+  // every slot of 8/4 (examined 3, processed 0, all day). No value of a
+  // shared-total threshold fixes that: under the baseline it never opens,
+  // above it it bounds nothing. The sweep now spends against its own daily
+  // record budget; total exposure stays bounded by the global RentCast spend
+  // ceiling, which refuses calls at the plan cap regardless.
+  let backfillSpentToday: number | null = null;
   try {
-    const entries = await readRecentFromKv(5000);
-    const counts = countCallsBySource24h(entries, new Date());
+    backfillSpentToday = Number((await kvProd.get(backfillDayKey(new Date()))) ?? "0") || 0;
+  } catch {
+    backfillSpentToday = null; // fail-open, same posture as every other brake
+  }
+  const budgetVerdict = checkBackfillBudget(backfillSpentToday);
+  // Diagnostic only — no longer a gate. Kept in the audit row so the sweep's
+  // spend stays legible next to the rest of the system's burn.
+  let sweepRentcast24h: number | null = null;
+  let sweepPaid24h: number | null = null;
+  try {
+    const counts = countCallsBySource24h(await readRecentFromKv(5000), new Date());
     sweepRentcast24h = counts.rentcast;
     sweepPaid24h = counts.rentcast + counts.attom;
   } catch {
-    sweepPaid24h = null;
+    /* diagnostic only */
   }
-  if (sweepPaid24h != null && sweepPaid24h >= sweepCeiling) {
+  if (!budgetVerdict.allowed) {
     await audit({
       agent: "appraiser",
       event: "backfill_budget_skip",
@@ -385,11 +421,12 @@ export async function GET(req: Request) {
       inputSummary: {
         selection: rehabReady ? "rehab_ready" : "brief_active",
         examined: subset.length,
+        records_today: budgetVerdict.spentToday,
+        daily_record_budget: budgetVerdict.budget,
         rentcast_24h: sweepRentcast24h,
         paid_24h: sweepPaid24h,
-        ceiling: sweepCeiling,
       },
-      outputSummary: { skipped: true, reason: "backfill_paid_calls_24h_ceiling" },
+      outputSummary: { skipped: true, reason: budgetVerdict.reason },
       decision: "skip_budget",
       ms: Date.now() - t0,
     });
@@ -397,13 +434,16 @@ export async function GET(req: Request) {
       ok: true,
       mode: "apply",
       skipped: true,
-      reason: "backfill_paid_calls_24h_ceiling",
+      reason: budgetVerdict.reason,
+      records_today: budgetVerdict.spentToday,
+      daily_record_budget: budgetVerdict.budget,
       rentcast_24h: sweepRentcast24h,
       paid_24h: sweepPaid24h,
-      ceiling: sweepCeiling,
       elapsed_ms: Date.now() - t0,
     });
   }
+  // Never process more than the day's remaining allowance.
+  if (subset.length > budgetVerdict.remaining) subset = subset.slice(0, budgetVerdict.remaining);
 
   const cookie = req.headers.get("cookie");
   // Forward the incoming bearer + x-vercel-cron so a CRON_SECRET fire
@@ -666,6 +706,20 @@ export async function GET(req: Request) {
     stable_delta_usd: p2.stableDeltaUsd,
     failure_cap: p2.failureCap,
   };
+
+  // Charge the day's record budget for the work actually attempted. Atomic
+  // (lib/maverick/oauth/kv incrBy) so overlapping slots cannot both read the
+  // same total and write the same increment — the lost-update race that made
+  // the RentCast meter read ~4x low.
+  if (applied.length > 0) {
+    try {
+      const key = backfillDayKey(new Date());
+      const total = await kvProd.incrBy(key, applied.length);
+      if (total === applied.length) await kvProd.expire(key, BACKFILL_DAY_TTL_S);
+    } catch {
+      /* meter write failure just means one more run's worth of allowance */
+    }
+  }
 
   await audit({
     agent: "appraiser",
