@@ -50,6 +50,12 @@ import { hydrateRecord } from "@/lib/federation/federation-orchestration";
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
+/** Soft deadline: bail out of the scan loop with a partial summary before
+ *  the platform's maxDuration hard-kills the run (504, summary lost —
+ *  2026-08-01→08-04, four consecutive daily timeouts). Records left
+ *  unscanned are picked up by the next daily run via the freshness window. */
+const TIME_BUDGET_MS = (maxDuration - 30) * 1000;
+
 /** Per-run RentCast credit ceiling. Conservative slice of the monthly cap
  *  (RENTCAST_MONTHLY_CAP default 1000) so a single daily run can't exhaust
  *  the month. ~40 credits = ~20 record hydrations/run. Overridable via env. */
@@ -154,8 +160,24 @@ export async function GET(req: Request) {
 
   summary.scanned = listings.length;
   const now = new Date();
+  let timeBudgetBail = false;
 
   for (const l of listings) {
+    if (Date.now() - t0 > TIME_BUDGET_MS) {
+      timeBudgetBail = true;
+      await audit({
+        agent: "appraiser",
+        event: "data_federation_time_budget_bail",
+        status: "uncertain",
+        inputSummary: { auth_kind: authKind, time_budget_ms: TIME_BUDGET_MS },
+        outputSummary: {
+          hydrated: summary.hydrated,
+          eligible_so_far: summary.eligible,
+          duration_ms: Date.now() - t0,
+        },
+      });
+      break;
+    }
     // ── Existing Property_Intel row (freshness + flood cache) ─────
     let existing: { recordId: string; fields: Record<string, unknown> } | null = null;
     try {
@@ -244,6 +266,7 @@ export async function GET(req: Request) {
     auth_kind: authKind,
     duration_ms: Date.now() - t0,
     rentcast_budget_remaining: rentcastBudget,
+    aborted: timeBudgetBail ? "time_budget" : null,
     ...summary,
   });
 }
