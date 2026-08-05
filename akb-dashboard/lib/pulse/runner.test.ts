@@ -291,3 +291,103 @@ describe("runPulseScan", () => {
     expect(savedState.test_count_anchor).toBe(700);
   });
 });
+
+// Operator paging (2026-08-04). The silent-403 incident was not a detection
+// failure — it was that a detection reached Spine and stopped there.
+describe("runPulseScan → operator paging", () => {
+  const NOW = new Date("2026-08-04T20:00:00Z");
+  // A total RentCast outage: 10 × 403 in the window.
+  const outageAudit = [
+    {
+      ts: new Date("2026-08-04T19:00:00Z").toISOString(),
+      agent: "maverick" as const,
+      event: "write_state.build_event",
+      status: "confirmed_success" as const,
+    },
+    ...Array.from({ length: 10 }, () => ({
+      ts: NOW.toISOString(),
+      agent: "rentcast" as const,
+      event: "paid_api_call",
+      status: "confirmed_failure" as const,
+      outputSummary: { endpoint: "listings/sale", http: 403 },
+    })),
+  ];
+
+  function deps(sendFn: ReturnType<typeof vi.fn>, active: Record<string, never> | object = {}) {
+    return {
+      writeStateFn: vi.fn().mockResolvedValue({ written: true, spine_record_id: "x", audit_event_id: "y" }),
+      auditFn: vi.fn().mockResolvedValue(undefined),
+      readState: vi.fn().mockResolvedValue({
+        active,
+        test_count_anchor: null,
+        progress_meter_anchor: null,
+        last_scan_at: null,
+      }),
+      writeStateStore: vi.fn().mockResolvedValue(undefined),
+      sendFn: sendFn as never,
+    };
+  }
+
+  const env = {
+    PULSE_CRON_SILENCE_WARNING_HOURS: "1000",
+    PULSE_CRON_SILENCE_CRITICAL_HOURS: "2000",
+    ALERT_PHONE: "+15550001111",
+    ALERT_FROM: "+16302505865",
+  };
+
+  const input = (envOverride: Record<string, string | undefined> = {}) => ({
+    audit_log: outageAudit,
+    listings: [],
+    test_count: null,
+    previous_test_count: null,
+    env: { ...env, ...envOverride },
+    now: () => NOW,
+  });
+
+  it("pages the operator when a vendor outage fires fresh", async () => {
+    const sendFn = vi.fn().mockResolvedValue(undefined);
+    const result = await runPulseScan(input(), deps(sendFn));
+    expect(sendFn).toHaveBeenCalledTimes(1);
+    const [to, body, opts] = sendFn.mock.calls[0];
+    expect(to).toBe("+15550001111");
+    expect(body).toContain("RENTCAST");
+    // Channel separation: never the agent-facing outreach line.
+    expect(opts).toEqual({ from: "+16302505865" });
+    expect(result.paged_ids).toEqual(["vendor_health:rentcast"]);
+  });
+
+  it("does NOT re-page a standing outage (edge-triggered, not hourly)", async () => {
+    const sendFn = vi.fn().mockResolvedValue(undefined);
+    const already = {
+      "vendor_health:rentcast": {
+        detection: mkDetection("vendor_health:rentcast", "critical"),
+        first_seen_at: "2026-08-04T18:00:00Z",
+      },
+    };
+    const result = await runPulseScan(input(), deps(sendFn, already));
+    expect(sendFn).not.toHaveBeenCalled();
+    expect(result.paged_ids).toEqual([]);
+  });
+
+  it("refuses to page without ALERT_FROM rather than using the outreach line", async () => {
+    const sendFn = vi.fn().mockResolvedValue(undefined);
+    const result = await runPulseScan(input({ ALERT_FROM: undefined }), deps(sendFn));
+    expect(sendFn).not.toHaveBeenCalled();
+    expect(result.paged_ids).toEqual([]);
+  });
+
+  it("does not page for advisory detectors outside the allowlist", async () => {
+    const sendFn = vi.fn().mockResolvedValue(undefined);
+    await runPulseScan(input({ PULSE_PAGING_DETECTORS: "firecrawl_payment_required" }), deps(sendFn));
+    expect(sendFn).not.toHaveBeenCalled();
+  });
+
+  it("a failed page does not abort the scan — the Spine row still lands", async () => {
+    const sendFn = vi.fn().mockRejectedValue(new Error("quo down"));
+    const d = deps(sendFn);
+    const result = await runPulseScan(input(), d);
+    expect(result.paged_ids).toEqual([]);
+    expect(d.writeStateFn).toHaveBeenCalled();
+    expect(result.new_ids).toContain("vendor_health:rentcast");
+  });
+});

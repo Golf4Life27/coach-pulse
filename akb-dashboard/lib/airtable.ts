@@ -120,6 +120,13 @@ const LISTING_FIELD_REGISTRY: ReadonlyArray<ListingFieldRegistryEntry> = [
   { prop: "propertyType", fieldId: "fldrlbePeS9glaFQu", name: "Property_Type" },
   { prop: "priceDropCount", fieldId: "fldg1j5wHJzoGJB0I", name: "Price_Drop_Count" },
   { prop: "lastVerified", fieldId: "fld2eUkKaC4pMjIdd", name: "Last_Verified" },
+  // Last_Seen — the last time the SOURCE FEED still returned this address as
+  // an active listing. Distinct from Last_Verified (when we last scraped the
+  // page): the feed dropping an address is positive evidence it is gone,
+  // whereas page text only says "gone" if it happens to print one of a small
+  // set of phrases (the 8203 Brace incident). Field existed since the schema
+  // was written and had NO writer anywhere in the codebase until 2026-08-04.
+  { prop: "lastSeen", fieldId: "fldNDdcGayTxVuYYL", name: "Last_Seen" },
   { prop: "pipelineStage", fieldId: "fldJt2pSCHiXqBxwj", name: "Pipeline_Stage" },
   // ── Back-half contract lifecycle (2026-07-14, the 3123 Sunbeam blind spot):
   // the deadline fields that drive under_contract/dispo surfacing + clocks in

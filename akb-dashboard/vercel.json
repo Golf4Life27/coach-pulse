@@ -74,7 +74,11 @@
     },
     {
       "path": "/api/agents/pulse/scan",
-      "schedule": "0 12 * * *"
+      "schedule": "25 * * * *"
+    },
+    {
+      "path": "/api/cron/discovery-sweep?apply=1&zips=8",
+      "schedule": "15 */3 * * *"
     },
     {
       "path": "/api/cron/outreach-status-reconcile",

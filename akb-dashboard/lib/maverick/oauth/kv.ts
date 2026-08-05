@@ -24,6 +24,18 @@ export interface KvClient {
    *  absent (lock acquired), false if it already existed (lock held). The
    *  cross-invocation lock primitive: strongly-consistent, no propagation lag. */
   setNx(key: string, value: string, ttlSeconds: number): Promise<boolean>;
+  /** INCRBY key amount — ATOMIC counter increment, returns the new total.
+   *
+   *  The counter primitive this client was missing (added 2026-08-04). Every
+   *  spend meter in the codebase was doing get-then-add-then-setEx in
+   *  application space, which loses updates whenever two lambdas overlap —
+   *  and this system runs 13 outreach slots plus a 10-minute intake and a
+   *  30-minute backfill that routinely overlap. A meter that undercounts is
+   *  not a conservative meter: it is a brake that does not engage. */
+  incrBy(key: string, amount: number): Promise<number>;
+  /** EXPIRE key seconds. Used to attach a TTL after the first incrBy, since
+   *  INCRBY on a missing key creates it with no expiry. */
+  expire(key: string, ttlSeconds: number): Promise<void>;
 }
 
 const KV_URL = process.env.KV_REST_API_URL;
@@ -103,6 +115,28 @@ export const kvProd: KvClient = {
     const data = (await res.json()) as { result: string | null };
     return data.result === "OK";
   },
+  async incrBy(key, amount) {
+    if (!KV_URL || !KV_TOKEN) throw new Error("KV not configured");
+    const url = `${KV_URL}/incrby/${encodeURIComponent(key)}/${amount}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${KV_TOKEN}` },
+      cache: "no-store",
+    });
+    if (!res.ok) throw new Error(`KV incrby failed: ${res.status}`);
+    const data = (await res.json()) as { result: number };
+    return data.result;
+  },
+  async expire(key, ttlSeconds) {
+    if (!KV_URL || !KV_TOKEN) throw new Error("KV not configured");
+    const url = `${KV_URL}/expire/${encodeURIComponent(key)}/${ttlSeconds}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${KV_TOKEN}` },
+      cache: "no-store",
+    });
+    if (!res.ok) throw new Error(`KV expire failed: ${res.status}`);
+  },
 };
 
 /**
@@ -154,6 +188,20 @@ export function makeMemoryKv(): KvClient {
       if (entry && !isExpired(entry, now)) return false;
       store.set(key, { value, expiresAt: now + ttlSeconds * 1000 });
       return true;
+    },
+    async incrBy(key, amount) {
+      const now = Date.now();
+      const entry = store.get(key);
+      const prev = entry && !isExpired(entry, now) ? Number(entry.value) || 0 : 0;
+      const next = prev + amount;
+      // INCRBY preserves an existing TTL and creates with none.
+      store.set(key, { value: String(next), expiresAt: entry && !isExpired(entry, now) ? entry.expiresAt : null });
+      return next;
+    },
+    async expire(key, ttlSeconds) {
+      const entry = store.get(key);
+      if (!entry) return;
+      store.set(key, { value: entry.value, expiresAt: Date.now() + ttlSeconds * 1000 });
     },
   };
 }

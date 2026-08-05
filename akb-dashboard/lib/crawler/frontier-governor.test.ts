@@ -201,8 +201,10 @@ describe("zipDailyCallCost", () => {
     ).toBeCloseTo(1 / 7);
   });
 
-  it("opener-HOLD ZIPs cost the biweekly trickle rate (1/14)", () => {
-    expect(zipDailyCallCost(row({ openerHold: true }))).toBeCloseTo(1 / 14);
+  it("opener-HOLD ZIPs now cost NOTHING — they are excluded, not trickled (2026-08-04)", () => {
+    // Was 1/14 (biweekly trickle). A market the pricer can never price cannot
+    // yield, so it earns no budget at all.
+    expect(zipDailyCallCost(row({ openerHold: true }))).toBe(0);
   });
 });
 
@@ -239,11 +241,13 @@ describe("frontierDecisions — capacity unfreezes as metros are chewed", () => 
     expect(d.promote.map((r) => r.zip)).toEqual(["44120"]);
   });
 
-  it("opener-HOLD TX cluster barely dents the budget", () => {
+  it("opener-HOLD TX cluster now costs the budget nothing at all", () => {
     const rows = Array.from({ length: 21 }, (_, i) =>
       row({ recordId: `recTX${i}`, zip: String(78200 + i), openerHold: true }),
     );
     const d = frontierDecisions({ rows, dailyBudget: 28, now: JUL_11 });
-    expect(d.currentDailyCost).toBeCloseTo(21 / 14, 1); // 1.5 calls/day, was 7/day flat
+    // Was 1.5 calls/day under the trickle, 7/day under the old flat model.
+    // The freed budget flows to metros that can actually produce a send.
+    expect(d.currentDailyCost).toBe(0);
   });
 });

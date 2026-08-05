@@ -34,7 +34,8 @@ export type PulseDetectorId =
   | "progress_meter_movement"
   | "unbacked_reply_status"
   | "intake_run_duration"
-  | "firecrawl_payment_required";
+  | "firecrawl_payment_required"
+  | "vendor_health";
 
 export interface PulseDetection {
   /** Unique per-detection-fire ID; for steady-state detections this

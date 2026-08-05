@@ -54,6 +54,7 @@ import { persistDecisionMath } from "@/lib/decision-persist";
 import { priceOpenerWithSeed } from "@/lib/opener-pricing";
 import { getZipArvSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import { minOfferFloor } from "@/lib/per-market-pricer";
+import { classifyHold } from "@/lib/pricing/hold-reason";
 import { getMarketForListing, openerArvPctMax } from "@/lib/markets/registry";
 import { resolveAnchorPct } from "@/lib/markets/anchor";
 import {
@@ -387,12 +388,51 @@ async function handle(req: Request): Promise<Response> {
     not_eligible: 0,
     by_tier: {} as Record<string, number>,
   };
+  // ── HOLD-reason instrument, wired into the LIVE cron (2026-08-04) ──────
+  // The candidate scan already computes every signal lib/pricing/hold-reason
+  // needs (arvDistrusted, flooredToFallback, flagReseed, arvSource,
+  // seedDontPrice, marketHasBuybox, plus the over-list tripwire + failed-
+  // corroboration flags it previously had no input for) and then discarded
+  // them — every distinct hold cause collapsed into the single reason string
+  // "opener_hold_no_value_basis" below. classifyHold is called ALONGSIDE
+  // that existing 3-bucket reason derivation (never replacing it — no send/
+  // gate behavior changes) purely to accumulate counts, so the operator can
+  // finally see WHICH cause is costing volume and whether it is system-owned
+  // (auto-seed / cached-skip, no human) or operator-owned.
+  const byHoldReason: Record<string, number> = {
+    over_list_tripwire: 0,
+    failed_corroboration: 0,
+    needs_seed: 0,
+    no_market_buybox: 0,
+    seed_dont_price: 0,
+    cash_no_pencil: 0,
+    operator_review: 0,
+  };
+  const byHoldOwner: Record<string, number> = {
+    auto_seed: 0,
+    configure_market: 0,
+    data_limited: 0,
+    creative_lane: 0,
+    operator: 0,
+  };
+  // ── SCAN-STOP-REASON (operator visibility, 2026-08-04) ── which of the
+  // scan loop's three brakes ended candidate selection this run, so a "sent
+  // almost nothing" run can be diagnosed without guessing. Overwritten only
+  // on an actual break below; a loop that walks the whole ranked queue
+  // without tripping any brake keeps the default.
+  let scanStopReason: "limit_reached" | "scan_cap" | "scan_budget_ms" | "queue_exhausted" = "queue_exhausted";
   const filteredQueue: typeof queue = [];
   for (const l of queue) {
-    if (filteredQueue.length >= limit || scanned >= scanCap) break;
+    if (filteredQueue.length >= limit || scanned >= scanCap) {
+      scanStopReason = filteredQueue.length >= limit ? "limit_reached" : "scan_cap";
+      break;
+    }
     // Wall-clock guard on the deep scan: never let candidate selection eat the
     // budget the actual SENDS need (each send costs the inter-send delay).
-    if (Date.now() - t0 > SCAN_BUDGET_MS) break;
+    if (Date.now() - t0 > SCAN_BUDGET_MS) {
+      scanStopReason = "scan_budget_ms";
+      break;
+    }
     scanned += 1;
 
     // FRONT GATE — runs BEFORE the opener is priced (it decides WHO gets an
@@ -485,6 +525,27 @@ async function handle(req: Request): Promise<Response> {
         opener: null,
         source: pw.arvSource,
       });
+      // MEASUREMENT ONLY — does not affect the reason/label above or any
+      // gate/route decision. Alongside the 3-bucket reason string just
+      // pushed, classify WHY + WHO owns it via the same instrument the
+      // opener-dry-run route already proved (lib/pricing/hold-reason),
+      // now extended with the over-list tripwire + failed-corroboration
+      // signals this scan already computes but previously discarded.
+      const hold = classifyHold({
+        opener: priced.opener,
+        arvDistrusted: priced.arvDistrusted,
+        flooredToFallback: priced.flooredToFallback,
+        flagReseed: priced.flagReseed,
+        arvSource: pw.arvSource,
+        seedDontPrice: !!seed?.dontPrice,
+        marketHasBuybox: openerArvPctMax(market, l.state) != null,
+        overListTripwire: priced.overListTripwire,
+        corroborationFlags: pw.corroborationFlags,
+      });
+      if (hold.category !== "value_send") {
+        byHoldReason[hold.category] = (byHoldReason[hold.category] ?? 0) + 1;
+        byHoldOwner[hold.owner] = (byHoldOwner[hold.owner] ?? 0) + 1;
+      }
       continue;
     }
     // ── MIN-OFFER FLOOR (relationship-protector, operator 2026-06-30) ──
@@ -527,6 +588,19 @@ async function handle(req: Request): Promise<Response> {
     filteredQueue.push(l);
   }
   queue = filteredQueue;
+
+  // ── SILENT-KILLER HISTOGRAM (operator visibility, 2026-08-04) ──────────
+  // Every reason string already gets attached to a skipped openerGuarded
+  // entry above (lowball_not_eligible_<tier> at the front gate,
+  // opener_hold_no_value_basis/opener_hold and placeholder_rehab_needs_vision
+  // at the pricer gate, below_min_offer_floor at the relationship-protector
+  // guard) — none of that was NEW computation, it just was never tallied
+  // into one countable summary. One pass over the already-built array.
+  const byReason: Record<string, number> = {};
+  for (const g of openerGuarded) {
+    const key = g.reason ?? "unknown";
+    byReason[key] = (byReason[key] ?? 0) + 1;
+  }
 
   // ── HOLD surface (operator 2026-06-11): a guard-SKIPPED record is a
   // decision waiting on the operator (send the deep lowball anyway / skip /
@@ -1154,7 +1228,19 @@ async function handle(req: Request): Promise<Response> {
     event: dryRun ? "h2_outreach_dry_run" : "h2_outreach_live",
     status: summary.errors > 0 ? "uncertain" : "confirmed_success",
     inputSummary: { auth_kind: authKind, dry_run: dryRun, limit, record_id: recordId, live_env: liveEnv },
-    outputSummary: { eligible_count: eligibleCount, processed: processed.length, ...summary, send_cap: sendCapSummary },
+    outputSummary: {
+      eligible_count: eligibleCount,
+      processed: processed.length,
+      ...summary,
+      send_cap: sendCapSummary,
+      // ── volume-worry instrument (2026-08-04): why ~354 eligible plans
+      // 1-5 sends/slot. Landed in the audit trail so it's queryable later,
+      // not just visible on the one JSON response that happened to be read.
+      queue_scan: { scanned, scan_cap: scanCap, planned: queue.length, scan_stop_reason: scanStopReason },
+      by_hold_reason: byHoldReason,
+      by_hold_owner: byHoldOwner,
+      by_reason: byReason,
+    },
     ms: Date.now() - t0,
   });
 
@@ -1209,7 +1295,25 @@ async function handle(req: Request): Promise<Response> {
     started_at: startedAt,
     finished_at: new Date().toISOString(),
     eligible_count: eligibleCount,
-    queue_scan: { scanned, scan_cap: scanCap, planned: queue.length },
+    // scan_stop_reason (operator visibility, 2026-08-04): which of the three
+    // brakes ended candidate selection — "limit_reached" (the healthy case:
+    // enough sendable records were found), "scan_cap" or "scan_budget_ms"
+    // (the scan ran out of runway before it found `limit` sendable records —
+    // the hold pile is deep), or "queue_exhausted" (the whole ranked queue
+    // was walked and still came up short of `limit`).
+    queue_scan: { scanned, scan_cap: scanCap, planned: queue.length, scan_stop_reason: scanStopReason },
+    // WHY the pricer/corroboration/tripwire guards HELD, and WHO owns the
+    // next step (lib/pricing/hold-reason — same instrument the opener-dry-run
+    // route already used, now wired into the live cron). Every distinct hold
+    // cause used to collapse into "opener_hold_no_value_basis" below; this
+    // splits it back out.
+    by_hold_reason: byHoldReason,
+    by_hold_owner: byHoldOwner,
+    // Every silent-killer reason string already attached to a skipped
+    // openerGuarded row (lowball_not_eligible_<tier>, opener_hold_no_value_basis
+    // / opener_hold, placeholder_rehab_needs_vision, below_min_offer_floor),
+    // tallied into one histogram.
+    by_reason: byReason,
     processed,
     summary,
     send_cap: sendCapSummary,

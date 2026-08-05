@@ -146,6 +146,9 @@ const EXPECTED_LISTING_FIELDS: Record<string, string> = {
   "fldrlbePeS9glaFQu": "propertyType",
   "fldg1j5wHJzoGJB0I": "priceDropCount",
   "fld2eUkKaC4pMjIdd": "lastVerified",
+  // Added 2026-08-04 with the Last_Seen writer (lib/crawler/last-seen). The
+  // field existed in the Airtable schema all along with no reader OR writer.
+  "fldNDdcGayTxVuYYL": "lastSeen",
   "fldJt2pSCHiXqBxwj": "pipelineStage",
   "fld3lxWDerPs3rSNM": "rehabConfidenceScore",
   "fld0fWZGiFS73PPB7": "agentPriorOutreachCount",
@@ -248,6 +251,7 @@ const EXPECTED_LISTING_NAME_MAP: Record<string, string> = {
   "Property_Type": "propertyType",
   "Price_Drop_Count": "priceDropCount",
   "Last_Verified": "lastVerified",
+  "Last_Seen": "lastSeen",
   "Pipeline_Stage": "pipelineStage",
   "Contract_Executed_At": "contractExecutedAt",
   "EMD_Due_At": "emdDueAt",
