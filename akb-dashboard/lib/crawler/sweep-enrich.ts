@@ -85,6 +85,104 @@ export function parseAddressFromListingUrl(url: string | null | undefined): Pars
   return null;
 }
 
+// ── ADDRESS MATCHING (2026-08-06 fix) ──────────────────────────────────────
+//
+// The first enrichment run wrote ZERO records: 4 of 5 qualifiers came back
+// `no_rentcast_match`. The cause was the SHAPE of the lookup, not a bug — it
+// queried RentCast per-property with `?address=<exact string>&status=Active`,
+// which is brittle twice over. Portal URL slugs abbreviate ("Elm-St" vs the
+// feed's "Elm Street"), so an exact string match fails on formatting alone;
+// and filtering on status=Active asks RentCast to CONFIRM inventory Firecrawl
+// found, which is partly circular — a listing the feed classifies differently
+// simply vanishes.
+//
+// The fix is the hybrid shape: ONE ZIP fetch per ZIP-with-qualifiers (the call
+// already returns ~100 listings WITH agent phones), then match locally. That
+// is strictly cheaper — 5 qualifiers in one ZIP cost 1 call instead of 5 — and
+// robust to formatting, because matching happens on parsed components rather
+// than on a string the vendor has to reproduce exactly.
+
+/** Street-type suffixes normalized to a canonical token so "St" and "Street"
+ *  compare equal. Anything unlisted is left as-is. */
+const SUFFIX_CANON: Record<string, string> = {
+  st: "st", street: "st",
+  ave: "ave", av: "ave", avenue: "ave",
+  rd: "rd", road: "rd",
+  dr: "dr", drive: "dr",
+  blvd: "blvd", boulevard: "blvd",
+  ln: "ln", lane: "ln",
+  ct: "ct", court: "ct",
+  pl: "pl", place: "pl",
+  cir: "cir", circle: "cir",
+  ter: "ter", terrace: "ter",
+  pkwy: "pkwy", parkway: "pkwy",
+  hwy: "hwy", highway: "hwy",
+  way: "way", trl: "trl", trail: "trl",
+};
+
+export interface StreetKey {
+  /** Leading house number — must match exactly. */
+  number: string;
+  /** Street name with directionals and suffix removed, lowercased. */
+  name: string;
+  /** Canonical suffix, or "" when the address carries none. */
+  suffix: string;
+}
+
+/** Pure: break a street address into comparable parts. Returns null when there
+ *  is no leading house number — without one there is nothing safe to match on,
+ *  and a wrong match would put a real offer on the wrong house. */
+export function streetKey(address: string | null | undefined): StreetKey | null {
+  const raw = (address ?? "").split(",")[0]?.trim() ?? "";
+  if (!raw) return null;
+  const cleaned = raw.toLowerCase().replace(/[.,#]/g, " ").replace(/\s+/g, " ").trim();
+  const tokens = cleaned.split(" ").filter(Boolean);
+  if (tokens.length < 2) return null;
+  const number = tokens[0];
+  if (!/^\d+[a-z]?$/.test(number)) return null;
+
+  let rest = tokens.slice(1);
+  // Drop a leading directional ("N Elm St" and "Elm St" are the same street in
+  // most feeds' formatting variance).
+  if (rest.length > 1 && /^(n|s|e|w|ne|nw|se|sw|north|south|east|west)$/.test(rest[0])) {
+    rest = rest.slice(1);
+  }
+  let suffix = "";
+  const last = rest[rest.length - 1];
+  if (rest.length > 1 && last && SUFFIX_CANON[last]) {
+    suffix = SUFFIX_CANON[last];
+    rest = rest.slice(0, -1);
+  }
+  const name = rest.join(" ").trim();
+  if (!name) return null;
+  return { number, name, suffix };
+}
+
+/** Pure: do two addresses refer to the same property?
+ *
+ *  House number and street name must match. The suffix must match only when
+ *  BOTH sides carry one — a feed that omits "St" should not fail an otherwise
+ *  identical address, but "1234 Elm St" must never match "1234 Elm Ave". */
+export function addressesMatch(a: string | null | undefined, b: string | null | undefined): boolean {
+  const ka = streetKey(a);
+  const kb = streetKey(b);
+  if (!ka || !kb) return false;
+  if (ka.number !== kb.number || ka.name !== kb.name) return false;
+  if (ka.suffix && kb.suffix && ka.suffix !== kb.suffix) return false;
+  return true;
+}
+
+/** Pure: find the feed listing that matches a swept address, or null. */
+export function findMatchingListing<T extends { address: string | null }>(
+  target: string | null | undefined,
+  listings: readonly T[],
+): T | null {
+  for (const l of listings) {
+    if (addressesMatch(target, l.address)) return l;
+  }
+  return null;
+}
+
 /** Pure: is this enriched listing actually textable? The single question that
  *  decides whether a qualifier becomes a lead or stays a URL. A record without
  *  a normalizable agent phone fails isH2Eligible, so writing one just grows the
@@ -99,6 +197,7 @@ export type EnrichSkipReason =
   | "url_unparseable"
   | "no_rentcast_match"
   | "no_agent_phone"
+  | "record_write_failed"
   | "enrich_budget_reached";
 
 export interface EnrichOutcome {
