@@ -1,8 +1,10 @@
 // Pure tests for H2 first-touch outreach routing.
 
 import { describe, it, expect } from "vitest";
+import { SOURCE_VERSION_V2 } from "@/lib/source-version";
 import {
   isH2Eligible,
+  askWithinBuyBox,
   ineligibleReasonForListing,
   selectH2Eligible,
   selectOutreachReady,
@@ -344,5 +346,57 @@ describe("selectOutreachReady / outreachReadyReason — confirmed-live + actiona
       listing({ id: "memphis", ...ready(), state: "TN", city: "Memphis", zip: "38109" }),
     ];
     expect(selectOutreachReady(set, NOW).map((l) => l.id)).toEqual(["ready", "memphis"]);
+  });
+});
+
+// BUY-BOX ASK CEILING (2026-08-06, 257 Chalmers Dr NW). The opener path had
+// no ask ceiling: buy-box.ts was wired only into discovery-sweep, while the
+// old intake belt still admitted up to $400,000. A $248,500 cash offer went
+// out on a $346,000 Atlanta listing — underwritten CORRECTLY (ARV ~$483,000)
+// and completely unassignable with 4 Atlanta buyers and no capital.
+describe("askWithinBuyBox — the business constraint the math cannot see", () => {
+  const base = {
+    listPrice: null,
+    city: "Detroit",
+  } as unknown as Listing;
+
+  it("refuses a known ask above the metro ceiling", () => {
+    // Atlanta is southern_mid; $346,000 is far outside it.
+    expect(askWithinBuyBox({ ...base, city: "Atlanta", listPrice: 346_000 } as Listing)).toBe(false);
+    // The $1,050,000 record that was sitting active and eligible.
+    expect(askWithinBuyBox({ ...base, city: "Atlanta", listPrice: 1_050_000 } as Listing)).toBe(false);
+  });
+
+  it("refuses a Rust Belt ask above its tighter ceiling", () => {
+    expect(askWithinBuyBox({ ...base, city: "Detroit", listPrice: 225_000 } as Listing)).toBe(false);
+  });
+
+  it("allows an ask inside the box", () => {
+    expect(askWithinBuyBox({ ...base, city: "Detroit", listPrice: 60_000 } as Listing)).toBe(true);
+    expect(askWithinBuyBox({ ...base, city: "Atlanta", listPrice: 130_000 } as Listing)).toBe(true);
+  });
+
+  it("does NOT refuse a record with no list price", () => {
+    // Absence of a number is not evidence of a big one, and the pricing gates
+    // downstream still have to derive an opener from the property. Refusing
+    // here would silently drop every un-priced record from the send lane.
+    expect(askWithinBuyBox({ ...base, listPrice: null } as Listing)).toBe(true);
+    expect(askWithinBuyBox({ ...base, listPrice: 0 } as Listing)).toBe(true);
+  });
+
+  it("gates isH2Eligible, not just the helper", () => {
+    const eligible = {
+      outreachStatus: "",
+      liveStatus: "Active",
+      executionPath: "Auto Proceed",
+      doNotText: false,
+      renovatedLanguage: false,
+      agentPhone: "3135551234",
+      sourceVersion: SOURCE_VERSION_V2,
+      city: "Atlanta",
+      listPrice: 60_000,
+    } as unknown as Listing;
+    expect(isH2Eligible(eligible)).toBe(true);
+    expect(isH2Eligible({ ...eligible, listPrice: 346_000 } as Listing)).toBe(false);
   });
 });

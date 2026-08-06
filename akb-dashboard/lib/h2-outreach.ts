@@ -40,6 +40,7 @@ import { SOURCE_VERSION_V2 } from "@/lib/source-version";
 import { isActionableMarket } from "@/lib/markets/actionable";
 import { isOutreachFresh, DEFAULT_FRESHNESS_HOURS } from "@/lib/outreach-freshness";
 import { agentInventoryAsk } from "@/lib/pricing/bounded-ratio-opener";
+import { maxAskFor } from "@/lib/buy-box";
 
 export const AUTO_PROCEED = "Auto Proceed";
 export const LIVE_ACTIVE = "Active";
@@ -120,9 +121,42 @@ export function isH2Eligible(l: Listing): boolean {
     // the page markets itself renovated/turnkey with no distress language —
     // a distress opener at a turnkey ask cannot convert, only insults.
     l.renovatedLanguage !== true &&
+    // BUY-BOX ASK CEILING (2026-08-06, 257 Chalmers Dr NW). lib/buy-box.ts
+    // states the target in one place — MAX_ASK_ANY_MARKET $150,000, tiered
+    // per metro — and its own comment says it "Replaces
+    // INTAKE_RULES.maxListPrice = $400,000". It did not: intake-filter.ts
+    // still admits up to $400,000, buy-box was wired ONLY into
+    // discovery-sweep, and the opener path consulted no ask ceiling at all.
+    //
+    // So 257 Chalmers (list $346,000, 3,284 sqft, Atlanta) was underwritten
+    // CORRECTLY — ARV ~$483,000 × 0.70 − rehab $79,473 − fee = $248,500 —
+    // and a $248,500 cash offer went to a listing agent. The math was right
+    // and the deal was impossible: assigning it needs a buyer at ~$260,000
+    // and there are 4 buyers on the whole Atlanta list.
+    //
+    // Measured blast radius at the time of the fix: 577 ACTIVE non-dead
+    // records above the ceiling, including one at $1,050,000, with intake
+    // dates from the last 48h. Not legacy — a live daily inflow.
+    //
+    // This is a value-anchored system: the opener has no reason of its own
+    // to refuse a big number, because the ARV genuinely supports it. The
+    // ceiling is a BUSINESS constraint (no capital, assignment-only, thin
+    // buyer list), so it belongs at the eligibility gate.
+    askWithinBuyBox(l) &&
     agentPhonePresent(l) &&
     l.sourceVersion === SOURCE_VERSION_V2
   );
+}
+
+/** Pure: is the seller's ask inside the buy box for this metro?
+ *
+ *  A record with NO list price passes — absence of a number is not evidence
+ *  of a big one, and the pricing gates downstream still have to produce an
+ *  opener from the property. Only a KNOWN ask above the ceiling is refused. */
+export function askWithinBuyBox(l: Listing): boolean {
+  const ask = l.listPrice;
+  if (typeof ask !== "number" || !Number.isFinite(ask) || ask <= 0) return true;
+  return ask <= maxAskFor(l.city ?? null);
 }
 
 export function selectH2Eligible(listings: Listing[]): Listing[] {
