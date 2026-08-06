@@ -57,14 +57,41 @@ function shortAddress(address: string | null): string {
 
 const usd = (n: number) => `$${Math.round(n).toLocaleString("en-US")}`;
 
-/** Pure: the action line per classification. */
+/** Pure: the action line per classification.
+ *
+ *  EVERY classification the triage can PRODUCE needs a case here. `soft_no`
+ *  had none and fell to the default, so a bare "No" — which classifyReply
+ *  matches exactly, on a pattern commented "the shortest rejection there is" —
+ *  paged the operator as "intent unclear" (2026-08-06, 257 Chalmers Dr NW and
+ *  2241 1st St). The classifier was right, had already drafted the
+ *  re-engagement, and the alert reported confusion anyway.
+ *
+ *  That is worse than a wrong label: it makes the operator distrust a
+ *  component that is working. An alert must never claim less certainty than
+ *  the system actually has. */
 export function alertAction(classification: ReplyClassification): string {
   switch (classification) {
     case "acceptance": return "Seller said yes, draft contract";
     case "counter": return "Agent countered";
     case "interest": return "Agent is interested";
     case "rejection": return "Agent declined"; // not alerted (tier 0); label kept for completeness
-    default: return "Agent replied, intent unclear";
+    case "soft_no": return "Agent declined, re-engagement drafted";
+    // The four below were ALSO falling through to "intent unclear" — and they
+    // are the highest-intent replies the funnel produces. An agent proposing a
+    // showing is the closest thing to a yes that exists before a contract, and
+    // it paged as confusion.
+    case "offer_format": return "Agent wants the offer in writing";
+    case "appointment": return "Agent proposed a showing/call time";
+    case "seller_costs": return "Agent asked who pays what";
+    case "disclosure_step": return "Compliance disclosure — needs you personally";
+    case "unknown": return "Agent replied, intent unclear";
+    default: {
+      // Exhaustiveness: a NEW classification added to the union lands here at
+      // COMPILE time, not as a mystery SMS at 2pm.
+      const _exhaustive: never = classification;
+      void _exhaustive;
+      return "Agent replied, intent unclear";
+    }
   }
 }
 
