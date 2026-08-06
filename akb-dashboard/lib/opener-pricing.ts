@@ -18,6 +18,8 @@
 import { priceOpener, type PricerResult } from "@/lib/per-market-pricer";
 import { arvForSubjectFromSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import { corroborateOpener, type CorroborationFlag } from "@/lib/opener-sanity-gate";
+import { buildDerivation, type OpenerDerivation } from "@/lib/pricing/opener-derivation";
+import { OFFER_ROUND_STEP_USD } from "@/lib/pricing/offer-rounding";
 import { PLACEHOLDER_REHAB_HOLD_REASON } from "@/lib/pricing/vision-queue";
 
 export type ArvSource = "seed_renovated" | "stored" | "none";
@@ -50,6 +52,11 @@ export interface OpenerWithSeedResult {
   /** Corroboration flags that turned a computed opener into a HOLD (empty when
    *  the opener sent or the record was already a HOLD for another reason). */
   corroborationFlags: CorroborationFlag[];
+  /** THE RECEIPT (2026-08-06 audit). Every term the formula consumed, so the
+   *  number can be recomputed cold from the record instead of reverse-
+   *  engineered. Emitted HERE, at the point of computation, so it can never
+   *  drift from the opener it explains. */
+  derivation: OpenerDerivation;
 }
 
 const pos = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v > 0;
@@ -184,5 +191,22 @@ export function priceOpenerWithSeed(input: OpenerWithSeedInput): OpenerWithSeedR
       ? (finalResult.overArvList ? "arv_buybox_seed_over_arv_list" : "arv_buybox_seed")
     : "arv_buybox_stored";
 
-  return { result: finalResult, arvSource, arvUsed: arvForPricer, basisLabel, corroborationFlags: corr.flags };
+  const derivation = buildDerivation({
+    opener: finalResult.opener,
+    basis: basisLabel,
+    psf: psfUsed ?? null,
+    sqft: input.sqft ?? null,
+    arv: arvForPricer,
+    arvSource,
+    arvPctMax: input.arvPctMax ?? null,
+    rehab: finalResult.rehabUsed,
+    rehabPlaceholder: finalResult.placeholderRehab === true,
+    fee: input.wholesaleFee ?? null,
+    anchor: finalResult.anchorPct,
+    ceiling: finalResult.ceiling,
+    roundTo: OFFER_ROUND_STEP_USD,
+    flags: corr.flags,
+  });
+
+  return { result: finalResult, arvSource, arvUsed: arvForPricer, basisLabel, corroborationFlags: corr.flags, derivation };
 }

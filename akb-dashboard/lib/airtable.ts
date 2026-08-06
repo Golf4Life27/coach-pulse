@@ -104,6 +104,9 @@ const LISTING_FIELD_REGISTRY: ReadonlyArray<ListingFieldRegistryEntry> = [
   { prop: "underwriteConfidence", fieldId: "fldw0zfap0NbzqsO5", name: "Underwrite_Confidence" },
   { prop: "latestCounterUsd", fieldId: "fldVEInwbGdWOlt5F", name: "Latest_Counter_Usd" },
   { prop: "openerBasis", fieldId: "fldCjwSV2vLeui8Mf", name: "Opener_Basis" },
+  // THE OPENER RECEIPT (2026-08-06 audit). Every term the formula consumed,
+  // so a number can be recomputed cold. See lib/pricing/opener-derivation.
+  { prop: "openerDerivationJson", fieldId: "fldnVJBLgM6pKUHKk", name: "Opener_Derivation_JSON" },
   // Phase 11.2 (5/18) — email-attributable outbound send timestamp.
   // Crier staleness math takes max() across this + lastOutreachDate
   // (SMS) + lastInboundAt + lastOutboundAt so active email negotiations

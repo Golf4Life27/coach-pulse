@@ -82,6 +82,7 @@ import { decideAutoSeed, runAutoSeed } from "@/lib/crawler/auto-seed";
 import { listArvSeededZips, getZipArvSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import { resolveSeedBudget } from "@/lib/spend/daily-budget";
 import { priceOpenerWithSeed } from "@/lib/opener-pricing";
+import { serializeDerivation } from "@/lib/pricing/opener-derivation";
 import { getMarketForListing, openerArvPctMax } from "@/lib/markets/registry";
 import { resolveAnchorPct } from "@/lib/markets/anchor";
 
@@ -168,6 +169,7 @@ async function createIntakeListing(
   underwrittenMaoTrack: string | null = null,
   opener: { amount: number | null; basis: string; reseed: boolean } | null = null,
   renovated: { detected: boolean; keywords: string[] } | null = null,
+  openerDerivationJson: string | null = null,
 ): Promise<string> {
   if (!AIRTABLE_PAT) throw new Error("AIRTABLE_PAT not set");
   const url = `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}`;
@@ -188,6 +190,7 @@ async function createIntakeListing(
     opener,
     renovatedLanguage: renovated?.detected ?? false,
     matchedRenovationKeywords: renovated?.keywords ?? [],
+    openerDerivationJson,
   });
   const res = await fetch(url, {
     method: "POST",
@@ -1304,6 +1307,7 @@ export async function GET(req: Request) {
         // ZIP seed (source-swap). New intake records carry no stored ARV, so
         // the seed — or the flat 65% fallback — is the only basis.
         let opener: { amount: number | null; basis: string; reseed: boolean } | null = null;
+        let openerDerivationJson: string | null = null;
         if (autoseedLive) {
           const market = getMarketForListing({ state: c.state, zip: c.zip });
           const marketId = market?.id ?? "";
@@ -1322,8 +1326,11 @@ export async function GET(req: Request) {
             seed: zipSeedMap.get(zip) ?? null,
           });
           opener = { amount: priced.result.opener, basis: priced.basisLabel, reseed: priced.result.flagReseed };
+          // THE RECEIPT (2026-08-06 audit) — persist the arithmetic, not just
+          // the answer, so the number can be recomputed cold from the record.
+          openerDerivationJson = serializeDerivation(priced.derivation);
         }
-        await createIntakeListing(c, promote, firecrawlUrl, portfolioDetected, matchedPortfolioKeywords, underwrittenMao, underwrittenMaoTrack, opener, renovated);
+        await createIntakeListing(c, promote, firecrawlUrl, portfolioDetected, matchedPortfolioKeywords, underwrittenMao, underwrittenMaoTrack, opener, renovated, openerDerivationJson);
         summary.written++;
       } catch (err) {
         summary.per_zip_errors.push({
