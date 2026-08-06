@@ -3,6 +3,8 @@ import {
   parseAddressFromListingUrl,
   isTextable,
   summarizeEnrichment,
+  addressesMatch,
+  findMatchingListing,
 } from "./sweep-enrich";
 
 describe("parseAddressFromListingUrl", () => {
@@ -71,5 +73,60 @@ describe("summarizeEnrichment", () => {
       written: 1,
       by_skip: { url_unparseable: 1, no_agent_phone: 2 },
     });
+  });
+});
+
+// THE FIX FOR THE FIRST ENRICHMENT RUN (2026-08-06): 4 of 5 qualifiers came
+// back no_rentcast_match because the lookup demanded an exact address string.
+// Portal URL slugs abbreviate; the feed does not have to agree.
+describe("addressesMatch — formatting must not lose a lead", () => {
+  it("matches across suffix abbreviation", () => {
+    expect(addressesMatch("1234 Elm St, Detroit, MI 48228", "1234 Elm Street, Detroit, MI 48228")).toBe(true);
+    expect(addressesMatch("500 Oak Ave", "500 Oak Avenue")).toBe(true);
+    expect(addressesMatch("77 Pine Rd", "77 Pine Road")).toBe(true);
+  });
+
+  it("matches when one side omits the suffix entirely", () => {
+    expect(addressesMatch("1234 Elm St", "1234 Elm")).toBe(true);
+  });
+
+  it("matches across a leading directional", () => {
+    expect(addressesMatch("21554 W Davison St", "21554 Davison St")).toBe(true);
+  });
+
+  it("ignores punctuation and casing", () => {
+    expect(addressesMatch("1234 ELM ST.", "1234 elm st")).toBe(true);
+  });
+
+  it("does NOT match a different street type", () => {
+    // Putting a real offer on the wrong house is the failure that matters.
+    expect(addressesMatch("1234 Elm St", "1234 Elm Ave")).toBe(false);
+  });
+
+  it("does NOT match a different house number or street", () => {
+    expect(addressesMatch("1234 Elm St", "1235 Elm St")).toBe(false);
+    expect(addressesMatch("1234 Elm St", "1234 Oak St")).toBe(false);
+  });
+
+  it("refuses to match without a house number", () => {
+    expect(addressesMatch("Elm St", "Elm St")).toBe(false);
+    expect(addressesMatch(null, "1234 Elm St")).toBe(false);
+  });
+});
+
+describe("findMatchingListing", () => {
+  const feed = [
+    { address: "9999 Other St, Detroit, MI 48228" },
+    { address: "1234 Elm Street, Detroit, MI 48228" },
+  ];
+
+  it("finds the swept address in a ZIP feed despite formatting drift", () => {
+    expect(findMatchingListing("1234 Elm St, Detroit, MI 48228", feed)?.address).toBe(
+      "1234 Elm Street, Detroit, MI 48228",
+    );
+  });
+
+  it("returns null when the feed genuinely lacks it", () => {
+    expect(findMatchingListing("5555 Missing Rd, Detroit, MI 48228", feed)).toBeNull();
   });
 });

@@ -66,6 +66,20 @@ const DEFAULT_FAILURE_ONLY_EXCLUSIONS = [
   // SMS on 2026-07-12 (5/5 during ~55-msg/48h live traffic). Belt health for
   // sends is the send-slot summary, not this event.
   "h2_outreach_delivery_quarantine",
+  // Gates working as designed (2026-08-06). These three are audited ONLY when
+  // they REFUSE or HOLD — a refusal is the success case of a safety gate, and
+  // there is no `send_gate_allowed` counterpart to divide by. So the rate is
+  // pinned at 100% the moment one appears, and on 2026-08-06 that fired two
+  // Tier-3 SMS pages at the operator (13:08Z, 16:43Z) for a send gate and a
+  // pricing gate that were both doing their job.
+  //
+  // The COUNTS still matter — 9 held bumps is 9 follow-ups that did not go
+  // out. Read them in /api/admin/audit-tail?event=..., where the hold reason
+  // is on the row. A failure-only event needs a queue-depth alarm, not a rate
+  // alarm; rate is the wrong instrument and pages on noise.
+  "send_gate_refused",
+  "send_gate_thread_truth_refused",
+  "h2_bump_reprice_hold",
 ];
 
 function readExclusions(env: Record<string, string | undefined>): Set<string> {

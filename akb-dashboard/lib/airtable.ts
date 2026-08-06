@@ -542,6 +542,47 @@ export async function getRecentlyDeadCandidates(opts: {
   return listings;
 }
 
+// SIBLING NOTES BY AGENT PHONE (2026-08-06) — the thread-truth scope fix.
+//
+// A Quo thread belongs to a PHONE NUMBER; a Verification_Notes field belongs to
+// ONE record. Agent phones are brokerage switchboards: 734-838-9197 carries ~60
+// listings under two agent names, 404-843-2500 carries 18 under ten. So once one
+// property's opener went out on a line, every OTHER property on that line failed
+// first touch forever — its own notes had no knowledge of a Quo id written to a
+// sibling record, and rule (a) read that as an unrecorded operator send.
+//
+// This returns the notes of every OTHER record sharing the number, so the gate
+// can ask the question it actually means: "do we know what was said in our name
+// in this conversation?" — not "does this one row know". The Canfield invariant
+// is untouched: an operator's manual send from the Quo app has an id recorded on
+// NO record, so it still refuses.
+export async function getSiblingNotesByAgentPhone(
+  agentPhone: string,
+  excludeRecordId: string | null,
+): Promise<string[]> {
+  const digits = (agentPhone ?? "").replace(/\D/g, "").slice(-10);
+  if (digits.length !== 10) return [];
+  // No credentials → no sibling knowledge. Returning [] narrows rule (a) to
+  // the record's own notes, which can only REFUSE more, never send more.
+  if (!AIRTABLE_PAT) return [];
+  // Match on the last 10 digits so stored formatting variance ("(313) 555-1234",
+  // "+13135551234") cannot silently narrow the sibling set — a MISSED sibling
+  // re-opens exactly the false refusal this exists to close.
+  const formula = `AND(RIGHT(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE({Agent_Phone},'-',''),' ',''),'(',''),')',''),'+',''),10)='${digits}', NOT({Verification_Notes}=''))`;
+  const records = await fetchRecords(LISTINGS_TABLE, ["fldwKGxZly6O8qyPu"], {
+    filterByFormula: formula,
+    maxRecords: 200,
+  });
+  const out: string[] = [];
+  for (const r of records) {
+    if (excludeRecordId && (r as { id?: string }).id === excludeRecordId) continue;
+    const fields = (r as { fields?: Record<string, unknown> }).fields ?? {};
+    const notes = fields.fldwKGxZly6O8qyPu;
+    if (typeof notes === "string" && notes) out.push(notes);
+  }
+  return out;
+}
+
 // Rehab-sweep candidate selection (2026-06-05). The appraiser backfill
 // was crawling the brief's active set in lexicographic id order and
 // burning calls on records with NO Verification_URL (Firecrawl can't
