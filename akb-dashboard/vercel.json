@@ -93,6 +93,10 @@
       "schedule": "20 */2 * * *"
     },
     {
+      "path": "/api/cron/sqft-backfill?limit=150",
+      "schedule": "40 */6 * * *"
+    },
+    {
       "path": "/api/cron/data-federation-pull",
       "schedule": "0 16 * * *"
     },
