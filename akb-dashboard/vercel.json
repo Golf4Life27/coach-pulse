@@ -259,6 +259,10 @@
     {
       "path": "/api/cron/h2-outreach?dry_run=false&limit=25&send_cap_per_run=20&send_cap_per_zip=5",
       "schedule": "30 23 * * *"
+    },
+    {
+      "path": "/api/cron/purge-capped-to-list?apply=1&limit=1000",
+      "schedule": "50 3 * * *"
     }
   ]
 }
