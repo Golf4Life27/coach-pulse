@@ -46,6 +46,9 @@ import {
 import { fetchListingsByZip } from "@/lib/crawler/sources/rentcast";
 import { buildIntakeListingFields } from "@/lib/crawler/intake-fields";
 
+const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
+const AIRTABLE_LISTINGS_TABLE = process.env.AIRTABLE_LISTINGS_TABLE || "tbldMjKBgPiq45Jjs";
+
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
@@ -197,6 +200,9 @@ export async function GET(req: Request) {
   // already passed the buy box, the distress test and every hard veto, so this
   // is the call the old intake belt was spending blind on whole ZIPs.
   const enrichOutcomes: EnrichOutcome[] = [];
+  // Verbatim Airtable failures — the sweep reported "record_write_failed" with
+  // no detail for two days while the write URL was malformed.
+  const writeErrors: string[] = [];
   if (!dryRun) {
     // ONE ZIP fetch per ZIP-with-qualifiers, then match locally. Strictly
     // cheaper than per-property (5 qualifiers in a ZIP cost 1 call, not 5) and
@@ -262,7 +268,13 @@ export async function GET(req: Request) {
           renovatedLanguage: false,
           matchedRenovationKeywords: [],
         });
-        const res = await fetch(`https://api.airtable.com/v0/${process.env.AIRTABLE_BASE_ID}/${process.env.AIRTABLE_LISTINGS_TABLE}`, {
+        // TABLE/BASE IDs (2026-08-07): this route was the ONLY file in the repo
+        // reading AIRTABLE_LISTINGS_TABLE — every other writer hardcodes
+        // tbldMjKBgPiq45Jjs. With that env var unset the URL resolved to
+        // ".../undefined", so EVERY write 404'd and the sweep had never
+        // persisted a record. Fall back to the known ids so this works whether
+        // or not the vars exist.
+        const res = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${AIRTABLE_LISTINGS_TABLE}`, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${process.env.AIRTABLE_PAT}`,
@@ -270,10 +282,20 @@ export async function GET(req: Request) {
           },
           body: JSON.stringify({ records: [{ fields }], typecast: true }),
         });
-        const body = (await res.json().catch(() => null)) as { records?: Array<{ id: string }> } | null;
+        const raw = await res.text().catch(() => "");
+        let body: { records?: Array<{ id: string }> } | null = null;
+        try { body = JSON.parse(raw) as { records?: Array<{ id: string }> }; } catch { /* non-JSON error body */ }
         const recordId = body?.records?.[0]?.id ?? null;
+        if (!recordId) {
+          // SAY WHY. The previous version swallowed the response with
+          // .catch(() => null), so a 404 from a malformed URL and a 422 from a
+          // bad field looked identical — "record_write_failed" and nothing
+          // else. A system that knows the reason must not report confusion.
+          writeErrors.push(`${res.status} ${raw.slice(0, 300)}`);
+        }
         enrichOutcomes.push({ url: q.url, address: parsed.formatted, recordId, skipped: recordId ? null : "record_write_failed" });
-        } catch {
+        } catch (err) {
+          writeErrors.push(err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300));
           enrichOutcomes.push({ url: q.url, address: parsed.formatted, recordId: null, skipped: "record_write_failed" });
         }
       }
@@ -284,6 +306,7 @@ export async function GET(req: Request) {
     metro: leg.metro,
     zips_swept: perZip.length,
     enrichment: summarizeEnrichment(enrichOutcomes),
+    write_errors: writeErrors.slice(0, 5),
     ...summarizeScreens(screens),
     qualified_urls: qualified.length,
     credits: { search: searchCredits, scrape: scrapeCredits, total: searchCredits + scrapeCredits },
