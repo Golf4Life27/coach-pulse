@@ -110,6 +110,9 @@ export type OpenerConfidence = "STRONG" | "THIN" | "STORED" | "NONE";
 
 export interface PricerInput {
   listPrice?: number | null;
+  /** Subject square footage — feeds the scope-tiered rehab fallback when there
+   *  is no vision read. Without it such a record still HOLDS. */
+  sqft?: number | null;
   /** Rough ARV — stored Real_ARV_Median OR an auto-seeded ZIP $/sqft ×
    *  subject sqft. For THIN comp sets this should already be the low-end
    *  (conservative) figure, not the median. */
@@ -145,6 +148,9 @@ export interface PricerResult {
    *  the vision queue. Carried as a flag rather than an early hold so every
    *  downstream diagnostic still runs and keeps its own, more specific reason. */
   placeholderRehab?: boolean;
+  /** Named scope when rehab came from sqft × a scope tier instead of a vision
+   *  read — drives the "which scope is it?" ask in the outbound message. */
+  assumedScope?: "light" | "medium" | "heavy" | null;
   /** Anchor actually applied (buy-box path only; null on a hold). */
   anchorPct: number | null;
   /** ARV-SANITY GATE (Hole C): stored ARV was below list → distrusted as
@@ -261,10 +267,17 @@ export function placeholderRehabIsUnsafe(
 function holdResult(
   ceilingSource: RoughCeilingResult["source"],
   detail: string,
-  extra?: Partial<Pick<PricerResult, "arvDistrusted" | "flagReseed" | "flooredToFallback">>,
+  extra?: Partial<
+    Pick<PricerResult, "arvDistrusted" | "flagReseed" | "flooredToFallback" | "assumedScope">
+  >,
 ): PricerResult {
   return {
     opener: null,
+    // A HOLD still has to say WHY the rehab was what it was. When rehab came
+    // from a scope tier (nobody has been inside), the hold is a "we guessed the
+    // interior" hold — the vision queue can clear it. Dropping the scope here
+    // sent those records to operator review instead, where they sat.
+    assumedScope: extra?.assumedScope ?? null,
     basis: "hold_no_value_basis",
     confidence: "NONE",
     ceiling: null,
@@ -325,6 +338,7 @@ export function priceOpener(input: PricerInput): PricerResult {
     listPrice: input.listPrice ?? null,
     arvPctMax: input.arvPctMax ?? null,
     wholesaleFee: input.wholesaleFee ?? null,
+    sqft: input.sqft ?? null,
   });
 
   // ── PLACEHOLDER-REHAB HOLD (256 Westchester, operator 2026-07-31) ──────
@@ -363,6 +377,7 @@ export function priceOpener(input: PricerInput): PricerResult {
         rough.source,
         `does not pencil as a flip — MAO bound ≤ $0 (0.70×ARV $${(trustedArv ?? 0).toLocaleString()} − rehab $${(rough.rehabUsed ?? 0).toLocaleString()} − closing − fee $${fee.toLocaleString()}). ` +
           `HELD for operator review (rental/creative lane candidate; never list-anchored)`,
+        { assumedScope: rough.assumedScope ?? null },
       );
     }
     const maoBound = flip.offer;
@@ -398,7 +413,7 @@ export function priceOpener(input: PricerInput): PricerResult {
             `buy-box opener $${opener.toLocaleString()} below floor $${Math.round(floor).toLocaleString()} ` +
               `(max ${Math.round(LOW_OPENER_FLOOR_PCT_OF_LIST * 100)}%×list, $${LOW_OPENER_FLOOR_USD.toLocaleString()}) — ` +
               `micro-opener suppressed, HELD for operator review`,
-            { flooredToFallback: true },
+            { flooredToFallback: true, assumedScope: rough.assumedScope ?? null },
           );
         }
       }
@@ -464,17 +479,26 @@ export function priceOpener(input: PricerInput): PricerResult {
       //      the invented rehab term — and the dollars we commit — grow with
       //      it. Above this ceiling a placeholder rehab must be replaced by a
       //      real vision read before any number reaches a seller.
-      return rough.source === PLACEHOLDER_REHAB_SOURCE &&
+      const withScope = rough.assumedScope ? { ...guarded, assumedScope: rough.assumedScope } : guarded;
+      // NOBODY HAS BEEN INSIDE — the exposure cap applies to a SCOPE-derived
+      // rehab exactly as it does to a %-of-ARV placeholder (2026-08-07). A
+      // scope tier is a better guess, not a vision read, so the $75k
+      // autonomous-exposure ceiling from #188 must still bite. Without this,
+      // wiring scope tiers would have silently un-capped the largest
+      // autonomous offers the system can make.
+      const rehabUnseen = rough.source === PLACEHOLDER_REHAB_SOURCE || rough.assumedScope != null;
+      return rehabUnseen &&
         (placeholderRehabIsUnsafe(list, rough.arvUsed) ||
           (pos(guarded.opener) && guarded.opener > PLACEHOLDER_REHAB_MAX_OPENER_USD))
-        ? { ...guarded, placeholderRehab: true }
-        : guarded;
+        ? { ...withScope, placeholderRehab: true }
+        : withScope;
     }
     // Buy-box ceiling did not pencil (≤0 — rehab ate the value) → HOLD. A non-
     // deal correctly holds; we never paper over it with a list fraction.
     return holdResult(
       rough.source,
       `buy-box ceiling did not pencil (${gate.reason}) — HELD for operator review (rehab eats the buy-box; never list-anchored)`,
+      { assumedScope: rough.assumedScope ?? null },
     );
   }
 

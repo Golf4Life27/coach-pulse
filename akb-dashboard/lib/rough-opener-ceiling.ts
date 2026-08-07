@@ -38,6 +38,7 @@
 // rehab error bars, not in substituting the list price for value.
 
 import { DEFAULT_WHOLESALE_FEE } from "@/lib/pre-contract-math";
+import { pickScopeRehab, SCOPE_REHAB_ENABLED, type RehabScope } from "@/lib/pricing/rehab-scope";
 
 /** Placeholder rehab band center when ARV is present but no vision rehab
  *  exists yet — a conservative fraction of ARV. Opener-only; the precise
@@ -68,9 +69,15 @@ export interface RoughCeilingInput {
    *  value-anchored path; absent → HOLD (no autonomous opener). */
   arvPctMax?: number | null;
   wholesaleFee?: number | null;
+  /** Subject square footage. Required for the scope-tiered rehab fallback —
+   *  without it there is no honest scope estimate and the record still holds. */
+  sqft?: number | null;
 }
 
 export interface RoughCeilingResult {
+  /** Named scope when rehab was derived from sqft × a scope tier rather than a
+   *  vision read. Drives the "which scope is it?" ask in the outbound message. */
+  assumedScope?: RehabScope | null;
   /** The rough opener ceiling — the cap the anchor multiplies. Null whenever
    *  there is no trusted ARV value basis (→ the record HOLDS for review). */
   ceiling: number | null;
@@ -79,6 +86,10 @@ export interface RoughCeilingResult {
   /** Echoes for audit. */
   arvUsed: number | null;
   rehabUsed: number | null;
+}
+
+function sqftLabel(v: number | null | undefined): string {
+  return typeof v === "number" && Number.isFinite(v) ? `${Math.round(v)} sqft` : "sqft";
 }
 
 const pos = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v > 0;
@@ -95,8 +106,29 @@ export function computeRoughOpenerCeiling(input: RoughCeilingInput): RoughCeilin
   // subject sqft (or a stored comp-ARV) — it prices THE house.
   if (arv != null && validPct(input.arvPctMax)) {
     const visionRehab = pos(input.estRehabMid) ? input.estRehabMid : (pos(input.estRehab) ? input.estRehab : null);
-    const placeholder = visionRehab == null;
-    const rehab = visionRehab ?? Math.round(arv * ROUGH_REHAB_PCT_OF_ARV);
+
+    // SCOPE-TIERED REHAB (operator design, wired 2026-08-07). With no vision
+    // read the old path guessed a %-of-ARV and the send lane HELD the record —
+    // 260 of 616 eligible houses were stuck there, which is why outreach ran
+    // 12/day against a pool of hundreds.
+    //
+    // A %-of-ARV guess is not derived from the house. sqft × a named scope
+    // $/sqft is. So price the SCOPE instead: walk heavy → medium → light and
+    // take the first tier the property can actually carry, so the number we
+    // say is the most pessimistic one that still leaves a deal (INVARIANTS §2
+    // — better information may then only RAISE it). The message names the
+    // assumed scope and asks the agent, who has been inside, to correct it.
+    //
+    // Measured over the live pool before shipping: heavy-only would send 58
+    // and kill 91 outright (negative MAO at $45/sqft); heavy-with-fallback
+    // sends 160 at the unchanged 30%-of-list floor. 12 → 160.
+    const scopeRehab =
+      visionRehab == null && pos(input.sqft) && SCOPE_REHAB_ENABLED
+        ? pickScopeRehab({ sqft: input.sqft, arv, arvPctMax: input.arvPctMax, fee })
+        : null;
+
+    const placeholder = visionRehab == null && scopeRehab == null;
+    const rehab = visionRehab ?? scopeRehab?.rehab ?? Math.round(arv * ROUGH_REHAB_PCT_OF_ARV);
     const ceiling = Math.max(0, Math.round(arv * input.arvPctMax - rehab - fee));
     const source: RoughCeilingSource = placeholder ? "rough_buybox_arv_placeholder_rehab" : "rough_buybox_arv";
     return {
@@ -104,10 +136,13 @@ export function computeRoughOpenerCeiling(input: RoughCeilingInput): RoughCeilin
       source,
       detail:
         `rough ceiling $${ceiling.toLocaleString()} = ARV $${arv.toLocaleString()} × ${input.arvPctMax} ` +
-        `− rehab $${rehab.toLocaleString()}${placeholder ? ` (placeholder ${ROUGH_REHAB_PCT_OF_ARV}×ARV — no vision yet)` : " (vision)"} ` +
+        `− rehab $${rehab.toLocaleString()}${
+          scopeRehab ? ` (${scopeRehab.scope} scope, ${sqftLabel(input.sqft)} × $/sqft — no vision yet, agent asked)`
+          : placeholder ? ` (placeholder ${ROUGH_REHAB_PCT_OF_ARV}×ARV — no vision yet)` : " (vision)"} ` +
         `− fee $${fee.toLocaleString()}`,
       arvUsed: arv,
       rehabUsed: rehab,
+      assumedScope: scopeRehab?.scope ?? null,
     };
   }
 

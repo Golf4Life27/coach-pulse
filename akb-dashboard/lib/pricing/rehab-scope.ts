@@ -183,3 +183,48 @@ export function lighterTierFor(
   if (!next || next.opener == null || pessimistic.opener == null) return null;
   return next.opener > pessimistic.opener ? next : null;
 }
+
+// ── THE WIRED ENTRY POINT (2026-08-07) ──────────────────────────────────────
+// Used by lib/rough-opener-ceiling when a record has NO vision rehab. Replaces
+// the %-of-ARV placeholder that was holding 260 of 616 eligible houses.
+
+/** Kill switch. Default ON — this is the volume path. */
+export const SCOPE_REHAB_ENABLED = process.env.SCOPE_REHAB_ENABLED !== "false";
+
+/** The floor an opener must clear to be worth sending: max(pct×list, $USD).
+ *  Mirrors minOfferFloor in per-market-pricer; duplicated as an OPTIONAL input
+ *  here so this module stays pure and dependency-free. */
+export interface PickScopeInput {
+  sqft: number;
+  arv: number;
+  arvPctMax: number;
+  fee: number;
+}
+
+export interface PickedScope {
+  scope: RehabScope;
+  rehab: number;
+  mao: number;
+}
+
+/** Pure: the most PESSIMISTIC scope the property can actually carry.
+ *
+ *  Walks heavy → medium → light and returns the first whose MAO is positive.
+ *  Measured on the live pool: heavy-only would have sent 58 records and killed
+ *  91 outright (MAO goes negative at $45/sqft on a cheap house — that is not
+ *  conservatism, it is a dead record). Stepping down only when the heavier
+ *  scope cannot carry a deal sends 160 while still saying the lowest number
+ *  the house supports.
+ *
+ *  Returns null without sqft — inventing a rehab for a house of unknown size
+ *  is the exact failure this replaces. */
+export function pickScopeRehab(input: PickScopeInput): PickedScope | null {
+  const { sqft, arv, arvPctMax, fee } = input;
+  if (!pos(sqft) || !pos(arv) || !pos(arvPctMax) || !Number.isFinite(fee)) return null;
+  for (const scope of ["heavy", "medium", "light"] as const) {
+    const rehab = Math.round(sqft * SCOPE_PSF[scope]);
+    const mao = arv * arvPctMax - rehab - fee;
+    if (mao > 0) return { scope, rehab, mao: Math.round(mao) };
+  }
+  return null; // nothing pencils at any scope — the record genuinely does not work
+}
