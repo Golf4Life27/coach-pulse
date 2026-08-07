@@ -26,6 +26,10 @@ export interface IntakeFieldsOpts {
   underwrittenMao?: number | null;
   underwrittenMaoTrack?: string | null;
   opener?: { amount: number | null; basis: string; reseed: boolean } | null;
+  /** The opener's arithmetic receipt (2026-08-06 audit) — serialized
+   *  OpenerDerivation. Persisted so the number can be recomputed cold from the
+   *  record rather than reverse-engineered. */
+  openerDerivationJson?: string | null;
   /** Renovated/turnkey language detected on the subject page by the intake
    *  Firecrawl verify (fc.hasRenovatedLanguage). Persisted to
    *  Renovated_Language so the send-gate opener veto can see it from the
@@ -106,6 +110,11 @@ export function buildIntakeListingFields(c: IntakeCandidate, opts: IntakeFieldsO
     }
     fields["Opener_Basis"] = opts.opener.basis;
     if (opts.opener.reseed) fields["Opener_Reseed_Flag"] = true;
+  }
+  // Write the receipt for a HOLD too: "why is there no number" is exactly as
+  // hard to answer later as "where did this number come from".
+  if (typeof opts.openerDerivationJson === "string" && opts.openerDerivationJson) {
+    fields["Opener_Derivation_JSON"] = opts.openerDerivationJson;
   }
   return fields;
 }

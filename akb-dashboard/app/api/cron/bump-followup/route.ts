@@ -60,7 +60,7 @@ import {
 } from "@/lib/h2-outreach/bump-lane";
 import { evaluateSendWindow, type WorkingHoursMeta } from "@/lib/h2-working-hours";
 import { listSeededZips } from "@/lib/buyer-median-store";
-import { listArvSeededZips, getZipArvSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
+import { listPriceableArvZips, getZipArvSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import { priceOpenerWithSeed } from "@/lib/opener-pricing";
 import { getMarketForListing, openerArvPctMax } from "@/lib/markets/registry";
 import { resolveAnchorPct } from "@/lib/markets/anchor";
@@ -237,7 +237,7 @@ async function handle(req: Request): Promise<Response> {
   const capCfg =
     rawCapCfg.coverageMode === "auto"
       ? resolveCoverage(rawCapCfg, [
-          ...(await listArvSeededZips()),
+          ...(await listPriceableArvZips()),
           ...(await listSeededZips()),
         ])
       : rawCapCfg;

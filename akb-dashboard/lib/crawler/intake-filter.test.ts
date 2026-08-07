@@ -255,3 +255,64 @@ describe("crossCheckSqft — the basement-double-count detector", () => {
     expect(crossCheckSqft(1_260, 1_000, SQFT_MISMATCH_TOLERANCE).mismatch).toBe(true);
   });
 });
+
+describe("ask_above_renovated_value — reject at intake, not at send (2026-08-07)", () => {
+  // The Detroit records this exists for. Each was collected, enriched, priced,
+  // and only then refused by the pre-send corroboration gate as infeasible_ask.
+  const PSF = new Map<string, number>([["48235", 92], ["48205", 68], ["48228", 92]]);
+
+  const detroit = (over: Partial<IntakeCandidate>) =>
+    cand({ city: "Detroit", state: "MI", zip: "48235", ...over });
+
+  it("rejects 16172 Cruse — $109,000 ask on a house worth $104,328 finished", () => {
+    const ev = evaluateIntakeCandidate(
+      detroit({ listPrice: 109_000, squareFootage: 1_134 }),
+      NOW,
+      { zipRenovatedPsf: PSF },
+    );
+    expect(ev.reasons).toContain("ask_above_renovated_value");
+    expect(ev.accept).toBe(false);
+  });
+
+  it("rejects 19216 Hickory — $89,900 ask, $55,760 renovated value", () => {
+    const ev = evaluateIntakeCandidate(
+      detroit({ zip: "48205", listPrice: 89_900, squareFootage: 820 }),
+      NOW,
+      { zipRenovatedPsf: PSF },
+    );
+    expect(ev.reasons).toContain("ask_above_renovated_value");
+  });
+
+  it("KEEPS 11635 Penrod — $72,800 ask, $128,800 renovated value (this one sends)", () => {
+    const ev = evaluateIntakeCandidate(
+      detroit({ zip: "48228", listPrice: 72_800, squareFootage: 1_400 }),
+      NOW,
+      { zipRenovatedPsf: PSF },
+    );
+    expect(ev.reasons).not.toContain("ask_above_renovated_value");
+  });
+
+  it("FAILS OPEN — never rejects without sqft, without a seed, or without the map", () => {
+    const noSqft = detroit({ listPrice: 109_000, squareFootage: null });
+    expect(evaluateIntakeCandidate(noSqft, NOW, { zipRenovatedPsf: PSF }).reasons)
+      .not.toContain("ask_above_renovated_value");
+
+    const unseededZip = detroit({ zip: "99999", listPrice: 109_000, squareFootage: 1_134 });
+    expect(evaluateIntakeCandidate(unseededZip, NOW, { zipRenovatedPsf: PSF }).reasons)
+      .not.toContain("ask_above_renovated_value");
+
+    // Seed-store outage: no map at all. Intake must stay OPEN, not slam shut.
+    const noMap = detroit({ listPrice: 109_000, squareFootage: 1_134 });
+    expect(evaluateIntakeCandidate(noMap, NOW, {}).reasons)
+      .not.toContain("ask_above_renovated_value");
+  });
+
+  it("is the loosest form of the test — a house worth a dollar more is KEPT", () => {
+    // 1,134 sqft x $92 = $104,328. Deliberately no margin: our ARVs carry
+    // error and this gate drops a record before anything else can look at it.
+    const ev = evaluateIntakeCandidate(
+      detroit({ listPrice: 104_327, squareFootage: 1_134 }), NOW, { zipRenovatedPsf: PSF },
+    );
+    expect(ev.reasons).not.toContain("ask_above_renovated_value");
+  });
+});

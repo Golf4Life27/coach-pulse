@@ -3,16 +3,41 @@ import { priceOpener, NEVER_OVER_LIST_PCT, minOfferFloor, placeholderRehabIsUnsa
 
 const DETROIT_BUYBOX = 0.6461;
 
-describe("minOfferFloor — relationship-protector (operator 2026-06-30)", () => {
-  it("floor = max(30% × list, $10k)", () => {
-    expect(minOfferFloor(55_000)).toBe(16_500); // 30% of 55k (16,500) > 10k
-    expect(minOfferFloor(14_950)).toBe(10_000); // 30% (4,485) < 10k → the $10k USD leg wins
+describe("minOfferFloor — relationship-protector (operator 2026-06-30, value-anchored 2026-08-07)", () => {
+  it("floor = max(15% × ARV, 15% × list, $10k)", () => {
+    expect(minOfferFloor(55_000)).toBe(10_000);            // 15% of 55k = 8,250 < 10k
+    expect(minOfferFloor(120_000)).toBe(18_000);           // 15% of list wins
+    expect(minOfferFloor(120_000, 300_000)).toBe(45_000);  // 15% of ARV wins
+    expect(minOfferFloor(14_950)).toBe(10_000);            // the $10k USD leg wins
   });
   it("the $1,714 Liberal opener is below the $10k floor → HOLDS (no laughable text)", () => {
     expect(1_714 < minOfferFloor(14_950)).toBe(true);
   });
-  it("the $16,500 Tacoma opener clears its $16,500 floor (not below) → sends", () => {
-    expect(16_500 < minOfferFloor(55_000)).toBe(false);
+
+  // THE REGRESSION THIS SUITE EXISTS TO CATCH (2026-08-07). Seven live Detroit
+  // records computed their MAO to the dollar and were suppressed by a floor set
+  // as 30% of an ASK that exceeded the house's own renovated value. Each pair
+  // below is (opener, list, ARV) as measured.
+  it("passes correctly-priced cheap-market openers the 30%-of-list floor killed", () => {
+    const held: Array<[number, number, number]> = [
+      [31_000, 109_000, 104_328], // 16172 Cruse   — missed the old bar by $1,700
+      [19_000, 80_000, 69_580],   // 15871 Tracey
+      [12_500, 69_900, 50_468],   // 15724 Fielding
+      [17_750, 82_900, 65_520],   // 1671 W Buena Vista
+      [14_250, 89_900, 55_760],   // 19216 Hickory
+      [37_250, 179_900, 122_040], // 19947 Heyden
+      [45_500, 257_000, 146_114], // 150 W Hildale
+    ];
+    for (const [opener, list, arv] of held) {
+      expect(opener >= minOfferFloor(list, arv)).toBe(true);
+      expect(opener < 0.30 * list).toBe(true); // all 7 WERE blocked before
+    }
+  });
+
+  it("still refuses an opener that is absurd against the ask", () => {
+    // ARV $60,000 vs a $200,000 list: $14,250 is 24% of ARV (fine on value)
+    // but 7% of the ask. The list leg is what catches this, and must.
+    expect(14_250 < minOfferFloor(200_000, 60_000)).toBe(true);
   });
 });
 

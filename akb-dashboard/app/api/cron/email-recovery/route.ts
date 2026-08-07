@@ -134,7 +134,7 @@ async function handle(req: Request): Promise<Response> {
       seed: zip5 ? (seedCache.get(zip5) ?? null) : null,
     });
     const opener = pw.result.opener;
-    if (opener == null || (l.listPrice != null && opener < minOfferFloor(l.listPrice))) {
+    if (opener == null || (l.listPrice != null && opener < minOfferFloor(l.listPrice, pw.result.arvUsed))) {
       rows.push({
         record_id: l.id,
         address: l.address,

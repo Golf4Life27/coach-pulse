@@ -31,7 +31,7 @@ import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { verifyListingByUrl } from "@/lib/crawler/sources/firecrawl";
 import { isPriceableMarket } from "@/lib/markets/actionable";
 import { listSeededZips } from "@/lib/buyer-median-store";
-import { listArvSeededZips } from "@/lib/zip-arv-seed-store";
+import { listPriceableArvZips } from "@/lib/zip-arv-seed-store";
 import { isOutreachFresh, DEFAULT_FRESHNESS_HOURS } from "@/lib/outreach-freshness";
 import { judgeSpread, isSpreadWatchRecord } from "@/lib/contract-lifecycle/spread-watch";
 import { judgeSubjectPrint } from "@/lib/pricing/subject-history";
@@ -124,7 +124,7 @@ export async function GET(req: Request) {
     // legacy set.
     let arvZips: Set<string>;
     let medianZips: Set<string>;
-    [all, arvZips, medianZips] = await Promise.all([getListings(), listArvSeededZips(), listSeededZips()]);
+    [all, arvZips, medianZips] = await Promise.all([getListings(), listPriceableArvZips(), listSeededZips()]);
     seededZips = new Set<string>([...arvZips, ...medianZips]);
     // Third cohort (2026-07-09): untouched records whose Live_Status was
     // never stamped (6/30 Indy class) are invisible to isH2Eligible until
