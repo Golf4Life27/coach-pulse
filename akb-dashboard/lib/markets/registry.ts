@@ -210,8 +210,9 @@ export const NATIONAL_OPENER_ARV_PCT_MAX = (() => {
 export type OpenerArvPctMaxSource =
   | "configured_verified"            // a configured market with a verified ARV source
   | "national_default_disclosure"    // unconfigured disclosure + non-restricted state
+  | "national_default_unverified"    // configured-but-dormant, fell back to the national default
   | "hold_restricted"                // restricted state
-  | "hold_configured_unverified"     // configured but ARV source not verified (dormant)
+  | "hold_configured_unverified"     // configured, unverified, AND the state cannot self-price
   | "hold_non_disclosure"            // non-disclosure state, ARV unprovable
   | "hold_no_state";                 // no state on the listing
 
@@ -231,12 +232,36 @@ export function resolveOpenerArvPctMax(
   const st = (state ?? "").trim().toUpperCase();
   if (!st) return { arvPctMax: null, source: "hold_no_state" };
   if (getRestrictedStates().has(st)) return { arvPctMax: null, source: "hold_restricted" };
+  const nonDisclosure = NON_DISCLOSURE_STATES.has(st);
   if (market && market.buyer_params) {
-    return market.arv_source_verified && market.sourcing_allowed
-      ? { arvPctMax: market.buyer_params.arv_pct_max, source: "configured_verified" }
-      : { arvPctMax: null, source: "hold_configured_unverified" };
+    if (market.arv_source_verified && market.sourcing_allowed) {
+      return { arvPctMax: market.buyer_params.arv_pct_max, source: "configured_verified" };
+    }
+    // ── ADDING A MARKET MUST NEVER MAKE THINGS WORSE THAN NOT ADDING IT ──
+    // (operator 2026-08-07, on the third request to expand markets.)
+    //
+    // THE BUG. A dormant market HELD outright, while the very same listing in
+    // a state with NO market entry at all priced off the national default. So
+    // writing down what we know about a metro DISABLED it. Memphis is the
+    // proof: 295 records — 33% of the entire eligible pool — every one holding
+    // on hold_no_value_basis, purely because memphis_tn exists in markets.json
+    // with arv_source_verified:false. Delete that entry and TN prices today.
+    //
+    // The fallback is strictly MORE conservative than the config it replaces:
+    // Memphis's configured buy-box is 0.7175 and the national default is 0.70,
+    // so we offer LESS, not more. There is no version of this where holding
+    // was the safe choice and pricing at 0.70 is the reckless one — we already
+    // price every unconfigured disclosure market at exactly this number.
+    //
+    // What arv_source_verified still gates is the market's OWN buy-box, and
+    // the precise contract lane (isMarketLive, all three flags) is untouched.
+    // A dormant market in a state that cannot self-price still HOLDs.
+    if (!nonDisclosure) {
+      return { arvPctMax: NATIONAL_OPENER_ARV_PCT_MAX, source: "national_default_unverified" };
+    }
+    return { arvPctMax: null, source: "hold_configured_unverified" };
   }
-  if (NON_DISCLOSURE_STATES.has(st)) return { arvPctMax: null, source: "hold_non_disclosure" };
+  if (nonDisclosure) return { arvPctMax: null, source: "hold_non_disclosure" };
   return { arvPctMax: NATIONAL_OPENER_ARV_PCT_MAX, source: "national_default_disclosure" };
 }
 
