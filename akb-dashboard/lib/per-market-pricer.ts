@@ -61,28 +61,79 @@ import { DEFAULT_WHOLESALE_FEE } from "@/lib/pre-contract-math";
 //     value (wrong basis), so renovated-ARV < list. ARV-SANITY GATE distrusts
 //     any ARV below list and HOLDS (flags re-seed) instead of list-anchoring.
 
-/** Low-opener floor: a buy-box opener below `max(PCT×list, USD)` is treated
- *  as broken-looking and HELD for operator review. Env-tunable.
- *  (NOTE: this now HOLDS rather than routing to a 65%-of-list rail. If cheap-
- *  market volume suffers, lower this to let real low value-anchored openers
- *  send — an operator dial, not a silent default change.) */
+/** Low-opener floor — VALUE-ANCHORED (operator 2026-08-07).
+ *
+ *  WAS max(30% × LIST, $10,000), and that was the last list-anchored term left
+ *  in the pricer. The doctrine is that the seller's ask is NEVER an input to
+ *  our number; a floor expressed as a fraction of the ask violates it in the
+ *  one place it does the most damage, because an inflated ask RAISES the bar
+ *  our correctly-computed offer has to clear.
+ *
+ *  MEASURED, 14 live Detroit records through the shipped pricer: 7 held here.
+ *  Every one of the 7 was asking AT OR ABOVE its own fully-renovated value
+ *  (ARV 57-96% of list) — so 30% of that ask was 30% of a fiction. 16172 Cruse
+ *  computed $31,000, which IS its MAO to the dollar, and was suppressed for
+ *  missing a $32,700 bar set by a seller who wants $109,000 for a house worth
+ *  $104,328 finished. Meanwhile all 7 openers sat at 25-31% OF ARV — right
+ *  where a healthy cheap-market deal lands (0.6461×ARV − 0.30×ARV − $5k fee
+ *  ≈ 30% of ARV). They were never broken numbers. They were correct numbers
+ *  measured against the wrong stick.
+ *
+ *  The floor's real job — never text a laughable micro-offer like $1,714 on a
+ *  gutted shell — is preserved by measuring against VALUE and by the absolute
+ *  dollar backstop, which is unchanged. 15% of ARV is half of where a normal
+ *  deal lands, so it still catches genuinely broken arithmetic. */
+export const LOW_OPENER_FLOOR_PCT_OF_ARV = (() => {
+  const raw = Number(process.env.LOW_OPENER_FLOOR_PCT_OF_ARV);
+  return Number.isFinite(raw) && raw > 0 && raw < 1 ? raw : 0.15;
+})();
+/** The ABSURDITY rail — see minOfferFloor. Lowered 0.30 → 0.15 (2026-08-07).
+ *  This is a send/don't-send politeness bound, NOT a pricing input: it can
+ *  only ever suppress a number, never produce or raise one. */
 export const LOW_OPENER_FLOOR_PCT_OF_LIST = (() => {
   const raw = Number(process.env.LOW_OPENER_FLOOR_PCT_OF_LIST);
-  return Number.isFinite(raw) && raw > 0 && raw < 1 ? raw : 0.30;
+  return Number.isFinite(raw) && raw > 0 && raw < 1 ? raw : 0.15;
 })();
 export const LOW_OPENER_FLOOR_USD = (() => {
   const raw = Number(process.env.LOW_OPENER_FLOOR_USD);
   return Number.isFinite(raw) && raw >= 0 ? raw : 10_000;
 })();
 
-/** The minimum DEFENSIBLE cash opener for a listing: max(PCT×list, $USD).
- *  A buy-box opener below this is a laughable micro-offer (e.g. $1,714 on a
- *  gutted shell) — HOLD → creative/landlord lane, never text it. Exported so
- *  the h2 SEND path applies the identical floor the seed pricer already does
- *  (the relationship-protector the direct send path was missing). Pure given
- *  the env-read constants above. */
-export function minOfferFloor(list: number): number {
-  return Math.max(LOW_OPENER_FLOOR_PCT_OF_LIST * list, LOW_OPENER_FLOOR_USD);
+/** The minimum DEFENSIBLE cash opener:
+ *      max(PCT_OF_ARV × ARV, PCT_OF_LIST × list, $USD)
+ *
+ *  THE FLOOR DOES TWO DIFFERENT JOBS and the old single 30%-of-list term
+ *  conflated them, which is why it was both too strict and too loose:
+ *
+ *   (1) BROKEN ARITHMETIC — the ceiling pencilled to a nonsense micro-number
+ *       ($1,714 on a gutted shell). Detected against VALUE, because that is
+ *       what "broken" is relative to. A healthy cheap-market opener lands near
+ *       0.6461×ARV − 0.30×ARV − $5k ≈ 30% of ARV, so 15% is half of normal.
+ *
+ *   (2) ABSURD VS THE ASK — arithmetically fine but so far under the seller's
+ *       number that texting it burns the agent. Inherently list-relative;
+ *       nothing about ARV can detect it.
+ *
+ *  Job (2) at 30% of list was suppressing correct offers wholesale. Measured
+ *  on 14 live Detroit records: 7 held, all of them asking AT OR ABOVE their own
+ *  renovated value, so 30% of that ask was 30% of a fiction. 16172 Cruse
+ *  computed $31,000 — its MAO to the dollar, 30% of ARV — and was blocked for
+ *  missing a $32,700 bar by $1,700. The 7 sit at 16-28% of ask and 25-31% of
+ *  ARV. The pathological case that job (2) exists for looks nothing like them:
+ *  ARV $60,000 against a $200,000 ask is an opener at 7% of list.
+ *
+ *  So both terms stay, and the list term drops to 15% — low enough to clear
+ *  every correctly-priced record measured, high enough to still catch the 7%
+ *  case. The ask remains barred from PRODUCING a number; it may only veto one.
+ *
+ *  Exported so the h2 SEND path and email-recovery apply the identical floor
+ *  the seed pricer does. Pure given the env-read constants above. */
+export function minOfferFloor(list: number, arv?: number | null): number {
+  const valueFloor =
+    typeof arv === "number" && Number.isFinite(arv) && arv > 0
+      ? LOW_OPENER_FLOOR_PCT_OF_ARV * arv
+      : 0;
+  return Math.max(valueFloor, LOW_OPENER_FLOOR_PCT_OF_LIST * list, LOW_OPENER_FLOOR_USD);
 }
 
 /** Over-list TRIPWIRE threshold: an opener above this fraction of list HOLDS
@@ -406,12 +457,16 @@ export function priceOpener(input: PricerInput): PricerResult {
       // for operator review instead of sending it (and instead of the retired
       // list-fraction rail).
       if (list != null) {
-        const floor = minOfferFloor(list);
+        const floor = minOfferFloor(list, rough.arvUsed);
         if (opener < floor) {
+          const basis =
+            `max ${Math.round(LOW_OPENER_FLOOR_PCT_OF_ARV * 100)}%×ARV` +
+            (pos(rough.arvUsed) ? ` $${Math.round(rough.arvUsed).toLocaleString()}` : " (none)") +
+            `, ${Math.round(LOW_OPENER_FLOOR_PCT_OF_LIST * 100)}%×list`;
           return holdResult(
             rough.source,
             `buy-box opener $${opener.toLocaleString()} below floor $${Math.round(floor).toLocaleString()} ` +
-              `(max ${Math.round(LOW_OPENER_FLOOR_PCT_OF_LIST * 100)}%×list, $${LOW_OPENER_FLOOR_USD.toLocaleString()}) — ` +
+              `(${basis}, $${LOW_OPENER_FLOOR_USD.toLocaleString()}) — ` +
               `micro-opener suppressed, HELD for operator review`,
             { flooredToFallback: true, assumedScope: rough.assumedScope ?? null },
           );

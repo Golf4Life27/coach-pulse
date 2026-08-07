@@ -123,7 +123,8 @@ export type IntakeRejectReason =
   | "state_missing"
   | "dom_below_floor"
   | "no_distress_signal"
-  | "market_not_priceable";
+  | "market_not_priceable"
+  | "ask_above_renovated_value";
 
 export interface IntakeEvaluation {
   accept: boolean;
@@ -139,6 +140,42 @@ export interface IntakeEvaluation {
 export interface IntakePriceabilityOpts {
   seededZips?: ReadonlySet<string>;
   requirePriceable?: boolean;
+  /** ZIP → renovated $/sqft, from the ARV seed store. Enables the
+   *  ask-above-renovated-value reject below. Absent → that check is skipped. */
+  zipRenovatedPsf?: ReadonlyMap<string, number>;
+}
+
+/** A listing asking AT OR ABOVE its own fully-renovated value cannot be
+ *  wholesaled at any price, and the whole pipeline already knows it — the
+ *  pre-send corroboration gate flags exactly these records `infeasible_ask`
+ *  and refuses to text them. The defect was that we found that out at the very
+ *  END, after paying to crawl, verify, enrich and price the record, and after
+ *  it had occupied a slot in the eligible pool all week.
+ *
+ *  MEASURED 2026-08-07 across three markets, share of our own stored listings
+ *  whose ask exceeds their renovated value: Detroit 50%, Ohio 42%, Atlanta 33%.
+ *  In the Detroit sample all 7 non-sending priceable records were this, and 6
+ *  carried `infeasible_ask` verbatim.
+ *
+ *  Deliberately the LOOSEST possible form of the test — ask >= 100% of ARV, no
+ *  margin — because our ARVs carry known error and this drops a record before
+ *  anything else can look at it. Anything softer than "worth less finished
+ *  than they are asking today" stays in the pool and gets its chance downstream.
+ *
+ *  Needs sqft + a seeded ZIP; without either it cannot judge and does NOT
+ *  reject. Fail-open is the only safe direction for a gate this early. */
+export function askAboveRenovatedValue(
+  c: IntakeCandidate,
+  zipRenovatedPsf: ReadonlyMap<string, number> | undefined,
+): boolean {
+  if (!zipRenovatedPsf) return false;
+  const zip = (c.zip ?? "").trim();
+  const psf = zipRenovatedPsf.get(zip);
+  const sqft = c.squareFootage;
+  if (!zip || psf == null || !(psf > 0)) return false;
+  if (typeof sqft !== "number" || !Number.isFinite(sqft) || sqft <= 0) return false;
+  if (c.listPrice == null || !(c.listPrice > 0)) return false;
+  return c.listPrice >= psf * sqft;
 }
 
 const DAY_MS = 86_400_000;
@@ -259,6 +296,12 @@ export function evaluateIntakeCandidate(
   // OR an aged DOM. Pure + config-injectable for tests; the live path uses the
   // module defaults.
   reasons.push(...distressSourcingReasons(c, DEFAULT_DISTRESS_SOURCING, now));
+
+  // Asking at or above the renovated value → no offer exists. Reject here
+  // rather than paying to crawl it and discovering `infeasible_ask` at send.
+  if (askAboveRenovatedValue(c, priceability.zipRenovatedPsf)) {
+    reasons.push("ask_above_renovated_value");
+  }
 
   return { accept: reasons.length === 0, reasons };
 }

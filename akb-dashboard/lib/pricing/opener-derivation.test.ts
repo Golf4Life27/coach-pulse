@@ -198,18 +198,26 @@ describe("the production pricer emits a receipt that reproduces its own opener",
     expect(priced.derivation.arvSource).toBe("seed_renovated");
     expect(priced.derivation.arvPctMax).toBe(0.6461);
 
-    // KNOWN GAP (2026-08-06, found by this very test): on some HOLD paths the
-    // pricer never populates rehabUsed or ceiling, so the receipt records THAT
-    // it held but not what the number would have been. verifyDerivation
-    // correctly reports "hold_no_opener", and maoFromDerivation returns null
-    // rather than inventing a ceiling from partial inputs.
+    // The KNOWN GAP this test documented on 2026-08-06 is CLOSED for this
+    // record, and by accident rather than by design — worth stating plainly.
     //
-    // So "where did this number come from" is now answerable and "why is there
-    // no number" is only partly answerable. Closing that means having the
-    // pricer's hold branches carry their intermediate terms — a change to
-    // per-market-pricer, not to the receipt.
+    // It used to hold on the low-opener floor (30% × list = $22,770), and the
+    // floor branch returns before rehabUsed or ceiling are populated, so the
+    // receipt could say THAT it held but not what the number would have been.
+    // Making the floor value-anchored on 2026-08-07 dropped it to $12,972, so
+    // this record now falls through to the placeholder-rehab hold instead —
+    // a branch that DOES carry its intermediate terms.
+    //
+    // So the receipt now answers "why is there no number": rehab $25,944 was
+    // invented, the ceiling would have been $24,931, and the opener $22,500 is
+    // withheld pending vision. The gap itself is NOT fixed — the floor branch
+    // still returns bare, it just no longer catches this record. Closing it
+    // properly still means carrying intermediate terms through every hold in
+    // per-market-pricer.
+    expect(priced.basisLabel).toBe("placeholder_rehab_needs_vision");
     expect(verifyDerivation(priced.derivation).status).toBe("hold_no_opener");
-    expect(maoFromDerivation(priced.derivation)).toBeNull();
+    expect(priced.derivation.rehab).toBe(25_944);
+    expect(maoFromDerivation(priced.derivation)).toBe(24_931);
   });
 
   it("round-trips through the stored field from the real pricer", () => {
