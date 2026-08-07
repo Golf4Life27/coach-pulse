@@ -176,7 +176,15 @@ export async function GET(req: Request) {
       park.push({ id: r.id, fields: { [F_OUTREACH]: NO_SPREAD_STATUS } });
       if (samplePark.length < 40) samplePark.push(row);
     } else if (v.action === "revive") {
-      revive.push({ id: r.id, fields: { [F_OUTREACH]: "" } });
+      // NULL, never "". Writing an empty STRING to a singleSelect with
+      // typecast:true makes Airtable mint a choice whose NAME is the empty
+      // string, and 251 Ohio records already carry exactly that artifact
+      // (found 2026-08-07). It is the worst possible state: Airtable's
+      // isEmpty() reports the field as SET, so every filterByFormula audit
+      // skips them, while the app's outreachStatusEmpty() reads the blank name
+      // as UNSET and treats them as never-contacted. The two disagree
+      // permanently. null clears the cell outright.
+      revive.push({ id: r.id, fields: { [F_OUTREACH]: null } });
       if (sampleRevive.length < 40) sampleRevive.push(row);
     }
   }
