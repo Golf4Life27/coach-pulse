@@ -188,8 +188,34 @@ export function lighterTierFor(
 // Used by lib/rough-opener-ceiling when a record has NO vision rehab. Replaces
 // the %-of-ARV placeholder that was holding 260 of 616 eligible houses.
 
-/** Kill switch. Default ON — this is the volume path. */
-export const SCOPE_REHAB_ENABLED = process.env.SCOPE_REHAB_ENABLED !== "false";
+/** DEFAULT OFF — measured on live records, this LOWERS volume. Opt in with
+ *  SCOPE_REHAB_ENABLED=true.
+ *
+ *  MEASURED 2026-08-07 through the shipped pricer (lib/opener-pricing), 26
+ *  real records with sqft + list and no rehab estimate:
+ *
+ *    Detroit, 14 records:  3 sends -> 2.   Openers FELL (Kingsville
+ *      $60,250 -> $45,000; 4102 Somerset $42,000 -> $28,000).
+ *    Atlanta, 12 records:  0 sends -> 0.   No effect either way.
+ *
+ *  WHY, and it is arithmetic, not tuning. The estimate this replaces is
+ *  ROUGH_REHAB_PCT_OF_ARV = 0.30 x ARV = 0.30 x psf x sqft. Against heavy at
+ *  $45/sqft, the two are equal when 45 = 0.30 x psf, i.e. psf = $150. BELOW a
+ *  $150/sqft renovated market the scope tier is the LARGER rehab, so it
+ *  produces a SMALLER opener and more records fall under the low-opener floor.
+ *  Detroit seeds run $39-$118/sqft — every Detroit ZIP is on the losing side.
+ *
+ *  A $/sqft rehab constant is only meaningful next to the market's value per
+ *  square foot: $45/sqft on a house worth $92/sqft finished is half the
+ *  finished value. The %-of-ARV estimate already self-scales to the market,
+ *  which is exactly the "blanket average" behaviour we wanted, so it stays the
+ *  default. Above $150/sqft the tiers help — Atlanta is $161-$333 — but there
+ *  the binding constraint is the $75k unseen-rehab exposure cap (#188), which
+ *  no rehab formula moves.
+ *
+ *  The tiers keep their real job: the QUESTION to the agent (scopeQuestion),
+ *  where a named scope beats a percentage because a human can answer it. */
+export const SCOPE_REHAB_ENABLED = process.env.SCOPE_REHAB_ENABLED === "true";
 
 /** The floor an opener must clear to be worth sending: max(pct×list, $USD).
  *  Mirrors minOfferFloor in per-market-pricer; duplicated as an OPTIONAL input

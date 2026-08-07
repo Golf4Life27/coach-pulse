@@ -41,19 +41,17 @@ describe("256 Westchester Dr — the defect this exists to stop", () => {
     const r = price();
     expect(r.result.opener).toBeNull();
     expect(r.basisLabel).toBe(PLACEHOLDER_REHAB_HOLD_REASON);
-    // SCOPE TIERS (2026-08-07) changed WHERE the guessed rehab comes from, not
-    // whether it sends. Rehab is now 1,902 sqft × $45 (heavy) = $85,590 rather
-    // than 0.30 × ARV, so ceilingSource is the real buy-box source and the
-    // guess is carried in assumedScope. The record still HOLDS and still routes
-    // to vision — nobody has been inside either way.
-    expect(r.result.ceilingSource).toBe("rough_buybox_arv");
-    expect(r.result.assumedScope).toBe("heavy");
+    expect(r.result.ceilingSource).toBe(PLACEHOLDER_REHAB_SOURCE);
+    // SCOPE TIERS are OFF by default (measured 2026-08-07: they LOWER volume
+    // below a $150/sqft market — see lib/pricing/rehab-scope). So the rehab
+    // here is still the %-of-ARV placeholder, and no scope is assumed.
+    expect(r.result.assumedScope ?? null).toBeNull();
   });
 
-  it("still routes a scope-assumed hold to the VISION queue, not operator review", () => {
-    // The failure this guards: a scope-derived rehab holds on the low-opener
-    // floor, the hold drops the scope, and the record lands in an operator
-    // queue no cron can clear. It sat there instead of being looked at.
+  it("routes the hold to the VISION queue, not to operator review", () => {
+    // The distinction that matters: this hold is machine-resolvable. Running
+    // vision replaces the guessed interior with a fact and may clear it
+    // outright. An operator queue has no cron that can.
     const r = price();
     expect(isMachineResolvableHold(r.basisLabel)).toBe(true);
   });
