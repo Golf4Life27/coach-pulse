@@ -47,6 +47,7 @@ import {
   parseKnownQuoIds,
   newestKnownInboundTs,
 } from "@/lib/outreach/thread-truth";
+import { getSiblingNotesByAgentPhone } from "@/lib/airtable";
 
 /** Every send must declare WHY it is going out. Opener-class purposes
  *  (first_touch, bump, followup) carry the renovated-listing veto; the only
@@ -233,6 +234,9 @@ export interface SendGateDeps {
   /** Live-thread fetch for the THREAD-TRUTH check. Defaults to
    *  getMessagesForParticipant over a 30-day tail. Tests inject. */
   fetchThread?: (phone: string) => Promise<QuoMessage[]>;
+  /** Notes of every OTHER record sharing this agent phone — the thread-truth
+   *  scope fix. Defaults to getSiblingNotesByAgentPhone. Tests inject. */
+  fetchSiblingNotes?: (phone: string, excludeRecordId: string | null) => Promise<string[]>;
 }
 
 /** 30 days of thread tail (capped at 300 messages by lib/quo pagination) —
@@ -338,9 +342,38 @@ export async function sendGuarded(
       });
     }
     if (thread) {
+      // SCOPE (2026-08-06): rule (a) asks "do we know what was said in our
+      // name in THIS CONVERSATION?" — and a conversation is a phone number,
+      // not a record. Agent phones are brokerage switchboards (one line, ~60
+      // listings), so the per-record read made every sibling property look
+      // like an unrecorded operator send and capped outbound at one property
+      // per line, permanently. Union the notes of every record on the number.
+      //
+      // Widened for rule (a) ONLY. Rule (b) — unseen inbound — stays
+      // per-record on purpose: if the agent replied about ANY property, an
+      // opener aimed at another one should still refuse and let a human
+      // answer first. Widening (b) would suppress refusals, which is the
+      // wrong direction for a safety gate.
+      let knownQuoIds = parseKnownQuoIds(req.listing?.notes);
+      if (req.to) {
+        try {
+          const siblingNotes = await (deps.fetchSiblingNotes ?? getSiblingNotesByAgentPhone)(
+            req.to,
+            req.recordId || null,
+          );
+          for (const n of siblingNotes) {
+            for (const id of parseKnownQuoIds(n)) knownQuoIds.add(id);
+          }
+        } catch (err) {
+          // A sibling-lookup failure narrows what we know, so it can only
+          // cause a REFUSAL, never a send. Fail quiet and let rule (a) run
+          // on the record's own notes — the pre-fix behaviour.
+          console.error("[send-gate] sibling-notes lookup failed, rule (a) narrowed to record:", err);
+        }
+      }
       const verdict = evaluateThreadTruth({
         thread,
-        knownQuoIds: parseKnownQuoIds(req.listing?.notes),
+        knownQuoIds,
         newestKnownInboundMs: newestKnownInboundTs(req.listing?.lastInboundAt, req.listing?.notes),
         enforceUnseenInbound: openerClass,
       });

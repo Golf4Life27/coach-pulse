@@ -89,12 +89,8 @@
       "schedule": "0 15 * * *"
     },
     {
-      "path": "/api/cron/opener-vision-drain?limit=6",
-      "schedule": "20 13 * * *"
-    },
-    {
-      "path": "/api/cron/opener-vision-drain?limit=6",
-      "schedule": "20 20 * * *"
+      "path": "/api/cron/opener-vision-drain?limit=8",
+      "schedule": "20 */2 * * *"
     },
     {
       "path": "/api/cron/data-federation-pull",

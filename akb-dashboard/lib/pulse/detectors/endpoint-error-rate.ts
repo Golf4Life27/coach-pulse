@@ -66,21 +66,20 @@ const DEFAULT_FAILURE_ONLY_EXCLUSIONS = [
   // SMS on 2026-07-12 (5/5 during ~55-msg/48h live traffic). Belt health for
   // sends is the send-slot summary, not this event.
   "h2_outreach_delivery_quarantine",
-  // Reprice-gate-working-as-designed: fired only when bumpRepriceGate BLOCKS
-  // a bump (INVARIANTS §H2 bump lane) — the hold IS the success. Audited
-  // confirmed_failure with no success counterpart, so any held bump pins the
-  // rate at 100%; fired a false critical + Tier-3 SMS on 2026-08-05 (10/10).
-  // Gate health lives in the bump-followup run summary and audit-tail.
-  "h2_bump_reprice_hold",
-  // Send-gate-working-as-designed: sendGuarded audits these ONLY when it
-  // REFUSES a send (do-not-text, dedupe, thread-truth, outside-hours…) —
-  // the refusal is the gate doing its job, and includes deliberate holds
-  // like the thread-truth freeze on operator-driven threads. A successful
-  // send never emits either event, so any refusal in the window pins the
-  // rate at 100% ("full outreach stoppage" false critical, 2026-08-05,
-  // 5/5 on both). Send-belt health lives in the slot run summaries.
+  // Gates working as designed (2026-08-06). These three are audited ONLY when
+  // they REFUSE or HOLD — a refusal is the success case of a safety gate, and
+  // there is no `send_gate_allowed` counterpart to divide by. So the rate is
+  // pinned at 100% the moment one appears, and on 2026-08-06 that fired two
+  // Tier-3 SMS pages at the operator (13:08Z, 16:43Z) for a send gate and a
+  // pricing gate that were both doing their job.
+  //
+  // The COUNTS still matter — 9 held bumps is 9 follow-ups that did not go
+  // out. Read them in /api/admin/audit-tail?event=..., where the hold reason
+  // is on the row. A failure-only event needs a queue-depth alarm, not a rate
+  // alarm; rate is the wrong instrument and pages on noise.
   "send_gate_refused",
   "send_gate_thread_truth_refused",
+  "h2_bump_reprice_hold",
 ];
 
 function readExclusions(env: Record<string, string | undefined>): Set<string> {

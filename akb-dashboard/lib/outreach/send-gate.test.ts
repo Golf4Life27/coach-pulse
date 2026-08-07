@@ -410,6 +410,93 @@ describe("sendGuarded thread-truth", () => {
     expect(r.reason).toBe("unrecorded_outbound_in_thread");
   });
 
+  // ── SCOPE FIX (2026-08-06): a conversation is a PHONE NUMBER, not a record.
+  // Agent phones are brokerage switchboards — 734-838-9197 carries ~60 listings
+  // — so the per-record read of rule (a) capped outbound at one property per
+  // line, permanently. All 6 send refusals in the 24h window were first_touch
+  // sends dying this way.
+  describe("sibling-record scope", () => {
+    const firstTouch = {
+      ...base,
+      purpose: "first_touch" as const,
+      recordId: "recSIBLINGB00001",
+      // This record is NEW — it has never been texted, so its own notes are bare.
+      listing: { notes: "", lastInboundAt: null },
+    };
+    const siblingOutbound = {
+      id: "ACAAAA00000000000000000000000001",
+      from: "", to: "", body: "opener on the OTHER property", direction: "outgoing" as const,
+      createdAt: "2026-08-05T15:00:00.000Z",
+    };
+
+    it("SENDS when the thread's outbound is recorded on a SIBLING record", async () => {
+      const s = spySender();
+      const r = await sendGuarded(firstTouch, {
+        kv: makeMemoryKv(),
+        send: s.fn,
+        fetchThread: async () => [siblingOutbound],
+        fetchSiblingNotes: async () => [
+          "[H2 sent] Quo msg ACAAAA00000000000000000000000001: opener on the OTHER property",
+        ],
+      });
+      expect(r.refused).toBeFalsy();
+      expect(r.sent).toBe(true);
+    });
+
+    it("STILL REFUSES an operator manual send — recorded on NO record (Canfield)", async () => {
+      // The invariant this fix must not weaken. A send made from the Quo app
+      // never ingests into any record's notes, so widening the union across
+      // every sibling still leaves its id unknown.
+      const r = await sendGuarded(firstTouch, {
+        kv: makeMemoryKv(),
+        send: okSend as never,
+        fetchThread: async () => [siblingOutbound, {
+          id: "ACFFFF00000000000000000000000000",
+          from: "", to: "", body: "operator apology from the Quo app", direction: "outgoing" as const,
+          createdAt: "2026-08-05T16:00:00.000Z",
+        }],
+        fetchSiblingNotes: async () => [
+          "[H2 sent] Quo msg ACAAAA00000000000000000000000001: opener on the OTHER property",
+        ],
+      });
+      expect(r.refused).toBe(true);
+      expect(r.reason).toBe("unrecorded_outbound_in_thread");
+    });
+
+    it("a sibling-lookup failure REFUSES rather than sending blind", async () => {
+      // Losing sibling knowledge narrows what we know — it must fall back to
+      // the pre-fix behaviour, never fail open.
+      const r = await sendGuarded(firstTouch, {
+        kv: makeMemoryKv(),
+        send: okSend as never,
+        fetchThread: async () => [siblingOutbound],
+        fetchSiblingNotes: async () => { throw new Error("airtable down"); },
+      });
+      expect(r.refused).toBe(true);
+      expect(r.reason).toBe("unrecorded_outbound_in_thread");
+    });
+
+    it("does NOT widen rule (b) — an unseen inbound anywhere on the line still holds the opener", async () => {
+      // If the agent replied about ANY property, a cold opener aimed at
+      // another one should wait for a human. Widening (b) would suppress
+      // refusals, which is the wrong direction for a safety gate.
+      const r = await sendGuarded(firstTouch, {
+        kv: makeMemoryKv(),
+        send: okSend as never,
+        fetchThread: async () => [siblingOutbound, {
+          id: "ACBBBB00000000000000000000000002",
+          from: "", to: "", body: "what's your number on this one?", direction: "incoming" as const,
+          createdAt: "2026-08-06T12:00:00.000Z",
+        }],
+        fetchSiblingNotes: async () => [
+          "[H2 sent] Quo msg ACAAAA00000000000000000000000001: opener on the OTHER property",
+        ],
+      });
+      expect(r.refused).toBe(true);
+      expect(r.reason).toBe("unseen_inbound_in_thread");
+    });
+  });
+
   it("opener-class FAILS CLOSED when the thread fetch throws", async () => {
     const r = await sendGuarded(base, {
       kv: makeMemoryKv(),

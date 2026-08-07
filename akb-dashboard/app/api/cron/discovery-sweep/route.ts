@@ -40,10 +40,10 @@ import {
   parseAddressFromListingUrl,
   isTextable,
   summarizeEnrichment,
+  findMatchingListing,
   type EnrichOutcome,
 } from "@/lib/crawler/sweep-enrich";
-import { rentcastPaidFetch } from "@/lib/rentcast";
-import { mapListingToCandidate, type RentCastListing } from "@/lib/crawler/sources/rentcast";
+import { fetchListingsByZip } from "@/lib/crawler/sources/rentcast";
 import { buildIntakeListingFields } from "@/lib/crawler/intake-fields";
 
 export const runtime = "nodejs";
@@ -198,46 +198,49 @@ export async function GET(req: Request) {
   // is the call the old intake belt was spending blind on whole ZIPs.
   const enrichOutcomes: EnrichOutcome[] = [];
   if (!dryRun) {
+    // ONE ZIP fetch per ZIP-with-qualifiers, then match locally. Strictly
+    // cheaper than per-property (5 qualifiers in a ZIP cost 1 call, not 5) and
+    // robust to the formatting variance that made the exact-address lookup
+    // return no_rentcast_match on 4 of 5 qualifiers.
+    const byZip = new Map<string, typeof qualified>();
     for (const q of qualified) {
-      if (enrichOutcomes.filter((o) => o.recordId).length >= MAX_ENRICH_PER_RUN) {
-        enrichOutcomes.push({ url: q.url, address: null, recordId: null, skipped: "enrich_budget_reached" });
-        continue;
-      }
+      const list = byZip.get(q.zip) ?? [];
+      list.push(q);
+      byZip.set(q.zip, list);
+    }
+
+    for (const [zip, group] of byZip) {
       if (Date.now() - t0 > WALL_CLOCK_BUDGET_MS) break;
-
-      const parsed = parseAddressFromListingUrl(q.url);
-      if (!parsed) {
-        enrichOutcomes.push({ url: q.url, address: null, recordId: null, skipped: "url_unparseable" });
-        continue;
-      }
-
-      let listing: RentCastListing | null = null;
+      let feed: Awaited<ReturnType<typeof fetchListingsByZip>> | null = null;
       try {
-        // Routed through rentcastPaidFetch so the spend ceiling and loop
-        // breaker apply exactly as they do everywhere else.
-        const res = await rentcastPaidFetch(
-          "listings/sale",
-          `https://api.rentcast.io/v1/listings/sale?address=${encodeURIComponent(parsed.formatted)}&status=Active&limit=1`,
-          { headers: { "X-Api-Key": process.env.RENTCAST_API_KEY ?? "" } },
-          undefined,
-          undefined,
-          [404],
-        );
-        if (res.ok) {
-          const body = (await res.json()) as RentCastListing[] | RentCastListing;
-          listing = Array.isArray(body) ? (body[0] ?? null) : body;
-        }
+        feed = await fetchListingsByZip(zip);
       } catch {
-        /* a vendor blip is a skip, never a failed run */
+        /* a vendor blip is a skip for this ZIP, never a failed run */
       }
+      const feedCandidates = feed?.candidates ?? [];
 
-      if (!listing) {
-        enrichOutcomes.push({ url: q.url, address: parsed.formatted, recordId: null, skipped: "no_rentcast_match" });
-        continue;
-      }
+      for (const q of group) {
+        if (enrichOutcomes.filter((o) => o.recordId).length >= MAX_ENRICH_PER_RUN) {
+          enrichOutcomes.push({ url: q.url, address: null, recordId: null, skipped: "enrich_budget_reached" });
+          continue;
+        }
 
-      const candidate = mapListingToCandidate(listing);
-      if (!isTextable(candidate.agentPhone)) {
+        const parsed = parseAddressFromListingUrl(q.url);
+        if (!parsed) {
+          enrichOutcomes.push({ url: q.url, address: null, recordId: null, skipped: "url_unparseable" });
+          continue;
+        }
+
+        const candidate = findMatchingListing(parsed.formatted, feedCandidates);
+        if (!candidate) {
+          // Address recorded so a repeat failure is diagnosable from the audit
+          // row alone — the first run only said "no match" and could not say
+          // what we asked for.
+          enrichOutcomes.push({ url: q.url, address: parsed.formatted, recordId: null, skipped: "no_rentcast_match" });
+          continue;
+        }
+
+        if (!isTextable(candidate.agentPhone)) {
         enrichOutcomes.push({ url: q.url, address: parsed.formatted, recordId: null, skipped: "no_agent_phone" });
         continue;
       }
@@ -269,9 +272,10 @@ export async function GET(req: Request) {
         });
         const body = (await res.json().catch(() => null)) as { records?: Array<{ id: string }> } | null;
         const recordId = body?.records?.[0]?.id ?? null;
-        enrichOutcomes.push({ url: q.url, address: parsed.formatted, recordId, skipped: recordId ? null : "no_rentcast_match" });
-      } catch {
-        enrichOutcomes.push({ url: q.url, address: parsed.formatted, recordId: null, skipped: "no_rentcast_match" });
+        enrichOutcomes.push({ url: q.url, address: parsed.formatted, recordId, skipped: recordId ? null : "record_write_failed" });
+        } catch {
+          enrichOutcomes.push({ url: q.url, address: parsed.formatted, recordId: null, skipped: "record_write_failed" });
+        }
       }
     }
   }
