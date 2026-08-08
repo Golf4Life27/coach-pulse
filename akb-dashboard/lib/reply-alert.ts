@@ -38,6 +38,15 @@ export interface ReplyAlertInput {
   outreachOfferPrice?: number | null;
   /** Underwritten MAO ceiling on the record. */
   underwrittenMao?: number | null;
+  /** SCOPE INTEL (lib/reply/scope-intel): the agent's own condition language,
+   *  re-priced. Rides the ALERT only — guardrail G1 bars any recomputed
+   *  number from an outbound draft. Null/omitted → no scope line. */
+  scope?: {
+    tier: string;
+    scopeRehab: number | null;
+    storedRehab: number | null;
+    ceiling: number | null;
+  } | null;
 }
 
 export interface ReplyAlertResult {
@@ -119,8 +128,17 @@ export function buildReplyAlertBody(input: ReplyAlertInput): { body: string; pri
     return { body: `ACT NOW: ${addr}. ${alertAction(input.classification)}. ${link}`, priceGap: false };
   }
   const rec = alertRecommendation(input);
+  // SCOPE LINE (2175 W 106th, 2026-08-08): when the inbound named a
+  // condition, show what that scope does to the ceiling — the hand math the
+  // operator otherwise asks for in chat. Computed number, never the inbound
+  // text; the number rides the ALERT, never a draft (guardrail G1).
+  const s = input.scope;
+  const scopeLine =
+    s && s.ceiling != null && s.scopeRehab != null
+      ? ` Agent scope ~${s.tier}: rehab ${usd(s.scopeRehab)}${s.storedRehab != null ? ` (filed ${usd(s.storedRehab)})` : ""} → ceiling ${usd(s.ceiling)}.`
+      : "";
   return {
-    body: `DECISION NEEDED: ${addr}. ${alertAction(input.classification)}. Recommend: ${rec.text}. ${link}`,
+    body: `DECISION NEEDED: ${addr}. ${alertAction(input.classification)}. Recommend: ${rec.text}.${scopeLine} ${link}`,
     priceGap: rec.priceGap,
   };
 }

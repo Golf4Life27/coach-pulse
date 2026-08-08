@@ -15,6 +15,7 @@ import { AUTO_ANSWERABLE } from "@/lib/reply-triage/auto-answer";
 import { sendAutoAnswer } from "@/lib/reply-triage/auto-answer-send";
 import { buildReplyClassificationFields } from "@/lib/inbound/reply-classification";
 import { sendReplyAlert, type ReplyAlertInput } from "@/lib/reply-alert";
+import { extractScopeTier, scopeReprice } from "@/lib/reply/scope-intel";
 import { sendAutoClose } from "@/lib/auto-close";
 import { sendAutoAck } from "@/lib/auto-ack";
 import { detectOptOut, applyOptOut, inboundStampAdvances } from "@/lib/outreach/opt-out";
@@ -505,6 +506,23 @@ export async function GET(req: Request) {
           // Missing numbers still fall back to "hold sticky opener" with the
           // gap audited, never fabricated.
           const nums = resolveAlertNumbers(listing);
+          // SCOPE INTEL (2175 W 106th, 2026-08-08): if the agent's reply names
+          // a condition ("light/medium", "needs a roof", "turnkey"), re-price
+          // the ceiling at that scope and put the math in the operator's alert
+          // — the system proposes, the operator disposes. Only the rehab term
+          // moves (ceiling = mao + storedRehab − scopeRehab), so this cannot
+          // drift from whatever produced the MAO. Fails to no-line on missing
+          // sqft/rehab/mao.
+          const scopeSignal = extractScopeTier(inbound.body);
+          const scope = scopeSignal
+            ? scopeReprice({
+                signal: scopeSignal,
+                sqft: listing.buildingSqFt ?? null,
+                state: listing.state ?? null,
+                storedRehab: listing.estRehabMid ?? listing.estRehab ?? null,
+                mao: nums.mao,
+              })
+            : null;
           alertQueue.push({
             recordId: listing.id,
             address: listing.address ?? null,
@@ -512,6 +530,7 @@ export async function GET(req: Request) {
             classification: triage.classification,
             outreachOfferPrice: nums.opener,
             underwrittenMao: nums.mao,
+            scope,
           });
 
           existingPending.add(`${listing.id}:jarvis_reply`);
