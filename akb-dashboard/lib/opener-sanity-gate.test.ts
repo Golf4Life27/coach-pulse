@@ -159,3 +159,34 @@ describe("size rail tightened (2026-08-08): outside the RAW band needs a measure
     expect(r.flags).toContain("size_extrapolation");
   });
 });
+
+describe("avm_priced_seed — comps that are model guesses, not sales (Dallas 75216)", () => {
+  const mk = (prices: number[]) =>
+    JSON.stringify({ comps: prices.map((price, i) => ({ addr: `c${i}`, price, sqft: 1_500 + i * 100, psf: Math.round(price / 1_500) })) });
+  const base = {
+    opener: 40_000, listPrice: 120_000, arvUsed: 180_000, sqft: 1_600, cappedToList: false,
+    arvConfidence: "STRONG" as const, renovatedPerSqft: 110, bestCaseOpener: 90_000,
+  };
+
+  it("flags the real Dallas price shapes", () => {
+    const r = corroborateOpener({
+      ...base,
+      seed: { receiptsJson: mk([410_970, 323_203, 283_290, 297_265, 418_950, 179_975, 363_025, 342_940, 319_200, 246_933, 423_272, 475_589]) },
+    });
+    expect(r.flags).toContain("avm_priced_seed");
+    expect(r.corroborated).toBe(false);
+  });
+
+  it("passes the real Memphis price shapes", () => {
+    const r = corroborateOpener({
+      ...base,
+      seed: { receiptsJson: mk([144_999, 149_900, 250_000, 137_000, 199_900, 185_000, 236_500, 189_900, 190_000, 209_000, 205_000, 135_000]) },
+    });
+    expect(r.flags).not.toContain("avm_priced_seed");
+  });
+
+  it("thin receipts never draw this flag — thin data has its own guards", () => {
+    const r = corroborateOpener({ ...base, seed: { receiptsJson: mk([423_272, 297_265, 246_933]) } });
+    expect(r.flags).not.toContain("avm_priced_seed");
+  });
+});
