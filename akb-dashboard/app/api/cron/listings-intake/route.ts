@@ -79,9 +79,10 @@ import { transitionToPriced } from "@/lib/pipeline-state/price-transition";
 // National crawler (Maverick 2026-06-14) — auto-seed + opener-write, all
 // behind CRAWLER_AUTOSEED_LIVE (default off → these paths never execute).
 import { decideAutoSeed, runAutoSeed } from "@/lib/crawler/auto-seed";
-import { listArvSeededZips, getZipArvSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
+import { listArvSeededZips, listPriceableArvZips, listArvPsfByZip, getZipArvSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import { resolveSeedBudget } from "@/lib/spend/daily-budget";
 import { priceOpenerWithSeed } from "@/lib/opener-pricing";
+import { serializeDerivation } from "@/lib/pricing/opener-derivation";
 import { getMarketForListing, openerArvPctMax } from "@/lib/markets/registry";
 import { resolveAnchorPct } from "@/lib/markets/anchor";
 
@@ -168,6 +169,7 @@ async function createIntakeListing(
   underwrittenMaoTrack: string | null = null,
   opener: { amount: number | null; basis: string; reseed: boolean } | null = null,
   renovated: { detected: boolean; keywords: string[] } | null = null,
+  openerDerivationJson: string | null = null,
 ): Promise<string> {
   if (!AIRTABLE_PAT) throw new Error("AIRTABLE_PAT not set");
   const url = `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}`;
@@ -188,6 +190,7 @@ async function createIntakeListing(
     opener,
     renovatedLanguage: renovated?.detected ?? false,
     matchedRenovationKeywords: renovated?.keywords ?? [],
+    openerDerivationJson,
   });
   const res = await fetch(url, {
     method: "POST",
@@ -670,6 +673,9 @@ export async function GET(req: Request) {
   const requirePriceable = process.env.INTAKE_REQUIRE_PRICEABLE !== "false";
   let seededZips: ReadonlySet<string> = new Set<string>();
   let seededZipsSource: "store" | "fallback" = "store";
+  // Empty map → askAboveRenovatedValue cannot judge and never rejects. That is
+  // the correct failure mode: on a seed-store outage intake stays open.
+  let zipRenovatedPsf: ReadonlyMap<string, number> = new Map<string, number>();
   if (requirePriceable) {
     try {
       // Opener-priceable = has EITHER a buyer-median seed (precise/contract
@@ -682,11 +688,18 @@ export async function GET(req: Request) {
       // HOLDs a no-ARV market), so the union is safe — it never sends a number
       // it can't back; it just lets the opener lane onboard a new metro the
       // moment its ARV is seeded, without waiting on the buyer-median.
-      const [buyerMedianSeeded, arvSeeded] = await Promise.all([
+      const [buyerMedianSeeded, arvSeeded, psfMap] = await Promise.all([
         listSeededZips(),
-        listArvSeededZips(),
+        // PRICEABLE, not merely evaluated. A DONT_PRICE ZIP passed this gate
+        // until 2026-08-07 and the hunter kept crawling it: 41 of 120 sampled
+        // Ohio listings (34%) sat in a ZIP the pricer may never price.
+        listPriceableArvZips(),
+        // ZIP -> renovated $/sqft, so intake can drop a listing asking above
+        // its own finished value before we pay to crawl it.
+        listArvPsfByZip(),
       ]);
       seededZips = new Set<string>([...buyerMedianSeeded, ...arvSeeded]);
+      zipRenovatedPsf = psfMap;
     } catch (e) {
       seededZips = FALLBACK_SEEDED_ZIPS;
       seededZipsSource = "fallback";
@@ -758,7 +771,7 @@ export async function GET(req: Request) {
         }
       }
 
-      const { accepted, rejected } = filterIntakeCandidates(fetchResult.candidates, now, { seededZips, requirePriceable });
+      const { accepted, rejected } = filterIntakeCandidates(fetchResult.candidates, now, { seededZips, requirePriceable, zipRenovatedPsf });
       summary.rejected += rejected.length;
       for (const r of rejected) {
         for (const reason of r.reasons) bump(reason);
@@ -1304,6 +1317,7 @@ export async function GET(req: Request) {
         // ZIP seed (source-swap). New intake records carry no stored ARV, so
         // the seed — or the flat 65% fallback — is the only basis.
         let opener: { amount: number | null; basis: string; reseed: boolean } | null = null;
+        let openerDerivationJson: string | null = null;
         if (autoseedLive) {
           const market = getMarketForListing({ state: c.state, zip: c.zip });
           const marketId = market?.id ?? "";
@@ -1322,8 +1336,11 @@ export async function GET(req: Request) {
             seed: zipSeedMap.get(zip) ?? null,
           });
           opener = { amount: priced.result.opener, basis: priced.basisLabel, reseed: priced.result.flagReseed };
+          // THE RECEIPT (2026-08-06 audit) — persist the arithmetic, not just
+          // the answer, so the number can be recomputed cold from the record.
+          openerDerivationJson = serializeDerivation(priced.derivation);
         }
-        await createIntakeListing(c, promote, firecrawlUrl, portfolioDetected, matchedPortfolioKeywords, underwrittenMao, underwrittenMaoTrack, opener, renovated);
+        await createIntakeListing(c, promote, firecrawlUrl, portfolioDetected, matchedPortfolioKeywords, underwrittenMao, underwrittenMaoTrack, opener, renovated, openerDerivationJson);
         summary.written++;
       } catch (err) {
         summary.per_zip_errors.push({

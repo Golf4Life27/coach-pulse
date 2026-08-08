@@ -93,7 +93,7 @@ import {
 } from "@/lib/h2-working-hours";
 import { SOURCE_VERSION_V2 } from "@/lib/source-version";
 import { listSeededZips, FALLBACK_SEEDED_ZIPS } from "@/lib/buyer-median-store";
-import { listArvSeededZips } from "@/lib/zip-arv-seed-store";
+import { listPriceableArvZips } from "@/lib/zip-arv-seed-store";
 import {
   evaluateSupplyFloor,
   emitSupplyFloorAudit,
@@ -558,7 +558,7 @@ async function handle(req: Request): Promise<Response> {
     if (
       l.listPrice != null &&
       priced.opener != null &&
-      priced.opener < minOfferFloor(l.listPrice)
+      priced.opener < minOfferFloor(l.listPrice, priced.arvUsed)
     ) {
       openerGuarded.push({
         recordId: l.id,
@@ -723,7 +723,7 @@ async function handle(req: Request): Promise<Response> {
   const capCfg =
     rawCapCfg.coverageMode === "auto"
       ? resolveCoverage(rawCapCfg, [
-          ...(await listArvSeededZips()),
+          ...(await listPriceableArvZips()),
           ...(await listSeededZips()),
         ])
       : rawCapCfg;

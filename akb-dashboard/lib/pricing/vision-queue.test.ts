@@ -42,6 +42,18 @@ describe("256 Westchester Dr — the defect this exists to stop", () => {
     expect(r.result.opener).toBeNull();
     expect(r.basisLabel).toBe(PLACEHOLDER_REHAB_HOLD_REASON);
     expect(r.result.ceilingSource).toBe(PLACEHOLDER_REHAB_SOURCE);
+    // SCOPE TIERS are OFF by default (measured 2026-08-07: they LOWER volume
+    // below a $150/sqft market — see lib/pricing/rehab-scope). So the rehab
+    // here is still the %-of-ARV placeholder, and no scope is assumed.
+    expect(r.result.assumedScope ?? null).toBeNull();
+  });
+
+  it("routes the hold to the VISION queue, not to operator review", () => {
+    // The distinction that matters: this hold is machine-resolvable. Running
+    // vision replaces the guessed interior with a fact and may clear it
+    // outright. An operator queue has no cron that can.
+    const r = price();
+    expect(isMachineResolvableHold(r.basisLabel)).toBe(true);
   });
 
   it("names the guessed rehab in the detail — the ARV was never the problem", () => {

@@ -133,17 +133,27 @@ describe("dry-run-trace harness (CONVEYOR Milestone 1)", () => {
     expect(r02.opener.recomputed.basisLabel).toBe("hold");
     expect(r02.opener.recomputed.opener).toBeNull(); // was 64,935
 
-    // rec07 — Detroit, fresh verify + MLS ACTIVE → clears Pre-Outreach and
-    // reaches Pre-Send, where it stops on PS-01 (ARV_Validated_At unset).
-    // ARV 99,672 > list 79,000 is sane, but the buy-box ceiling pencils below
-    // the low-opener floor → HOLD for review (OLD routed to 0.65 × list).
+    // rec07 — 15875 Strathmoor St, Detroit. Fresh verify + MLS ACTIVE → clears
+    // Pre-Outreach and reaches Pre-Send, where it stops on PS-01
+    // (ARV_Validated_At unset). The GATE outcome is unchanged.
+    //
+    // The OPENER changed on 2026-08-07 and this is the change working. ARV
+    // $99,672 (vision rehab $37,434, not a placeholder) × 0.6461 − rehab − $5k
+    // fee = $21,964 ceiling; × 0.90 anchor = $19,750. That is the correct
+    // value-anchored number for a house needing $37k of work.
+    //
+    // It used to HOLD, and only because the floor was 30% of the ASK: $23,700.
+    // Nothing about the ask is an input to $19,750. The floor is now
+    // max(15%×ARV $14,951, 15%×list $11,850, $10,000) = $14,951, which the
+    // opener clears — while the $10k absolute and the list leg still bar a
+    // genuinely absurd number. (OLD-OLD behaviour here was 0.65 × list.)
     const r07 = byId["rec07YAC9KOwr6iZv"];
     expect(r07.gates[0].overall_status).toBe("pass");
     expect(r07.gates[1].gate_id).toBe("pre_send");
     expect(r07.gates[1].reached).toBe(true);
     expect(r07.gates[1].overall_status).toBe("fail");
     expect(r07.gates[1].stopped_by?.item_id).toBe("PS-01");
-    expect(r07.opener.recomputed.flooredToFallback).toBe(true);
-    expect(r07.opener.recomputed.opener).toBeNull(); // was 51,350
+    expect(r07.opener.recomputed.flooredToFallback).toBe(false);
+    expect(r07.opener.recomputed.opener).toBe(19_750);
   });
 });

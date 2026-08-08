@@ -89,6 +89,9 @@ export interface Listing {
   latestCounterUsd?: number | null;
   /** Opener_Basis receipt (capped_to_list / arv_buybox_seed / …). */
   openerBasis?: string | null;
+  /** Serialized OpenerDerivation — the opener's arithmetic receipt, so the
+   *  number can be recomputed cold. See lib/pricing/opener-derivation.ts. */
+  openerDerivationJson?: string | null;
   // Phase 11.2 — email outbound timestamp. Crier staleness uses max()
   // of all four contact timestamps to avoid false-stale on active email
   // negotiations (the 23 Fields scenario). Null until first attributable

@@ -106,3 +106,36 @@ describe("alertAction / alertRecommendation", () => {
     expect(alertRecommendation({ recordId: "r", address: null, tier: "tier_1_decision", classification: "counter", outreachOfferPrice: null, underwrittenMao: 50000 }).priceGap).toBe(true);
   });
 });
+
+// THE 2026-08-06 MISS (257 Chalmers Dr NW, 2241 1st St): a bare "No" paged the
+// operator as "intent unclear". classifyReply had matched it exactly, triage
+// had already drafted the re-engagement — only the alert's switch was missing
+// a case, so the system reported confusion it did not have.
+describe("alertAction covers EVERY classification triage can produce", () => {
+  it("names a soft no instead of calling it unclear", () => {
+    expect(alertAction("soft_no")).toBe("Agent declined, re-engagement drafted");
+  });
+
+  it("names the high-intent replies that were also falling through", () => {
+    // An agent proposing a showing is the closest thing to a yes that exists
+    // before a contract. It must never render as confusion.
+    expect(alertAction("appointment")).toBe("Agent proposed a showing/call time");
+    expect(alertAction("offer_format")).toBe("Agent wants the offer in writing");
+    expect(alertAction("seller_costs")).toBe("Agent asked who pays what");
+    expect(alertAction("disclosure_step")).toBe("Compliance disclosure — needs you personally");
+  });
+
+  it("reserves 'intent unclear' for the ONLY case that is genuinely unclear", () => {
+    expect(alertAction("unknown")).toBe("Agent replied, intent unclear");
+  });
+
+  it("no classification but 'unknown' may claim confusion", () => {
+    // Guards the regression directly: if a future classification renders as
+    // "intent unclear", it is either genuinely unknown or this test fails.
+    const named = ["acceptance", "counter", "interest", "rejection", "soft_no",
+      "offer_format", "appointment", "seller_costs", "disclosure_step"] as const;
+    for (const c of named) {
+      expect(alertAction(c)).not.toMatch(/intent unclear/);
+    }
+  });
+});

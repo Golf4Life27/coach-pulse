@@ -377,7 +377,57 @@ export async function getZipArvSeed(zip: string | null | undefined): Promise<Zip
 
 /** The set of ZIPs that already carry a positive ARV seed — lets the
  *  crawler skip a paid comp pull for a ZIP it has already seeded this cycle. */
+/** ZIPs we can actually PRICE — a positive Renovated_PerSqft, DONT_PRICE
+ *  EXCLUDED.
+ *
+ *  This is the twin of listArvSeededZips, and the split is the point. The two
+ *  callers ask opposite questions of the same table:
+ *
+ *    seed-sweep asks "do I need to SPEND to evaluate this ZIP?" — a DONT_PRICE
+ *      sentinel means yes, it was evaluated, skip it. Counting it as seeded is
+ *      CORRECT there and prevents budget churn.
+ *    intake / outreach / freshness ask "can I PRICE this ZIP?" — for a
+ *      DONT_PRICE sentinel the answer is NO, and the shared helper was
+ *      answering YES.
+ *
+ *  MEASURED 2026-08-07: 21 of 121 seeded ZIPs carry Renovated_PerSqft = 0 with
+ *  Confidence = DONT_PRICE, and 41 of 120 sampled Ohio listings (34%) sit in
+ *  one of them — 45406 alone held 9. We were spending Firecrawl credits and
+ *  record slots collecting inventory the pricer had already been told it may
+ *  never price. */
+export async function listPriceableArvZips(): Promise<Set<string>> {
+  return listArvZips({ includeDontPrice: false });
+}
+
+/** ZIP → renovated $/sqft, for every priceable ZIP. One read, so the intake
+ *  filter can reject a listing asking above its own renovated value BEFORE we
+ *  pay to crawl it (see intake-filter.askAboveRenovatedValue). */
+export async function listArvPsfByZip(): Promise<Map<string, number>> {
+  const pat = requirePat();
+  const out = new Map<string, number>();
+  let offset: string | undefined;
+  do {
+    const url = new URL(`https://api.airtable.com/v0/${BASE_ID}/${ZIP_ARV_SEED_TABLE}`);
+    url.searchParams.set("pageSize", "100");
+    if (offset) url.searchParams.set("offset", offset);
+    const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${pat}` }, cache: "no-store" });
+    if (!res.ok) throw new Error(`ZIP_ARV_Seed list ${res.status}: ${await res.text().catch(() => "")}`);
+    const body = (await res.json()) as { records?: AirtableRow[]; offset?: string };
+    for (const rec of body.records ?? []) {
+      const zip = typeof rec.fields["ZIP"] === "string" ? (rec.fields["ZIP"] as string).trim() : "";
+      const psf = typeof rec.fields["Renovated_PerSqft"] === "number" ? (rec.fields["Renovated_PerSqft"] as number) : 0;
+      if (/^\d{5}$/.test(zip) && psf > 0) out.set(zip, psf);
+    }
+    offset = body.offset;
+  } while (offset);
+  return out;
+}
+
 export async function listArvSeededZips(): Promise<Set<string>> {
+  return listArvZips({ includeDontPrice: true });
+}
+
+async function listArvZips(opts: { includeDontPrice: boolean }): Promise<Set<string>> {
   const pat = requirePat();
   const zips = new Set<string>();
   let offset: string | undefined;
@@ -392,10 +442,11 @@ export async function listArvSeededZips(): Promise<Set<string>> {
       const zip = typeof rec.fields["ZIP"] === "string" ? (rec.fields["ZIP"] as string).trim() : "";
       const psf = typeof rec.fields["Renovated_PerSqft"] === "number" ? (rec.fields["Renovated_PerSqft"] as number) : 0;
       const dontPrice = rec.fields["Confidence"] === "DONT_PRICE";
-      // A DONT_PRICE sentinel counts as seeded too — the ZIP was evaluated and
-      // must not be re-pulled every run (that was the budget-churn the gate
-      // is meant to prevent).
-      if (/^\d{5}$/.test(zip) && (psf > 0 || dontPrice)) zips.add(zip);
+      // A DONT_PRICE sentinel counts as SEEDED (evaluated — do not re-pull,
+      // that was the budget churn) but NOT as PRICEABLE. See the two exported
+      // wrappers above; conflating those was a real defect.
+      const usable = psf > 0 || (dontPrice && opts.includeDontPrice);
+      if (/^\d{5}$/.test(zip) && usable) zips.add(zip);
     }
     offset = body.offset;
   } while (offset);

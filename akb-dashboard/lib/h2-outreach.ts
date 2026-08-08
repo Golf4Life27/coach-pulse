@@ -125,6 +125,7 @@ export function isH2Eligible(l: Listing): boolean {
   );
 }
 
+
 export function selectH2Eligible(listings: Listing[]): Listing[] {
   return listings.filter(isH2Eligible);
 }

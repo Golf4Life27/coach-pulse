@@ -18,6 +18,8 @@
 import { priceOpener, type PricerResult } from "@/lib/per-market-pricer";
 import { arvForSubjectFromSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import { corroborateOpener, type CorroborationFlag } from "@/lib/opener-sanity-gate";
+import { buildDerivation, type OpenerDerivation } from "@/lib/pricing/opener-derivation";
+import { OFFER_ROUND_STEP_USD } from "@/lib/pricing/offer-rounding";
 import { PLACEHOLDER_REHAB_HOLD_REASON } from "@/lib/pricing/vision-queue";
 
 export type ArvSource = "seed_renovated" | "stored" | "none";
@@ -50,6 +52,14 @@ export interface OpenerWithSeedResult {
   /** Corroboration flags that turned a computed opener into a HOLD (empty when
    *  the opener sent or the record was already a HOLD for another reason). */
   corroborationFlags: CorroborationFlag[];
+  /** Named scope when rehab was derived from sqft × a scope tier rather than a
+   *  vision read. The send path appends the "which scope is it?" ask. */
+  assumedScope?: "light" | "medium" | "heavy" | null;
+  /** THE RECEIPT (2026-08-06 audit). Every term the formula consumed, so the
+   *  number can be recomputed cold from the record instead of reverse-
+   *  engineered. Emitted HERE, at the point of computation, so it can never
+   *  drift from the opener it explains. */
+  derivation: OpenerDerivation;
 }
 
 const pos = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v > 0;
@@ -101,6 +111,10 @@ export function priceOpenerWithSeed(input: OpenerWithSeedInput): OpenerWithSeedR
     wholesaleFee: input.wholesaleFee ?? null,
     anchorPct: input.anchorPct ?? null,
     arvConfidence,
+    // Feeds the scope-tiered rehab fallback (2026-08-07). Without sqft a
+    // no-vision record still holds — there is no honest scope estimate for a
+    // house of unknown size.
+    sqft: input.sqft ?? null,
   });
 
   // ── PRE-SEND CORROBORATION GATE (allowlist) ──────────────────────────────
@@ -175,14 +189,66 @@ export function priceOpenerWithSeed(input: OpenerWithSeedInput): OpenerWithSeedR
   // Compact label for the Opener_Basis receipt. (capped_to_list is retired as
   // a producible label — ruling recmy2Vwp1wMA1Vs8; it survives only on legacy
   // records. An over-threshold opener now surfaces as hold_over_list_tripwire.)
+  // A HELD record whose rehab was ASSUMED (scope tier, nobody inside) is
+  // MACHINE work, not operator work — running vision replaces the assumption
+  // with a fact and may clear the hold outright. Without this a scope-derived
+  // record that lands below the micro-opener floor would route to the
+  // operator's decision queue instead of the vision drain that can fix it.
+  //
+  // BUT it yields to every ARV diagnostic, for the same reason the
+  // placeholder-rehab mark in per-market-pricer is a flag and not an early
+  // return: VISION CANNOT FIX AN ARV PROBLEM. An over-list tripwire or a
+  // distrusted ARV labelled "needs vision" would route to a drain cron that can
+  // never clear it, and would bury the specific reason a human needs to see.
+  // Only a hold whose cause is the GUESSED INTERIOR belongs in the vision queue.
+  const arvProblem =
+    finalResult.overListTripwire || finalResult.arvDistrusted || finalResult.flagReseed;
+  const heldOnAssumedScope =
+    finalResult.opener == null &&
+    finalResult.assumedScope != null &&
+    !arvProblem &&
+    !pos(input.estRehabMid) && !pos(input.estRehab);
+
   const basisLabel =
     !corr.corroborated && pos(result.opener) ? "hold_failed_corroboration"
     : heldForVision ? PLACEHOLDER_REHAB_HOLD_REASON
+    : heldOnAssumedScope ? PLACEHOLDER_REHAB_HOLD_REASON
     : finalResult.overListTripwire ? "hold_over_list_tripwire"
     : finalResult.basis === "hold_no_value_basis" ? "hold"
     : arvSource === "seed_renovated"
       ? (finalResult.overArvList ? "arv_buybox_seed_over_arv_list" : "arv_buybox_seed")
     : "arv_buybox_stored";
 
-  return { result: finalResult, arvSource, arvUsed: arvForPricer, basisLabel, corroborationFlags: corr.flags };
+  if (heldOnAssumedScope) {
+    finalResult = {
+      ...finalResult,
+      detail:
+        `placeholder rehab (${finalResult.assumedScope} scope assumed — nobody has been inside; ` +
+        `rehab $${(finalResult.rehabUsed ?? 0).toLocaleString()} is sqft × scope, not a vision read). ` +
+        `The ARV is not the problem. | ${finalResult.detail}`,
+    };
+  }
+
+  const derivation = buildDerivation({
+    opener: finalResult.opener,
+    basis: basisLabel,
+    psf: psfUsed ?? null,
+    sqft: input.sqft ?? null,
+    arv: arvForPricer,
+    arvSource,
+    arvPctMax: input.arvPctMax ?? null,
+    rehab: finalResult.rehabUsed,
+    rehabPlaceholder: finalResult.placeholderRehab === true,
+    fee: input.wholesaleFee ?? null,
+    anchor: finalResult.anchorPct,
+    ceiling: finalResult.ceiling,
+    roundTo: OFFER_ROUND_STEP_USD,
+    flags: corr.flags,
+  });
+
+  return {
+    result: finalResult, arvSource, arvUsed: arvForPricer, basisLabel,
+    corroborationFlags: corr.flags, derivation,
+    assumedScope: finalResult.assumedScope ?? null,
+  };
 }
