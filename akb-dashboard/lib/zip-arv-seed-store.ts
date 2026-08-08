@@ -25,6 +25,7 @@
 
 import type { ArvIntelligenceResult } from "@/lib/arv-intelligence";
 import { adjustedArvFromComps, type AdjustComp } from "@/lib/comp-adjustment";
+import { sizeAdjustedPsf } from "@/lib/pricing/size-adjusted-psf";
 
 export const ZIP_ARV_SEED_TABLE = "tblduJzD1gShaGDQQ";
 
@@ -191,15 +192,34 @@ export function arvForSubjectFromSeed(seed: ZipArvSeed, sqft: number | null | un
   if (seed.dontPrice || seed.confidence === "DONT_PRICE") return null;
   if (sqft == null || !Number.isFinite(sqft) || sqft <= 0) return null;
 
-  // SIZE-ADJUSTED SALES COMPARISON (reliability build #2, 2026-07-23). A STRONG
-  // seed carries its comps; use them to compute a size-adjusted, similarity-
-  // weighted ARV for THIS subject instead of a flat ZIP $/sqft (the Avon bug).
-  // Falls back to $/sqft × sqft when there are no usable comp receipts (older
-  // seeds) or the adjustment can't be computed. THIN seeds keep the
-  // conservative low-end $/sqft (too few comps to weight reliably).
+  // SIZE-AWARE ARV, one ladder, measured before assumed (operator 2026-08-08:
+  // "complete and competent pricing for any size, metro, and property
+  // configuration"). A STRONG seed carries its comps; use them, in order:
+  //
+  //   1. MEASURED slope — fit this ZIP's own psf-vs-sqft relationship
+  //      (lib/pricing/size-adjusted-psf). Fires only when the comps genuinely
+  //      support it (≥6 usable, negative slope of real magnitude) and clamps
+  //      to the observed psf range. This is the method that matches ground
+  //      truth on both known failures: 2302 S Randolph (790 sqft, smaller
+  //      than all 12 comps, every comp sold OVER ask) and 2175 W 106th
+  //      (1,258 sqft vs comps 1,658-2,710; agent rejected the resulting
+  //      lowball outright).
+  //   2. ASSUMED curve — the sub-linear similarity-weighted comparison
+  //      (lib/comp-adjustment, β=0.75). Right shape, national constant; on
+  //      W 106th it recovered only half the size effect the ZIP's own comps
+  //      show ($107k vs $118.5k).
+  //   3. FLAT psf × sqft — no usable comp receipts (older seeds).
+  //
+  // THIN seeds skip all of this and keep the conservative low-end $/sqft.
   if (seed.confidence === "STRONG") {
     const comps = seedComps(seed);
     if (comps.length >= SEED_STRONG_MIN_COMPS) {
+      const fit = sizeAdjustedPsf({
+        comps: comps.filter((c) => c.sqft > 0 && c.price > 0).map((c) => ({ sqft: c.sqft, psf: c.price / c.sqft })),
+        subjectSqft: sqft,
+        seedMedianPsf: seed.renovatedPerSqft,
+      });
+      if (fit.source === "size_fit" && fit.psf != null) return Math.round(fit.psf * sqft);
       const adj = adjustedArvFromComps(comps, sqft);
       if (adj) return adj.arv;
     }
