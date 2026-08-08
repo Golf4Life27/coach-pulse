@@ -89,3 +89,61 @@ describe("isNonDisclosureState", () => {
     expect(isNonDisclosureState(null)).toBe(false);
   });
 });
+
+describe("adding a market must never make things worse than not adding it (2026-08-07)", () => {
+  // THE BUG. A dormant market HELD outright while the same listing in a state
+  // with no market entry priced off the national default — so writing down
+  // what we knew about a metro DISABLED it. Memphis was 295 records, 33% of
+  // the entire eligible pool, every one holding on hold_no_value_basis purely
+  // because memphis_tn exists with arv_source_verified:false.
+  const dormantTn = () => mkt({ id: "memphis_tn", state: "TN", arv_source_verified: false,
+    buyer_params: { arv_pct_max: 0.7175, max_rehab_usd: 75_062, max_price_usd: 308_710,
+      criteria: { beds_min: null, baths_min: null, year_built_min: null, sqft_min: null, sqft_max: null, property_types_allowed: null } } });
+
+  it("a dormant market in a DISCLOSURE state falls back to the national default", () => {
+    const r = resolveOpenerArvPctMax(dormantTn(), "TN");
+    expect(r.source).toBe("national_default_unverified");
+    expect(r.arvPctMax).toBe(NATIONAL_OPENER_ARV_PCT_MAX);
+  });
+
+  it("the fallback is MORE conservative than the config it replaces", () => {
+    // 0.70 national vs Memphis's own 0.7175 — we offer LESS, not more. There
+    // is no reading where holding was safe and this is reckless.
+    const m = dormantTn();
+    expect(resolveOpenerArvPctMax(m, "TN").arvPctMax!)
+      .toBeLessThan(m.buyer_params!.arv_pct_max);
+  });
+
+  it("a market entry can never price WORSE than no entry at all", () => {
+    for (const st of ["TN", "OH", "GA", "AL", "IN", "MI"]) {
+      const withEntry = resolveOpenerArvPctMax(mkt({ state: st, arv_source_verified: false }), st).arvPctMax;
+      const without = resolveOpenerArvPctMax(null, st).arvPctMax;
+      expect(withEntry, st).not.toBeNull();
+      expect(withEntry, st).toBe(without);
+    }
+  });
+
+  it("STILL HOLDS a dormant market in a non-disclosure state", () => {
+    // TX is the reason the gate exists. A dormant TX market cannot borrow the
+    // national default, because the default assumes provable sold comps.
+    const r = resolveOpenerArvPctMax(mkt({ state: "TX", arv_source_verified: false }), "TX");
+    expect(r.source).toBe("hold_configured_unverified");
+    expect(r.arvPctMax).toBeNull();
+  });
+
+  it("STILL HOLDS a restricted state regardless of config", () => {
+    expect(resolveOpenerArvPctMax(mkt({ state: "IL", arv_source_verified: false }), "IL").source)
+      .toBe("hold_restricted");
+  });
+
+  it("a VERIFIED market still uses its own buy-box, not the default", () => {
+    const r = resolveOpenerArvPctMax(mkt({ state: "MI", arv_source_verified: true }), "MI");
+    expect(r.source).toBe("configured_verified");
+    expect(r.arvPctMax).toBe(0.65);
+  });
+
+  it("sourcing_allowed=false also falls back rather than holding, in a disclosure state", () => {
+    const r = resolveOpenerArvPctMax(mkt({ state: "TN", sourcing_allowed: false }), "TN");
+    expect(r.arvPctMax).toBe(NATIONAL_OPENER_ARV_PCT_MAX);
+  });
+});
