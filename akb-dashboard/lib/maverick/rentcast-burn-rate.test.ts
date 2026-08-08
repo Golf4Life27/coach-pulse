@@ -219,3 +219,72 @@ describe("a REAL consumed figure beats the extrapolation", () => {
     expect(r.estimated_calls_remaining).toBe(1000);
   });
 });
+
+// 2026-08-08: the truncation regression. The KV audit source read only its
+// newest page (200 events ≈ 3h on a busy day) while the aggregator claimed a
+// 24h window — 30 calls / 24h reported "30/day, stabilized" while the honest
+// 5,000-row counter read 197/24h. The clamp keys on read_truncated +
+// oldest_event_ts: a truncated read's count only covers the span back to the
+// oldest event it holds.
+describe("a truncated audit read must not be rated over the claimed window", () => {
+  const NOW = new Date("2026-08-08T18:00:00Z");
+  const threeHoursAgo = "2026-08-08T15:00:00Z";
+
+  it("clamps the window to the actual data span and reports the real burn", () => {
+    const au = { ...audit({ rentcast: 30 }), read_truncated: true, oldest_event_ts: threeHoursAgo };
+    const out = computeBurnRate({
+      rentcast: rentcast(),
+      audit: au,
+      windowHours: 24,
+      daysElapsedInCycle: 7,
+      now: NOW,
+    });
+    expect(out.window_hours).toBe(3);
+    expect(out.burn_rate_per_day).toBe(240); // 30 calls / 3h × 24 — not 30/day
+    // 3h < MIN_TRUSTED_WINDOW_HOURS: too short to average the cron mix, so
+    // no exhaustion projection — a loud "unknown" beats a false calm.
+    expect(out.days_until_exhaustion_estimate).toBeNull();
+  });
+
+  it("does not clamp when the read was not truncated (recent oldest event just means low traffic)", () => {
+    const au = { ...audit({ rentcast: 30 }), read_truncated: false, oldest_event_ts: threeHoursAgo };
+    const out = computeBurnRate({
+      rentcast: rentcast(),
+      audit: au,
+      windowHours: 24,
+      daysElapsedInCycle: 7,
+      now: NOW,
+    });
+    expect(out.window_hours).toBe(24);
+    expect(out.burn_rate_per_day).toBe(30);
+  });
+
+  it("legacy states without the read_truncated field behave exactly as before", () => {
+    const out = computeBurnRate({
+      rentcast: rentcast(),
+      audit: audit({ rentcast: 30 }),
+      windowHours: 24,
+      daysElapsedInCycle: 7,
+      now: NOW,
+    });
+    expect(out.window_hours).toBe(24);
+    expect(out.burn_rate_per_day).toBe(30);
+  });
+
+  it("a truncated read spanning the full window is left alone (clamp is a min, never a stretch)", () => {
+    const au = {
+      ...audit({ rentcast: 197 }),
+      read_truncated: true,
+      oldest_event_ts: "2026-08-07T17:00:00Z", // 25h ago — span exceeds claim
+    };
+    const out = computeBurnRate({
+      rentcast: rentcast(),
+      audit: au,
+      windowHours: 24,
+      daysElapsedInCycle: 7,
+      now: NOW,
+    });
+    expect(out.window_hours).toBe(24);
+    expect(out.burn_rate_per_day).toBe(197);
+  });
+});
