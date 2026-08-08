@@ -29,18 +29,26 @@
 // Only the rehab TERM changes basis, from "invented % of ARV" to "named scope
 // at a published $/sqft". It needs no pricing-doctrine amendment.
 
+import { BBC_ANCHOR_PER_SQFT } from "@/lib/appraiser/rehab-calibration";
+
 export type RehabScope = "light" | "medium" | "heavy";
 
-/** Operator's tiers (2026-08-06). Dollars per square foot.
+/** ONE REHAB VOCABULARY (2026-08-08). These tiers are now the Bible v3 §4.2
+ *  anchors from lib/appraiser/rehab-calibration — the SAME table the vision
+ *  calibrator and the reply-lane scope intel price against. Three tier tables
+ *  existed (this module's 15/30/45, the Bible's 15/22/30/50/70, and the
+ *  %-of-ARV placeholder); a system with three rehab languages gives three
+ *  different answers to "what does light mean". The agent-facing trio maps:
+ *    light → Bible Light ($22), medium → Medium ($30), heavy → Heavy ($50).
  *
- *  Calibration check against a real record: 8235 Prest St carried a vision
+ *  Calibration check survives the change: 8235 Prest St carried a vision
  *  rehab of $23,970 on 940 sqft = $25.50/sqft, and the operator independently
- *  called it "light/medium" — which lands exactly between LIGHT and MEDIUM.
- *  The tiers are env-tunable; these are the launch values. */
+ *  called it "light/medium" — which still lands between LIGHT ($22) and
+ *  MEDIUM ($30). Env overrides retained. */
 export const SCOPE_PSF: Readonly<Record<RehabScope, number>> = {
-  light: envNum("REHAB_SCOPE_LIGHT_PSF", 15),
-  medium: envNum("REHAB_SCOPE_MEDIUM_PSF", 30),
-  heavy: envNum("REHAB_SCOPE_HEAVY_PSF", 45),
+  light: envNum("REHAB_SCOPE_LIGHT_PSF", BBC_ANCHOR_PER_SQFT.Light),
+  medium: envNum("REHAB_SCOPE_MEDIUM_PSF", BBC_ANCHOR_PER_SQFT.Medium),
+  heavy: envNum("REHAB_SCOPE_HEAVY_PSF", BBC_ANCHOR_PER_SQFT.Heavy),
 };
 
 /** What each tier MEANS, in the words an agent would use. The label has to be
