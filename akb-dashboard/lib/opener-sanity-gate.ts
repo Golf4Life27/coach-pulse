@@ -23,6 +23,7 @@
 
 import { subjectOutsideCompSizeBand, seedFilterQuality, seedComps, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import { sizeAdjustedPsf } from "@/lib/pricing/size-adjusted-psf";
+import { assessSeedPriceShape } from "@/lib/pricing/seed-quality";
 
 /** arvUsed above this multiple of the seller's list price → the renovated ARV
  *  is implausibly high for an on-market listing (the ARV basis is inflated).
@@ -90,7 +91,8 @@ export type CorroborationFlag =
   | "arv_implausible_vs_list"  // renovated ARV ≫ list price
   | "psf_out_of_range"         // renovated $/sqft outside sane absolute bounds
   | "capped_untrusted_arv"     // opener only survived by clamping to list, on a non-STRONG ARV
-  | "infeasible_ask";          // even the ZERO-rehab best case is hopelessly under the ask
+  | "infeasible_ask"           // even the ZERO-rehab best case is hopelessly under the ask
+  | "avm_priced_seed";         // the seed's "comps" are model estimates, not transactions
 
 export interface CorroborationResult {
   /** True ⇒ every signal corroborates the opener; safe to send. False ⇒ HOLD. */
@@ -150,6 +152,22 @@ export function corroborateOpener(input: CorroborationInput): CorroborationResul
           );
         }
       }
+    }
+  }
+
+  // 1b. AVM-PRICED SEED (Dallas 75216, 2026-08-08) — the seed's "comps" carry
+  //     prices arbitrary to the dollar ($423,272, $297,265): model ESTIMATES
+  //     returned where the vendor cannot see real sales, stored as comps, and
+  //     laundered into "STRONG, clean" confidence. An ARV built on them
+  //     inherits the model's error, not market evidence. Real sale prices are
+  //     transaction-shaped (00/50/900/999 endings); the shape test is
+  //     napkin-cheap and independent of the pricer's math. Fails toward NOT
+  //     flagging on thin/unreadable receipts — thin data has its own guards.
+  if (input.seed) {
+    const q = assessSeedPriceShape(input.seed.receiptsJson);
+    if (q.verdict === "avm_priced") {
+      flags.push("avm_priced_seed");
+      reasons.push(q.detail);
     }
   }
 
