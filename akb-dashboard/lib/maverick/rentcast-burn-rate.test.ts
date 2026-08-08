@@ -1,7 +1,7 @@
 // @agent: maverick — RentCast burn-rate synthesis tests.
 
 import { describe, it, expect } from "vitest";
-import { computeBurnRate, countRentcastPaidCalls, rentcastQuotaAllows } from "./rentcast-burn-rate";
+import { computeBurnRate, countRentcastPaidCalls, rentcastQuotaAllows, MIN_TRUSTED_WINDOW_HOURS } from "./rentcast-burn-rate";
 import type { RentCastState } from "./sources/external-rentcast";
 import type { VercelKvAuditState } from "./sources/vercel-kv-audit";
 
@@ -171,5 +171,51 @@ describe("computeBurnRate", () => {
     expect(r.burn_rate_per_day).toBe(0);
     expect(r.estimated_calls_remaining).toBe(1000);
     expect(r.days_until_exhaustion_estimate).toBeNull();
+  });
+});
+
+describe("it refuses to page on a window too short to average the cron mix", () => {
+  // TWICE NOW: 2026-08-05 and 2026-08-08, both "~0d to exhaustion" at Tier 3.
+  const rc = rentcast({ monthly_cap: 1000 });
+  const au = audit({ rentcast: 25 });
+
+  it("returns null days on a 2h window even with a hot burst", () => {
+    // 25 calls in 2h extrapolates to 300/day, which then eats the whole cap
+    // 8 days into the cycle and divides down to 0.
+    const r = computeBurnRate({ rentcast: rc, audit: au, windowHours: 2, daysElapsedInCycle: 8 });
+    expect(r.burn_rate_per_day).toBe(300);
+    expect(r.days_until_exhaustion_estimate).toBeNull();
+  });
+
+  it("projects normally once the window reaches 24h", () => {
+    const r = computeBurnRate({ rentcast: rc, audit: au, windowHours: 24, daysElapsedInCycle: 8 });
+    expect(r.days_until_exhaustion_estimate).not.toBeNull();
+  });
+
+  it("holds the threshold so a later edit argues with a test", () => {
+    expect(MIN_TRUSTED_WINDOW_HOURS).toBe(24);
+  });
+});
+
+describe("a REAL consumed figure beats the extrapolation", () => {
+  const rc = rentcast({ monthly_cap: 1000 });
+  const au = audit({ rentcast: 25 });
+
+  it("uses the meter instead of rate x days-elapsed", () => {
+    // Extrapolation would claim 300/day x 8 = 2,400 consumed -> 0 remaining.
+    // The real meter says 120 used, so 880 remain.
+    const r = computeBurnRate({
+      rentcast: rc, audit: au, windowHours: 2, daysElapsedInCycle: 8, actualCallsUsedThisCycle: 120,
+    });
+    expect(r.estimated_calls_remaining).toBe(880);
+    // With a solid remaining figure the projection is allowed even on 2h.
+    expect(r.days_until_exhaustion_estimate).toBe(Math.floor(880 / 300));
+  });
+
+  it("a zero meter is honoured, not treated as missing", () => {
+    const r = computeBurnRate({
+      rentcast: rc, audit: au, windowHours: 24, daysElapsedInCycle: 8, actualCallsUsedThisCycle: 0,
+    });
+    expect(r.estimated_calls_remaining).toBe(1000);
   });
 });

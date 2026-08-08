@@ -37,7 +37,8 @@ export interface RentCastBurnRate {
   // Calls per day projected from window observations.
   burn_rate_per_day: number;
   // How many days of quota remain at the current burn rate.
-  // null when burn_rate_per_day is 0 (no recent activity).
+  // null when burn_rate_per_day is 0 (no recent activity), AND null when the
+  // window is too short to trust (see MIN_TRUSTED_WINDOW_HOURS).
   days_until_exhaustion_estimate: number | null;
   // Calls remaining in the current billing cycle (capped at 0).
   estimated_calls_remaining: number;
@@ -54,7 +55,25 @@ export interface ComputeBurnRateInputs {
   // approximate by extrapolating the windowed rate across days
   // elapsed in the cycle.
   daysElapsedInCycle: number;
+  /** ACTUAL calls consumed this cycle, when a real meter is available.
+   *  Supersedes the extrapolation entirely — see the note below. */
+  actualCallsUsedThisCycle?: number | null;
 }
+
+/** A window shorter than a full day cannot average the daily cron mix.
+ *
+ *  THE FAILURE, twice now (2026-08-05 and 2026-08-08). burn_rate_per_day is
+ *  (calls in window / windowHours) x 24, and the aggregator sets windowHours
+ *  from its `since` anchor with a floor of 1. Anchor at 2 hours, catch one
+ *  cron burst, and the daily rate comes out ~12x high. That error then
+ *  COMPOUNDS, because the inflated rate is used twice in opposite directions:
+ *  it inflates estimatedConsumedThisCycle, which shrinks the remaining quota,
+ *  and it is also the divisor. A modest burst therefore collapses straight to
+ *  "~0d to exhaustion" and pages the operator at Tier 3.
+ *
+ *  On 2026-08-05 the honest 24h burn was ~93/day (~6 days of headroom) while a
+ *  2h slice read ~300/day and fired "~0d". */
+export const MIN_TRUSTED_WINDOW_HOURS = 24;
 
 /**
  * Pure cross-source synthesis. Tests pass synthetic audit + rentcast
@@ -70,13 +89,25 @@ export function computeBurnRate(opts: ComputeBurnRateInputs): RentCastBurnRate {
       ? Math.round((estimatedCallsInWindow / opts.windowHours) * 24)
       : 0;
 
-  // Approximation: assume the windowed burn rate has held across the
-  // cycle so far. Days-elapsed × per-day burn = estimated consumed.
-  const estimatedConsumedThisCycle = Math.max(0, Math.round(burnPerDay * opts.daysElapsedInCycle));
+  // Consumed this cycle. PREFER A REAL METER: extrapolating the window rate
+  // across days elapsed multiplies any window error by ~8 mid-month, and the
+  // same error is then the divisor below. When the caller can tell us what was
+  // actually spent, the guess has no business being used.
+  const actualUsed = opts.actualCallsUsedThisCycle;
+  const haveActual = typeof actualUsed === "number" && Number.isFinite(actualUsed) && actualUsed >= 0;
+  const estimatedConsumedThisCycle = haveActual
+    ? Math.round(actualUsed as number)
+    : Math.max(0, Math.round(burnPerDay * opts.daysElapsedInCycle));
   const estimatedCallsRemaining = Math.max(0, opts.rentcast.monthly_cap - estimatedConsumedThisCycle);
 
+  // Only project from a window wide enough to average the daily cron mix —
+  // unless we have a real consumed figure, in which case the remaining side of
+  // the division is solid and only the rate is a projection.
+  const windowTrusted = opts.windowHours >= MIN_TRUSTED_WINDOW_HOURS;
   const daysUntilExhaustion =
-    burnPerDay > 0 ? Math.floor(estimatedCallsRemaining / burnPerDay) : null;
+    burnPerDay > 0 && (windowTrusted || haveActual)
+      ? Math.floor(estimatedCallsRemaining / burnPerDay)
+      : null;
 
   return {
     paid_calls_in_window: auditCalls,
