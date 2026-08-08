@@ -108,3 +108,54 @@ describe("corroborateOpener — allowlist pre-send gate", () => {
     expect(r.corroborated).toBe(true);
   });
 });
+
+describe("size rail tightened (2026-08-08): outside the RAW band needs a measured fit", () => {
+  // Ten sloped comps, 1,658–2,710 sqft — the real 44102 seed shape.
+  const slopedComps = JSON.stringify({
+    comps: [
+      { price: 149_900, sqft: 2_710 }, { price: 184_900, sqft: 2_337 }, { price: 150_000, sqft: 2_128 },
+      { price: 149_999, sqft: 1_658 }, { price: 129_900, sqft: 2_040 }, { price: 125_000, sqft: 1_889 },
+      { price: 124_900, sqft: 1_896 }, { price: 160_000, sqft: 2_091 }, { price: 149_900, sqft: 1_848 },
+      { price: 199_000, sqft: 1_964 },
+    ],
+  });
+  const base = {
+    opener: 30_000, listPrice: 89_000, arvUsed: 118_554, cappedToList: false,
+    arvConfidence: "STRONG" as const, renovatedPerSqft: 94, bestCaseOpener: 78_000,
+  };
+
+  it("2175 W 106th shape: below every comp but the slope fit covers it → PASSES", () => {
+    const r = corroborateOpener({ ...base, sqft: 1_258, seed: { receiptsJson: slopedComps } });
+    expect(r.flags).not.toContain("size_extrapolation");
+  });
+
+  it("same subject, but the seed has too few comps for a fit → FLAGS", () => {
+    const thin = JSON.stringify({
+      comps: [
+        { price: 149_900, sqft: 2_710 }, { price: 184_900, sqft: 2_337 },
+        { price: 150_000, sqft: 2_128 }, { price: 149_999, sqft: 1_658 },
+      ],
+    });
+    const r = corroborateOpener({ ...base, sqft: 1_258, seed: { receiptsJson: thin } });
+    expect(r.flags).toContain("size_extrapolation");
+    expect(r.reasons.join(" ")).toMatch(/cannot support a measured size fit/);
+  });
+
+  it("same subject, comps FLAT (no size signal) → FLAGS rather than trusting a curve past the data", () => {
+    const flat = JSON.stringify({
+      comps: [1_658, 1_848, 1_889, 1_964, 2_091, 2_337].map((sqft) => ({ price: 100 * sqft, sqft })),
+    });
+    const r = corroborateOpener({ ...base, sqft: 1_258, seed: { receiptsJson: flat } });
+    expect(r.flags).toContain("size_extrapolation");
+  });
+
+  it("a subject INSIDE the comp band never touches the new rail", () => {
+    const r = corroborateOpener({ ...base, sqft: 1_900, seed: { receiptsJson: slopedComps } });
+    expect(r.flags).not.toContain("size_extrapolation");
+  });
+
+  it("the 1.5× Avon rail is unchanged: 2.1× the largest comp flags regardless of fit", () => {
+    const r = corroborateOpener({ ...base, sqft: 5_700, seed: { receiptsJson: slopedComps } });
+    expect(r.flags).toContain("size_extrapolation");
+  });
+});
