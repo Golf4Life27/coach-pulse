@@ -21,7 +21,8 @@
 // extrapolation), 110 Leathers / 868 N Main (ARV implausibly high vs list,
 // opener only survived by clamping to list), plus a clean deal that must PASS.
 
-import { subjectOutsideCompSizeBand, seedFilterQuality, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
+import { subjectOutsideCompSizeBand, seedFilterQuality, seedComps, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
+import { sizeAdjustedPsf } from "@/lib/pricing/size-adjusted-psf";
 
 /** arvUsed above this multiple of the seller's list price → the renovated ARV
  *  is implausibly high for an on-market listing (the ARV basis is inflated).
@@ -111,14 +112,44 @@ export function corroborateOpener(input: CorroborationInput): CorroborationResul
   // Nothing to send → nothing to corroborate.
   if (!pos(input.opener)) return { corroborated: true, flags, reasons };
 
-  // 1. SIZE EXTRAPOLATION — subject far outside the seed's comp size band, so a
-  //    psf-derived ARV is a size guess, not a comp. (927 Avon: 2,605 sqft priced
-  //    off ~1,000 sqft comps.)
+  // 1. SIZE EXTRAPOLATION — the subject sits outside the sizes the seed's
+  //    comps actually cover AND the seed cannot size-price it.
+  //
+  //    TIGHTENED 2026-08-08. The old test was a single 1.5× envelope, and both
+  //    real mispricings sailed through it: 2302 S Randolph (790 sqft, smallest
+  //    comp 1,138) cleared the floor by 31 sqft; 2175 W 106th (1,258 sqft,
+  //    smallest comp 1,658) cleared it by 153. A subject smaller than EVERY
+  //    comp passed a guard named "size extrapolation".
+  //
+  //    Since #194 the ARV ladder handles out-of-band subjects PROPERLY when
+  //    the comps support a measured slope — that is what the fit is FOR, so
+  //    holding those would undo the fix. The residual danger is precisely the
+  //    subject outside the RAW comp range whose seed CANNOT support a slope
+  //    fit (<6 usable comps, or a flat/positive slope): its ARV came from the
+  //    assumed β-curve or flat psf extrapolating past the data.
+  //      - outside 1.5× the band → flag, always (the Avon rail, unchanged)
+  //      - outside the RAW band + no measured fit → flag (the new rail)
+  //      - outside the RAW band + measured fit ran → PASS (clamped, sized)
   if (input.seed) {
     const band = subjectOutsideCompSizeBand(input.seed, input.sqft ?? null);
     if (band.outside && band.reason) {
       flags.push("size_extrapolation");
       reasons.push(band.reason);
+    } else {
+      const raw = subjectOutsideCompSizeBand(input.seed, input.sqft ?? null, 1.0);
+      if (raw.outside && raw.reason) {
+        const comps = seedComps(input.seed as Parameters<typeof seedComps>[0])
+          .filter((c) => c.sqft > 0 && c.price > 0)
+          .map((c) => ({ sqft: c.sqft, psf: c.price / c.sqft }));
+        const fit = sizeAdjustedPsf({ comps, subjectSqft: input.sqft ?? null, seedMedianPsf: null });
+        if (fit.source !== "size_fit") {
+          flags.push("size_extrapolation");
+          reasons.push(
+            `${raw.reason}; and the seed's comps cannot support a measured size fit (${fit.source}) — ` +
+              `the ARV extrapolates past the data with no size correction`,
+          );
+        }
+      }
     }
   }
 
