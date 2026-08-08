@@ -13,9 +13,11 @@ import {
 
 describe("the tiers", () => {
   it("holds the operator's numbers", () => {
-    expect(SCOPE_PSF.light).toBe(15);
+    // ONE VOCABULARY (2026-08-08): tiers are the Bible v3 4.2 anchors, the
+    // same table vision and the reply-lane scope intel price against.
+    expect(SCOPE_PSF.light).toBe(22);
     expect(SCOPE_PSF.medium).toBe(30);
-    expect(SCOPE_PSF.heavy).toBe(45);
+    expect(SCOPE_PSF.heavy).toBe(50);
   });
 
   it("assumes HEAVY when nobody has been inside", () => {
@@ -26,11 +28,13 @@ describe("the tiers", () => {
 
   it("calibrates against a real vision read", () => {
     // 8235 Prest St: $23,970 vision rehab on 940 sqft = $25.50/sqft, which the
-    // operator independently called "light/medium". Nearest tier is medium.
-    expect(scopeForRehab(23_970, 940)).toBe("medium");
-    expect(rehabForScope(940, "light")).toBe(14_100);
-    expect(rehabForScope(940, "medium")).toBe(28_200);
-    expect(rehabForScope(940, "heavy")).toBe(42_300);
+    // operator independently called "light/medium". On the Bible anchors that
+    // sits between Light ($22) and Medium ($30); nearest is Light by $3.50 —
+    // consistent with the operator's own compound read.
+    expect(scopeForRehab(23_970, 940)).toBe("light");
+    expect(rehabForScope(940, "light")).toBe(20_680);   // 940 × $22
+    expect(rehabForScope(940, "medium")).toBe(28_200);  // 940 × $30
+    expect(rehabForScope(940, "heavy")).toBe(47_000);   // 940 × $50
   });
 
   it("refuses to estimate a scope without sqft", () => {
@@ -51,10 +55,10 @@ describe("scopedOpeners — the offer follows the scope", () => {
     const o = scopedOpeners(prest);
     expect(o.map((x) => x.scope)).toEqual(["light", "medium", "heavy"]);
     // 0.6461 × 86,480 = 55,874.73. − rehab − 5,000 fee.
-    expect(openerAtScope(o, "light")!.rehab).toBe(14_100);
-    expect(openerAtScope(o, "light")!.mao).toBe(36_775);
+    expect(openerAtScope(o, "light")!.rehab).toBe(20_680);
+    expect(openerAtScope(o, "light")!.mao).toBe(30_195);
     expect(openerAtScope(o, "medium")!.mao).toBe(22_675);
-    expect(openerAtScope(o, "heavy")!.mao).toBe(8_575);
+    expect(openerAtScope(o, "heavy")!.mao).toBe(3_875);
   });
 
   it("a heavier scope always produces a LOWER offer", () => {
