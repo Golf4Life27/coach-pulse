@@ -57,6 +57,10 @@ export async function GET(req: Request) {
   const zipFilter = (url.searchParams.get("zips") ?? DETROIT_ZIPS.join(","))
     .split(",").map((z) => z.trim()).filter((z) => /^\d{5}$/.test(z));
   const now = new Date();
+  // A1 (operator 2026-06-21): drop the (List − MAO) spread term from the distress
+  // replica so the projection stops encoding the spurious "expensive = distressed"
+  // contamination. Default OFF (live formula behavior); flip to re-verify A1.
+  const dropSpreadTerm = process.env.DISTRESS_DROP_SPREAD_TERM === "true";
 
   // ── Cohort: priced + MI + missing MLS date (the rows intake won't re-touch) ──
   const all = await getListings();
@@ -95,6 +99,7 @@ export async function GET(req: Request) {
       mao,
       priceDrops: l.priceDropCount ?? null,
       hasAgentPhone,
+      dropSpreadTerm,
     });
     return {
       recordId: l.id,
