@@ -317,6 +317,20 @@ export interface Buyer {
   cashBuyer: boolean;
   proofOfFundsOnFile: boolean;
   buyerActiveFlag: boolean;
+  // Dispo shortlist inputs (2026-08-09). Free-text on purpose: the operator
+  // annotates these by hand ("78245 (unconfirmed — contacted once)"), and
+  // that annotation is real signal the matcher reads. Do not "clean" these
+  // into bare code lists without preserving the confidence wording.
+  buyerPhone: string | null;
+  companyName: string | null;
+  preferredStates: string | null;
+  preferredZipCodes: string | null;
+  minPrice: number | null;
+  maxPrice: number | null;
+  buyerRating: string | null;
+  lastContactedAt: string | null;
+  pofExpiryDate: string | null;
+  dealsPurchasedLast12Months: string | null;
 }
 
 export interface DashboardStats {
