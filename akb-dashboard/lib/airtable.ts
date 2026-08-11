@@ -318,6 +318,19 @@ const BUYER_FIELDS: Record<string, string> = {
   fldzL2ooNWPZbxJOa: "cashBuyer",
   fldgjfPuBQkfRoebT: "proofOfFundsOnFile",
   fldhZbgY7oTHbuFTO: "buyerActiveFlag",
+  // Dispo shortlist inputs (2026-08-09). The buy-box columns existed in
+  // Airtable but were never read — the Buyer type stopped at 7 fields, so
+  // nothing downstream could match a buyer to a deal.
+  fldI3706VDc0OHVWw: "buyerPhone",
+  fldPHXsc8GTzPwgby: "companyName",
+  fld8UCxG9HQX8oxMx: "preferredStates",
+  flda9PTXHUSDP4vaj: "preferredZipCodes",
+  fldxIUS4ouQns4SMf: "minPrice",
+  fldpF9WUzwRZW1SoQ: "maxPrice",
+  fldM0lHWjQKzANxBc: "buyerRating",
+  fldugxoLI2L5hyZbO: "lastContactedAt",
+  fldtu63KxCSJ6kJJe: "pofExpiryDate",
+  fldeV2ddRDnHmNzfT: "dealsPurchasedLast12Months",
 };
 
 const PROSPECTIVE_BUYER_FIELDS: Record<string, string> = {

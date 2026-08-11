@@ -105,3 +105,33 @@ describe("vercel-kv-audit summarizeEvents", () => {
     expect(r.recent_events).toHaveLength(50);
   });
 });
+
+// 2026-08-08: read_truncated marks a full-page KV read — older events exist
+// that the state cannot see, so window-rating consumers (RentCast burn meter)
+// must clamp to the data span instead of the claimed window.
+describe("read_truncated marking", () => {
+  const three = (): AuditEntry[] => [
+    evt({ ts: "2026-05-15T00:02:00Z", agent: "crier", event: "send", status: "confirmed_success" }),
+    evt({ ts: "2026-05-15T00:01:00Z", agent: "crier", event: "send", status: "confirmed_success" }),
+    evt({ ts: "2026-05-15T00:00:00Z", agent: "sentry", event: "gate", status: "confirmed_success" }),
+  ];
+
+  it("marks truncated when the read returned a full page", () => {
+    expect(summarizeEvents(three(), undefined, 3).read_truncated).toBe(true);
+  });
+
+  it("does not mark truncated when the read came back under the limit", () => {
+    expect(summarizeEvents(three(), undefined, 200).read_truncated).toBe(false);
+  });
+
+  it("judges truncation on the PRE-filter count — a since-filter that drops rows is not truncation, a full page still is", () => {
+    const since = new Date("2026-05-15T00:01:30Z"); // keeps only the newest row
+    const r = summarizeEvents(three(), since, 3);
+    expect(r.total_events_since).toBe(1);
+    expect(r.read_truncated).toBe(true);
+  });
+
+  it("leaves read_truncated false when no read limit is supplied (pure-summarizer callers)", () => {
+    expect(summarizeEvents(three()).read_truncated).toBe(false);
+  });
+});

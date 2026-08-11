@@ -384,3 +384,124 @@ describe("bumpRepriceGate — recompute-before-queue on the bump lane (963 W 3rd
     expect(v.reason).toBe("reprice_hold_hold_failed_corroboration [infeasible_ask]");
   });
 });
+
+// ── planBumps: slot accounting ────────────────────────────────────────
+//
+// 2026-08-08 (Spine rec7xw7eUgFQ7stEb). The dispatch claim used to be
+// consulted only at send time, so a claimed record still consumed one of
+// the run's `limit` slots and then bounced to idempotent_skipped. Both of
+// 8/8's runs planned 10, skipped 10, and sent 0 while 42+ due records
+// behind them were never reached. These pin the slot accounting.
+import { planBumps } from "./bump-lane";
+
+describe("planBumps — a claimed record must not consume a plan slot", () => {
+  const due = (n: number): Listing[] =>
+    Array.from({ length: n }, (_, i) =>
+      texted({
+        id: `recBUMP${String(i).padStart(9, "0")}`,
+        address: `${100 + i} Test St, Detroit, MI 48219`,
+        // distinct agent per record so per-agent dedup never interferes
+        agentPhone: `(313) 555-${String(1000 + i).slice(-4)}`,
+        lastOutreachDate: hoursAgo(24 * 5),
+      }),
+    );
+
+  const noThreads = new Set<string>();
+
+  it("walks past claimed records and still fills the run to `limit`", async () => {
+    const listings = due(20);
+    const claimed = new Set(listings.slice(0, 10).map((l) => l.id));
+    const r = await planBumps({
+      due: listings,
+      liveThreads: noThreads,
+      limit: 10,
+      maxScan: 200,
+      now: NOW,
+      isClaimed: async (recordId) => claimed.has(recordId),
+    });
+    // THE REGRESSION: before the fix this returned 0 plans — the ten
+    // claimed records ate the entire budget.
+    expect(r.plans).toHaveLength(10);
+    expect(r.claimSkipped).toBe(10);
+    expect(r.plans.every((p) => !claimed.has(p.recordId))).toBe(true);
+    expect(r.skipped.filter((s) => s.reason === "already_claimed")).toHaveLength(10);
+  });
+
+  it("reports claimSkipped so a queue backing up behind stale claims is legible", async () => {
+    const listings = due(10);
+    const r = await planBumps({
+      due: listings,
+      liveThreads: noThreads,
+      limit: 10,
+      maxScan: 200,
+      now: NOW,
+      isClaimed: async () => true,
+    });
+    expect(r.plans).toHaveLength(0);
+    expect(r.claimSkipped).toBe(10);
+  });
+
+  it("does no claim gating when the lock is off (dry run / KV unconfigured)", async () => {
+    const r = await planBumps({
+      due: due(3),
+      liveThreads: noThreads,
+      limit: 10,
+      maxScan: 200,
+      now: NOW,
+    });
+    expect(r.plans).toHaveLength(3);
+    expect(r.claimSkipped).toBe(0);
+  });
+
+  it("treats a throwing claim lookup as unclaimed — a blind check must not hold back the lane", async () => {
+    const r = await planBumps({
+      due: due(3),
+      liveThreads: noThreads,
+      limit: 10,
+      maxScan: 200,
+      now: NOW,
+      isClaimed: async () => {
+        throw new Error("KV down");
+      },
+    });
+    expect(r.plans).toHaveLength(3);
+    expect(r.claimSkipped).toBe(0);
+  });
+
+  it("a claimed record does not burn its agent's one-bump-per-run slot", async () => {
+    // Same agent on both records: the first is claimed, so the second must
+    // still be plannable. Ordering matters — the claim check has to run
+    // before seenThisRun.add.
+    const [a, b] = [
+      texted({ id: "recBUMPclaimed01", agentPhone: "(313) 555-7777", lastOutreachDate: hoursAgo(24 * 5) }),
+      texted({ id: "recBUMPopen00001", address: "9 Open St, Detroit, MI 48219", agentPhone: "(313) 555-7777", lastOutreachDate: hoursAgo(24 * 5) }),
+    ];
+    const r = await planBumps({
+      due: [a, b],
+      liveThreads: noThreads,
+      limit: 10,
+      maxScan: 200,
+      now: NOW,
+      isClaimed: async (recordId) => recordId === "recBUMPclaimed01",
+    });
+    expect(r.plans.map((p) => p.recordId)).toEqual(["recBUMPopen00001"]);
+  });
+
+  it("honours maxScan so a fully-claimed queue cannot issue unbounded lookups", async () => {
+    let lookups = 0;
+    const r = await planBumps({
+      due: due(50),
+      liveThreads: noThreads,
+      limit: 10,
+      maxScan: 12,
+      now: NOW,
+      isClaimed: async () => {
+        lookups++;
+        return true;
+      },
+    });
+    expect(r.scanned).toBe(12);
+    expect(lookups).toBe(12);
+    expect(r.plans).toHaveLength(0);
+  });
+});

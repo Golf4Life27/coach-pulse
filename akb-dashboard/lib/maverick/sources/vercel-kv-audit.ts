@@ -12,8 +12,13 @@ import { computeMcpLatency, type McpLatencyStats } from "../mcp-latency";
 import { runWithTimeout } from "../timeout";
 import { failResult, type FetchOpts, type SourceResult } from "../types";
 
-const DEFAULT_TIMEOUT_MS = 2_000;
-const DEFAULT_LIMIT = 200;
+const DEFAULT_TIMEOUT_MS = 4_000;
+// 2026-08-08: was 200 — on a busy day 200 events span ~3h, so any consumer
+// treating this as "the last 24h" (the RentCast burn meter did) undercounts
+// by whatever the truncation hides. 5000 matches the honest spend counter
+// (lib/spend/derive via appraiser-backfill). Timeout raised 2s→4s for the
+// larger lrange.
+const DEFAULT_LIMIT = 5_000;
 
 export interface RecentAuditEvent {
   agent: string;
@@ -42,6 +47,14 @@ export interface VercelKvAuditState {
   }>;
   oldest_event_ts: string | null;
   newest_event_ts: string | null;
+  /** True when the KV read returned a full page (events hit the read limit),
+   *  meaning older events exist that this state cannot see. Consumers that
+   *  rate-over-a-window (the RentCast burn meter) must clamp their window to
+   *  the actual data span when this is set — dividing a truncated count by
+   *  the full window is how the meter reported 30/day while the vendor was
+   *  billing ~197/day (2026-08-08). Optional for fixture compatibility;
+   *  absent means "not truncated". */
+  read_truncated?: boolean;
   mcp_call_latency: McpLatencyStats;
 }
 
@@ -52,18 +65,21 @@ export async function fetchVercelKvAuditState(
     { source: "vercel_kv_audit", timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS },
     async () => {
       const events = await readRecentFromKv(DEFAULT_LIMIT);
-      return summarizeEvents(events, opts.since);
+      return summarizeEvents(events, opts.since, DEFAULT_LIMIT);
     },
   );
 }
 
 /**
  * Pure summarizer — extracted so tests can hit the aggregation logic
- * without stubbing KV. The fetcher is the thin I/O wrapper.
+ * without stubbing KV. The fetcher is the thin I/O wrapper. readLimit
+ * is the limit the KV read was made with — a full page (pre-filter)
+ * marks the state read_truncated.
  */
 export function summarizeEvents(
   events: AuditEntry[],
   since?: Date,
+  readLimit?: number,
 ): VercelKvAuditState {
   const sinceMs = since?.getTime() ?? 0;
   const filtered = events.filter((e) => {
@@ -104,6 +120,7 @@ export function summarizeEvents(
     recent_failures: failures.slice(0, 25),
     oldest_event_ts: filtered.length > 0 ? filtered[filtered.length - 1].ts : null,
     newest_event_ts: filtered.length > 0 ? filtered[0].ts : null,
+    read_truncated: readLimit != null && events.length >= readLimit,
     mcp_call_latency: computeMcpLatency(filtered),
   };
 }

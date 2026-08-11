@@ -357,3 +357,118 @@ export function partitionReverifyBatch<T>(
     bumpTaken,
   };
 }
+
+// ── Plan selection ────────────────────────────────────────────────────
+//
+// Extracted from app/api/cron/bump-followup on 2026-08-08 so the slot
+// accounting is testable (Spine rec7xw7eUgFQ7stEb). The defect it pins:
+// the dispatch claim used to be consulted ONLY at send time, so a record
+// holding a live 24h claim still CONSUMED one of the run's `limit` slots
+// and then bounced to idempotent_skipped. With ten stale claims at the
+// head of the due queue every run planned 10, skipped 10, and sent 0
+// while dozens of genuinely-due records behind them were never reached.
+// The claim is now a planning input, and the records it displaces are
+// counted (claimSkipped) so a backed-up queue is legible in the audit
+// row instead of reading as ordinary idempotency.
+
+export interface BumpPlan {
+  recordId: string;
+  address: string;
+  zip: string | null;
+  state: string | null;
+  agentName: string | null;
+  toE164: string;
+  attempt: number;
+  stickyOffer: number;
+  message: string;
+}
+
+export interface BumpPlanSkip {
+  record_id: string;
+  address: string;
+  reason: string;
+}
+
+export interface PlanBumpsResult {
+  plans: BumpPlan[];
+  skipped: BumpPlanSkip[];
+  claimSkipped: number;
+  scanned: number;
+}
+
+export interface PlanBumpsOpts {
+  due: Listing[];
+  liveThreads: Set<string>;
+  limit: number;
+  maxScan: number;
+  now?: Date;
+  /** Live dispatch-claim lookup. Omitted (dry run / KV unconfigured) means
+   *  no claim gating — matching the dispatch path, which only calls setNx
+   *  when the lock is enabled. A lookup that throws must resolve false:
+   *  a blind claim check may not silently hold back the whole lane. */
+  isClaimed?: (recordId: string, attempt: number) => Promise<boolean>;
+}
+
+export async function planBumps(opts: PlanBumpsOpts): Promise<PlanBumpsResult> {
+  const { due, liveThreads, limit, maxScan, isClaimed } = opts;
+  const now = opts.now ?? new Date();
+  const plans: BumpPlan[] = [];
+  const skipped: BumpPlanSkip[] = [];
+  const seenThisRun = new Set<string>();
+  let claimSkipped = 0;
+  let scanned = 0;
+
+  for (const l of due) {
+    if (plans.length >= limit) break;
+    if (scanned >= maxScan) break;
+    scanned++;
+    const v = bumpVerdict(l, now);
+    if (!v.due || v.attempt == null) continue; // selectBumpDue already filtered; defensive
+    const phone = normalizePhone(l.agentPhone);
+    if (!phone) {
+      skipped.push({ record_id: l.id, address: l.address, reason: "no_agent_phone" });
+      continue;
+    }
+    if (liveThreads.has(phone)) {
+      skipped.push({ record_id: l.id, address: l.address, reason: "agent_in_live_thread" });
+      continue;
+    }
+    if (seenThisRun.has(phone)) {
+      skipped.push({ record_id: l.id, address: l.address, reason: "agent_already_bumped_this_run" });
+      continue;
+    }
+    const sticky = extractStickyOffer(l.notes);
+    if (!sticky) {
+      // No delivery stamp → we do not know what number the agent received.
+      // Fail closed — a drifted field is never a fallback (INVARIANTS §3).
+      skipped.push({ record_id: l.id, address: l.address, reason: "no_sticky_stamp" });
+      continue;
+    }
+    // Claim check LAST — the only I/O here, so it runs only for candidates
+    // that already cleared every cheap gate. It must also run BEFORE
+    // seenThisRun.add, or a claimed record would burn its agent's
+    // one-bump-per-run slot on its way out the door.
+    if (isClaimed) {
+      const held = await isClaimed(l.id, v.attempt).catch(() => false);
+      if (held) {
+        skipped.push({ record_id: l.id, address: l.address, reason: "already_claimed" });
+        claimSkipped++;
+        continue;
+      }
+    }
+    seenThisRun.add(phone);
+    plans.push({
+      recordId: l.id,
+      address: l.address,
+      zip: l.zip ?? null,
+      state: l.state ?? null,
+      agentName: l.agentName,
+      toE164: phone,
+      attempt: v.attempt,
+      stickyOffer: sticky.offer,
+      message: buildBumpMessage(l.agentName, l.address, sticky.offer, v.attempt),
+    });
+  }
+
+  return { plans, skipped, claimSkipped, scanned };
+}

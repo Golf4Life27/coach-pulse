@@ -58,6 +58,9 @@ export interface ComputeBurnRateInputs {
   /** ACTUAL calls consumed this cycle, when a real meter is available.
    *  Supersedes the extrapolation entirely — see the note below. */
   actualCallsUsedThisCycle?: number | null;
+  /** Clock for the truncation clamp. Injectable for tests; defaults to
+   *  wall clock. */
+  now?: Date;
 }
 
 /** A window shorter than a full day cannot average the daily cron mix.
@@ -72,7 +75,16 @@ export interface ComputeBurnRateInputs {
  *  "~0d to exhaustion" and pages the operator at Tier 3.
  *
  *  On 2026-08-05 the honest 24h burn was ~93/day (~6 days of headroom) while a
- *  2h slice read ~300/day and fired "~0d". */
+ *  2h slice read ~300/day and fired "~0d".
+ *
+ *  THE MIRROR FAILURE (2026-08-08, diagnosed): the guard checked the CLAIMED
+ *  windowHours, not what the audit data actually covered. The KV audit source
+ *  read only its newest page of events (~3h on a busy day) while the
+ *  aggregator claimed 24h — so a truncated count divided by the full window
+ *  DEFLATED the rate (30/day reported, ~197/day real) and the guard blessed
+ *  it. computeBurnRate now clamps the window to the actual data span whenever
+ *  the audit read was truncated (read_truncated + oldest_event_ts), which
+ *  both corrects the rate and lets this guard see the real, shorter window. */
 export const MIN_TRUSTED_WINDOW_HOURS = 24;
 
 /**
@@ -84,9 +96,24 @@ export function computeBurnRate(opts: ComputeBurnRateInputs): RentCastBurnRate {
   // Honest 1:1 — every RentCast call audits itself since 2026-07-29.
   const estimatedCallsInWindow = auditCalls;
 
+  // A truncated audit read saw only its newest page — the count covers the
+  // span back to the oldest event it holds, NOT the claimed window. Rating
+  // over the claimed window deflates the burn (the 2026-08-08 failure);
+  // clamp to what the data actually covers.
+  let effectiveWindowHours = opts.windowHours;
+  const audit = opts.audit;
+  if (audit?.read_truncated && audit.oldest_event_ts) {
+    const nowMs = (opts.now ?? new Date()).getTime();
+    const oldestMs = Date.parse(audit.oldest_event_ts);
+    if (Number.isFinite(oldestMs) && nowMs > oldestMs) {
+      const spanHours = Math.max(1, Math.round((nowMs - oldestMs) / 3_600_000));
+      effectiveWindowHours = Math.min(effectiveWindowHours, spanHours);
+    }
+  }
+
   const burnPerDay =
-    opts.windowHours > 0
-      ? Math.round((estimatedCallsInWindow / opts.windowHours) * 24)
+    effectiveWindowHours > 0
+      ? Math.round((estimatedCallsInWindow / effectiveWindowHours) * 24)
       : 0;
 
   // Consumed this cycle. PREFER A REAL METER: extrapolating the window rate
@@ -102,8 +129,10 @@ export function computeBurnRate(opts: ComputeBurnRateInputs): RentCastBurnRate {
 
   // Only project from a window wide enough to average the daily cron mix —
   // unless we have a real consumed figure, in which case the remaining side of
-  // the division is solid and only the rate is a projection.
-  const windowTrusted = opts.windowHours >= MIN_TRUSTED_WINDOW_HOURS;
+  // the division is solid and only the rate is a projection. Judged on the
+  // EFFECTIVE window: a truncated read that only covers 3h is a 3h window no
+  // matter what the aggregator's anchor claims.
+  const windowTrusted = effectiveWindowHours >= MIN_TRUSTED_WINDOW_HOURS;
   const daysUntilExhaustion =
     burnPerDay > 0 && (windowTrusted || haveActual)
       ? Math.floor(estimatedCallsRemaining / burnPerDay)
@@ -112,7 +141,7 @@ export function computeBurnRate(opts: ComputeBurnRateInputs): RentCastBurnRate {
   return {
     paid_calls_in_window: auditCalls,
     estimated_calls_in_window: estimatedCallsInWindow,
-    window_hours: opts.windowHours,
+    window_hours: effectiveWindowHours,
     burn_rate_per_day: burnPerDay,
     days_until_exhaustion_estimate: daysUntilExhaustion,
     estimated_calls_remaining: estimatedCallsRemaining,

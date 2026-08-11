@@ -53,6 +53,7 @@ import {
   liveThreadPhoneIndex,
   extractStickyOffer,
   buildBumpMessage,
+  planBumps,
   buildBumpSentNote,
   threadInboundTruth,
   buildBumpAbortedNote,
@@ -76,6 +77,11 @@ const WALL_CLOCK_BUDGET_MS = 270_000;
 const RUN_LOCK_KEY = "h2:bump:run:lock";
 const RUN_LOCK_TTL_S = 300;
 const DISPATCH_CLAIM_TTL_S = 86_400;
+/** Bound on how far down the due queue the planner will walk looking for
+ *  unclaimed records. Without it, a fully-claimed queue would issue one KV
+ *  read per due record every run. Generous enough that a normal run never
+ *  reaches it (limit is 10, due runs ~50-60). */
+const MAX_PLAN_SCAN = 200;
 const dispatchClaimKey = (recordId: string, attempt: number) =>
   `h2:bump:${recordId}:${attempt}`;
 
@@ -90,17 +96,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-interface BumpPlan {
-  recordId: string;
-  address: string;
-  zip: string | null;
-  state: string | null;
-  agentName: string | null;
-  toE164: string;
-  attempt: number;
-  stickyOffer: number;
-  message: string;
-}
 
 interface ProcessedRow {
   record_id: string;
@@ -195,42 +190,34 @@ async function handle(req: Request): Promise<Response> {
   const liveThreads = liveThreadPhoneIndex(allListings);
 
   // ── Plan: per-agent dedup, live-thread guard, sticky-stamp gate ────
-  const skipped: Array<{ record_id: string; address: string; reason: string }> = [];
-  const seenThisRun = new Set<string>();
-  const plans: BumpPlan[] = [];
-  for (const l of due) {
-    if (plans.length >= limit) break;
-    const v = bumpVerdict(l, now);
-    if (!v.due || v.attempt == null) continue; // selectBumpDue already filtered; defensive
-    const phone = normalizePhone(l.agentPhone)!;
-    if (liveThreads.has(phone)) {
-      skipped.push({ record_id: l.id, address: l.address, reason: "agent_in_live_thread" });
-      continue;
-    }
-    if (seenThisRun.has(phone)) {
-      skipped.push({ record_id: l.id, address: l.address, reason: "agent_already_bumped_this_run" });
-      continue;
-    }
-    const sticky = extractStickyOffer(l.notes);
-    if (!sticky) {
-      // No delivery stamp → we do not know what number the agent received.
-      // Fail closed — a drifted field is never a fallback (INVARIANTS §3).
-      skipped.push({ record_id: l.id, address: l.address, reason: "no_sticky_stamp" });
-      continue;
-    }
-    seenThisRun.add(phone);
-    plans.push({
-      recordId: l.id,
-      address: l.address,
-      zip: l.zip ?? null,
-      state: l.state ?? null,
-      agentName: l.agentName,
-      toE164: phone,
-      attempt: v.attempt,
-      stickyOffer: sticky.offer,
-      message: buildBumpMessage(l.agentName, l.address, sticky.offer, v.attempt),
-    });
-  }
+  //
+  // 2026-08-08 STARVATION FIX (Spine rec7xw7eUgFQ7stEb). The claim check
+  // used to live ONLY at dispatch, so a record holding a live 24h claim
+  // still consumed a plan slot and then bounced to idempotent_skipped.
+  // Ten stale claims at the head of the due queue therefore produced
+  // "planned 10 / skipped 10 / bumped 0" while 42 genuinely-due records
+  // behind them were never reached — observed on both of 8/8's runs, and
+  // invisible because the counter reads as ordinary idempotency. The
+  // claim is now consulted BEFORE the slot is spent. The dispatch-time
+  // setNx remains the authoritative claim (a claim appearing between plan
+  // and dispatch is still caught there); this read only stops the budget
+  // from being burned on records we already know are claimed.
+  const lockEnabled = !dryRun && kvConfigured();
+  const {
+    plans,
+    skipped,
+    claimSkipped: planClaimSkipped,
+    scanned: planScanned,
+  } = await planBumps({
+    due,
+    liveThreads,
+    limit,
+    maxScan: MAX_PLAN_SCAN,
+    now,
+    isClaimed: lockEnabled
+      ? async (recordId, attempt) => (await kvProd.get(dispatchClaimKey(recordId, attempt))) != null
+      : undefined,
+  });
 
   // ── Send cap — same fail-closed meter + auto coverage as first touch ─
   const rawCapCfg = readSendCapConfig();
@@ -268,7 +255,6 @@ async function handle(req: Request): Promise<Response> {
     thread_truth_aborted: 0,
   };
 
-  const lockEnabled = !dryRun && kvConfigured();
   let runLockHeld = false;
   if (lockEnabled) {
     runLockHeld = await kvProd.setNx(RUN_LOCK_KEY, startedAt, RUN_LOCK_TTL_S);
@@ -587,6 +573,13 @@ async function handle(req: Request): Promise<Response> {
       due_total: due.length,
       planned: plans.length,
       processed: processed.length,
+      // Starvation telemetry: how many due records the planner walked past
+      // because they already held a dispatch claim. A run with
+      // plan_claim_skipped high and planned low is the queue backing up
+      // behind stale claims — the failure that read as benign
+      // idempotent_skipped before 2026-08-08.
+      plan_claim_skipped: planClaimSkipped,
+      plan_scanned: planScanned,
       ...summary,
       send_cap: sendCapSummary,
     },
@@ -601,6 +594,8 @@ async function handle(req: Request): Promise<Response> {
     finished_at: new Date().toISOString(),
     due_total: due.length,
     planned: plans.length,
+    plan_claim_skipped: planClaimSkipped,
+    plan_scanned: planScanned,
     plan_skipped: skipped,
     processed,
     summary,
