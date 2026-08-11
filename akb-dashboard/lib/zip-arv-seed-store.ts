@@ -42,7 +42,12 @@ export const SEED_STRONG_MIN_COMPS = 5;
 // contaminated stored ARV. Caching it (rather than leaving the ZIP unseeded)
 // also stops the auto-seed loop re-pulling a known-noisy ZIP every run.
 export type SeedConfidence = "STRONG" | "THIN" | "DONT_PRICE";
-export type SeedSource = "rentcast_avm" | "attom_salescomparables";
+// "propstream_mls_sold" (2026-08-11) is the first source that is a RECORDED
+// transaction rather than model output: agent-reported MLS closings, which
+// exist even in non-disclosure states where deed prices do not. See
+// lib/pricing/propstream-seed for why the vendor's own "Last Sale Amount"
+// column is NOT usable for this.
+export type SeedSource = "rentcast_avm" | "attom_salescomparables" | "propstream_mls_sold";
 const ALLOWED_SOURCES: ReadonlySet<string> = new Set(["rentcast_avm", "attom_salescomparables"]);
 
 export interface ZipArvSeed {
