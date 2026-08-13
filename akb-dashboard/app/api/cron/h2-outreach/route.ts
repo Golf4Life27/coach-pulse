@@ -52,7 +52,7 @@ import {
 } from "@/lib/pricing/vision-queue";
 import { persistDecisionMath } from "@/lib/decision-persist";
 import { priceOpenerWithSeed } from "@/lib/opener-pricing";
-import { getZipArvSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
+import { getZipArvSeed, seedSelfPricesNonDisclosure, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import { minOfferFloor } from "@/lib/per-market-pricer";
 import { classifyHold } from "@/lib/pricing/hold-reason";
 import { getMarketForListing, openerArvPctMax } from "@/lib/markets/registry";
@@ -487,6 +487,9 @@ async function handle(req: Request): Promise<Response> {
       seedCache.set(zip5, await getZipArvSeed(zip5).catch(() => null));
     }
     const seed = zip5 ? seedCache.get(zip5) ?? null : null;
+    // A non-disclosure ZIP with MLS-sold receipts prices; one without still
+    // holds (operator ruling 2026-08-13 — see resolveOpenerArvPctMax).
+    const selfPricingSeed = seedSelfPricesNonDisclosure(seed);
     const pw = priceOpenerWithSeed({
       listPrice: l.listPrice ?? null,
       storedArv: l.realArvMedian ?? null,
@@ -494,7 +497,7 @@ async function handle(req: Request): Promise<Response> {
       estRehabMid: l.estRehabMid ?? null,
       estRehab: l.estRehab ?? null,
       sqft: l.buildingSqFt ?? null,
-      arvPctMax: openerArvPctMax(market, l.state),
+      arvPctMax: openerArvPctMax(market, l.state, { selfPricingSeed }),
       wholesaleFee: l.wholesaleFeeTarget ?? null,
       anchorPct,
       seed,
@@ -538,7 +541,7 @@ async function handle(req: Request): Promise<Response> {
         flagReseed: priced.flagReseed,
         arvSource: pw.arvSource,
         seedDontPrice: !!seed?.dontPrice,
-        marketHasBuybox: openerArvPctMax(market, l.state) != null,
+        marketHasBuybox: openerArvPctMax(market, l.state, { selfPricingSeed }) != null,
         overListTripwire: priced.overListTripwire,
         corroborationFlags: pw.corroborationFlags,
       });

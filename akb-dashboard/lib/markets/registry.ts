@@ -211,6 +211,7 @@ export type OpenerArvPctMaxSource =
   | "configured_verified"            // a configured market with a verified ARV source
   | "national_default_disclosure"    // unconfigured disclosure + non-restricted state
   | "national_default_unverified"    // configured-but-dormant, fell back to the national default
+  | "national_default_seed_verified" // non-disclosure, but THIS ZIP carries MLS-sold receipts
   | "hold_restricted"                // restricted state
   | "hold_configured_unverified"     // configured, unverified, AND the state cannot self-price
   | "hold_non_disclosure"            // non-disclosure state, ARV unprovable
@@ -225,14 +226,51 @@ export interface OpenerArvPctMaxResult {
 /** Pure: the ROUGH OPENER's effective ARV%Max for a listing — encodes the
  *  national buy-box policy above. OPENER ONLY: the precise contract lane uses
  *  isMarketLive (all three flags), NEVER this. */
+export interface OpenerArvPctMaxOpts {
+  /** True when the SUBJECT'S OWN ZIP carries a seed built from agent-reported
+   *  MLS closings (see seedSelfPricesNonDisclosure). This is the evidence that
+   *  lifts the non-disclosure hold — per ZIP, never per state. */
+  selfPricingSeed?: boolean;
+}
+
 export function resolveOpenerArvPctMax(
   market: Market | null,
   state: string | null | undefined,
+  opts?: OpenerArvPctMaxOpts,
 ): OpenerArvPctMaxResult {
   const st = (state ?? "").trim().toUpperCase();
   if (!st) return { arvPctMax: null, source: "hold_no_state" };
   if (getRestrictedStates().has(st)) return { arvPctMax: null, source: "hold_restricted" };
   const nonDisclosure = NON_DISCLOSURE_STATES.has(st);
+
+  // ── THE NON-DISCLOSURE HOLD IS ABOUT EVIDENCE, NOT GEOGRAPHY ──────────
+  // (operator ruling 2026-08-13, after the San Antonio dry run.)
+  //
+  // A non-disclosure state held because deed prices are not public, so no ARV
+  // could be proven. That premise is FALSE for a ZIP whose seed was built from
+  // "MLS Amount where MLS Status = SOLD": agents report closings to the MLS
+  // even where the county publishes nothing, and that column measured 94.8%
+  // transaction-shaped across 5,282 San Antonio rows (vs 23.0% for the
+  // modelled Last Sale Amount that produced the $3,459/sqft 78211 fiction).
+  //
+  // THE DRY RUN THIS FIXES: 45 real SA listings, all 45 produced a correct
+  // seed ARV, and all 45 were discarded here with arvPctMax=null before the
+  // ARV was ever read. Writing 56 honest seeds changed nothing until this.
+  //
+  // Scoped deliberately to the ZIP, not the state: a TX ZIP with no MLS-sold
+  // seed still HOLDs, exactly as before. Restricted states are unreachable
+  // from here (returned above) and stay unreachable.
+  //
+  // ORDERING MATTERS, and a test caught it: this must apply ONLY where the
+  // resolver would otherwise HOLD — never ahead of a verified market's own
+  // buy-box. The national default (0.70) is LOOSER than a typical configured
+  // one (Detroit 0.65), so checking the seed first would have quietly offered
+  // MORE than a live market's buy-box permits. The seed lifts holds; it never
+  // raises a rate that was already sourced.
+  const seedUnlock = (): OpenerArvPctMaxResult | null =>
+    opts?.selfPricingSeed
+      ? { arvPctMax: NATIONAL_OPENER_ARV_PCT_MAX, source: "national_default_seed_verified" }
+      : null;
   if (market && market.buyer_params) {
     if (market.arv_source_verified && market.sourcing_allowed) {
       return { arvPctMax: market.buyer_params.arv_pct_max, source: "configured_verified" };
@@ -259,13 +297,17 @@ export function resolveOpenerArvPctMax(
     if (!nonDisclosure) {
       return { arvPctMax: NATIONAL_OPENER_ARV_PCT_MAX, source: "national_default_unverified" };
     }
-    return { arvPctMax: null, source: "hold_configured_unverified" };
+    return seedUnlock() ?? { arvPctMax: null, source: "hold_configured_unverified" };
   }
-  if (nonDisclosure) return { arvPctMax: null, source: "hold_non_disclosure" };
+  if (nonDisclosure) return seedUnlock() ?? { arvPctMax: null, source: "hold_non_disclosure" };
   return { arvPctMax: NATIONAL_OPENER_ARV_PCT_MAX, source: "national_default_disclosure" };
 }
 
 /** Convenience: just the number (null = HOLD). */
-export function openerArvPctMax(market: Market | null, state: string | null | undefined): number | null {
-  return resolveOpenerArvPctMax(market, state).arvPctMax;
+export function openerArvPctMax(
+  market: Market | null,
+  state: string | null | undefined,
+  opts?: OpenerArvPctMaxOpts,
+): number | null {
+  return resolveOpenerArvPctMax(market, state, opts).arvPctMax;
 }

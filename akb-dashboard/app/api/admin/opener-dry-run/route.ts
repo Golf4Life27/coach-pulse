@@ -31,7 +31,7 @@ import { classifyHold } from "@/lib/pricing/hold-reason";
 import { resolveCumulativeDom } from "@/lib/attom/cumulative-dom";
 import { getMarketForListing, openerArvPctMax } from "@/lib/markets/registry";
 import { resolveAnchorPct } from "@/lib/markets/anchor";
-import { getZipArvSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
+import { getZipArvSeed, seedSelfPricesNonDisclosure, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import {
   authenticate,
   hasDashboardSession,
@@ -152,6 +152,7 @@ export async function GET(req: Request) {
     }
     const seed = l.zip ? seedCache.get(l.zip) ?? null : null;
     if (seed?.dontPrice) agg.seed_dont_price++;
+    const selfPricingSeed = seedSelfPricesNonDisclosure(seed);
     const pricedW = priceOpenerWithSeed({
       listPrice: l.listPrice ?? null,
       storedArv: l.realArvMedian ?? null,
@@ -159,7 +160,7 @@ export async function GET(req: Request) {
       estRehabMid: l.estRehabMid ?? null,
       estRehab: l.estRehab ?? null,
       sqft: l.buildingSqFt ?? null,
-      arvPctMax: openerArvPctMax(market, l.state),
+      arvPctMax: openerArvPctMax(market, l.state, { selfPricingSeed }),
       wholesaleFee: l.wholesaleFeeTarget ?? null,
       anchorPct,
       seed,
@@ -208,7 +209,7 @@ export async function GET(req: Request) {
       flagReseed: priced.flagReseed,
       arvSource: pricedW.arvSource,
       seedDontPrice: !!seed?.dontPrice,
-      marketHasBuybox: openerArvPctMax(market, l.state) != null,
+      marketHasBuybox: openerArvPctMax(market, l.state, { selfPricingSeed }) != null,
     });
     if (hold.category !== "value_send") {
       agg.by_hold_reason[hold.category] = (agg.by_hold_reason[hold.category] ?? 0) + 1;

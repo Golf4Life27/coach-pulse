@@ -147,3 +147,56 @@ describe("adding a market must never make things worse than not adding it (2026-
     expect(r.arvPctMax).toBe(NATIONAL_OPENER_ARV_PCT_MAX);
   });
 });
+
+// ── Seed-scoped non-disclosure unlock (operator ruling 2026-08-13) ────────
+// The San Antonio dry run: 45 real listings all produced a correct seed ARV
+// and all 45 were discarded because arvPctMax was null. These pin the rule
+// that lifted it — and, more importantly, its edges.
+describe("resolveOpenerArvPctMax — MLS-receipt seed lifts the non-disclosure hold", () => {
+  it("non-disclosure state + self-pricing seed → the NATIONAL default (not a metro buy-box)", () => {
+    const r = resolveOpenerArvPctMax(
+      mkt({ state: "TX", buyer_params: null, buyer_params_present: false, arv_source_verified: false }),
+      "TX",
+      { selfPricingSeed: true },
+    );
+    expect(r.source).toBe("national_default_seed_verified");
+    expect(r.arvPctMax).toBe(NATIONAL_OPENER_ARV_PCT_MAX);
+  });
+
+  it("the unlock is PER ZIP: same state, no self-pricing seed → still HOLDs", () => {
+    const m = mkt({ state: "TX", buyer_params: null, buyer_params_present: false, arv_source_verified: false });
+    expect(resolveOpenerArvPctMax(m, "TX", { selfPricingSeed: false }).arvPctMax).toBeNull();
+    expect(resolveOpenerArvPctMax(m, "TX").source).toBe("hold_non_disclosure");
+  });
+
+  it("also lifts the configured-but-unverified non-disclosure hold (Dallas-shaped)", () => {
+    const r = resolveOpenerArvPctMax(mkt({ state: "TX", arv_source_verified: false }), "TX", { selfPricingSeed: true });
+    expect(r.source).toBe("national_default_seed_verified");
+  });
+
+  it("a seed NEVER reopens a restricted state — geography still wins there", () => {
+    for (const st of ["IL", "MO", "SC", "NC", "OK", "ND"]) {
+      const r = resolveOpenerArvPctMax(null, st, { selfPricingSeed: true });
+      expect(r.source, `${st} must stay restricted`).toBe("hold_restricted");
+      expect(r.arvPctMax).toBeNull();
+    }
+  });
+
+  it("a verified configured market still wins over the seed fallback", () => {
+    const r = resolveOpenerArvPctMax(mkt({ state: "TX", arv_source_verified: true }), "TX", { selfPricingSeed: true });
+    expect(r.source).toBe("configured_verified");
+    expect(r.arvPctMax).toBe(0.65);
+  });
+
+  it("the seed rate is never MORE generous than a disclosure market's default", () => {
+    const seeded = resolveOpenerArvPctMax(null, "TX", { selfPricingSeed: true }).arvPctMax;
+    const disclosure = resolveOpenerArvPctMax(null, "OH").arvPctMax;
+    expect(seeded).toBe(disclosure);
+  });
+
+  it("openerArvPctMax passes the option through", () => {
+    const m = mkt({ state: "TX", buyer_params: null, buyer_params_present: false, arv_source_verified: false });
+    expect(openerArvPctMax(m, "TX")).toBeNull();
+    expect(openerArvPctMax(m, "TX", { selfPricingSeed: true })).toBe(NATIONAL_OPENER_ARV_PCT_MAX);
+  });
+});

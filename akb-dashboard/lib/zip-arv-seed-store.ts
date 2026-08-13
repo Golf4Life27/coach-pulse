@@ -77,6 +77,26 @@ export interface ZipArvSeed {
   recordId: string;
 }
 
+/** Seed sources built from agent-reported MLS CLOSINGS rather than a vendor's
+ *  model. These are real transactions even in a non-disclosure state, which is
+ *  why they — and only they — can lift the non-disclosure opener hold. Keep in
+ *  step with ALLOWED_SOURCES above; a new source is NOT self-pricing by
+ *  default (fail-closed: an unlisted source holds, as it did before). */
+const MLS_RECEIPT_SOURCES: ReadonlySet<string> = new Set(["propstream_mls_sold"]);
+
+/** Pure: may this ZIP's seed price a subject in a NON-DISCLOSURE state?
+ *
+ *  Requires all three: MLS-closing provenance, STRONG confidence (a THIN seed
+ *  is 1–3 comps — not enough to overturn a state-level hold), and not marked
+ *  do-not-price. See lib/markets/registry.resolveOpenerArvPctMax for the rule
+ *  this feeds and the operator ruling behind it (2026-08-13). */
+export function seedSelfPricesNonDisclosure(seed: ZipArvSeed | null | undefined): boolean {
+  if (!seed) return false;
+  if (seed.dontPrice || seed.confidence !== "STRONG") return false;
+  if (!MLS_RECEIPT_SOURCES.has(seed.source)) return false;
+  return Number.isFinite(seed.renovatedPerSqft) && seed.renovatedPerSqft > 0;
+}
+
 export interface ZipArvSeedWrite {
   zip: string;
   /** Required for a priceable seed; 0/omitted only for a DONT_PRICE sentinel. */
