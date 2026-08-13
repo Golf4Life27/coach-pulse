@@ -46,6 +46,7 @@ import {
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { fetchListingsByZip } from "@/lib/crawler/sources/rentcast";
 import { listSeededZips, FALLBACK_SEEDED_ZIPS } from "@/lib/buyer-median-store";
+import { listSelfPricingArvZips } from "@/lib/zip-arv-seed-store";
 import {
   filterIntakeCandidates,
   normalizeAddressKey,
@@ -223,6 +224,17 @@ export async function GET(req: Request) {
   const t0 = Date.now();
   const url = new URL(req.url);
 
+  // Which ZIPs hold an MLS-receipt seed strong enough to lift a non-disclosure
+  // hold (operator ruling 2026-08-13). Loaded ONCE at request scope because
+  // BOTH the tiered-cadence rotation and the auto-promote gate far below must
+  // ask it. Until they did, a seeded San Antonio ZIP was demoted to the
+  // biweekly opener-HOLD trickle AND its listings failed auto-promote — so the
+  // metro could never accumulate inventory however good its seeds were.
+  // Fails CLOSED: an empty set restores the prior state-level hold behaviour.
+  const selfPricingZips: ReadonlySet<string> = await listSelfPricingArvZips().catch(
+    () => new Set<string>(),
+  );
+
   // ── Auth waterfall ──────────────────────────────────────────────
   const cookieHeader = req.headers.get("cookie");
   const isDashboard = hasDashboardSession(cookieHeader);
@@ -394,7 +406,9 @@ export async function GET(req: Request) {
           acceptRate: r.acceptRate30d,
           zeroYieldStreak: r.belowThresholdStreak,
           openerHold:
-            openerArvPctMax(getMarketForListing({ state: r.state, zip: r.zip }), r.state) == null,
+            openerArvPctMax(getMarketForListing({ state: r.state, zip: r.zip }), r.state, {
+              selfPricingSeed: selfPricingZips.has(r.zip),
+            }) == null,
           saturated: zipSaturation.get(r.zip)?.saturated ?? false,
         })),
         effectiveCap,
@@ -771,7 +785,7 @@ export async function GET(req: Request) {
         }
       }
 
-      const { accepted, rejected } = filterIntakeCandidates(fetchResult.candidates, now, { seededZips, requirePriceable, zipRenovatedPsf });
+      const { accepted, rejected } = filterIntakeCandidates(fetchResult.candidates, now, { seededZips, selfPricingZips, requirePriceable, zipRenovatedPsf });
       summary.rejected += rejected.length;
       for (const r of rejected) {
         for (const reason of r.reasons) bump(reason);
@@ -1236,7 +1250,9 @@ export async function GET(req: Request) {
     // disclosure / restricted / configured-unverified → openerArvPctMax null)
     // still require underwrittenMao.
     const apMarket = getMarketForListing({ state: c.state, zip });
-    const openerPriceable = openerArvPctMax(apMarket, c.state) != null && seededZips.has(zip);
+    const openerPriceable =
+      openerArvPctMax(apMarket, c.state, { selfPricingSeed: selfPricingZips.has(zip) }) != null &&
+      seededZips.has(zip);
     const ap = shouldAutoPromote({ accepted, agentPhone: c.agentPhone, state: c.state, listPrice: c.listPrice, underwrittenMao, openerPriceable });
     if (ap.promote) summary.auto_promote.eligible++;
     if (accepted && !ap.promote && ap.reason) {
