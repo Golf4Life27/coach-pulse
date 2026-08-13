@@ -48,7 +48,17 @@ export type SeedConfidence = "STRONG" | "THIN" | "DONT_PRICE";
 // lib/pricing/propstream-seed for why the vendor's own "Last Sale Amount"
 // column is NOT usable for this.
 export type SeedSource = "rentcast_avm" | "attom_salescomparables" | "propstream_mls_sold";
-const ALLOWED_SOURCES: ReadonlySet<string> = new Set(["rentcast_avm", "attom_salescomparables"]);
+// RUNTIME allowlist — must be kept in step with SeedSource above. The type
+// union is compile-time only; this Set is what validateSeedWrite actually
+// enforces, so adding a source to the type WITHOUT adding it here silently
+// rejects every write of that source at the store boundary (found 2026-08-12,
+// after propstream_mls_sold shipped in the type alone and would have failed
+// all 56 San Antonio seeds with source_invalid).
+const ALLOWED_SOURCES: ReadonlySet<string> = new Set([
+  "rentcast_avm",
+  "attom_salescomparables",
+  "propstream_mls_sold",
+]);
 
 export interface ZipArvSeed {
   zip: string;
@@ -103,7 +113,10 @@ export function validateSeedWrite(raw: ZipArvSeedWrite): SeedWriteValidation {
   if (!/^\d{5}$/.test(zip)) return { ok: false, error: `zip_invalid: "${raw.zip}" is not a 5-digit ZIP` };
 
   if (!ALLOWED_SOURCES.has(String(raw.source))) {
-    return { ok: false, error: `source_invalid: only rentcast_avm / attom_salescomparables accepted (got "${raw.source}")` };
+    return {
+      ok: false,
+      error: `source_invalid: only ${[...ALLOWED_SOURCES].join(" / ")} accepted (got "${raw.source}")`,
+    };
   }
 
   // DONT_PRICE sentinel: the seed-quality gate failed, so no $/sqft is trusted.

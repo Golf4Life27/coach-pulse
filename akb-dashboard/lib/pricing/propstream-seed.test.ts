@@ -182,3 +182,59 @@ describe("seed shape", () => {
     expect(r.seeds.every((s) => s.state === "TX" && s.market === "san_antonio_tx")).toBe(true);
   });
 });
+
+// ── Round trip to the store boundary ──────────────────────────────────
+//
+// 2026-08-12: the builder's tests all passed while the APPLY path was
+// broken. SeedSource gained "propstream_mls_sold" as a TYPE, but
+// ALLOWED_SOURCES — the runtime Set validateSeedWrite actually enforces —
+// was never updated, so every seed would have been refused at the store
+// with source_invalid and the route would have written nothing. A pure
+// builder test cannot see that. These run the builder's real output
+// through the real validator.
+import { validateSeedWrite } from "@/lib/zip-arv-seed-store";
+
+describe("every seed the builder emits must survive validateSeedWrite", () => {
+  it("accepts a priceable seed end to end", () => {
+    const r = buildSeedsFromPropstream({ rows: REAL.map((p) => row({ mlsAmount: p })), fetchedAt: NOW });
+    const v = validateSeedWrite(r.seeds[0]);
+    expect(v.ok).toBe(true);
+    if (v.ok) {
+      expect(v.data.source).toBe("propstream_mls_sold");
+      expect(v.data.confidence).toBe("STRONG");
+      expect(v.data.key).toBe("78210");
+      expect(v.data.renovatedPerSqft).toBeGreaterThan(0);
+    }
+  });
+
+  it("accepts a DONT_PRICE sentinel end to end", () => {
+    const r = buildSeedsFromPropstream({
+      rows: REAL.map((p) => row({ mlsAmount: p, totalCondition: "Average" })),
+      fetchedAt: NOW,
+    });
+    const v = validateSeedWrite(r.seeds[0]);
+    expect(v.ok).toBe(true);
+    if (v.ok) {
+      expect(v.data.confidence).toBe("DONT_PRICE");
+      expect(v.data.renovatedPerSqft).toBe(0);
+    }
+  });
+
+  it("accepts EVERY seed from a mixed multi-ZIP build — no silent refusals", () => {
+    const r = buildSeedsFromPropstream({
+      rows: [
+        ...REAL.map((p) => row({ mlsAmount: p, zip: "78202" })),
+        ...REAL.map((p) => row({ mlsAmount: p, zip: "78204", totalCondition: "Poor" })),
+        ...FICTION.map((p) => row({ mlsAmount: p, zip: "78207" })),
+        ...REAL.slice(0, 2).map((p) => row({ mlsAmount: p, zip: "78212" })),
+      ],
+      market: "san_antonio_tx",
+      fetchedAt: NOW,
+    });
+    expect(r.seeds.length).toBeGreaterThan(3);
+    const refusals = r.seeds
+      .map((s) => ({ zip: s.zip, v: validateSeedWrite(s) }))
+      .filter((x) => !x.v.ok);
+    expect(refusals).toEqual([]);
+  });
+});
