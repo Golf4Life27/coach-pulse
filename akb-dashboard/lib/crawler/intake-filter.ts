@@ -139,6 +139,10 @@ export interface IntakeEvaluation {
  *  it; pure callers that omit it keep the legacy state-only gate. */
 export interface IntakePriceabilityOpts {
   seededZips?: ReadonlySet<string>;
+  /** ZIPs whose ARV seed can lift a non-disclosure hold — see
+   *  lib/zip-arv-seed-store.listSelfPricingArvZips. Without this, intake keeps
+   *  rejecting every seeded non-disclosure ZIP market_not_priceable. */
+  selfPricingZips?: ReadonlySet<string>;
   requirePriceable?: boolean;
   /** ZIP → renovated $/sqft, from the ARV seed store. Enables the
    *  ask-above-renovated-value reject below. Absent → that check is skipped. */
@@ -287,6 +291,7 @@ export function evaluateIntakeCandidate(
     const verdict = isPriceableMarket(
       { state: c.state, city: c.city, zip: c.zip },
       priceability.seededZips ?? new Set<string>(),
+      priceability.selfPricingZips,
     );
     if (!verdict.actionable) reasons.push("market_not_priceable");
   }

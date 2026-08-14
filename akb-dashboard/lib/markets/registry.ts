@@ -211,6 +211,9 @@ export type OpenerArvPctMaxSource =
   | "configured_verified"            // a configured market with a verified ARV source
   | "national_default_disclosure"    // unconfigured disclosure + non-restricted state
   | "national_default_unverified"    // configured-but-dormant, fell back to the national default
+  | "national_default_seed_verified" // non-disclosure ZIP w/ MLS-sold receipts, no in-state buy-box
+  | "configured_seed_verified"       // ditto, and the metro has its OWN sourced buy-box → use it
+  | "state_floor_seed_verified"      // ditto, no metro params → tightest sourced buy-box in-state
   | "hold_restricted"                // restricted state
   | "hold_configured_unverified"     // configured, unverified, AND the state cannot self-price
   | "hold_non_disclosure"            // non-disclosure state, ARV unprovable
@@ -225,14 +228,97 @@ export interface OpenerArvPctMaxResult {
 /** Pure: the ROUGH OPENER's effective ARV%Max for a listing — encodes the
  *  national buy-box policy above. OPENER ONLY: the precise contract lane uses
  *  isMarketLive (all three flags), NEVER this. */
+/** Pure: the TIGHTEST operator-sourced arv_pct_max among configured markets in
+ *  a state, or null when the state has none. Used so a seeded ZIP in a metro
+ *  with no buy-box of its own is never offered looser terms than a sibling
+ *  metro whose buy-box IS sourced (San Antonio inheriting Dallas's 0.5883). */
+export function tightestConfiguredPctInState(state: string): number | null {
+  const st = (state ?? "").trim().toUpperCase();
+  if (!st) return null;
+  let best: number | null = null;
+  for (const m of CONFIG.markets) {
+    if (m.state.toUpperCase() !== st) continue;
+    const p = m.buyer_params?.arv_pct_max;
+    if (typeof p === "number" && Number.isFinite(p) && p > 0 && p <= 1) {
+      best = best == null ? p : Math.min(best, p);
+    }
+  }
+  return best;
+}
+
+export interface OpenerArvPctMaxOpts {
+  /** True when the SUBJECT'S OWN ZIP carries a seed built from agent-reported
+   *  MLS closings (see seedSelfPricesNonDisclosure). This is the evidence that
+   *  lifts the non-disclosure hold — per ZIP, never per state. */
+  selfPricingSeed?: boolean;
+}
+
 export function resolveOpenerArvPctMax(
   market: Market | null,
   state: string | null | undefined,
+  opts?: OpenerArvPctMaxOpts,
 ): OpenerArvPctMaxResult {
   const st = (state ?? "").trim().toUpperCase();
   if (!st) return { arvPctMax: null, source: "hold_no_state" };
   if (getRestrictedStates().has(st)) return { arvPctMax: null, source: "hold_restricted" };
   const nonDisclosure = NON_DISCLOSURE_STATES.has(st);
+
+  // ── THE NON-DISCLOSURE HOLD IS ABOUT EVIDENCE, NOT GEOGRAPHY ──────────
+  // (operator ruling 2026-08-13, after the San Antonio dry run.)
+  //
+  // A non-disclosure state held because deed prices are not public, so no ARV
+  // could be proven. That premise is FALSE for a ZIP whose seed was built from
+  // "MLS Amount where MLS Status = SOLD": agents report closings to the MLS
+  // even where the county publishes nothing, and that column measured 94.8%
+  // transaction-shaped across 5,282 San Antonio rows (vs 23.0% for the
+  // modelled Last Sale Amount that produced the $3,459/sqft 78211 fiction).
+  //
+  // THE DRY RUN THIS FIXES: 45 real SA listings, all 45 produced a correct
+  // seed ARV, and all 45 were discarded here with arvPctMax=null before the
+  // ARV was ever read. Writing 56 honest seeds changed nothing until this.
+  //
+  // Scoped deliberately to the ZIP, not the state: a TX ZIP with no MLS-sold
+  // seed still HOLDs, exactly as before. Restricted states are unreachable
+  // from here (returned above) and stay unreachable.
+  //
+  // ORDERING MATTERS, and a test caught it: this must apply ONLY where the
+  // resolver would otherwise HOLD — never ahead of a verified market's own
+  // buy-box. The national default (0.70) is LOOSER than a typical configured
+  // one (Detroit 0.65), so checking the seed first would have quietly offered
+  // MORE than a live market's buy-box permits. The seed lifts holds; it never
+  // raises a rate that was already sourced.
+  //
+  // WHICH RATE THE SEED UNLOCKS (operator challenge 2026-08-13, and he was
+  // right). A seed proves the ARV is real. It says NOTHING about what a
+  // flipper in this metro will pay for that ARV — that is the buy-box, a
+  // separate, operator/BBC-sourced number. Handing every seeded ZIP the
+  // national 0.70 would have been exactly the "generic lazy math" the seed
+  // work exists to kill, and in the loose direction: Dallas's sourced buy-box
+  // is 0.5883, so a seeded TX ZIP would have been offered ~19% more of ARV
+  // than the only in-state evidence supports. Wrong-low costs a "no";
+  // wrong-high costs a contract that cannot be dispo'd — which is the exact
+  // failure that killed the first volume push (4 under contract, none sold).
+  //
+  // So, in order of how much the number is actually KNOWN:
+  //   1. this metro's own BBC buy-box, when it has one. arv_source_verified
+  //      was gating precisely that number, and the seed IS that verification
+  //      for this ZIP. Never override a sourced buy-box with a default.
+  //   2. the TIGHTEST sourced buy-box in the SAME STATE. San Antonio has no
+  //      params of its own, but Dallas does; offering looser than a sibling
+  //      metro's operator-sourced number is not a defensible default.
+  //   3. only then the national default.
+  const seedUnlock = (): OpenerArvPctMaxResult | null => {
+    if (!opts?.selfPricingSeed) return null;
+    const own = market?.buyer_params?.arv_pct_max;
+    if (typeof own === "number" && Number.isFinite(own) && own > 0 && own <= 1) {
+      return { arvPctMax: own, source: "configured_seed_verified" };
+    }
+    const stateFloor = tightestConfiguredPctInState(st);
+    if (stateFloor != null && stateFloor < NATIONAL_OPENER_ARV_PCT_MAX) {
+      return { arvPctMax: stateFloor, source: "state_floor_seed_verified" };
+    }
+    return { arvPctMax: NATIONAL_OPENER_ARV_PCT_MAX, source: "national_default_seed_verified" };
+  };
   if (market && market.buyer_params) {
     if (market.arv_source_verified && market.sourcing_allowed) {
       return { arvPctMax: market.buyer_params.arv_pct_max, source: "configured_verified" };
@@ -259,13 +345,17 @@ export function resolveOpenerArvPctMax(
     if (!nonDisclosure) {
       return { arvPctMax: NATIONAL_OPENER_ARV_PCT_MAX, source: "national_default_unverified" };
     }
-    return { arvPctMax: null, source: "hold_configured_unverified" };
+    return seedUnlock() ?? { arvPctMax: null, source: "hold_configured_unverified" };
   }
-  if (nonDisclosure) return { arvPctMax: null, source: "hold_non_disclosure" };
+  if (nonDisclosure) return seedUnlock() ?? { arvPctMax: null, source: "hold_non_disclosure" };
   return { arvPctMax: NATIONAL_OPENER_ARV_PCT_MAX, source: "national_default_disclosure" };
 }
 
 /** Convenience: just the number (null = HOLD). */
-export function openerArvPctMax(market: Market | null, state: string | null | undefined): number | null {
-  return resolveOpenerArvPctMax(market, state).arvPctMax;
+export function openerArvPctMax(
+  market: Market | null,
+  state: string | null | undefined,
+  opts?: OpenerArvPctMaxOpts,
+): number | null {
+  return resolveOpenerArvPctMax(market, state, opts).arvPctMax;
 }

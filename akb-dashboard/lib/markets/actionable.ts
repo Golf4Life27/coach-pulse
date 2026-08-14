@@ -87,11 +87,26 @@ export function isActionableMarket(input: MarketInput): MarketVerdict {
  *  Gate (b) (per-ZIP seed) stays: real comps must exist, or the opener
  *  self-HOLDs downstream anyway (computeRoughOpenerCeiling). The caller loads
  *  `seededZips` once (listSeededZips ∪ listArvSeededZips). */
-export function isPriceableMarket(input: MarketInput, seededZips: ReadonlySet<string>): MarketVerdict {
+export function isPriceableMarket(
+  input: MarketInput,
+  seededZips: ReadonlySet<string>,
+  /** ZIPs whose seed can lift a non-disclosure hold (listSelfPricingArvZips).
+   *  Omitted → prior behaviour: the whole non-disclosure state stays excluded.
+   *
+   *  THIS PARAMETER IS WHY SAN ANTONIO HAD NO INVENTORY. The opener ruling of
+   *  2026-08-13 let a seeded TX ZIP price, but this gate — which decides what
+   *  intake will even scrape — still asked the state-level question and
+   *  answered "no", so no SA listing could enter the table to be priced. A
+   *  market unlock is not finished until every downstream copy of the premise
+   *  is threaded too. */
+  selfPricingZips?: ReadonlySet<string>,
+): MarketVerdict {
   const base = isActionableMarket(input);
   if (!base.actionable) return base;
   const market = getMarketForListing({ state: input.state, zip: input.zip });
-  if (openerArvPctMax(market, input.state) == null) {
+  const zipKey = (input.zip ?? "").trim();
+  const selfPricingSeed = zipKey !== "" && (selfPricingZips?.has(zipKey) ?? false);
+  if (openerArvPctMax(market, input.state, { selfPricingSeed }) == null) {
     return { actionable: false, reason: "opener_holds_market" };
   }
   const zip = (input.zip ?? "").trim();

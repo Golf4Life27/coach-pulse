@@ -77,6 +77,26 @@ export interface ZipArvSeed {
   recordId: string;
 }
 
+/** Seed sources built from agent-reported MLS CLOSINGS rather than a vendor's
+ *  model. These are real transactions even in a non-disclosure state, which is
+ *  why they — and only they — can lift the non-disclosure opener hold. Keep in
+ *  step with ALLOWED_SOURCES above; a new source is NOT self-pricing by
+ *  default (fail-closed: an unlisted source holds, as it did before). */
+const MLS_RECEIPT_SOURCES: ReadonlySet<string> = new Set(["propstream_mls_sold"]);
+
+/** Pure: may this ZIP's seed price a subject in a NON-DISCLOSURE state?
+ *
+ *  Requires all three: MLS-closing provenance, STRONG confidence (a THIN seed
+ *  is 1–3 comps — not enough to overturn a state-level hold), and not marked
+ *  do-not-price. See lib/markets/registry.resolveOpenerArvPctMax for the rule
+ *  this feeds and the operator ruling behind it (2026-08-13). */
+export function seedSelfPricesNonDisclosure(seed: ZipArvSeed | null | undefined): boolean {
+  if (!seed) return false;
+  if (seed.dontPrice || seed.confidence !== "STRONG") return false;
+  if (!MLS_RECEIPT_SOURCES.has(seed.source)) return false;
+  return Number.isFinite(seed.renovatedPerSqft) && seed.renovatedPerSqft > 0;
+}
+
 export interface ZipArvSeedWrite {
   zip: string;
   /** Required for a priceable seed; 0/omitted only for a DONT_PRICE sentinel. */
@@ -435,6 +455,43 @@ export async function getZipArvSeed(zip: string | null | undefined): Promise<Zip
  *  never price. */
 export async function listPriceableArvZips(): Promise<Set<string>> {
   return listArvZips({ includeDontPrice: false });
+}
+
+/** ZIPs whose seed can price a subject in a NON-DISCLOSURE state — the same
+ *  test seedSelfPricesNonDisclosure applies to a single seed, run over the
+ *  whole table so the crawler and intake gates can ask "is this ZIP one of the
+ *  ones the 2026-08-13 ruling unlocked?" without a per-record read.
+ *
+ *  Kept as its own list rather than folded into listPriceableArvZips: those
+ *  two answer different questions. Priceable = "the pricer may use this seed".
+ *  Self-pricing = "this seed is strong enough to overturn a STATE-level hold".
+ *  Every self-pricing ZIP is priceable; the reverse is false (a THIN seed, or
+ *  one from an AVM source, prices in Ohio but must not reopen Texas). */
+export async function listSelfPricingArvZips(): Promise<Set<string>> {
+  const pat = requirePat();
+  const zips = new Set<string>();
+  let offset: string | undefined;
+  do {
+    const url = new URL(`https://api.airtable.com/v0/${BASE_ID}/${ZIP_ARV_SEED_TABLE}`);
+    url.searchParams.set("pageSize", "100");
+    if (offset) url.searchParams.set("offset", offset);
+    const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${pat}` }, cache: "no-store" });
+    if (!res.ok) throw new Error(`ZIP_ARV_Seed list ${res.status}: ${await res.text().catch(() => "")}`);
+    const body = (await res.json()) as { records?: AirtableRow[]; offset?: string };
+    for (const rec of body.records ?? []) {
+      const zip = typeof rec.fields["ZIP"] === "string" ? (rec.fields["ZIP"] as string).trim() : "";
+      if (!/^\d{5}$/.test(zip)) continue;
+      const psf = typeof rec.fields["Renovated_PerSqft"] === "number" ? (rec.fields["Renovated_PerSqft"] as number) : 0;
+      const confidence = typeof rec.fields["Confidence"] === "string" ? rec.fields["Confidence"] : "";
+      const source = typeof rec.fields["Source"] === "string" ? rec.fields["Source"] : "";
+      if (confidence !== "STRONG") continue;
+      if (!MLS_RECEIPT_SOURCES.has(source)) continue;
+      if (!(psf > 0)) continue;
+      zips.add(zip);
+    }
+    offset = body.offset;
+  } while (offset);
+  return zips;
 }
 
 /** ZIP → renovated $/sqft, for every priceable ZIP. One read, so the intake

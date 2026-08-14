@@ -88,3 +88,42 @@ describe("isPriceableMarket — opener-priceable (national buy-box) AND seeded Z
     expect(isPriceableMarket({ state: "IL", zip: "60601" }, seeded).reason).toBe("wholesale_restricted_state");
   });
 });
+
+// ── Seeded non-disclosure ZIPs must be crawlable (2026-08-13) ─────────────
+// The San Antonio dead-end: the opener ruling let a seeded TX ZIP price, but
+// THIS gate decides what intake will even scrape, and it still answered the
+// state-level question — so no SA listing could enter the table to be priced.
+describe("isPriceableMarket — self-pricing ZIPs in a non-disclosure state", () => {
+  const SA = { state: "TX", city: "San Antonio", zip: "78207" };
+  const seeded = new Set(["78207"]);
+
+  it("still holds a non-disclosure ZIP when no self-pricing set is supplied", () => {
+    expect(isPriceableMarket(SA, seeded).actionable).toBe(false);
+    expect(isPriceableMarket(SA, seeded).reason).toBe("opener_holds_market");
+  });
+
+  it("still holds when the ZIP is seeded but NOT self-pricing", () => {
+    const v = isPriceableMarket(SA, seeded, new Set(["78999"]));
+    expect(v.actionable).toBe(false);
+    expect(v.reason).toBe("opener_holds_market");
+  });
+
+  it("becomes priceable when the ZIP carries a self-pricing seed", () => {
+    const v = isPriceableMarket(SA, seeded, seeded);
+    expect(v.actionable).toBe(true);
+    expect(v.reason).toBeNull();
+  });
+
+  it("a self-pricing seed does NOT rescue an excluded state", () => {
+    const il = { state: "IL", city: "Chicago", zip: "60620" };
+    const v = isPriceableMarket(il, new Set(["60620"]), new Set(["60620"]));
+    expect(v.actionable).toBe(false);
+    expect(v.reason).not.toBe("opener_holds_market"); // excluded earlier, by geography
+  });
+
+  it("a self-pricing seed does NOT bypass the seeded-ZIP requirement", () => {
+    const v = isPriceableMarket(SA, new Set<string>(), seeded);
+    expect(v.actionable).toBe(false);
+    expect(v.reason).toBe("no_seeded_zip");
+  });
+});
