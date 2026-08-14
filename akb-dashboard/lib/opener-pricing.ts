@@ -19,6 +19,7 @@ import { priceOpener, type PricerResult } from "@/lib/per-market-pricer";
 import { arvForSubjectFromSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import { corroborateOpener, type CorroborationFlag } from "@/lib/opener-sanity-gate";
 import { buildDerivation, type OpenerDerivation } from "@/lib/pricing/opener-derivation";
+import { effectiveWholesaleFee } from "@/lib/pre-contract-math";
 import { OFFER_ROUND_STEP_USD } from "@/lib/pricing/offer-rounding";
 import { PLACEHOLDER_REHAB_HOLD_REASON } from "@/lib/pricing/vision-queue";
 
@@ -239,7 +240,12 @@ export function priceOpenerWithSeed(input: OpenerWithSeedInput): OpenerWithSeedR
     arvPctMax: input.arvPctMax ?? null,
     rehab: finalResult.rehabUsed,
     rehabPlaceholder: finalResult.placeholderRehab === true,
-    fee: input.wholesaleFee ?? null,
+    // The fee USED, not the fee PASSED. `input.wholesaleFee ?? null` wrote
+    // fee:null on every record with a blank Wholesale_Fee_Target — most of
+    // them — so verifyDerivation() returned "incomplete" and the receipt could
+    // never reproduce its own opener. Caught on the 1708 Cardinal rerun, where
+    // the detail line read "fee $5,000" while the receipt read null.
+    fee: effectiveWholesaleFee(input.wholesaleFee),
     anchor: finalResult.anchorPct,
     ceiling: finalResult.ceiling,
     roundTo: OFFER_ROUND_STEP_USD,
