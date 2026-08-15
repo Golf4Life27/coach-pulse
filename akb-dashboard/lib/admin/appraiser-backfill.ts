@@ -68,6 +68,7 @@ export function classifyBackfillEligibility(
     | "estimatedMonthlyRent"
     | "arvConfidence"
     | "realArvMedian"
+    | "arvCompDetailsJson"
   >,
   opts: BackfillEligibilityOpts = {},
 ): BackfillEligibility {
@@ -93,10 +94,21 @@ export function classifyBackfillEligibility(
   // Idempotency: skip when all three completion timestamps populated.
   // Note: rent uses the value (not a timestamp) since the schema
   // doesn't have a rent_validated_at field.
+  //
+  // COMPS ARE PART OF "COMPLETE" (2026-08-15). Since the own-comps ARV basis
+  // shipped, the ARV leg's load-bearing output is ARV_Comp_Details_JSON, not
+  // just the stamp — so a record with all three timestamps but an EMPTY comps
+  // field is not complete, it is a number with no surviving basis. Without
+  // this, such records never even reach the leg planner: the first
+  // comp-coverage sweep saw eligible_total 4 and wrote zero comps.
+  // Terminator matches the planner's: an honest-empty compute still WRITES
+  // the field (exclusion receipts), so one pass makes this true permanently.
+  const compsPresent = ((listing.arvCompDetailsJson ?? "") as string).trim().length > 0;
   const complete =
     current.arv_validated_at != null &&
     current.rehab_estimated_at != null &&
-    current.estimated_monthly_rent != null;
+    current.estimated_monthly_rent != null &&
+    compsPresent;
   if (complete && !opts.force) {
     return { recordId: listing.id, eligible: false, skipReason: "already_complete", current };
   }

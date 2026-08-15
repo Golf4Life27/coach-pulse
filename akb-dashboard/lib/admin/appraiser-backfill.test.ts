@@ -27,6 +27,10 @@ function makeListing(overrides: Partial<EligibilityListing> = {}): EligibilityLi
     estimatedMonthlyRent: null,
     arvConfidence: null,
     realArvMedian: null,
+    // Comp evidence present by default so the pre-existing cases keep testing
+    // the timestamp semantics they were written for. The comps requirement
+    // has its own describe below.
+    arvCompDetailsJson: '[{"price":100000,"sqft":1000}]',
     ...overrides,
   };
 }
@@ -71,12 +75,59 @@ describe("classifyBackfillEligibility", () => {
     ).toBe(true);
   });
 
-  it("skip already_complete when all three completion fields populated", () => {
+  it("skip already_complete when all three completion fields populated AND comps exist", () => {
     const r = classifyBackfillEligibility(
       makeListing({
         arvValidatedAt: "2026-05-18T00:00:00Z",
         rehabEstimatedAt: "2026-05-18T00:00:00Z",
         estimatedMonthlyRent: 1400,
+      }),
+    );
+    expect(r.eligible).toBe(false);
+    expect(r.skipReason).toBe("already_complete");
+  });
+
+  // ── COMP EVIDENCE (2026-08-15, the 16-slice no-op sweep) ────────────────
+  // Since the own-comps ARV basis shipped, ARV_Comp_Details_JSON is the ARV
+  // leg's load-bearing output. A record with all three timestamps and an
+  // EMPTY comps field is a number whose basis no longer exists — and it was
+  // being filtered out before the leg planner ever saw it. The first
+  // comp-coverage sweep reported eligible_total 4 and wrote zero comps.
+  it("THE BUG: all three timestamps but EMPTY comps is NOT complete — stays eligible", () => {
+    const r = classifyBackfillEligibility(
+      makeListing({
+        arvValidatedAt: "2026-05-18T00:00:00Z",
+        rehabEstimatedAt: "2026-05-18T00:00:00Z",
+        estimatedMonthlyRent: 1400,
+        arvCompDetailsJson: null,
+      }),
+    );
+    expect(r.eligible).toBe(true);
+    expect(r.skipReason).toBeNull();
+  });
+
+  it("a whitespace-only comps field counts as empty", () => {
+    const r = classifyBackfillEligibility(
+      makeListing({
+        arvValidatedAt: "2026-05-18T00:00:00Z",
+        rehabEstimatedAt: "2026-05-18T00:00:00Z",
+        estimatedMonthlyRent: 1400,
+        arvCompDetailsJson: "   ",
+      }),
+    );
+    expect(r.eligible).toBe(true);
+  });
+
+  it("TERMINATES: honest-empty exclusion receipts still count as written, so one pass settles it", () => {
+    // arv-write.ts persists comps_excluded when comps_used is empty. Keyed on
+    // WRITTEN, never USABLE — otherwise a property with genuinely no comps
+    // would re-buy its pull on every sweep, forever.
+    const r = classifyBackfillEligibility(
+      makeListing({
+        arvValidatedAt: "2026-05-18T00:00:00Z",
+        rehabEstimatedAt: "2026-05-18T00:00:00Z",
+        estimatedMonthlyRent: 1400,
+        arvCompDetailsJson: '[{"excluded_reason":"no_recorded_sale"}]',
       }),
     );
     expect(r.eligible).toBe(false);

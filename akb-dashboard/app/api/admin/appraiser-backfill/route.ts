@@ -359,6 +359,8 @@ export async function GET(req: Request) {
         // the KV stable/bench ledgers): which legs would actually fire.
         leg_plan: planLegs({
           arvValidatedAt: o.record.current.arv_validated_at,
+          arvCompEvidencePresent:
+            ((byId.get(o.record.recordId)?.arvCompDetailsJson ?? "") as string).trim().length > 0,
           rehabEstimatedAt: o.record.current.rehab_estimated_at,
           estimatedMonthlyRent: o.record.current.estimated_monthly_rent,
           force,
@@ -552,6 +554,10 @@ export async function GET(req: Request) {
     }
     let plan = planLegs({
       arvValidatedAt: o.record.current.arv_validated_at,
+      // The comps ARE the ARV leg's load-bearing output since the own-comps
+      // basis shipped. A record read as "done" on its stamp alone while its
+      // comps field sat empty is what made the first sweep a 16-slice no-op.
+      arvCompEvidencePresent: ((listing?.arvCompDetailsJson ?? "") as string).trim().length > 0,
       rehabEstimatedAt: o.record.current.rehab_estimated_at,
       estimatedMonthlyRent: o.record.current.estimated_monthly_rent,
       force,
@@ -796,6 +802,18 @@ export async function GET(req: Request) {
     elapsed_ms: Date.now() - t0,
     active_total_in_airtable: active.length,
     examined: subset.length,
+    // REAL WORK DONE, unambiguously (2026-08-15). `applied` includes records
+    // whose legs were all SKIPPED — a skipped leg still lands there with
+    // status "ok" — so counting that array reads no-ops as successes. The
+    // first comp-coverage sweep did exactly that: 16 slices, every ARV leg
+    // skip_done, and the driver logged "64 records backfilled". A loop driver
+    // must be able to tell "nothing left to do" from "nothing was done".
+    arv_legs_run: appliedPlans.filter((p) => p.arv === "run").length,
+    legs_run: {
+      arv: appliedPlans.filter((p) => p.arv === "run").length,
+      rehab: appliedPlans.filter((p) => p.rehab === "run").length,
+      rent: appliedPlans.filter((p) => p.rent === "run").length,
+    },
     next_cursor,
     cursor_wrapped: cursorWrapped,
     summary: {

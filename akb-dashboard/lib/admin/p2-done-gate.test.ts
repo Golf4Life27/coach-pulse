@@ -21,6 +21,10 @@ afterAll(() => {
 function input(overrides: Partial<PlanLegsInput> = {}): PlanLegsInput {
   return {
     arvValidatedAt: null,
+    // Default TRUE so every pre-existing case still exercises the behaviour it
+    // was written for (stamp semantics). The comps requirement gets its own
+    // describe below.
+    arvCompEvidencePresent: true,
     rehabEstimatedAt: null,
     estimatedMonthlyRent: null,
     force: false,
@@ -172,6 +176,7 @@ describe("planLegs — rehabUnproducible terminal state", () => {
     force: false,
     kvAvailable: true,
     rehabStable: false,
+    arvCompEvidencePresent: true,
     failures: { arv: 0, rehab: 0, rent: 0 },
   };
 
@@ -207,5 +212,57 @@ describe("planLegs — rehabUnproducible terminal state", () => {
       { arv: "run", rehab: "skip_unproducible", rent: "run" },
     ]);
     expect(avoided.anthropic).toBe(1);
+  });
+});
+
+// ── ARV COMP EVIDENCE (2026-08-15, the 16-slice no-op sweep) ──────────────
+//
+// The first comp-coverage sweep ran 16 slices over the SAME 4 records and
+// wrote zero comps: every ARV leg planned "skip_done" purely because
+// ARV_Validated_At was recent, while ARV_Comp_Details_JSON sat empty. Since
+// the own-comps ARV basis shipped, that field IS the leg's load-bearing
+// output — a stamp is a claim, the comps are the evidence. The driver then
+// logged "Total records backfilled this run: 64".
+describe("ARV leg requires comp evidence, not just a trusted stamp", () => {
+  const TRUSTED = "2026-08-10T00:00:00.000Z"; // after the test epoch
+
+  it("THE BUG: trusted stamp + EMPTY comps → runs (was skip_done, wrote nothing)", () => {
+    const p = planLegs(input({ arvValidatedAt: TRUSTED, arvCompEvidencePresent: false }));
+    expect(p.arv).toBe("run");
+  });
+
+  it("trusted stamp + comps present → skip_done (unchanged, and the terminator)", () => {
+    const p = planLegs(input({ arvValidatedAt: TRUSTED, arvCompEvidencePresent: true }));
+    expect(p.arv).toBe("skip_done");
+  });
+
+  it("comps present but NO stamp still runs — evidence alone is not done", () => {
+    const p = planLegs(input({ arvValidatedAt: null, arvCompEvidencePresent: true }));
+    expect(p.arv).toBe("run");
+  });
+
+  it("TERMINATES: an honest-empty compute writes exclusion receipts, so the very next pass skips", () => {
+    // arv-write.ts persists comps_excluded when comps_used is empty, so the
+    // field is non-empty even for a property with no usable comps. Keyed on
+    // WRITTEN rather than USABLE precisely so this cannot re-buy forever.
+    const before = planLegs(input({ arvValidatedAt: TRUSTED, arvCompEvidencePresent: false }));
+    expect(before.arv).toBe("run");
+    const after = planLegs(input({ arvValidatedAt: TRUSTED, arvCompEvidencePresent: true }));
+    expect(after.arv).toBe("skip_done");
+  });
+
+  it("the failure cap still outranks a comps-driven re-run — a broken record benches", () => {
+    const p = planLegs(input({
+      arvValidatedAt: TRUSTED,
+      arvCompEvidencePresent: false,
+      failures: { arv: 5, rehab: 0, rent: 0 },
+      failureCap: 5,
+    }));
+    expect(p.arv).toBe("skip_failure_capped");
+  });
+
+  it("force still overrides everything", () => {
+    const p = planLegs(input({ arvValidatedAt: TRUSTED, arvCompEvidencePresent: true, force: true }));
+    expect(p.arv).toBe("run");
   });
 });

@@ -89,6 +89,25 @@ export interface RecordLegPlan {
 
 export interface PlanLegsInput {
   arvValidatedAt: string | null;
+  /** Has this record's ARV_Comp_Details_JSON ever been WRITTEN — real comps
+   *  OR the honest-empty exclusion receipts?
+   *
+   *  WHY (2026-08-15, the no-op sweep). The gate treated a trusted
+   *  ARV_Validated_At stamp as proof the ARV leg was done. That was true when
+   *  the leg's only output was a NUMBER. Since the own-comps ARV basis
+   *  (97d6968) the leg's load-bearing output is the COMP ARRAY, and a record
+   *  can carry a recent stamp with an empty comps field — priced under the
+   *  old regime, or stamped before the appraiser wrote receipts. The first
+   *  comp-coverage sweep hit exactly that: 16 slices, 4 records, every ARV
+   *  leg "skip_done", zero comps written, and a driver that logged
+   *  "64 records backfilled". A stamp is a claim; the comps are the evidence.
+   *
+   *  TERMINATOR — why this cannot loop: an honest-empty compute still WRITES
+   *  the field (arv-write.ts persists comps_excluded when comps_used is
+   *  empty), so one run flips this true whether or not usable comps exist.
+   *  Deliberately keyed on WRITTEN, never on USABLE: keying on usable would
+   *  re-buy comps forever for every property that genuinely has none. */
+  arvCompEvidencePresent: boolean;
   rehabEstimatedAt: string | null;
   estimatedMonthlyRent: number | null;
   force: boolean;
@@ -117,8 +136,13 @@ export function planLegs(input: PlanLegsInput): RecordLegPlan {
   // fixed ARV route stamps on EVERY successful compute, including zero-comp
   // results (which land as LOW → the manual_review_low_arv eligibility gate
   // takes the record out of the sweep), so a re-run always terminates.
+  // DONE requires BOTH a trusted stamp AND the comp evidence on the record.
+  // Either alone is insufficient: a stamp without comps is a number whose
+  // basis no longer exists, and comps without a trusted stamp are pre-epoch
+  // output. The failure cap still outranks a re-run so a genuinely broken
+  // record benches instead of looping.
   const arv: LegPlan =
-    arvStampTrusted(input.arvValidatedAt)
+    arvStampTrusted(input.arvValidatedAt) && input.arvCompEvidencePresent
       ? "skip_done"
       : input.failures.arv >= cap
         ? "skip_failure_capped"

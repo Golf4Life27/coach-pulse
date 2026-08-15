@@ -79,22 +79,29 @@ jobs:
               --max-time 320 \
               "${BASE_URL}/api/admin/appraiser-backfill?apply=1&legs=arv&limit=${SLICE}&daily_budget=${DAILY_BUDGET}")
             echo "HTTP ${HTTP_CODE}"
-            jq '{skipped, reason, records_today, daily_record_budget, applied: ((.applied // []) | length), summary: (.apply_summary // null), cost: (.cost_estimate // null)}' /tmp/slice.json 2>/dev/null || cat /tmp/slice.json
+            jq '{skipped, reason, records_today, daily_record_budget,
+                 arv_legs_run, legs_run, examined,
+                 eligible: (.summary.eligible // null),
+                 skip_breakdown: (.summary.skip_breakdown // null),
+                 done_gate: (.summary.p2_done_gate // null)}' /tmp/slice.json 2>/dev/null || cat /tmp/slice.json
             if [ "${HTTP_CODE}" -ge 400 ]; then
               echo "::error::backfill slice returned HTTP ${HTTP_CODE} — halting sweep"
               exit 1
             fi
             SKIPPED=$(jq -r '.skipped // false' /tmp/slice.json 2>/dev/null || echo "parse_error")
-            APPLIED=$(jq -r '(.applied // []) | length' /tmp/slice.json 2>/dev/null || echo "0")
+            # Count legs that actually RAN, never the `applied` array: a skipped
+            # leg lands in `applied` with status ok, which is how the 2026-08-15
+            # sweep logged 64 "backfilled" records while writing zero comps.
+            RAN=$(jq -r '.arv_legs_run // 0' /tmp/slice.json 2>/dev/null || echo "0")
             if [ "${SKIPPED}" = "true" ]; then
               echo "Budget reached or sweep skipped ($(jq -r '.reason // "unknown"' /tmp/slice.json)) — done for today."
               break
             fi
-            if [ "${APPLIED}" = "0" ]; then
-              echo "No records applied this slice — pool drained or nothing eligible. Done."
+            if [ "${RAN}" = "0" ]; then
+              echo "Zero ARV legs actually RAN this slice — everything eligible is already evidenced, or nothing is eligible. Stopping rather than looping on no-ops."
               break
             fi
-            TOTAL_APPLIED=$((TOTAL_APPLIED + APPLIED))
+            TOTAL_APPLIED=$((TOTAL_APPLIED + RAN))
             sleep 5
           done
           echo "Sweep complete. Total records backfilled this run: ${TOTAL_APPLIED}"
