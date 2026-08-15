@@ -401,7 +401,23 @@ export async function GET(req: Request) {
   } catch {
     backfillSpentToday = null; // fail-open, same posture as every other brake
   }
-  const budgetVerdict = checkBackfillBudget(backfillSpentToday);
+  // ?daily_budget=N — bounded override for CONTROLLED drivers (2026-08-15,
+  // comp-coverage sweep). The 5/day default was sized for the vision-heavy
+  // full backfill era and silently starves comp coverage — the operator's
+  // "why is volume 13/day" root cause traces here. The override is clamped
+  // to 200 records/day and every paid call underneath still answers to the
+  // shared PAID_CALLS_DAILY_CEILING brake (250/day) + the RentCast plan-cap
+  // refusal, so total spend stays inside the rails the operator blessed.
+  // Reachable in practice only via CRON_SECRET-authenticated drivers (the
+  // GH Actions sweep) or the operator's own dashboard session.
+  const dailyBudgetRaw = Number(url.searchParams.get("daily_budget"));
+  const dailyBudgetOverride =
+    Number.isFinite(dailyBudgetRaw) && dailyBudgetRaw > 0
+      ? Math.min(200, Math.floor(dailyBudgetRaw))
+      : undefined;
+  const budgetVerdict = dailyBudgetOverride != null
+    ? checkBackfillBudget(backfillSpentToday, dailyBudgetOverride)
+    : checkBackfillBudget(backfillSpentToday);
   // Diagnostic only — no longer a gate. Kept in the audit row so the sweep's
   // spend stays legible next to the rest of the system's burn.
   let sweepRentcast24h: number | null = null;
