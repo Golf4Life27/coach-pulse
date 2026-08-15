@@ -104,4 +104,4 @@ jobs:
             TOTAL_APPLIED=$((TOTAL_APPLIED + RAN))
             sleep 5
           done
-          echo "Sweep complete. Total records backfilled this run: ${TOTAL_APPLIED}"
+          echo "Sweep complete. ARV legs that actually RAN this sweep: ${TOTAL_APPLIED} (this is real work done, not records touched)"
