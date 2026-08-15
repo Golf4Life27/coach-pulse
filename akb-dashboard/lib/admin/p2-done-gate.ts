@@ -74,7 +74,12 @@ export type LegPlan =
   // Terminal answer: no usable photo source exists for this record (422
   // no_photos_available / street_view_only_insufficient). Re-tested only
   // after the 30d flag lapses.
-  | "skip_unproducible";
+  | "skip_unproducible"
+  // The CALLER narrowed which legs run this pass (?legs=arv comp-coverage
+  // sweep, 2026-08-15) — the leg is still due and will run on a later pass.
+  // Distinct from every skip_* above so the audit never reads a deferred leg
+  // as a completed or terminally-dead one.
+  | "skip_leg_filtered";
 
 export interface RecordLegPlan {
   arv: LegPlan;

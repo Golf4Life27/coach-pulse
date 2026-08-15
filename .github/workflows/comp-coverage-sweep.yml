@@ -26,12 +26,12 @@ on:
       daily_budget:
         description: "Records allowed today (clamped to 200 server-side; paid-call brake still applies underneath)."
         required: false
-        default: "120"
+        default: "200"
         type: string
       slice:
-        description: "Records per invocation (route paces serially inside its 300s window; ~6-10 realistic)."
+        description: "Records per invocation. ARV-only legs run ~10s each, so ~25 fits the 300s window."
         required: false
-        default: "8"
+        default: "25"
         type: string
       max_slices:
         description: "Safety cap on loop iterations."
@@ -77,7 +77,7 @@ jobs:
               -H "Authorization: Bearer ${CRON_SECRET}" \
               -H "x-vercel-cron: 1" \
               --max-time 320 \
-              "${BASE_URL}/api/admin/appraiser-backfill?apply=1&limit=${SLICE}&daily_budget=${DAILY_BUDGET}")
+              "${BASE_URL}/api/admin/appraiser-backfill?apply=1&legs=arv&limit=${SLICE}&daily_budget=${DAILY_BUDGET}")
             echo "HTTP ${HTTP_CODE}"
             jq '{skipped, reason, records_today, daily_record_budget, applied: ((.applied // []) | length), summary: (.apply_summary // null), cost: (.cost_estimate // null)}' /tmp/slice.json 2>/dev/null || cat /tmp/slice.json
             if [ "${HTTP_CODE}" -ge 400 ]; then
