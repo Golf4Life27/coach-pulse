@@ -179,7 +179,13 @@ export interface BackfillEndpointOutcome {
    *  vision reads recorded), or skip_failure_capped (benched after N
    *  consecutive errors). A skipped leg reports status "ok" with no call
    *  spent. */
-  skipped_reason?: "skip_done" | "skip_stable" | "skip_failure_capped" | "skip_unproducible";
+  skipped_reason?:
+    | "skip_done"
+    | "skip_stable"
+    | "skip_failure_capped"
+    | "skip_unproducible"
+    // Caller narrowed the legs this pass (?legs=arv); the leg is still due.
+    | "skip_leg_filtered";
 }
 
 export interface BackfillRecordApplyOutcome {

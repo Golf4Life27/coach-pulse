@@ -309,6 +309,7 @@ export function traceOpener(listing: Listing): OpenerTrace {
     wholesaleFee: inputs.wholesaleFee,
     anchorPct: inputs.anchorPct,
     seed: null, // MOCKED — no Airtable ZIP_ARV_Seed read.
+    ownCompsJson: (listing as { arvCompDetailsJson?: string | null }).arvCompDetailsJson ?? null,
   });
   const r = priced.result;
   return {

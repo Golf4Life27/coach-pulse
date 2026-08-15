@@ -42,6 +42,7 @@ import { verifyListing, verifyListingByUrl, probeFirecrawlBalance } from "@/lib/
 import { checkFirecrawlBreaker, recordFirecrawlSpend, shouldHaltVerify } from "@/lib/crawler/firecrawl-circuit-breaker";
 import { runAsyncPool } from "@/lib/crawler/async-pool";
 import { priceOpenerWithSeed } from "@/lib/opener-pricing";
+import { serializeDerivation } from "@/lib/pricing/opener-derivation";
 import { getMarketForListing, openerArvPctMax } from "@/lib/markets/registry";
 import { resolveAnchorPct } from "@/lib/markets/anchor";
 import { getZipArvSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
@@ -242,11 +243,15 @@ export async function GET(req: Request) {
         wholesaleFee: l.wholesaleFeeTarget ?? null,
         anchorPct,
         seed,
+        ownCompsJson: l.arvCompDetailsJson ?? null,
       });
       const priced = pricedW.result;
 
       if (priced.opener == null) {
-        try { await updateListingRecord(l.id, { Live_Status: "Active", Last_Verified: iso, Renovated_Language: renovatedVeto }); } catch { /* best-effort */ }
+        // The receipt is written for a HOLD too — "why is there no number" is
+        // exactly as hard to answer later as "where did this number come from",
+        // and the HOLD receipt carries the flags that caused it.
+        try { await updateListingRecord(l.id, { Live_Status: "Active", Last_Verified: iso, Renovated_Language: renovatedVeto, Opener_Derivation_JSON: serializeDerivation(pricedW.derivation) }); } catch { /* best-effort */ }
         return { recordId: l.id, address: l.address, zip: l.zip, action: "live_no_opener", basis: priced.basis };
       }
 
@@ -256,6 +261,8 @@ export async function GET(req: Request) {
       const fields: Record<string, unknown> = {
         Rough_Opener_Amount: priced.opener,
         Opener_Basis: pricedW.basisLabel,
+        // THE RECEIPT (2026-08-06 audit) — the arithmetic, not just the answer.
+        Opener_Derivation_JSON: serializeDerivation(pricedW.derivation),
         Live_Status: "Active",
         Last_Verified: iso,
         Renovated_Language: renovatedVeto,

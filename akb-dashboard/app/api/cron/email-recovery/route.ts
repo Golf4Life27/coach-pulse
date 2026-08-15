@@ -33,6 +33,7 @@ import {
 } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { priceOpenerWithSeed } from "@/lib/opener-pricing";
+import { serializeDerivation } from "@/lib/pricing/opener-derivation";
 import { getZipArvSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import { getMarketForListing, openerArvPctMax } from "@/lib/markets/registry";
 import { resolveAnchorPct } from "@/lib/markets/anchor";
@@ -132,6 +133,7 @@ async function handle(req: Request): Promise<Response> {
       wholesaleFee: l.wholesaleFeeTarget ?? null,
       anchorPct,
       seed: zip5 ? (seedCache.get(zip5) ?? null) : null,
+      ownCompsJson: l.arvCompDetailsJson ?? null,
     });
     const opener = pw.result.opener;
     if (opener == null || (l.listPrice != null && opener < minOfferFloor(l.listPrice, pw.result.arvUsed))) {
@@ -184,6 +186,17 @@ async function handle(req: Request): Promise<Response> {
         Outreach_Status: "Emailed",
         Last_Outbound_At: iso,
         Verification_Notes: buildEmailSentNote(l.notes, iso, result.messageId ?? null, subject, body),
+        // ── STICKY + RECEIPT (2026-08-14) ────────────────────────────────────
+        // This lane EMAILED `opener` to the agent and then stored nothing about
+        // it — no sticky number, no basis, no arithmetic. That is the 529 Bina
+        // drift bug (texted $31,000 / stored $26,750) reproduced in the email
+        // lane: the follow-up path would re-quote a different figure than the
+        // agent was actually sent, and INVARIANTS §3 stickiness had nothing to
+        // hold. Stamped here, on CONFIRMED send only, exactly as h2-outreach
+        // does on confirmed delivery.
+        Rough_Opener_Amount: opener,
+        Opener_Basis: pw.basisLabel,
+        Opener_Derivation_JSON: serializeDerivation(pw.derivation),
       });
       rows.push({ record_id: l.id, address: l.address, to: l.agentEmail!, offer: opener, status: "sent", subject, detail: result.messageId ?? null });
       sent++;

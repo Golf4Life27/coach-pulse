@@ -428,6 +428,7 @@ async function handle(req: Request): Promise<Response> {
         wholesaleFee: fresh.wholesaleFeeTarget ?? null,
         anchorPct: bumpAnchor,
         seed: bumpZip ? seedCache.get(bumpZip) ?? null : null,
+        ownCompsJson: fresh.arvCompDetailsJson ?? null,
       });
       const repriceVerdict = bumpRepriceGate(repriced);
       if (!repriceVerdict.allowed) {

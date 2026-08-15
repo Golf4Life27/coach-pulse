@@ -194,6 +194,9 @@ export async function GET(req: Request) {
   const includeManualReview =
     url.searchParams.get("include_manual_review") === "1";
   const force = url.searchParams.get("force") === "1";
+  // ?legs=arv — run ONLY the ARV/comps leg (see the comp-coverage note at the
+  // leg planner). Any other value keeps the full ARV+rehab+rent behavior.
+  const legsOnlyArv = (url.searchParams.get("legs") ?? "").trim().toLowerCase() === "arv";
   const apply = url.searchParams.get("apply") === "1";
   const paceMs = readBackfillPaceMs();
 
@@ -401,7 +404,23 @@ export async function GET(req: Request) {
   } catch {
     backfillSpentToday = null; // fail-open, same posture as every other brake
   }
-  const budgetVerdict = checkBackfillBudget(backfillSpentToday);
+  // ?daily_budget=N — bounded override for CONTROLLED drivers (2026-08-15,
+  // comp-coverage sweep). The 5/day default was sized for the vision-heavy
+  // full backfill era and silently starves comp coverage — the operator's
+  // "why is volume 13/day" root cause traces here. The override is clamped
+  // to 200 records/day and every paid call underneath still answers to the
+  // shared PAID_CALLS_DAILY_CEILING brake (250/day) + the RentCast plan-cap
+  // refusal, so total spend stays inside the rails the operator blessed.
+  // Reachable in practice only via CRON_SECRET-authenticated drivers (the
+  // GH Actions sweep) or the operator's own dashboard session.
+  const dailyBudgetRaw = Number(url.searchParams.get("daily_budget"));
+  const dailyBudgetOverride =
+    Number.isFinite(dailyBudgetRaw) && dailyBudgetRaw > 0
+      ? Math.min(200, Math.floor(dailyBudgetRaw))
+      : undefined;
+  const budgetVerdict = dailyBudgetOverride != null
+    ? checkBackfillBudget(backfillSpentToday, dailyBudgetOverride)
+    : checkBackfillBudget(backfillSpentToday);
   // Diagnostic only — no longer a gate. Kept in the audit row so the sweep's
   // spend stays legible next to the rest of the system's burn.
   let sweepRentcast24h: number | null = null;
@@ -531,7 +550,7 @@ export async function GET(req: Request) {
         kvAvailable = false; // ledger unreadable → fail toward not spending
       }
     }
-    const plan = planLegs({
+    let plan = planLegs({
       arvValidatedAt: o.record.current.arv_validated_at,
       rehabEstimatedAt: o.record.current.rehab_estimated_at,
       estimatedMonthlyRent: o.record.current.estimated_monthly_rent,
@@ -542,6 +561,18 @@ export async function GET(req: Request) {
       failures,
       failureCap: p2.failureCap,
     });
+    // ?legs=arv — COMP-COVERAGE MODE (2026-08-15). The sweep that feeds the
+    // own-comps pricing basis needs exactly one thing: ARV_Comp_Details_JSON
+    // on the record. Rehab (~20s, vision spend) and buyer-intel (~10s) are
+    // dead weight for that goal, and running all three caps throughput at
+    // ~6-10 records per 300s invocation. ARV-only roughly triples it and
+    // spends nothing on vision. Rehab/rent stay available for the deals that
+    // survive pricing — this only reorders WHEN they are bought, never
+    // whether. Narrowing only: a leg the planner already skipped stays
+    // skipped.
+    if (legsOnlyArv) {
+      plan = { ...plan, rehab: "skip_leg_filtered", rent: "skip_leg_filtered" };
+    }
     appliedPlans.push(plan);
     // Snapshot the PRIOR vision read before a new one lands (consecutive-
     // agreement needs read N-1; the fields hold it until the endpoint

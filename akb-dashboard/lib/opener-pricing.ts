@@ -17,12 +17,14 @@
 
 import { priceOpener, type PricerResult } from "@/lib/per-market-pricer";
 import { arvForSubjectFromSeed, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
+import { ownCompsArv } from "@/lib/pricing/own-comps-arv";
 import { corroborateOpener, type CorroborationFlag } from "@/lib/opener-sanity-gate";
 import { buildDerivation, type OpenerDerivation } from "@/lib/pricing/opener-derivation";
+import { effectiveWholesaleFee } from "@/lib/pre-contract-math";
 import { OFFER_ROUND_STEP_USD } from "@/lib/pricing/offer-rounding";
 import { PLACEHOLDER_REHAB_HOLD_REASON } from "@/lib/pricing/vision-queue";
 
-export type ArvSource = "seed_renovated" | "stored" | "none";
+export type ArvSource = "own_comps" | "seed_renovated" | "stored" | "none";
 
 export interface OpenerWithSeedInput {
   listPrice?: number | null;
@@ -40,6 +42,10 @@ export interface OpenerWithSeedInput {
   anchorPct?: number | null;
   /** The ZIP's renovated-comp seed, when one exists. */
   seed?: ZipArvSeed | null;
+  /** The record's OWN sold comps (ARV_Comp_Details_JSON) — the PRIMARY ARV
+   *  basis when sufficient (operator ruling 2026-08-14). See
+   *  lib/pricing/own-comps-arv for the Cardinal/Cheyenne history. */
+  ownCompsJson?: string | null;
 }
 
 export interface OpenerWithSeedResult {
@@ -70,19 +76,49 @@ function mapStoredConfidence(c: "HIGH" | "MED" | "LOW" | null | undefined): "STR
   return null;
 }
 
-/** Pure: price an opener, preferring the renovated-comp seed ARV over the
- *  contaminated stored field. */
+/** Pure: price an opener. ARV basis hierarchy (operator ruling 2026-08-14):
+ *  the record's OWN comps → ZIP seed → stored field → HOLD. */
 export function priceOpenerWithSeed(input: OpenerWithSeedInput): OpenerWithSeedResult {
-  // Source-swap: seed renovated $/sqft × subject sqft wins when both exist.
   let arvForPricer: number | null = null;
   let arvSource: ArvSource = "none";
   let arvConfidence: "STRONG" | "THIN" | null = null;
   let psfUsed: number | null = null;
 
+  // ── 1. OWN COMPS — the closest evidence the system holds, and it was never
+  // consulted (Cardinal: seed built 10/12 from neighbor ZIPs priced $63k where
+  // the record's own 30 comps say ~$121k; Cheyenne: stored field 2× its own
+  // comps). Deliberately OUTRANKS a DONT_PRICE ZIP verdict: that verdict is
+  // about the ZIP's aggregate noise, and 5+ hyperlocal recent sales on the
+  // record itself are better evidence than the aggregate's absence.
+  const own = ownCompsArv({ compsJson: input.ownCompsJson, sqft: input.sqft ?? null });
+
   const seedArv = input.seed ? arvForSubjectFromSeed(input.seed, input.sqft ?? null) : null;
   const seedDontPrice = !!input.seed && (input.seed.dontPrice || input.seed.confidence === "DONT_PRICE");
 
-  if (pos(seedArv)) {
+  // CROSS-SOURCE DIVERGENCE RAIL (adversarial review 2026-08-14): when a
+  // STRONG curated seed exists and the own-comp $/sqft sits far ABOVE it, the
+  // array is the suspect (stale dupes / portfolio deeds inflate upward) — the
+  // seed prices, keeping the check cross-source. Downward divergence is left
+  // alone: own comps below the seed is the honest as-is reality (Cheyenne),
+  // and it fails conservative.
+  const ownDivergesAboveSeed =
+    own.ok && pos(own.psf) &&
+    input.seed?.confidence === "STRONG" && pos(input.seed.renovatedPerSqft) &&
+    own.psf > 1.75 * input.seed.renovatedPerSqft;
+
+  if (own.ok && pos(own.arv) && !ownDivergesAboveSeed) {
+    arvForPricer = own.arv;
+    arvSource = "own_comps";
+    // ALWAYS THIN for now (adversarial review, as-is/renovated bias): a mixed-
+    // condition median understates renovated value, which fails conservative —
+    // EXCEPT via the over-ARV-list amendment, where a count-based "STRONG"
+    // would autonomously send wrong-basis lowballs into the amendment's
+    // reply-tracking cohort. THIN makes ARV-below-list HOLD instead of send on
+    // this basis. STRONG is earned later, by a renovated-cluster upgrade with
+    // a shadow cohort behind it — not by comp count alone.
+    arvConfidence = "THIN";
+    psfUsed = own.psf;
+  } else if (pos(seedArv)) {
     arvForPricer = seedArv;
     arvSource = "seed_renovated";
     arvConfidence = input.seed!.confidence === "STRONG" ? "STRONG" : "THIN";
@@ -136,7 +172,10 @@ export function priceOpenerWithSeed(input: OpenerWithSeedInput): OpenerWithSeedR
     sqft: input.sqft ?? null,
     cappedToList: result.cappedToList,
     arvConfidence: confidenceLabel,
-    seed: input.seed ?? null,
+    // The gate audits the SAME evidence that produced the ARV: on the
+    // own-comps basis its size-band and price-shape rails run against the
+    // record's own comps, not the ZIP seed the pricer just declined to use.
+    seed: arvSource === "own_comps" ? { receiptsJson: own.receiptsJson } : (input.seed ?? null),
     renovatedPerSqft: psfUsed,
     bestCaseOpener: result.bestCaseOpener,
   });
@@ -215,6 +254,8 @@ export function priceOpenerWithSeed(input: OpenerWithSeedInput): OpenerWithSeedR
     : heldOnAssumedScope ? PLACEHOLDER_REHAB_HOLD_REASON
     : finalResult.overListTripwire ? "hold_over_list_tripwire"
     : finalResult.basis === "hold_no_value_basis" ? "hold"
+    : arvSource === "own_comps"
+      ? (finalResult.overArvList ? "arv_buybox_own_comps_over_arv_list" : "arv_buybox_own_comps")
     : arvSource === "seed_renovated"
       ? (finalResult.overArvList ? "arv_buybox_seed_over_arv_list" : "arv_buybox_seed")
     : "arv_buybox_stored";
@@ -239,7 +280,12 @@ export function priceOpenerWithSeed(input: OpenerWithSeedInput): OpenerWithSeedR
     arvPctMax: input.arvPctMax ?? null,
     rehab: finalResult.rehabUsed,
     rehabPlaceholder: finalResult.placeholderRehab === true,
-    fee: input.wholesaleFee ?? null,
+    // The fee USED, not the fee PASSED. `input.wholesaleFee ?? null` wrote
+    // fee:null on every record with a blank Wholesale_Fee_Target — most of
+    // them — so verifyDerivation() returned "incomplete" and the receipt could
+    // never reproduce its own opener. Caught on the 1708 Cardinal rerun, where
+    // the detail line read "fee $5,000" while the receipt read null.
+    fee: effectiveWholesaleFee(input.wholesaleFee),
     anchor: finalResult.anchorPct,
     ceiling: finalResult.ceiling,
     roundTo: OFFER_ROUND_STEP_USD,

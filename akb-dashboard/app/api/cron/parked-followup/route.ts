@@ -570,6 +570,7 @@ export async function GET(req: Request) {
       wholesaleFee: listing.wholesaleFeeTarget ?? null,
       anchorPct: pfAnchor,
       seed: pfZip ? seedCache.get(pfZip) ?? null : null,
+      ownCompsJson: listing.arvCompDetailsJson ?? null,
     });
     const pfVerdict = bumpRepriceGate(pfRepriced);
     if (!pfVerdict.allowed) {

@@ -39,11 +39,20 @@ underwrite against.
 - `[enforced]` **The autonomous opener is VALUE-anchored or it HOLDS — it is NEVER
   anchored to the seller's list price** (operator 2026-06-28, after the Blackmoor
   $84.5k catastrophe: 0.65 × $130k list on a ~$40k house). The flat 65%-of-list
-  fallback is retired. The opener is `anchor × (ARV × buybox − rehab − fee)` where ARV
-  is the ZIP renovated `$/sqft` × subject sqft; with no trusted ARV basis the pricer
-  returns `opener: null` and the record routes to operator review. Pricer guards
-  (ARV-below-list distrust, sub-floor micro-opener, non-penciling buy-box) **HOLD**,
-  they do not fall to a list fraction.
+  fallback is retired. The opener is `anchor × (ARV × buybox − rehab − fee)`; with no
+  trusted ARV basis the pricer returns `opener: null` and the record routes to
+  operator review. Pricer guards (ARV-below-list distrust, sub-floor micro-opener,
+  non-penciling buy-box) **HOLD**, they do not fall to a list fraction.
+- `[enforced]` **ARV basis hierarchy: the record's OWN comps → ZIP seed → stored
+  field → HOLD** (operator ruling 2026-08-14, after 1708 Cardinal — seed built
+  10/12 from neighbor ZIPs underpriced the opener by ~$58k vs the record's own 30
+  comps — and 9360 Cheyenne — stored field 2× its own comps). `ARV_Comp_Details_JSON`
+  is EVIDENCE, recomputed at read time by `lib/pricing/own-comps-arv.ts` behind
+  hard rails (exclusion receipts dropped, subject self-print dropped, deed/portfolio
+  dedupe, AVM price-shape quarantine, ≥5 usable comps, cross-source divergence vs a
+  STRONG seed). The own-comps basis prices as **THIN** — ARV-below-list HOLDS, never
+  auto-sends the over-ARV-list lowball — until a renovated-cluster upgrade with a
+  shadow cohort earns STRONG.
   - **ARV-below-list is CONFIDENCE-AWARE** (operator principle amendment
     2026-07-22, superseding the 2026-06-28 blanket hold): a **STRONG** seed
     (≥5 tight renovated comps) with ARV < list SENDS the value-anchored

@@ -41,7 +41,7 @@ import {
 } from "@/lib/pricing/vision-queue";
 import { anchoredOpenerGate } from "@/lib/h2-outreach/your-mao-opener-gate";
 import { computeFlipOffer } from "@/lib/pricing/mao-flip";
-import { DEFAULT_WHOLESALE_FEE } from "@/lib/pre-contract-math";
+import { DEFAULT_WHOLESALE_FEE, effectiveWholesaleFee } from "@/lib/pre-contract-math";
 
 // ── GUARDS (Maverick 2026-06-14, full-437 dry-run outlier review) ──
 // The full-437 dry-run exposed holes the old door-opener guarded. These
@@ -421,7 +421,7 @@ export function priceOpener(input: PricerInput): PricerResult {
     // the FIRST text could sit ABOVE your own maximum (all 7 underwater
     // deals — Forest Manor opened $97,665 against a $78,886 MAO). One
     // formula, cold-touch through contract: lib/pricing/mao-flip.
-    const fee = pos(input.wholesaleFee) ? input.wholesaleFee : DEFAULT_WHOLESALE_FEE;
+    const fee = effectiveWholesaleFee(input.wholesaleFee);
     const flip = computeFlipOffer({ arv: trustedArv, rehab: rough.rehabUsed, assignmentFee: fee });
     if (flip.status === "no_deal" || flip.offer == null || flip.offer <= 0) {
       return holdResult(

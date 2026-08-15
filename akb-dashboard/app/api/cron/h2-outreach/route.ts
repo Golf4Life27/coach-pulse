@@ -52,6 +52,7 @@ import {
 } from "@/lib/pricing/vision-queue";
 import { persistDecisionMath } from "@/lib/decision-persist";
 import { priceOpenerWithSeed } from "@/lib/opener-pricing";
+import { serializeDerivation } from "@/lib/pricing/opener-derivation";
 import { getZipArvSeed, seedSelfPricesNonDisclosure, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import { minOfferFloor } from "@/lib/per-market-pricer";
 import { classifyHold } from "@/lib/pricing/hold-reason";
@@ -346,7 +347,10 @@ async function handle(req: Request): Promise<Response> {
   // recordId → the opener + basis this run priced and (if delivery confirms) TEXTED.
   // Persisted on confirmed first-touch delivery so the stored number always equals
   // the number the seller actually received. See the STICKY-OFFER RECEIPT note below.
-  const sentOpenerReceipt = new Map<string, { opener: number; basis: string }>();
+  // derivationJson carries the arithmetic receipt alongside the answer — the send
+  // path prices fresh, so this is the ONLY point at which the terms behind a
+  // texted number still exist. See the DERIVATION RECEIPT note at the write-back.
+  const sentOpenerReceipt = new Map<string, { opener: number; basis: string; derivationJson: string }>();
   // One anchor read per market per tick + one ARV-seed read per ZIP — cached so
   // a 100-record cohort doesn't hit KV per record.
   const anchorCache = new Map<string, number>();
@@ -501,6 +505,7 @@ async function handle(req: Request): Promise<Response> {
       wholesaleFee: l.wholesaleFeeTarget ?? null,
       anchorPct,
       seed,
+      ownCompsJson: l.arvCompDetailsJson ?? null,
     });
     const priced = pw.result;
     if (priced.opener == null) {
@@ -587,7 +592,11 @@ async function handle(req: Request): Promise<Response> {
     // kept a stale intake value (529 Bina: texted $31,000, stored $26,750) or
     // stayed empty — breaking INVARIANTS §3 stickiness and making the follow-up
     // path quote a DIFFERENT number than the seller was told.
-    sentOpenerReceipt.set(l.id, { opener: priced.opener!, basis: pw.basisLabel });
+    sentOpenerReceipt.set(l.id, {
+      opener: priced.opener!,
+      basis: pw.basisLabel,
+      derivationJson: serializeDerivation(pw.derivation),
+    });
     filteredQueue.push(l);
   }
   queue = filteredQueue;
@@ -1149,6 +1158,18 @@ async function handle(req: Request): Promise<Response> {
             if (p.route === "first_touch" && receipt && receipt.opener > 0) {
               sentFields.Rough_Opener_Amount = receipt.opener;
               sentFields.Opener_Basis = receipt.basis;
+              // ── DERIVATION RECEIPT (2026-08-14, 1708 Cardinal) ────────────
+              // The opener + basis were stamped here; the ARITHMETIC was not,
+              // because serializeDerivation had exactly one caller (the intake
+              // cron). So every record priced on the SEND path — which is most
+              // of the live pipeline — carried a number with no receipt.
+              // 1708 Cardinal texted $63,000 against a $229,900 list and the
+              // seller countered; answering "where did $63,000 come from?"
+              // took four queries and still ended in reverse-engineering, which
+              // is the precise failure the 2026-08-06 audit built this field to
+              // end. Doctrine standard 1 (recompute-before-queue) is
+              // unenforceable against a record that kept only the answer.
+              sentFields.Opener_Derivation_JSON = receipt.derivationJson;
             }
             await updateListingRecord(p.recordId, sentFields);
             row.delivered = true;

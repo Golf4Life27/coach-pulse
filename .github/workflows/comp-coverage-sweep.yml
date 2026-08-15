@@ -1,0 +1,100 @@
+# Comp-coverage sweep — drive the appraiser backfill in slices (2026-08-15).
+#
+# WHY. The own-comps ARV hierarchy (97d6968) prices off each record's own
+# stored sold comps — but only 42 of 2,161 Review records HAVE comps stored.
+# Comp coverage is the volume bottleneck: every array this sweep buys is
+# consumed by pricing the moment it lands. Comps route through the ONE faucet
+# (lib/comps/sold-comps.ts): county deed ledger (Detroit — FREE) → ATTOM
+# /sale/snapshot (primary; operator's key) → RentCast last-resort-on-error.
+#
+# SPEND RAILS, all pre-existing: the shared PAID_CALLS_DAILY_CEILING brake
+# (250/day across ATTOM+RentCast), the RentCast plan-cap refusal, the ATTOM
+# loop-breaker, and the route's own daily record budget (driven here via the
+# clamped ?daily_budget override, max 200/day). NEVER sends anything — this
+# buys evidence; the send lanes keep their own gates.
+#
+# Loops slices until the route reports skipped/budget-reached/no-work, so a
+# single dispatch drains the day's allowance unattended.
+#
+# Required GitHub secret: CRON_SECRET (mirror of the Vercel env).
+
+name: Comp coverage sweep (controlled)
+
+on:
+  workflow_dispatch:
+    inputs:
+      daily_budget:
+        description: "Records allowed today (clamped to 200 server-side; paid-call brake still applies underneath)."
+        required: false
+        default: "200"
+        type: string
+      slice:
+        description: "Records per invocation. ARV-only legs run ~10s each, so ~25 fits the 300s window."
+        required: false
+        default: "25"
+        type: string
+      max_slices:
+        description: "Safety cap on loop iterations."
+        required: false
+        default: "16"
+        type: string
+      base_url:
+        description: "Production base URL (override only for staging tests)."
+        required: false
+        default: "https://coach-pulse-ten.vercel.app"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 110
+    env:
+      DAILY_BUDGET: ${{ inputs.daily_budget }}
+      SLICE: ${{ inputs.slice }}
+      MAX_SLICES: ${{ inputs.max_slices }}
+      BASE_URL: ${{ inputs.base_url }}
+    steps:
+      - name: Refuse to run when CRON_SECRET is missing
+        run: |
+          if [ -z "${{ secrets.CRON_SECRET }}" ]; then
+            echo "::error::CRON_SECRET is not configured as a GitHub Actions secret."
+            exit 1
+          fi
+          echo "CRON_SECRET present; proceeding."
+
+      - name: Drive backfill slices until budget or no-work
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          TOTAL_APPLIED=0
+          for i in $(seq 1 "${MAX_SLICES}"); do
+            echo "=== slice ${i}/${MAX_SLICES} (applied so far: ${TOTAL_APPLIED}) ==="
+            HTTP_CODE=$(curl -sS -o /tmp/slice.json -w "%{http_code}" \
+              -H "Authorization: Bearer ${CRON_SECRET}" \
+              -H "x-vercel-cron: 1" \
+              --max-time 320 \
+              "${BASE_URL}/api/admin/appraiser-backfill?apply=1&legs=arv&limit=${SLICE}&daily_budget=${DAILY_BUDGET}")
+            echo "HTTP ${HTTP_CODE}"
+            jq '{skipped, reason, records_today, daily_record_budget, applied: ((.applied // []) | length), summary: (.apply_summary // null), cost: (.cost_estimate // null)}' /tmp/slice.json 2>/dev/null || cat /tmp/slice.json
+            if [ "${HTTP_CODE}" -ge 400 ]; then
+              echo "::error::backfill slice returned HTTP ${HTTP_CODE} — halting sweep"
+              exit 1
+            fi
+            SKIPPED=$(jq -r '.skipped // false' /tmp/slice.json 2>/dev/null || echo "parse_error")
+            APPLIED=$(jq -r '(.applied // []) | length' /tmp/slice.json 2>/dev/null || echo "0")
+            if [ "${SKIPPED}" = "true" ]; then
+              echo "Budget reached or sweep skipped ($(jq -r '.reason // "unknown"' /tmp/slice.json)) — done for today."
+              break
+            fi
+            if [ "${APPLIED}" = "0" ]; then
+              echo "No records applied this slice — pool drained or nothing eligible. Done."
+              break
+            fi
+            TOTAL_APPLIED=$((TOTAL_APPLIED + APPLIED))
+            sleep 5
+          done
+          echo "Sweep complete. Total records backfilled this run: ${TOTAL_APPLIED}"

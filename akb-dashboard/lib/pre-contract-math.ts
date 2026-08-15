@@ -30,6 +30,19 @@
  *  flagged for follow-up reconciliation. */
 export const DEFAULT_WHOLESALE_FEE = 5_000;
 
+/** The fee a pricing path ACTUALLY consumes for a given input — the raw input
+ *  when it is a positive number, the default otherwise.
+ *
+ *  Exported because the derivation receipt must record the fee that was USED,
+ *  not the fee that was PASSED. Recording `input.wholesaleFee` verbatim wrote
+ *  `fee: null` on every record with a blank Wholesale_Fee_Target (most of
+ *  them), which made verifyDerivation() return "incomplete" — a receipt that
+ *  cannot reproduce its own opener, i.e. the exact thing the receipt exists to
+ *  prevent. One resolver, so the arithmetic and its record can never disagree. */
+export function effectiveWholesaleFee(fee: number | null | undefined): number {
+  return typeof fee === "number" && Number.isFinite(fee) && fee > 0 ? fee : DEFAULT_WHOLESALE_FEE;
+}
+
 /** Default CMA freshness threshold in days. Matches the existing
  *  Gate 5 (PE-01) staleness rule. */
 export const DEFAULT_CMA_STALENESS_DAYS = 7;
