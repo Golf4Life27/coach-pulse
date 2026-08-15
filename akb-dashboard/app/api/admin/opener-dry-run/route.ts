@@ -164,6 +164,7 @@ export async function GET(req: Request) {
       wholesaleFee: l.wholesaleFeeTarget ?? null,
       anchorPct,
       seed,
+      ownCompsJson: l.arvCompDetailsJson ?? null,
     });
     const priced = pricedW.result;
 

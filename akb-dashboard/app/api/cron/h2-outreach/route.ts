@@ -505,6 +505,7 @@ async function handle(req: Request): Promise<Response> {
       wholesaleFee: l.wholesaleFeeTarget ?? null,
       anchorPct,
       seed,
+      ownCompsJson: l.arvCompDetailsJson ?? null,
     });
     const priced = pw.result;
     if (priced.opener == null) {

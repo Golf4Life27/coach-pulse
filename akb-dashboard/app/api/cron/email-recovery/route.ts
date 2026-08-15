@@ -133,6 +133,7 @@ async function handle(req: Request): Promise<Response> {
       wholesaleFee: l.wholesaleFeeTarget ?? null,
       anchorPct,
       seed: zip5 ? (seedCache.get(zip5) ?? null) : null,
+      ownCompsJson: l.arvCompDetailsJson ?? null,
     });
     const opener = pw.result.opener;
     if (opener == null || (l.listPrice != null && opener < minOfferFloor(l.listPrice, pw.result.arvUsed))) {

@@ -58,8 +58,11 @@ export interface HoldClassifyInput {
   flooredToFallback: boolean;
   /** PricerResult.flagReseed (the ARV is low-confidence — a re-pull could fix it). */
   flagReseed: boolean;
-  /** OpenerWithSeedResult.arvSource — did any value basis feed the pricer? */
-  arvSource: "seed_renovated" | "stored" | "none";
+  /** OpenerWithSeedResult.arvSource — did any value basis feed the pricer?
+   *  own_comps (2026-08-14 hierarchy) classifies exactly like seed_renovated:
+   *  a real-comp basis that tripped a guard is a deal-shape fact, not a data
+   *  gap. */
+  arvSource: "own_comps" | "seed_renovated" | "stored" | "none";
   /** The ZIP's ARV seed is the DONT_PRICE sentinel (comps too thin/noisy). */
   seedDontPrice: boolean;
   /** The market has a sourced arv_pct_max (is priceable at all). */
