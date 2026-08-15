@@ -273,6 +273,12 @@ export async function GET(req: Request) {
     subset = limit != null ? filtered.slice(0, limit) : filtered;
   }
 
+  // Declared HERE, above the dry-run return, because both branches need it:
+  // the dry run previews leg plans (which consult the record's comp evidence)
+  // and the apply loop looks up the live listing per record. Declaring it only
+  // in the apply path made the dry run throw a TDZ ReferenceError → HTTP 500.
+  const byId = new Map(subset.map((l) => [l.id, l] as const));
+
   const outcomes: BackfillRecordOutcome[] = subset.map((l) => {
     const eligibility = classifyBackfillEligibility(l, {
       includeManualReview,
@@ -477,7 +483,6 @@ export async function GET(req: Request) {
 
   // ── P2 done-gate (#35) state ─────────────────────────────────────────
   const p2 = readP2Config();
-  const byId = new Map(subset.map((l) => [l.id, l] as const));
   const appliedPlans: RecordLegPlan[] = [];
   let stableMarked = 0;
   const kvUp = kvConfigured();
