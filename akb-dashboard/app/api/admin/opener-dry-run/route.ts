@@ -211,6 +211,14 @@ export async function GET(req: Request) {
       arvSource: pricedW.arvSource,
       seedDontPrice: !!seed?.dontPrice,
       marketHasBuybox: openerArvPctMax(market, l.state, { selfPricingSeed }) != null,
+      // WITHOUT THESE THE BREAKDOWN LIES (2026-08-15). classifyHold reads
+      // corroborationFlags BEFORE every other cause, so omitting them silently
+      // re-filed 2,229 corroboration failures into cash_no_pencil /
+      // no_market_buybox — and this route's by_hold_reason was then used to
+      // pick a top lever that could not have produced a single send. The live
+      // h2 lane already passes both; this route was the blind one.
+      overListTripwire: priced.overListTripwire,
+      corroborationFlags: pricedW.corroborationFlags,
     });
     if (hold.category !== "value_send") {
       agg.by_hold_reason[hold.category] = (agg.by_hold_reason[hold.category] ?? 0) + 1;

@@ -403,6 +403,9 @@ async function handle(req: Request): Promise<Response> {
   // gate behavior changes) purely to accumulate counts, so the operator can
   // finally see WHICH cause is costing volume and whether it is system-owned
   // (auto-seed / cached-skip, no human) or operator-owned.
+  // Which corroboration signal fired, for the records the gate refused. The
+  // category is not actionable on its own — see the note at the increment.
+  const byCorroborationFlag: Record<string, number> = {};
   const byHoldReason: Record<string, number> = {
     over_list_tripwire: 0,
     failed_corroboration: 0,
@@ -553,6 +556,15 @@ async function handle(req: Request): Promise<Response> {
       if (hold.category !== "value_send") {
         byHoldReason[hold.category] = (byHoldReason[hold.category] ?? 0) + 1;
         byHoldOwner[hold.owner] = (byHoldOwner[hold.owner] ?? 0) + 1;
+        // WHICH corroboration signal fired (2026-08-15). failed_corroboration
+        // was the single largest hold on send-eligible records and the count
+        // alone is not actionable: infeasible_ask means the ASK is
+        // structurally unreachable and the record should be killed or routed
+        // creative, while size_extrapolation means our comps cannot size the
+        // subject and BETTER DATA fixes it. Opposite responses, same bucket.
+        for (const f of pw.corroborationFlags) {
+          byCorroborationFlag[f] = (byCorroborationFlag[f] ?? 0) + 1;
+        }
       }
       continue;
     }
@@ -1262,6 +1274,7 @@ async function handle(req: Request): Promise<Response> {
       // not just visible on the one JSON response that happened to be read.
       queue_scan: { scanned, scan_cap: scanCap, planned: queue.length, scan_stop_reason: scanStopReason },
       by_hold_reason: byHoldReason,
+      by_corroboration_flag: byCorroborationFlag,
       by_hold_owner: byHoldOwner,
       by_reason: byReason,
     },
@@ -1332,6 +1345,7 @@ async function handle(req: Request): Promise<Response> {
     // cause used to collapse into "opener_hold_no_value_basis" below; this
     // splits it back out.
     by_hold_reason: byHoldReason,
+    by_corroboration_flag: byCorroborationFlag,
     by_hold_owner: byHoldOwner,
     // Every silent-killer reason string already attached to a skipped
     // openerGuarded row (lowball_not_eligible_<tier>, opener_hold_no_value_basis
