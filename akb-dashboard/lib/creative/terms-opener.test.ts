@@ -36,7 +36,9 @@ describe("renderTermsOpener", () => {
       offer: offer({ price: 108500, priceCappedToValue: true }),
     });
     expect(msg).toContain("$108,500 on terms");
-    expect(msg).not.toContain("full");
+    // "paid in full" legitimately appears in both variants — the claim under
+    // test is that a value-capped offer never says "full ... asking price".
+    expect(msg).not.toContain("full $");
     expect(msg).not.toContain("asking price");
   });
 
