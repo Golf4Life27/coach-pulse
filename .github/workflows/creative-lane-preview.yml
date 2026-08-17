@@ -1,0 +1,92 @@
+# Creative-lane preview — eyeball the seller-finance terms offers (on-demand).
+#
+# Runs /api/admin/creative-lane-dry-run over the stored cohort: the records
+# the CASH lane refuses (cash_no_pencil / infeasible_ask) get a seller-finance
+# terms package computed per lib/creative/seller-finance — full-ask-capped-at-
+# value price, rent-carried payment, entry/cash-on-cash/balloon gates.
+#
+# DRY by construction — the route never sends, never writes, never spends.
+# Terms offers reach sellers only after the operator approves the terms
+# template (spine recNb0eYjIyeyCnPW).
+#
+# Required GitHub secret: CRON_SECRET (mirror of the Vercel env).
+
+name: Creative lane preview (eyeball terms offers)
+
+on:
+  workflow_dispatch:
+    inputs:
+      zips:
+        description: "Comma ZIPs to scope (empty = whole stored cohort)."
+        required: false
+        default: ""
+        type: string
+      sample:
+        description: "Max per-record rows returned (aggregates cover the full scan)."
+        required: false
+        default: "75"
+        type: string
+      base_url:
+        description: "Production base URL (override only for staging tests)."
+        required: false
+        default: "https://coach-pulse-ten.vercel.app"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ZIPS: ${{ inputs.zips }}
+      SAMPLE: ${{ inputs.sample }}
+      BASE_URL: ${{ inputs.base_url }}
+    steps:
+      - name: Refuse to run when CRON_SECRET is missing
+        run: |
+          if [ -z "${{ secrets.CRON_SECRET }}" ]; then
+            echo "::error::CRON_SECRET is not configured as a GitHub Actions secret."
+            exit 1
+          fi
+          echo "CRON_SECRET present; proceeding."
+
+      - name: Invoke /api/admin/creative-lane-dry-run
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          Q="sample=${SAMPLE:-75}"
+          ZIPS_CLEAN="$(echo "${ZIPS:-}" | tr -d '[:space:]')"
+          if [ -n "${ZIPS_CLEAN}" ]; then Q="${Q}&zips=${ZIPS_CLEAN}"; fi
+          URL="${BASE_URL}/api/admin/creative-lane-dry-run?${Q}"
+          echo "GET ${URL}"
+          HTTP_CODE=$(curl -sS -o /tmp/creative.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            --max-time 320 \
+            "${URL}")
+          echo "HTTP ${HTTP_CODE}"
+          echo "--- response body ---"
+          jq . /tmp/creative.json 2>/dev/null || cat /tmp/creative.json
+          if [ "${HTTP_CODE}" -ge 400 ]; then
+            echo "::error::creative-lane-dry-run returned HTTP ${HTTP_CODE}"
+            exit 1
+          fi
+
+      - name: Surface the headline numbers
+        if: success()
+        run: |
+          set -euo pipefail
+          {
+            echo "## Creative lane preview (zips=${ZIPS:-all})"
+            echo ""
+            jq -r '
+              "- scanned: \(.summary.scanned // "?")",
+              "- creative cohort (cash-refused): \(.summary.creative_cohort // "?") \(.summary.cohort_by_trigger // {})",
+              "- SENDABLE TERMS OFFERS: \(.summary.sendable_terms // "?") (value-capped: \(.summary.price_capped_to_value // "?"))",
+              "- holds: \(.summary.by_hold // {})",
+              "- rent coverage: \(.summary.rent_coverage // {})",
+              "- avg price / monthly / entry: \(.summary.avg_price // "-") / \(.summary.avg_monthly // "-") / \(.summary.avg_entry // "-")"
+            ' /tmp/creative.json 2>/dev/null || echo "- (see raw response above)"
+          } >> "$GITHUB_STEP_SUMMARY"
