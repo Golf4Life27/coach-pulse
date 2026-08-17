@@ -32,6 +32,7 @@ import {
   readSellerFinanceConfig,
   type SellerFinanceResult,
 } from "@/lib/creative/seller-finance";
+import { estimateRent, fitRentModel, type RentPoint } from "@/lib/creative/rent-model";
 import {
   authenticate,
   hasDashboardSession,
@@ -87,6 +88,17 @@ export async function GET(req: Request) {
   });
 
   const sfConfig = readSellerFinanceConfig();
+
+  // ── ZIP rent model, fitted for free from the records that already carry a
+  // paid RentCast rent estimate (operator 2026-08-17: never burn per-record
+  // rent calls on casts — model from what we own, buy precision on replies).
+  const metroFor = (l: Listing): string =>
+    getMarketForListing({ state: l.state, zip: l.zip })?.id ?? (l.zip ?? "").slice(0, 3);
+  const rentPoints: RentPoint[] = listings
+    .filter((l) => (l.estimatedMonthlyRent ?? 0) > 0 && (l.buildingSqFt ?? 0) > 0 && !!l.zip)
+    .map((l) => ({ zip: l.zip!, metro: metroFor(l), sqft: l.buildingSqFt!, rent: l.estimatedMonthlyRent! }));
+  const rentModel = fitRentModel(rentPoints);
+
   const agg = {
     scanned: 0,
     cash_priced: 0,
@@ -96,7 +108,9 @@ export async function GET(req: Request) {
     price_capped_to_value: 0,
     by_hold: {} as Record<string, number>,
     rent_present: 0,
+    rent_modeled: 0,
     rent_missing: 0,
+    by_rent_basis: {} as Record<string, number>,
     sum_price: 0,
     sum_payment: 0,
     sum_entry: 0,
@@ -159,13 +173,31 @@ export async function GET(req: Request) {
 
     agg.creative_cohort++;
     agg.cohort_by_trigger[infeasible && cashNoPencil ? "both" : infeasible ? "infeasible_ask" : "cash_no_pencil"]++;
-    if (l.estimatedMonthlyRent != null && l.estimatedMonthlyRent > 0) agg.rent_present++;
-    else agg.rent_missing++;
+
+    // Rent: the record's own PAID estimate first; else the zero-cost ZIP/metro
+    // model (haircut, basis-labeled); else the honest no_rent_estimate hold.
+    let monthlyRent: number | null = null;
+    let rentBasis = "none";
+    if ((l.estimatedMonthlyRent ?? 0) > 0) {
+      monthlyRent = l.estimatedMonthlyRent!;
+      rentBasis = "rentcast_avm";
+      agg.rent_present++;
+    } else {
+      const est = estimateRent(rentModel, { zip: l.zip, metro: metroFor(l), sqft: l.buildingSqFt });
+      if (est) {
+        monthlyRent = est.rent;
+        rentBasis = est.basis;
+        agg.rent_modeled++;
+      } else {
+        agg.rent_missing++;
+      }
+    }
+    agg.by_rent_basis[rentBasis] = (agg.by_rent_basis[rentBasis] ?? 0) + 1;
 
     const sf: SellerFinanceResult = priceSellerFinance(
       {
         listPrice: l.listPrice ?? null,
-        monthlyRent: l.estimatedMonthlyRent ?? null,
+        monthlyRent,
         arvBasis: pw.arvUsed ?? null,
         arvSource: pw.arvSource,
         wholesaleFee: l.wholesaleFeeTarget ?? null,
@@ -189,7 +221,8 @@ export async function GET(req: Request) {
         address: l.address ?? null,
         zip: l.zip ?? null,
         list_price: l.listPrice ?? null,
-        rent: l.estimatedMonthlyRent ?? null,
+        rent: monthlyRent,
+        rent_basis: rentBasis,
         arv_basis: pw.arvUsed ?? null,
         arv_source: pw.arvSource,
         trigger: infeasible && cashNoPencil ? "both" : infeasible ? "infeasible_ask" : "cash_no_pencil",
@@ -219,7 +252,9 @@ export async function GET(req: Request) {
     sendable_terms: agg.sendable_terms,
     price_capped_to_value: agg.price_capped_to_value,
     by_hold: agg.by_hold,
-    rent_coverage: { present: agg.rent_present, missing: agg.rent_missing },
+    rent_coverage: { present: agg.rent_present, modeled: agg.rent_modeled, missing: agg.rent_missing },
+    by_rent_basis: agg.by_rent_basis,
+    rent_model: { beta: Math.round(rentModel.beta * 1000) / 1000, sample_points: rentModel.totalPoints, zips_covered: rentModel.zipCoef.size, metros_covered: rentModel.metroCoef.size },
     avg_price: agg.sendable_terms > 0 ? Math.round(agg.sum_price / agg.sendable_terms) : null,
     avg_monthly: agg.sendable_terms > 0 ? Math.round(agg.sum_payment / agg.sendable_terms) : null,
     avg_entry: agg.sendable_terms > 0 ? Math.round(agg.sum_entry / agg.sendable_terms) : null,
