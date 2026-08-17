@@ -168,6 +168,14 @@ confirmed with the seller and in the contract.
   Pre-Outreach `PO-05` `restricted_states` (`lib/config/gates/pre_outreach.json`).
 - `[enforced]` TN assignability at EMD/contract: `lib/orchestrator/pre-emd-checks.ts`
   `PE-04`; `lib/orchestrator/pre-contract-checks.ts` `PC-16`.
+- `[operator]` **OHIO SB 155 (ORC § 5301.95, effective 2026-03-01): NO binding OH
+  purchase contract until the standalone wholesaler disclosure (bold ≥12pt) is
+  signed and dated by BOTH the record owner and the wholesaler.** Sequence is
+  disclosure → both signatures → contract; no EMD moves before the signed
+  disclosure exists (a defective disclosure makes the EMD the owner's money and
+  the contract cancellable until close of escrow; per (C)(2) this cannot be
+  waived). Form + operating rules: `docs/compliance/OHIO_SB155.md`. Gate item
+  PC-17 (`sb155_disclosure_signed`) docketed for when the contract path wires.
 - `[history]` Memphis was outreach-paused 2026-04-26→2026-07-23; `PAUSED_MARKETS` in
   `lib/markets/actionable.ts` and `app/v2/_lib/policy.ts` are now empty.
 
