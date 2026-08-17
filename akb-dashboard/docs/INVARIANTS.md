@@ -168,7 +168,7 @@ confirmed with the seller and in the contract.
   Pre-Outreach `PO-05` `restricted_states` (`lib/config/gates/pre_outreach.json`).
 - `[enforced]` TN assignability at EMD/contract: `lib/orchestrator/pre-emd-checks.ts`
   `PE-04`; `lib/orchestrator/pre-contract-checks.ts` `PC-16`.
-- `[operator]` **OHIO SB 155 (ORC § 5301.95, effective 2026-03-01): NO binding OH
+- `[operator]` **OHIO SB 155 (ORC § 5301.95, effective 2026-03-02): NO binding OH
   purchase contract until the standalone wholesaler disclosure (bold ≥12pt) is
   signed and dated by BOTH the record owner and the wholesaler.** Sequence is
   disclosure → both signatures → contract; no EMD moves before the signed
