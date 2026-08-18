@@ -33,8 +33,10 @@
 import { NextResponse } from "next/server";
 import { getListings, updateListingRecord } from "@/lib/airtable";
 import { audit } from "@/lib/audit-log";
-import { isH2Eligible } from "@/lib/h2-outreach";
+import { outreachReadyReason } from "@/lib/h2-outreach";
 import { evaluateSendWindow } from "@/lib/h2-working-hours";
+import { verifyListing, classifyVerifiedListing } from "@/lib/crawler/sources/firecrawl";
+import { checkFirecrawlBreaker } from "@/lib/crawler/firecrawl-circuit-breaker";
 import { priceOpenerWithSeed } from "@/lib/opener-pricing";
 import { classifyHold } from "@/lib/pricing/hold-reason";
 import { getMarketForListing, openerArvPctMax } from "@/lib/markets/registry";
@@ -142,7 +144,15 @@ export async function GET(req: Request) {
   let eligibleCount = 0;
 
   for (const l of listings) {
-    if (!isH2Eligible(l)) continue;
+    // FRESHNESS + MARKET GATE (operator catch 2026-08-18: "some of those
+    // records are from May and April... we don't even know if they're on the
+    // market still"). v1 of this route gated on isH2Eligible ALONE, which has
+    // no freshness window — the terms queue happily held listings nobody had
+    // verified in months. Same selector as the cash lane now: eligible AND
+    // actionable market (paused/excluded markets never text) AND confirmed
+    // on-market inside the freshness window. A terms offer on a delisted
+    // property is spam with our name on it.
+    if (!outreachReadyReason(l).ready) continue;
     eligibleCount++;
 
     const market = getMarketForListing({ state: l.state, zip: l.zip });
@@ -252,6 +262,8 @@ export async function GET(req: Request) {
   let claimed = 0;
   let outsideHours = 0;
   let refused = 0;
+  const probe = { probes: 0, credits_used: 0, disposed_inactive: 0, content_rejected: 0, infra_skipped: 0 };
+  const probeBreaker = dryRun ? null : await checkFirecrawlBreaker().catch(() => null);
 
   for (const c of planned.slice(0, daily.maxPerRunToday)) {
     const row: Record<string, unknown> = {
@@ -279,6 +291,58 @@ export async function GET(req: Request) {
       row.action = "outside_hours";
       outsideHours++;
       continue;
+    }
+
+    // ── PRE-SEND CONTENT PROBE — the LAST look at the live page before a
+    // money-bearing text (same rail as the cash lane; ported 2026-08-18 with
+    // the freshness-gate fix). Even a 48h-fresh record can have delisted or
+    // gone pending since its last verify; a full-ask terms offer on a dead
+    // listing is worse than a lowball on a live one. Content verdicts route
+    // the record OUT of the queue; infra failures skip fail-closed and the
+    // record stays queued for the next slot. Runs BEFORE the claim — probe
+    // outcomes must never wedge a claim.
+    {
+      const breakerBlocked =
+        !probeBreaker || probeBreaker.tripped || probeBreaker.spentRecent + probe.credits_used >= probeBreaker.cap;
+      const fc = breakerBlocked || !c.l.address ? null : await verifyListing(c.l.address).catch(() => null);
+      if (fc) {
+        probe.probes++;
+        probe.credits_used += fc.creditsUsed ?? 0;
+      }
+      const verdict = fc ? classifyVerifiedListing(fc) : null;
+      const iso0 = new Date().toISOString();
+      const notes0 = c.l.notes ?? "";
+      if (verdict?.outcome === "reject" && verdict.reason === "firecrawl_inactive") {
+        await updateListingRecord(c.l.id, {
+          Outreach_Status: "Dead",
+          Verification_Notes:
+            `${notes0 ? notes0 + "\n\n" : ""}[${iso0}] Creative pre-send probe: listing no longer active — disposed before terms text.`,
+        }).catch(() => {});
+        row.action = "probe_disposed_inactive";
+        probe.disposed_inactive++;
+        continue;
+      }
+      if (
+        verdict?.outcome === "reject" &&
+        (verdict.reason === "firecrawl_renovated" ||
+          verdict.reason === "new_construction_excluded" ||
+          verdict.reason === "wholesaler_excluded")
+      ) {
+        await updateListingRecord(c.l.id, {
+          ...(verdict.reason === "firecrawl_renovated" ? { Renovated_Language: true } : {}),
+          Outreach_Status: "Review",
+          Verification_Notes:
+            `${notes0 ? notes0 + "\n\n" : ""}[${iso0}] Creative pre-send probe: ${verdict.reason} — terms text SUPPRESSED, routed to Review.`,
+        }).catch(() => {});
+        row.action = `probe_content_reject:${verdict.reason}`;
+        probe.content_rejected++;
+        continue;
+      }
+      if (!verdict || verdict.outcome === "reject") {
+        row.action = `probe_infra_skip:${breakerBlocked ? "breaker_blocked" : verdict?.reason ?? "probe_failed"}`;
+        probe.infra_skipped++;
+        continue;
+      }
     }
 
     // Claim BEFORE send: a crashed run must never double-text.
@@ -366,6 +430,7 @@ export async function GET(req: Request) {
     idempotent_skipped: claimed,
     outside_hours: outsideHours,
     refused,
+    presend_probe: probe,
   };
 
   await audit({
