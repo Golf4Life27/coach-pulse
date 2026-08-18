@@ -236,6 +236,8 @@ export interface Listing {
   arvCompCount?: number | null;
   arvCompAvgPrSqFt?: number | null;
   arvCompDetailsJson?: string | null;
+  /** PropStream bulk-enrichment snapshot JSON (lib/creative/enrichment.ts). */
+  propStreamEnrichmentJson?: string | null;
   // Phase 4A.1 — read for the V2.1 MAO floor calc:
   //   floor = MAX(realArvMedian - estRehab - wholesaleFeeTarget, 0)
   // Defaults: wholesaleFeeTarget 15000, buyerProfitTarget 30000 (Bible v3).

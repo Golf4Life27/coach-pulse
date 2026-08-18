@@ -201,6 +201,10 @@ const LISTING_FIELD_REGISTRY: ReadonlyArray<ListingFieldRegistryEntry> = [
   { prop: "arvCompCount", fieldId: "fldyukQHGzGdxoDGf", name: "ARV_Comp_Count" },
   { prop: "arvCompAvgPrSqFt", fieldId: "fld9uJ3xRjkHGYruM", name: "ARV_Comp_Avg_PrSqFt" },
   { prop: "arvCompDetailsJson", fieldId: "fldIrL7bFboOEr9vj", name: "ARV_Comp_Details_JSON" },
+  // PropStream bulk-enrichment snapshot (2026-08-18, address+zip matched from
+  // the 'SF Enrichment 2026-08-18' 148-col export). Compact JSON — see
+  // lib/creative/enrichment.ts for the parser and field meanings.
+  { prop: "propStreamEnrichmentJson", fieldId: "fldhNQ7d8PQcu7TdV", name: "PropStream_Enrichment_JSON" },
   // V2.1 floor inputs the new endpoint reads (defaults Bible v3 §9):
   //   wholesaleFeeTarget default 15000, buyerProfitTarget default 30000
   { prop: "wholesaleFeeTarget", fieldId: "fldSPxo0LRdGDBxcv", name: "Wholesale_Fee_Target" },

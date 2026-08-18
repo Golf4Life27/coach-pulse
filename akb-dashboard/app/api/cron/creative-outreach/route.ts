@@ -40,8 +40,16 @@ import { getMarketForListing, openerArvPctMax } from "@/lib/markets/registry";
 import { resolveAnchorPct } from "@/lib/markets/anchor";
 import { getZipArvSeed, seedSelfPricesNonDisclosure, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import { estimateRent, fitRentModel, type RentPoint } from "@/lib/creative/rent-model";
+import {
+  creativePriority,
+  isAbsentee,
+  isFreeAndClear,
+  parsePropStreamEnrichment,
+  pickRentWithEnrichment,
+  type PropStreamEnrichment,
+} from "@/lib/creative/enrichment";
 import { priceSellerFinance, readSellerFinanceConfig, type SellerFinanceOffer } from "@/lib/creative/seller-finance";
-import { renderTermsOpener, termsPriority } from "@/lib/creative/terms-opener";
+import { renderTermsOpener } from "@/lib/creative/terms-opener";
 import { sendGuarded } from "@/lib/outreach/send-gate";
 import { readDailySendCap, governDailySends, dailySendMeterKey, DAILY_SEND_METER_TTL_S } from "@/lib/outreach/send-cap";
 import {
@@ -118,7 +126,13 @@ export async function GET(req: Request) {
   // ── Build the ranked terms queue: send-eligible ∩ cash-refused ∩ sendable.
   const anchorCache = new Map<string, number>();
   const seedCache = new Map<string, ZipArvSeed | null>();
-  type Candidate = { l: Listing; offer: SellerFinanceOffer; rentBasis: string; body: string };
+  type Candidate = {
+    l: Listing;
+    offer: SellerFinanceOffer;
+    rentBasis: string;
+    body: string;
+    enrichment: PropStreamEnrichment | null;
+  };
   const queue: Candidate[] = [];
   let eligibleCount = 0;
 
@@ -169,16 +183,22 @@ export async function GET(req: Request) {
     const inCohort = hold.category === "cash_no_pencil" || pw.corroborationFlags.includes("infeasible_ask");
     if (!inCohort) continue;
 
+    // Rent chain: RentCast AVM on the record → modeled (ZIP/metro) with the
+    // PropStream snapshot as a conservative second opinion (lower wins) →
+    // PropStream alone (haircut) → none. See lib/creative/enrichment.ts for
+    // the +9.5%-hot calibration finding that ordered this.
+    const enrichment = parsePropStreamEnrichment(l.propStreamEnrichmentJson);
     let monthlyRent: number | null = null;
     let rentBasis = "none";
     if ((l.estimatedMonthlyRent ?? 0) > 0) {
       monthlyRent = l.estimatedMonthlyRent!;
       rentBasis = "rentcast_avm";
     } else {
-      const est = estimateRent(rentModel, { zip: l.zip, metro: metroFor(l), sqft: l.buildingSqFt });
-      if (est) {
-        monthlyRent = est.rent;
-        rentBasis = est.basis;
+      const modeled = estimateRent(rentModel, { zip: l.zip, metro: metroFor(l), sqft: l.buildingSqFt });
+      const picked = pickRentWithEnrichment(modeled, enrichment);
+      if (picked) {
+        monthlyRent = picked.rent;
+        rentBasis = picked.basis;
       }
     }
 
@@ -200,10 +220,13 @@ export async function GET(req: Request) {
       offer: sf,
       rentBasis,
       body: renderTermsOpener({ agentName: l.agentName, address: l.address, listPrice: l.listPrice!, offer: sf }),
+      enrichment,
     });
   }
 
-  queue.sort((a, b) => termsPriority(b.offer) - termsPriority(a.offer));
+  // Lien-aware ordering: free-and-clear > absentee > last-cash-buyer tiers,
+  // then the offer-quality score (full-ask first, buyer CoC tiebreak).
+  queue.sort((a, b) => creativePriority(b.offer, b.enrichment) - creativePriority(a.offer, a.enrichment));
   const planned = queue.slice(0, limit);
 
   // ── Shared daily meter (cash + creative bounded together).
@@ -236,6 +259,9 @@ export async function GET(req: Request) {
       monthly: c.offer.monthlyPayment,
       term_months: c.offer.termMonths,
       rent_basis: c.rentBasis,
+      free_and_clear: isFreeAndClear(c.enrichment),
+      absentee: isAbsentee(c.enrichment),
+      last_cash_buyer: c.enrichment?.lastCashBuyer === true,
       body: c.body,
       action: "planned",
     };
@@ -316,6 +342,11 @@ export async function GET(req: Request) {
     lane_live_flag: laneLive,
     eligible_count: eligibleCount,
     terms_queue: queue.length,
+    queue_tiers: {
+      free_and_clear: queue.filter((c) => isFreeAndClear(c.enrichment)).length,
+      absentee: queue.filter((c) => isAbsentee(c.enrichment)).length,
+      enriched: queue.filter((c) => c.enrichment != null).length,
+    },
     planned: planned.length,
     daily: { cap: dailyCap, used_at_start: usedAtStart, allowed_this_run: daily.maxPerRunToday, meter_readable: meterReadable },
     sent,

@@ -146,6 +146,8 @@ const EXPECTED_LISTING_FIELDS: Record<string, string> = {
   "fldif6WwcJeXZtJcX": "mlsStatus",
   "fldrlbePeS9glaFQu": "propertyType",
   "fldg1j5wHJzoGJB0I": "priceDropCount",
+  // Added 2026-08-18 with the PropStream bulk-enrichment snapshot (lib/creative/enrichment.ts).
+  "fldhNQ7d8PQcu7TdV": "propStreamEnrichmentJson",
   "fld2eUkKaC4pMjIdd": "lastVerified",
   // Added 2026-08-04 with the Last_Seen writer (lib/crawler/last-seen). The
   // field existed in the Airtable schema all along with no reader OR writer.
@@ -252,6 +254,7 @@ const EXPECTED_LISTING_NAME_MAP: Record<string, string> = {
   "MLS_Status": "mlsStatus",
   "Property_Type": "propertyType",
   "Price_Drop_Count": "priceDropCount",
+  "PropStream_Enrichment_JSON": "propStreamEnrichmentJson",
   "Last_Verified": "lastVerified",
   "Last_Seen": "lastSeen",
   "Pipeline_Stage": "pipelineStage",
