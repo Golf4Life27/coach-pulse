@@ -321,8 +321,9 @@ export async function GET(req: Request) {
       Verification_Notes:
         `${existingNotes ? existingNotes + "\n\n" : ""}[CREATIVE terms sent ${iso}] Quo msg ${gate.result?.id ?? "?"}: ` +
         `price $${c.offer.price}${c.offer.priceCappedToValue ? " (value-capped, ask $" + c.l.listPrice + ")" : " (full ask)"}, ` +
-        `$${c.offer.downPayment} down, $${c.offer.monthlyPayment}/mo x ${c.offer.termMonths}mo, rent basis ${c.rentBasis}. ` +
-        `Mortgage status asked in opener.`,
+        `$${c.offer.downPayment} down, $${c.offer.monthlyPayment}/mo x ${c.offer.termMonths}mo` +
+        `${c.offer.balloonAmount > 0 ? ` + balloon $${c.offer.balloonAmount} at month ${c.offer.termMonths}` : ""}, ` +
+        `rent basis ${c.rentBasis}. Mortgage status asked in opener.`,
     }).catch((err) => {
       row.airtable_error = String(err).slice(0, 160);
     });

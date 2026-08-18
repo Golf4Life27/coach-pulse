@@ -28,8 +28,13 @@ describe("priceSellerFinance — the Hadley worked example", () => {
     expect(r.price).toBe(88500); // round250(88452)=88500 ≤ round250(95000)
     // Payment matches BBC's calculator to the dollar: $350/mo.
     expect(r.monthlyPayment).toBe(350);
-    // Principal-only term inside 30y; no balloon.
-    expect(r.termMonths).toBeLessThanOrEqual(cfg.termMaxMonths);
+    // 5-year balloon default: full payoff would run ~228mo, so the seller is
+    // fully paid at month 60 — payments plus the remaining balance.
+    expect(r.termMonths).toBe(cfg.balloonMonths);
+    expect(r.payoffMonths).toBeGreaterThan(cfg.balloonMonths);
+    expect(r.balloonAmount).toBe(r.price - r.downPayment - r.monthlyPayment * cfg.balloonMonths);
+    // Refi-exit gate honored: balloon inside 70% of the ARV basis.
+    expect(r.balloonAmount).toBeLessThanOrEqual(Math.round(hadley.arvBasis! * cfg.balloonRefiLtvMax));
     // Buyer economics clear both floors.
     expect(r.buyerMonthlyCashflow).toBeGreaterThanOrEqual(cfg.cashflowFloorUsd);
     expect(r.buyerCashOnCash).toBeGreaterThanOrEqual(cfg.cocMin);
@@ -81,15 +86,29 @@ describe("priceSellerFinance — holds, never guesses", () => {
     expect(r.reason).toBe("entry_too_heavy");
   });
 
-  it("HOLDs for a balloon when principal cannot amortize inside the term cap", () => {
-    // High price on modest rent: payment tops out, term blows past 360.
+  it("HOLDs when the balloon balance exceeds the buyer's plausible refi exit", () => {
+    // High price on modest rent: at month 60 the balance ($189,000) sits above
+    // 70% of the value basis — a balloon the buyer can't survive is never sent.
     const r = priceSellerFinance(
       { listPrice: 240000, monthlyRent: 1100, arvBasis: 245000, arvSource: "own_comps", wholesaleFee: 5000 },
       cfg,
     );
     expect(r.verdict).toBe("hold");
     if (r.verdict !== "hold") return;
-    expect(r.reason).toBe("needs_balloon");
+    expect(r.reason).toBe("balloon_refi_too_heavy");
+  });
+
+  it("carries NO balloon when the payoff amortizes inside the balloon window", () => {
+    // Strong rent on cheap stock: payment $500/mo retires the principal fast.
+    const r = priceSellerFinance(
+      { listPrice: 30000, monthlyRent: 1350, arvBasis: 32000, arvSource: "own_comps", wholesaleFee: 2000 },
+      cfg,
+    );
+    expect(r.verdict).toBe("sendable_terms");
+    if (r.verdict !== "sendable_terms") return;
+    expect(r.payoffMonths).toBeLessThanOrEqual(cfg.balloonMonths);
+    expect(r.termMonths).toBe(r.payoffMonths);
+    expect(r.balloonAmount).toBe(0);
   });
 
   it("never prices above the value cap regardless of ask", () => {

@@ -19,8 +19,10 @@
 //             buyer's cashflow floor, with an anchor margin
 //   down    = seller's day-one cash, clamped so total entry (down + fee +
 //             closing) stays inside the buyer's entry ceiling
-//   term    = principal / payment, principal-only; > TERM_MAX ⇒ HOLD
-//             (a balloon is a negotiation structure, not an auto-send)
+//   term    = principal / payment, principal-only, with a 5-YEAR BALLOON
+//             DEFAULT (operator 2026-08-18): payoffs longer than the balloon
+//             window pay monthly to the balloon date, then the balance in one
+//             lump sum — gated on the buyer's plausible refi exit
 //
 // DOCTRINE CARRIED OVER FROM THE CASH LANE (INVARIANTS §1/§2 spirit):
 // every guard HOLDs rather than guessing — no rent estimate ⇒ HOLD, no
@@ -52,6 +54,14 @@ export interface SellerFinanceConfig {
   cocMin: number;
   /** Principal-only term ceiling in months; beyond ⇒ needs a balloon ⇒ HOLD. */
   termMaxMonths: number;
+  /** Balloon date in months (operator 2026-08-18: 5-year balloon is the
+   *  DEFAULT structure — sellers won't be a 20-year bank). A payoff that
+   *  amortizes inside this window carries no balloon. */
+  balloonMonths: number;
+  /** Refi-exit gate: balloon balance must be ≤ this share of the ARV basis,
+   *  or the buyer plausibly cannot refinance/sell their way out at the
+   *  balloon date — we never structure a balloon the buyer can't survive. */
+  balloonRefiLtvMax: number;
   /** Price cap as a multiple of the trusted ARV basis. */
   valueCap: number;
   /** Prices/downs rounded to this. */
@@ -78,6 +88,8 @@ export function readSellerFinanceConfig(env: Record<string, string | undefined> 
     entryPctMax: num(env.SF_ENTRY_PCT_MAX, 0.25),
     cocMin: num(env.SF_COC_MIN, 0.12),
     termMaxMonths: num(env.SF_TERM_MAX_MONTHS, 360),
+    balloonMonths: num(env.SF_BALLOON_MONTHS, 60),
+    balloonRefiLtvMax: num(env.SF_BALLOON_REFI_LTV_MAX, 0.70),
     valueCap: num(env.SF_VALUE_CAP, 1.0),
     priceRoundUsd: num(env.SF_PRICE_ROUND_USD, 250),
     wholesaleFeeDefaultUsd: num(env.SF_WHOLESALE_FEE_USD, 5000),
@@ -90,7 +102,8 @@ export type SellerFinanceHoldReason =
   | "no_value_basis"      // owner: same as cash lane — no trusted ARV, never price blind
   | "rent_too_thin"       // owner: deal_shape — rent cannot carry any payment above the floor
   | "entry_too_heavy"     // owner: deal_shape — fee+closing alone break the buyer's entry ceiling
-  | "needs_balloon"       // owner: operator — >30y principal-only; balloon is a negotiated structure
+  | "needs_balloon"       // owner: operator — legacy (pre-balloon-default); kept for audit continuity
+  | "balloon_refi_too_heavy" // owner: deal_shape — balloon balance exceeds the buyer's plausible refi exit
   | "buyer_return_thin";  // owner: deal_shape — cash-on-cash below floor; not dispo-able
 
 export interface SellerFinanceOffer {
@@ -101,7 +114,13 @@ export interface SellerFinanceOffer {
   priceCappedToValue: boolean;
   downPayment: number;
   monthlyPayment: number;
+  /** Months until the seller is FULLY paid — the balloon date when a balloon
+   *  applies, else the full principal-only payoff. */
   termMonths: number;
+  /** Months the principal-only payment stream would take to fully amortize. */
+  payoffMonths: number;
+  /** Lump sum due at termMonths (0 = fully amortizes, no balloon). */
+  balloonAmount: number;
   wholesaleFee: number;
   closingCosts: number;
   totalEntry: number;
@@ -194,15 +213,31 @@ export function priceSellerFinance(
   const entry = down + fee + closing;
   const entryPct = entry / price;
 
-  // ── Term: principal-only. Beyond the ceiling a balloon is required, and a
-  // balloon is a negotiated structure — operator judgment, never auto-sent.
+  // ── Term: principal-only, with the 5-YEAR BALLOON DEFAULT (operator
+  // 2026-08-18, spine reczqSOSqJ3MTY9fi): a payoff that amortizes inside the
+  // balloon window carries no balloon; anything longer pays monthly to the
+  // balloon date and the remaining balance comes due as one lump sum — the
+  // seller is FULLY paid out in ~5 years, never a 20-year bank. The refi-exit
+  // gate keeps it survivable: the balloon balance must sit inside what the
+  // buyer can plausibly refinance (or resell) against the value basis, or we
+  // HOLD — a balloon the buyer can't exit is a default we structured.
   const principal = price - down;
-  const termMonths = Math.ceil(principal / payment);
-  if (termMonths > cfg.termMaxMonths) {
-    return {
-      verdict: "hold", reason: "needs_balloon", automatable: false,
-      detail: `principal $${principal} at $${payment}/mo runs ${termMonths} months (> ${cfg.termMaxMonths}); needs a balloon structure — operator call`,
-    };
+  const payoffMonths = Math.ceil(principal / payment);
+  let termMonths = payoffMonths;
+  let balloonAmount = 0;
+  if (payoffMonths > cfg.balloonMonths) {
+    termMonths = cfg.balloonMonths;
+    balloonAmount = principal - payment * cfg.balloonMonths;
+    const refiCeiling = Math.round(input.arvBasis * cfg.balloonRefiLtvMax);
+    if (balloonAmount > refiCeiling) {
+      return {
+        verdict: "hold", reason: "balloon_refi_too_heavy", automatable: false,
+        detail:
+          `balloon balance $${balloonAmount} at month ${cfg.balloonMonths} exceeds the buyer's plausible ` +
+          `refi exit (${Math.round(cfg.balloonRefiLtvMax * 100)}% of ARV basis $${input.arvBasis} = $${refiCeiling}) — ` +
+          `structuring it would be a built-in default`,
+      };
+    }
   }
 
   // ── Buyer return: the deal must be dispo-able or the offer is noise.
@@ -222,6 +257,8 @@ export function priceSellerFinance(
     downPayment: down,
     monthlyPayment: payment,
     termMonths,
+    payoffMonths,
+    balloonAmount,
     wholesaleFee: fee,
     closingCosts: closing,
     totalEntry: entry,
@@ -233,6 +270,7 @@ export function priceSellerFinance(
       `price=min(ask,arv×${cfg.valueCap})=$${price}${priceCappedToValue ? " (value-capped)" : ""}; ` +
       `payment=floor25((rent $${input.monthlyRent}×${1 - cfg.overheadPct}−$${cfg.cashflowFloorUsd})×${cfg.paymentAnchor})=$${payment}/mo; ` +
       `down=$${down}+fee $${fee}+closing $${closing}=entry $${entry} (${(entryPct * 100).toFixed(1)}%); ` +
-      `term=${termMonths}mo principal-only; buyer cashflow $${cashflow}/mo, CoC ${(coc * 100).toFixed(1)}%`,
+      `term=${termMonths}mo principal-only${balloonAmount > 0 ? ` + balloon $${balloonAmount} at month ${termMonths} (full payoff would run ${payoffMonths}mo)` : ""}; ` +
+      `buyer cashflow $${cashflow}/mo, CoC ${(coc * 100).toFixed(1)}%`,
   };
 }
