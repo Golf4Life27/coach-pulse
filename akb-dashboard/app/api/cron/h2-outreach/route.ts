@@ -949,14 +949,22 @@ async function handle(req: Request): Promise<Response> {
         row.error = p.skipReason;
         summary.skipped++;
       } else {
-        // first_touch — the only path that sends SMS. Claim the record in KV
-        // BEFORE dispatch: an overlapping run or a re-fire inside the Airtable
-        // status-propagation window then cannot re-text the same agent (the
-        // race that double-fired today — Spine recWwIMc7V15p968k).
-        if (lockEnabled) {
-          claimAcquired = await kvProd.setNx(claimKey, iso, DISPATCH_CLAIM_TTL_S);
-        }
-        if (lockEnabled && !claimAcquired) {
+        // first_touch — the only path that sends SMS.
+        //
+        // CLAIM ORDERING FIX (2026-08-18, Spine recuAjsaTeP7d8XpN): the claim
+        // used to be ACQUIRED here — before the hydration/economics gates and
+        // the Firecrawl content probe — and a block in any of them `continue`d
+        // WITHOUT releasing it. A blocked record was then "idempotent-skipped"
+        // by every run for the full 24h TTL, and because the sendable queue is
+        // small, four poisoned claims (laid 2026-08-17T17:31Z) starved the
+        // entire lane to zero sends for a day. Now: a cheap read-only claim
+        // CHECK happens here (so claimed records don't burn probe credits),
+        // and the atomic setNx acquisition happens at the last moment before
+        // dispatch — after every gate. The double-fire protection the claim
+        // exists for (Spine recWwIMc7V15p968k) is unchanged: overlapping runs
+        // still race on setNx at the dispatch point, and exactly one wins.
+        const existingClaim = lockEnabled ? await kvProd.get(claimKey).catch(() => "kv_error") : null;
+        if (lockEnabled && existingClaim !== null) {
           row.error = "idempotent_skip: dispatch already claimed";
           summary.idempotent_skipped++;
         } else {
@@ -1098,6 +1106,19 @@ async function handle(req: Request): Promise<Response> {
           // accept / review verdicts → the page is live and not veto-class;
           // proceed to the send-gate floor.
 
+          // ── 0) CLAIM — atomic, at the last moment before dispatch (see the
+          // claim-ordering note above). Fail-closed: if KV is unavailable or
+          // the claim is lost to a concurrent run, nothing sends.
+          if (lockEnabled) {
+            claimAcquired = await kvProd.setNx(claimKey, iso, DISPATCH_CLAIM_TTL_S).catch(() => false);
+            if (!claimAcquired) {
+              row.error = "idempotent_skip: dispatch claimed by concurrent run";
+              summary.idempotent_skipped++;
+              processed.push(row);
+              continue;
+            }
+          }
+
           // ── 1) SEND — through the ONE choke point (lib/outreach/send-gate).
           // The gate is the FLOOR (Do_Not_Text, renovated-opener veto,
           // number-level 30m duplicate suppression, mandatory purpose +
@@ -1114,6 +1135,10 @@ async function handle(req: Request): Promise<Response> {
           if (!gated.sent) {
             row.error = `send_gate_refused: ${gated.reason}`;
             summary.errors++;
+            // No SMS went out — release the claim so the refusal (which the
+            // gate re-evaluates fresh each run) can't poison the record for
+            // the full claim TTL.
+            if (claimAcquired) await kvProd.del(claimKey).catch(() => {});
             continue;
           }
           const result = gated.result!;
