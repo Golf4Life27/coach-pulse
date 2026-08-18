@@ -26,6 +26,7 @@ import { detectEndpointErrorRate } from "./detectors/endpoint-error-rate";
 import { detectStaleDataDrift } from "./detectors/stale-data-drift";
 import { detectVoiceDrift } from "./detectors/voice-drift";
 import { detectOutreachVolumeDrop } from "./detectors/outreach-volume-drop";
+import { detectSendLaneTripwire } from "./detectors/send-lane-tripwire";
 import { detectQuoQuotaBurn } from "./detectors/quo-quota-burn";
 import { detectIntakeSignal } from "./detectors/intake-signal";
 import { detectVerificationUrlCoverage } from "./detectors/verification-url-coverage";
@@ -69,6 +70,7 @@ export function runAllDetectors(input: PulseDetectorInput): PulseDetection[] {
     ...detectStaleDataDrift(input),
     ...detectVoiceDrift(input),
     ...detectOutreachVolumeDrop(input),
+    ...detectSendLaneTripwire(input),
     ...detectQuoQuotaBurn(input),
     ...detectIntakeSignal(input),
     ...detectVerificationUrlCoverage(input),

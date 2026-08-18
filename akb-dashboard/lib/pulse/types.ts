@@ -28,6 +28,7 @@ export type PulseDetectorId =
   | "stale_data_drift"
   | "voice_drift"
   | "outreach_volume_drop"
+  | "send_lane_tripwire"
   | "quo_quota_burn"
   | "verification_url_coverage"
   | "paid_api_spend_24h"

@@ -90,6 +90,11 @@ describe("runPulseScan", () => {
       // log has only 1 entry" — these tests aren't about it.
       PULSE_CRON_SILENCE_WARNING_HOURS: "1000",
       PULSE_CRON_SILENCE_CRITICAL_HOURS: "2000",
+      // Suppress send-lane-tripwire rule B — these fixtures' audit windows
+      // legitimately contain send slots with no lane runs, and these tests
+      // aren't about it (the detector has its own suite).
+      PULSE_SEND_TRIPWIRE_MISSED_SLOTS_WARN: "999",
+      PULSE_SEND_TRIPWIRE_MISSED_SLOTS_CRIT: "999",
     },
     now: () => new Date("2026-05-18T20:00:00Z"),
   };
