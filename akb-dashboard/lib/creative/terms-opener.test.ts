@@ -25,7 +25,7 @@ describe("renderTermsOpener", () => {
     const msg = renderTermsOpener({ agentName: "Erica Winner", address: "3470 Hadley Ave", listPrice: 95000, offer: offer() });
     expect(msg).toContain("full $95,000 asking price");
     expect(msg).toContain("Hi Erica,");
-    expect(msg).toContain("$9,500 down and $350/month");
+    expect(msg).toContain("$9,500 at closing, then $350/month");
   });
 
   it("names OUR number instead when the price was value-capped", () => {
@@ -35,11 +35,20 @@ describe("renderTermsOpener", () => {
       listPrice: 257000,
       offer: offer({ price: 108500, priceCappedToValue: true }),
     });
-    expect(msg).toContain("$108,500 on terms");
+    expect(msg).toContain("$108,500 on a seller-financed structure");
     // "paid in full" legitimately appears in both variants — the claim under
     // test is that a value-capped offer never says "full ... asking price".
     expect(msg).not.toContain("full $");
     expect(msg).not.toContain("asking price");
+  });
+
+  it("leads with the agent's commission and the seller's upside in BOTH variants (operator tone directive 2026-08-18)", () => {
+    for (const capped of [true, false]) {
+      const msg = renderTermsOpener({ agentName: "A B", address: "X", listPrice: 1, offer: offer({ priceCappedToValue: capped }) });
+      expect(msg).toContain("Your commission is paid in full at closing");
+      expect(msg).toContain("more money than a cash buyer");
+      expect(msg).toContain("patient on the payout");
+    }
   });
 
   it("ALWAYS asks the mortgage question — the unknown lien is collected on first touch", () => {

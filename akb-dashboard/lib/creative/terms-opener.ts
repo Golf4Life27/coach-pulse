@@ -13,6 +13,12 @@
 // Two variants, because honesty: when our value cap pulled the price below
 // the ask we never say "full asking price" — we name our number.
 //
+// TONE DIRECTIVE (operator 2026-08-18, replacing v1 which read "gimmicky"):
+// the message is about what the AGENT and SELLER get, not about us — the
+// agent's commission is paid in full at closing like any normal sale, and
+// the seller nets more than a cash sale IF they can wait on the payout.
+// No salesman flourishes ("more total money than any cash buyer" is gone).
+//
 // PRIORITY (until PropStream lien enrichment lands): full-ask offers first
 // (the strongest pitch), then buyer cash-on-cash descending (most
 // dispo-able first). Pure functions; the route decides who is eligible.
@@ -37,15 +43,16 @@ export function renderTermsOpener(input: {
   const { offer } = input;
   const name = greetName(input.agentName);
   const priceLine = offer.priceCappedToValue
-    ? `I can do ${usd(offer.price)} on terms`
-    : `I can work with the full ${usd(offer.price)} asking price`;
+    ? `what I can do is ${usd(offer.price)} on a seller-financed structure`
+    : `I can pay the seller's full ${usd(offer.price)} asking price on a seller-financed structure`;
   return (
-    `Hi ${name}, this is Alex with AKB Solutions. I'm interested in your listing at ${input.address}. ` +
-    `Cash offers are going to come in well under the seller's number on this one, but ${priceLine} — ` +
-    `${usd(offer.downPayment)} down and ${usd(offer.monthlyPayment)}/month until they're paid in full. ` +
-    `More total money than any cash buyer, it just arrives over time. ` +
-    `The exact structure depends on what's owed on the property — does the seller own it free and clear, or is there a mortgage? ` +
-    `Happy to put it in writing if they're open.`
+    `Hi ${name}, this is Alex with AKB Solutions, about your listing at ${input.address}. ` +
+    `Cash offers on this one are going to come in well under what the seller wants. ` +
+    `If the seller can be patient on the payout, ${priceLine} — ` +
+    `${usd(offer.downPayment)} at closing, then ${usd(offer.monthlyPayment)}/month. ` +
+    `Your commission is paid in full at closing like any other sale, and the seller ends up with more money than a cash buyer will offer. ` +
+    `Does the seller own it free and clear, or is there a mortgage? That decides how we'd write it up. ` +
+    `Happy to put a formal offer in writing if they're open.`
   );
 }
 
