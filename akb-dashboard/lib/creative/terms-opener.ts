@@ -18,6 +18,7 @@
 // agent's commission is paid in full at closing like any normal sale, and
 // the seller nets more than a cash sale IF they can wait on the payout.
 // No salesman flourishes ("more total money than any cash buyer" is gone).
+// LENGTH DIRECTIVE (operator, same day): these are TEXTS — keep it tight.
 //
 // PRIORITY (until PropStream lien enrichment lands): full-ask offers first
 // (the strongest pitch), then buyer cash-on-cash descending (most
@@ -43,16 +44,15 @@ export function renderTermsOpener(input: {
   const { offer } = input;
   const name = greetName(input.agentName);
   const priceLine = offer.priceCappedToValue
-    ? `what I can do is ${usd(offer.price)} on a seller-financed structure`
-    : `I can pay the seller's full ${usd(offer.price)} asking price on a seller-financed structure`;
+    ? `I can do ${usd(offer.price)} seller-financed`
+    : `I can pay the full ${usd(offer.price)} asking price seller-financed`;
   return (
-    `Hi ${name}, this is Alex with AKB Solutions, about your listing at ${input.address}. ` +
-    `Cash offers on this one are going to come in well under what the seller wants. ` +
-    `If the seller can be patient on the payout, ${priceLine} — ` +
+    `Hi ${name} — Alex with AKB Solutions, about ${input.address}. ` +
+    `If the seller can wait on the payout, ${priceLine}: ` +
     `${usd(offer.downPayment)} at closing, then ${usd(offer.monthlyPayment)}/month. ` +
-    `Your commission is paid in full at closing like any other sale, and the seller ends up with more money than a cash buyer will offer. ` +
-    `Does the seller own it free and clear, or is there a mortgage? That decides how we'd write it up. ` +
-    `Happy to put a formal offer in writing if they're open.`
+    `Your commission is paid in full at closing, and the seller nets more than any cash offer. ` +
+    `Does the seller own it free and clear, or is there a mortgage? ` +
+    `Glad to put it in writing if they're open.`
   );
 }
 
