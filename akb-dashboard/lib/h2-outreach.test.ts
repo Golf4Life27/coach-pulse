@@ -250,6 +250,15 @@ describe("note builders", () => {
       "[H2 quarantine 2026-05-26T19:00:00.000Z] Carrier could not deliver to '+12058756959' " +
         "(status: undelivered) — number marked Dead, no retry.",
     );
+    // The Quo msg id is LOAD-BEARING: an undelivered send still exists in the
+    // live thread, and thread-truth rule (a) must find its id in some record's
+    // notes or the whole number is refused forever (2026-08-18 wedge).
+    // 30-hex id (real Quo ids are AC + 30-34 hex; a 32-hex example would
+    // trip GitHub's Twilio-SID push protection in a test fixture).
+    expect(buildDeliveryQuarantineNote(null, NOW, "+12058756959", "undelivered", "AC0123456789abcdef0123456789ab")).toBe(
+      "[H2 quarantine 2026-05-26T19:00:00.000Z] Carrier could not deliver to '+12058756959' " +
+        "(status: undelivered) Quo msg AC0123456789abcdef0123456789ab — number marked Dead, no retry.",
+    );
   });
   it("formats MAO with thousands separators and no decimals", () => {
     expect(buildH2Message("Sam", "9 Oak", 71250.4)).toContain("$71,250");

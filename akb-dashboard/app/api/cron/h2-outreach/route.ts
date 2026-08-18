@@ -1233,7 +1233,7 @@ async function handle(req: Request): Promise<Response> {
             // 1505 17th St / Angela James (+12058756959), carrier "undelivered".
             await updateListingRecord(p.recordId, {
               Outreach_Status: "Dead",
-              Verification_Notes: buildDeliveryQuarantineNote(existingNotes, iso, p.toE164!, confirmedStatus),
+              Verification_Notes: buildDeliveryQuarantineNote(existingNotes, iso, p.toE164!, confirmedStatus, result.id),
             });
             row.airtable_updated = true;
             summary.delivery_quarantined++;

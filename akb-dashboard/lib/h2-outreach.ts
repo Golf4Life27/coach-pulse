@@ -316,17 +316,24 @@ export function buildQuarantineNote(
 /** Note for the auto-quarantine of a number the carrier confirmed it could NOT
  *  deliver to (Quo terminal status undelivered/failed) — a dead/non-SMS number
  *  (landline, disconnected, hard block). Distinct from the bad-phone-FORMAT
- *  quarantine above: this one fired a real SMS that the carrier bounced. */
+ *  quarantine above: this one fired a real SMS that the carrier bounced.
+ *
+ *  THE QUO MSG ID IS LOAD-BEARING (2026-08-18, Spine recx8Q1FDLeUMQWCN): an
+ *  undelivered send still CREATES a message in the live Quo thread. When the
+ *  quarantine note omitted its id, thread-truth rule (a) saw an outbound no
+ *  record knew of and refused EVERY sibling listing on that number forever —
+ *  two of the three send-lane wedges of 2026-08-18 were exactly this. */
 export function buildDeliveryQuarantineNote(
   existing: string | null,
   iso: string,
   phone: string | null,
   status: string | null,
+  quoMessageId?: string | null,
 ): string {
   return append(
     existing,
     `[H2 quarantine ${iso}] Carrier could not deliver to '${phone ?? ""}' ` +
-      `(status: ${status ?? "unknown"}) — number marked Dead, no retry.`,
+      `(status: ${status ?? "unknown"})${quoMessageId ? ` Quo msg ${quoMessageId}` : ""} — number marked Dead, no retry.`,
   );
 }
 
