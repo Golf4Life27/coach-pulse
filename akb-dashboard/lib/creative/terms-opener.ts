@@ -43,13 +43,16 @@ export function renderTermsOpener(input: {
 }): string {
   const { offer } = input;
   const name = greetName(input.agentName);
+  // Offer sentences are OPERATOR-AUTHORED verbatim (2026-08-18): "I can offer
+  // the full $X asking price seller-financed. $Y at closing, then $Z/month
+  // until the full amount is paid."
   const priceLine = offer.priceCappedToValue
-    ? `I can do ${usd(offer.price)} seller-financed`
-    : `I can pay the full ${usd(offer.price)} asking price seller-financed`;
+    ? `I can offer ${usd(offer.price)} seller-financed`
+    : `I can offer the full ${usd(offer.price)} asking price seller-financed`;
   return (
     `Hi ${name} — Alex with AKB Solutions, about ${input.address}. ` +
-    `If the seller can wait on the payout, ${priceLine}: ` +
-    `${usd(offer.downPayment)} at closing, then ${usd(offer.monthlyPayment)}/month. ` +
+    `${priceLine}. ` +
+    `${usd(offer.downPayment)} at closing, then ${usd(offer.monthlyPayment)}/month until the full amount is paid. ` +
     `Your commission is paid in full at closing, and the seller nets more than any cash offer. ` +
     `Does the seller own it free and clear, or is there a mortgage? ` +
     `Glad to put it in writing if they're open.`
