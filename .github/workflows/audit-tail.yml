@@ -1,0 +1,77 @@
+# Audit-tail reader — controlled, read-only diagnostics.
+#
+# Surfaces the KV audit ring (/api/admin/audit-tail) so a session can read a
+# cron run's own funnel numbers (planned/sent/errors per run) without needing
+# CRON_SECRET locally. Same controlled-trigger pattern as h2-send.yml.
+# Read-only by construction: the route only reads KV.
+#
+# Required GitHub secret: CRON_SECRET (mirror of the Vercel env).
+
+name: Audit tail (read-only diagnostics)
+
+on:
+  workflow_dispatch:
+    inputs:
+      event:
+        description: "Filter to one audit event name (e.g. h2_outreach_live). Empty = all."
+        required: false
+        default: ""
+        type: string
+      record_id:
+        description: "Filter to one record's write trail (rec...). Empty = none."
+        required: false
+        default: ""
+        type: string
+      limit:
+        description: "KV entries to scan (default 500, max 1000)."
+        required: false
+        default: "500"
+        type: string
+      base_url:
+        description: "Production base URL (override only for staging tests)."
+        required: false
+        default: "https://coach-pulse-ten.vercel.app"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      EVENT: ${{ inputs.event }}
+      RECORD_ID: ${{ inputs.record_id }}
+      LIMIT: ${{ inputs.limit }}
+      BASE_URL: ${{ inputs.base_url }}
+    steps:
+      - name: Refuse to run when CRON_SECRET is missing
+        run: |
+          if [ -z "${{ secrets.CRON_SECRET }}" ]; then
+            echo "::error::CRON_SECRET is not configured as a GitHub Actions secret."
+            exit 1
+          fi
+          echo "CRON_SECRET present; proceeding."
+
+      - name: GET /api/admin/audit-tail
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          Q="limit=${LIMIT}"
+          if [ -n "${EVENT}" ]; then Q="${Q}&event=${EVENT}"; fi
+          if [ -n "${RECORD_ID}" ]; then Q="${Q}&recordId=${RECORD_ID}"; fi
+          URL="${BASE_URL}/api/admin/audit-tail?${Q}"
+          echo "GET ${URL}"
+          HTTP_CODE=$(curl -sS -o /tmp/audit.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "x-vercel-cron: 1" \
+            "${URL}")
+          echo "HTTP ${HTTP_CODE}"
+          echo "--- response body ---"
+          jq . /tmp/audit.json 2>/dev/null || cat /tmp/audit.json
+          if [ "${HTTP_CODE}" -ge 400 ]; then
+            echo "::error::audit-tail returned HTTP ${HTTP_CODE}"
+            exit 1
+          fi
