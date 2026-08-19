@@ -25,9 +25,10 @@ const offer = (over: Partial<SellerFinanceOffer> = {}): SellerFinanceOffer => ({
 describe("renderTermsOpener", () => {
   it("says FULL ASKING PRICE only when the value cap did not engage", () => {
     const msg = renderTermsOpener({ agentName: "Erica Winner", address: "3470 Hadley Ave", listPrice: 95000, offer: offer() });
-    // Offer sentence is operator-authored verbatim (2026-08-18) — pin it whole.
+    // Offer sentence is operator-authored verbatim (2026-08-18, wiggle-room
+    // clause added 2026-08-19) — pin it whole.
     expect(msg).toContain(
-      "I can offer the full $95,000 asking price seller-financed. $9,500 at closing, then $350/month until the full amount is paid.",
+      "Assuming the numbers hold, I can offer the full $95,000 asking price seller-financed. $9,500 at closing, then $350/month until the full amount is paid.",
     );
     expect(msg).toContain("Hi Erica —");
   });
@@ -39,7 +40,7 @@ describe("renderTermsOpener", () => {
       listPrice: 257000,
       offer: offer({ price: 108500, priceCappedToValue: true }),
     });
-    expect(msg).toContain("$108,500 seller-financed");
+    expect(msg).toContain("Assuming the numbers hold, I can offer $108,500 seller-financed");
     // "paid in full" legitimately appears in both variants — the claim under
     // test is that a value-capped offer never says "full ... asking price".
     expect(msg).not.toContain("full $");
@@ -55,14 +56,28 @@ describe("renderTermsOpener", () => {
     }
   });
 
-  it("stays text-sized (operator length directive 2026-08-18): under 400 chars on realistic inputs", () => {
+  it("conditions the NUMBER pre-contract in both variants, and never stacks a second hedge (operator 2026-08-19)", () => {
+    for (const capped of [true, false]) {
+      const msg = renderTermsOpener({ agentName: "A B", address: "X", listPrice: 1, offer: offer({ priceCappedToValue: capped }) });
+      // The clause sits before the price so an adjustment is contemplated, not a retrade.
+      expect(msg).toContain("Assuming the numbers hold, I can offer");
+      // Contract-stage contingency language would push discovery into escrow —
+      // wasted time and effort. Pre-contract conditioning only.
+      expect(msg).not.toMatch(/subject to|contingent (up)?on|pending inspection/i);
+    }
+  });
+
+  // Cap raised 420 → 450 on 2026-08-19 to fund the operator's wiggle-room
+  // clause (+27 chars). Deliberate, not drift: 450 is still ~3 SMS segments,
+  // and the alternative was cutting meaning out of an operator-authored line.
+  it("stays text-sized (operator length directive 2026-08-18): under 450 chars on realistic inputs", () => {
     const msg = renderTermsOpener({
       agentName: "Lakesha \"Lilly\" Leatherwood",
       address: "759 Brandywine Blvd, Memphis, TN 38127",
       listPrice: 128500,
       offer: offer({ price: 128500, downPayment: 12850, monthlyPayment: 425 }),
     });
-    expect(msg.length).toBeLessThan(420);
+    expect(msg.length).toBeLessThan(450);
   });
 
   it("ALWAYS asks the mortgage question — the unknown lien is collected on first touch", () => {

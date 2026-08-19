@@ -43,15 +43,33 @@ export function renderTermsOpener(input: {
 }): string {
   const { offer } = input;
   const name = greetName(input.agentName);
-  // Offer sentences are OPERATOR-AUTHORED verbatim (2026-08-18): "I can offer
-  // the full $X asking price seller-financed. $Y at closing, then $Z/month
-  // until the full amount is paid."
+  // Offer sentences are OPERATOR-AUTHORED verbatim (2026-08-18): "Assuming the
+  // numbers hold, I can offer the full $X asking price seller-financed. $Y at
+  // closing, then $Z/month until the full amount is paid."
+  //
+  // WIGGLE-ROOM CLAUSE (operator 2026-08-19, after 1016 43rd Pl): this lane
+  // offers 100% of ask — unlike cash at 40-65%, it has ZERO cushion. A hard
+  // "I can offer $118,000" got an instant yes on a gut-stage flip our math
+  // could not actually support, leaving a retrade or a dead deal as the only
+  // exits.
+  //
+  // WHY THIS CLAUSE AND NOT A CONTINGENCY (operator's reasoning, verbatim
+  // intent): "subject to walkthrough / inspection" is a CONTRACT contingency —
+  // it only pays out AFTER papering, so discovery happens in escrow and the
+  // exit is backing out: wasted time, wasted effort, burned agent. "Assuming
+  // the numbers hold" conditions the OFFER, PRE-contract, so the adjustment
+  // happens in conversation before anyone spends anything. Same protection,
+  // spent at the cheap end of the funnel.
+  //
+  // Placed BEFORE the number so a later adjustment reads as contemplated, not
+  // as a retrade. ONE hedge only — stacking them reads as someone who can't
+  // close, and the confident number is what earns the reply.
   const priceLine = offer.priceCappedToValue
     ? `I can offer ${usd(offer.price)} seller-financed`
     : `I can offer the full ${usd(offer.price)} asking price seller-financed`;
   return (
     `Hi ${name} — Alex with AKB Solutions, about ${input.address}. ` +
-    `${priceLine}. ` +
+    `Assuming the numbers hold, ${priceLine}. ` +
     `${usd(offer.downPayment)} at closing, then ${usd(offer.monthlyPayment)}/month until the full amount is paid. ` +
     `Your commission is paid in full at closing, and the seller nets more than any cash offer. ` +
     `Does the seller own it free and clear, or is there a mortgage? ` +
