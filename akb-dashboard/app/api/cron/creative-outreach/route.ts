@@ -34,6 +34,7 @@ import { NextResponse } from "next/server";
 import { getListings, updateListingRecord } from "@/lib/airtable";
 import { audit } from "@/lib/audit-log";
 import { outreachReadyReason } from "@/lib/h2-outreach";
+import { normalizePhone } from "@/lib/phone-normalize";
 import { evaluateSendWindow } from "@/lib/h2-working-hours";
 import { verifyListing, classifyVerifiedListing } from "@/lib/crawler/sources/firecrawl";
 import { checkFirecrawlBreaker } from "@/lib/crawler/firecrawl-circuit-breaker";
@@ -139,6 +140,7 @@ export async function GET(req: Request) {
     rentBasis: string;
     body: string;
     enrichment: PropStreamEnrichment | null;
+    toE164: string;
   };
   const queue: Candidate[] = [];
   let eligibleCount = 0;
@@ -229,6 +231,13 @@ export async function GET(req: Request) {
     );
     if (sf.verdict !== "sendable_terms") continue;
     if (!l.address || !l.agentPhone) continue;
+    // E.164 — Airtable stores agent phones as bare 10-digit strings; Quo's
+    // API 400s anything not ^\+[1-9]\d{1,14}$. The cash lane normalizes in
+    // its planner; v1 of this route passed the raw field and the entire
+    // first live run (2026-08-18 21:35Z) refused as thread_truth_unavailable
+    // on Quo 400s. Same normalizer, unroutable numbers drop here.
+    const toE164 = normalizePhone(l.agentPhone);
+    if (!toE164) continue;
 
     queue.push({
       l,
@@ -236,6 +245,7 @@ export async function GET(req: Request) {
       rentBasis,
       body: renderTermsOpener({ agentName: l.agentName, address: l.address, listPrice: l.listPrice!, offer: sf }),
       enrichment,
+      toE164,
     });
   }
 
@@ -366,7 +376,7 @@ export async function GET(req: Request) {
     }
 
     const gate = await sendGuarded({
-      to: c.l.agentPhone!,
+      to: c.toE164,
       body: c.body,
       purpose: "first_touch",
       recordId: c.l.id,
