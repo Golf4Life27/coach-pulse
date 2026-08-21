@@ -66,6 +66,11 @@ export const CORROB_PSF_MAX = (() => {
  *  no-evidence tail. */
 const CORROB_UNVERIFIED_BASIS_ENFORCE = process.env.CORROB_UNVERIFIED_BASIS_ENFORCE !== "false";
 
+/** Off-switch for the opener-exceeds-ARV rail (default ON). A cash opener at
+ *  or above the finished value is a logical impossibility for a wholesale;
+ *  only disable to deliberately re-open it. */
+const CORROB_OPENER_OVER_ARV_ENFORCE = process.env.CORROB_OPENER_OVER_ARV_ENFORCE !== "false";
+
 export interface CorroborationInput {
   /** The candidate opener the pricer produced (null ⇒ already a HOLD, nothing
    *  to corroborate). */
@@ -105,7 +110,8 @@ export type CorroborationFlag =
   | "capped_untrusted_arv"     // opener only survived by clamping to list, on a non-STRONG ARV
   | "infeasible_ask"           // even the ZERO-rehab best case is hopelessly under the ask
   | "avm_priced_seed"          // the seed's "comps" are model estimates, not transactions
-  | "unverified_value_basis";  // ZERO usable own comps — no transaction evidence for THIS property
+  | "unverified_value_basis"   // ZERO usable own comps — no transaction evidence for THIS property
+  | "opener_exceeds_arv";      // the cash opener is at/above the finished value it was priced against
 
 export interface CorroborationResult {
   /** True ⇒ every signal corroborates the opener; safe to send. False ⇒ HOLD. */
@@ -233,6 +239,31 @@ export function corroborateOpener(input: CorroborationInput): CorroborationResul
           `(> ${CORROB_ARV_LIST_MAX_RATIO}× ceiling) — ARV basis implausibly high`,
       );
     }
+  }
+
+  // 2b. OPENER EXCEEDS ARV (2026-08-20, the Chalmers/Euclid/Wilbeth subset).
+  //     A cash wholesale opener can NEVER sit at or above the finished value
+  //     it was priced against — there is no room left for the end buyer's
+  //     rehab, our fee, or their profit. The value-anchored formula makes this
+  //     impossible on its own (opener = anchor × (ARV×buybox − rehab − fee) ≤
+  //     ARV×buybox < ARV), so an opener over ARV means a non-value-anchored
+  //     path produced it (a legacy list-fraction number) or the ARV was later
+  //     revised down. Live evidence at build time: 257 Chalmers offered
+  //     $248,500 on a $190,446 ARV (+30%), 818 Euclid $47,750 on $39,723
+  //     (+20%), 1214 W Wilbeth $65,000 on $62,250 (+4%). A hard invariant, not
+  //     a margin check: it fires only when the number is logically upside-down,
+  //     so it cannot over-hold the healthy book.
+  if (
+    CORROB_OPENER_OVER_ARV_ENFORCE &&
+    pos(input.opener) &&
+    pos(input.arvUsed) &&
+    input.opener > input.arvUsed
+  ) {
+    flags.push("opener_exceeds_arv");
+    reasons.push(
+      `opener $${input.opener.toLocaleString()} is at/above the ARV $${input.arvUsed.toLocaleString()} ` +
+        "it was priced against — no room for rehab, fee, or buyer profit; the number is upside-down",
+    );
   }
 
   // 3. $/SQFT OUT OF RANGE — a junk seed $/sqft (bad sqft, unit/decimal error).

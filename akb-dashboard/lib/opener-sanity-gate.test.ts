@@ -231,3 +231,37 @@ describe("unverified_value_basis", () => {
     expect(r.flags).toHaveLength(0);
   });
 });
+
+// ── OPENER EXCEEDS ARV (2026-08-20, the Chalmers/Euclid/Wilbeth subset) ─────
+// A cash opener at or above the finished value is logically upside-down: no
+// room for the end buyer's rehab, our fee, or their profit.
+describe("opener_exceeds_arv", () => {
+  const base = {
+    listPrice: 346000, sqft: 1500, cappedToList: false,
+    arvConfidence: "THIN" as const, ownComps: { parsed: 5, usable: 3 },
+  };
+
+  it("HOLDS the 257 Chalmers shape: $248,500 opener on a $190,446 ARV", () => {
+    const r = corroborateOpener({ ...base, opener: 248500, arvUsed: 190446 });
+    expect(r.corroborated).toBe(false);
+    expect(r.flags).toContain("opener_exceeds_arv");
+    expect(r.reasons.join(" ")).toMatch(/upside-down/);
+  });
+
+  it("HOLDS a marginal over-ARV (818 Euclid: $47,750 on $39,723)", () => {
+    expect(corroborateOpener({ ...base, opener: 47750, arvUsed: 39723 }).flags).toContain("opener_exceeds_arv");
+  });
+
+  it("does NOT fire on a healthy value-anchored opener well under ARV", () => {
+    expect(corroborateOpener({ ...base, opener: 45250, arvUsed: 120000 }).flags).not.toContain("opener_exceeds_arv");
+  });
+
+  it("does NOT fire at exactly ARV or when ARV is absent", () => {
+    expect(corroborateOpener({ ...base, opener: 100000, arvUsed: 100000 }).flags).not.toContain("opener_exceeds_arv");
+    expect(corroborateOpener({ ...base, opener: 50000, arvUsed: null }).flags).not.toContain("opener_exceeds_arv");
+  });
+
+  it("stays silent when there is no opener to send", () => {
+    expect(corroborateOpener({ ...base, opener: null, arvUsed: 190446 }).flags).toHaveLength(0);
+  });
+});
