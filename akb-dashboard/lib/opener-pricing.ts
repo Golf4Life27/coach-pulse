@@ -177,6 +177,11 @@ export function priceOpenerWithSeed(input: OpenerWithSeedInput): OpenerWithSeedR
     // record's own comps, not the ZIP seed the pricer just declined to use.
     seed: arvSource === "own_comps" ? { receiptsJson: own.receiptsJson } : (input.seed ?? null),
     renovatedPerSqft: psfUsed,
+    // Block-level evidence count: how many of the RECORD'S OWN comps were
+    // usable. Zero ⇒ the ARV is a ZIP average with nothing local behind it,
+    // and the gate holds rather than sending a false-precise number (2849
+    // Mcguffey, 2026-08-20).
+    ownComps: { parsed: own.parsedCompCount, usable: own.compCount },
     bestCaseOpener: result.bestCaseOpener,
   });
 

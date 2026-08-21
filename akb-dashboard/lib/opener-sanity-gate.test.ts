@@ -190,3 +190,44 @@ describe("avm_priced_seed — comps that are model guesses, not sales (Dallas 75
     expect(r.flags).not.toContain("avm_priced_seed");
   });
 });
+
+// ── UNVERIFIED VALUE BASIS (2026-08-20, the 2849 Mcguffey incident) ─────────
+// The record's own sold comps are the only block-level evidence we get. Zero
+// usable comps ⇒ the ARV is a ZIP average, and a ZIP is not a block.
+describe("unverified_value_basis", () => {
+  const base = {
+    opener: 45250,
+    listPrice: 66000,
+    arvUsed: 120000,
+    sqft: 1378,
+    cappedToList: false,
+    arvConfidence: "THIN" as const,
+  };
+
+  it("HOLDS the Mcguffey shape: a confident cash number on ZERO usable own comps", () => {
+    const r = corroborateOpener({ ...base, ownComps: { parsed: 44, usable: 0 } });
+    expect(r.corroborated).toBe(false);
+    expect(r.flags).toContain("unverified_value_basis");
+    expect(r.reasons.join(" ")).toMatch(/ZIP-level average/);
+  });
+
+  it("does NOT fire when the record has real own-comp evidence", () => {
+    const r = corroborateOpener({ ...base, ownComps: { parsed: 5, usable: 3 } });
+    expect(r.flags).not.toContain("unverified_value_basis");
+  });
+
+  it("fails toward SENDING when the record has NO comp data — unknown is not disproven", () => {
+    expect(corroborateOpener({ ...base, ownComps: { parsed: 0, usable: 0 } }).flags).not.toContain("unverified_value_basis");
+  });
+
+  it("fails toward SENDING when evidence is absent entirely", () => {
+    expect(corroborateOpener({ ...base, ownComps: null }).flags).not.toContain("unverified_value_basis");
+    expect(corroborateOpener({ ...base }).flags).not.toContain("unverified_value_basis");
+  });
+
+  it("stays silent when there is no opener to send (already a HOLD)", () => {
+    const r = corroborateOpener({ ...base, opener: null, ownComps: { parsed: 44, usable: 0 } });
+    expect(r.corroborated).toBe(true);
+    expect(r.flags).toHaveLength(0);
+  });
+});

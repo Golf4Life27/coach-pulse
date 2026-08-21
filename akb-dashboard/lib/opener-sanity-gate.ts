@@ -61,6 +61,11 @@ export const CORROB_PSF_MAX = (() => {
   return Number.isFinite(raw) && raw > 0 ? raw : 600;
 })();
 
+/** Off-switch for the unverified-value-basis rail (default ON). Set
+ *  CORROB_UNVERIFIED_BASIS_ENFORCE=false only to deliberately re-open the
+ *  no-evidence tail. */
+const CORROB_UNVERIFIED_BASIS_ENFORCE = process.env.CORROB_UNVERIFIED_BASIS_ENFORCE !== "false";
+
 export interface CorroborationInput {
   /** The candidate opener the pricer produced (null ⇒ already a HOLD, nothing
    *  to corroborate). */
@@ -80,6 +85,13 @@ export interface CorroborationInput {
   seed?: Pick<ZipArvSeed, "receiptsJson"> | null;
   /** Seed renovated $/sqft, for the absolute-$/sqft sanity bound. */
   renovatedPerSqft?: number | null;
+  /** The record's OWN sold-comp evidence: how many entries PARSED from its
+   *  comp JSON, and how many were USABLE (recent, non-excluded). The pair is
+   *  what makes the signal honest — `parsed > 0 && usable === 0` means comps
+   *  exist and every one is stale, i.e. affirmatively NO current evidence.
+   *  `parsed === 0` means the record has no comp data at all, which is
+   *  unknown, not disproven, and is never flagged here. */
+  ownComps?: { parsed: number; usable: number } | null;
   /** The ZERO-REHAB twin of the opener (per-market-pricer bestCaseOpener) —
    *  the most generous number the formula can ever produce for this deal.
    *  Used only by the infeasible_ask signal; never sent. */
@@ -92,7 +104,8 @@ export type CorroborationFlag =
   | "psf_out_of_range"         // renovated $/sqft outside sane absolute bounds
   | "capped_untrusted_arv"     // opener only survived by clamping to list, on a non-STRONG ARV
   | "infeasible_ask"           // even the ZERO-rehab best case is hopelessly under the ask
-  | "avm_priced_seed";         // the seed's "comps" are model estimates, not transactions
+  | "avm_priced_seed"          // the seed's "comps" are model estimates, not transactions
+  | "unverified_value_basis";  // ZERO usable own comps — no transaction evidence for THIS property
 
 export interface CorroborationResult {
   /** True ⇒ every signal corroborates the opener; safe to send. False ⇒ HOLD. */
@@ -169,6 +182,43 @@ export function corroborateOpener(input: CorroborationInput): CorroborationResul
       flags.push("avm_priced_seed");
       reasons.push(q.detail);
     }
+  }
+
+  // 1c. UNVERIFIED VALUE BASIS (2026-08-20, the 2849 Mcguffey incident).
+  //     The record's OWN sold comps are the only block-level evidence we ever
+  //     get. When ZERO of them are usable — every comp stale/excluded — the ARV
+  //     came entirely from a ZIP-wide average, and a ZIP is not a block.
+  //
+  //     Mcguffey: 44505's ZIP median list is ~$145k (renovated North Side) but
+  //     the McGuffey Rd pocket transacts at $7k-$41k. Zero usable own comps,
+  //     LOW stored confidence, ARV_Comp_Count 0 — and the lane still fired a
+  //     confident $45,250 cash number that the SELLER ACCEPTED. Nothing in the
+  //     stack objected, because every other rail audits the arithmetic rather
+  //     than asking whether any transaction evidence exists at all.
+  //
+  //     The system already KNEW (it stamped the record LOW / 0 comps); it had
+  //     no gate that acted on knowing. This is that gate: no evidence for THIS
+  //     property ⇒ no hard number. Measured blast radius at build time: 16 of
+  //     405 sent offers (4%) — the thin tail, not the book.
+  //
+  //     Fires ONLY on affirmative absence — comps exist and every one is stale.
+  //     A record with NO comp data at all is unknown, not disproven, and is
+  //     left alone: holding on "we could not tell" would darken the whole lane,
+  //     the over-correction the operator explicitly ruled out. (Whether the
+  //     no-data tail should also hold is a day-21 question, not this gate's.)
+  if (
+    CORROB_UNVERIFIED_BASIS_ENFORCE &&
+    input.ownComps &&
+    input.ownComps.parsed > 0 &&
+    input.ownComps.usable === 0
+  ) {
+    flags.push("unverified_value_basis");
+    reasons.push(
+      `all ${input.ownComps.parsed} of the record's own sold comps are stale/excluded — ` +
+        "zero current transaction evidence for this property; " +
+        "the ARV rests on a ZIP-level average, which cannot price a block. " +
+        "HOLD for a value check before any hard number goes out",
+    );
   }
 
   // 2. ARV IMPLAUSIBLE VS LIST — an independent read on the ARV basis that does

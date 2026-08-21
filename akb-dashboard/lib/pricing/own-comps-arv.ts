@@ -115,6 +115,11 @@ export interface OwnCompsArvResult {
   psf: number | null;
   psfSource: "size_fit" | "median" | null;
   compCount: number;
+  /** How many comp entries PARSED out of the record's JSON, before any
+   *  usability filtering (stale, self-print, dupe). Lets callers tell
+   *  "comps exist but none are current" (no evidence) apart from "this
+   *  record has no comps field at all" (unknown). */
+  parsedCompCount: number;
   /** Data-quality label for reports; the PRICER treats own_comps as THIN
    *  regardless until the renovated-cluster upgrade lands. */
   confidence: "STRONG" | "THIN" | null;
@@ -147,6 +152,23 @@ function withinDays(a: string | null, b: string | null, days: number): boolean {
  *  pricing from. Accepts both the bare-array shape the appraiser writes and a
  *  {comps:[…]} wrapper; drops exclusion receipts, the subject's own print,
  *  double-recorded deeds, and portfolio-deed signatures. */
+/** Pure: how many comp entries the record's JSON contains BEFORE usability
+ *  filtering. Distinguishes "comps exist but all stale" (no evidence) from
+ *  "no comp data at all" (unknown) for the corroboration gate. */
+export function countParsedOwnComps(raw: string | null | undefined): number {
+  if (!raw || typeof raw !== "string") return 0;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.length;
+    if (typeof parsed === "object" && parsed !== null && Array.isArray((parsed as { comps?: unknown }).comps)) {
+      return (parsed as { comps: unknown[] }).comps.length;
+    }
+    return 0;
+  } catch {
+    return 0;
+  }
+}
+
 export function parseOwnComps(
   raw: string | null | undefined,
   now: Date = new Date(),
@@ -234,8 +256,9 @@ export function ownCompsArv(input: {
   sqft?: number | null;
   now?: Date;
 }): OwnCompsArvResult {
+  const parsedCompCount = countParsedOwnComps(input.compsJson);
   const fail = (reason: string, compCount = 0): OwnCompsArvResult => ({
-    ok: false, arv: null, psf: null, psfSource: null, compCount,
+    ok: false, arv: null, psf: null, psfSource: null, compCount, parsedCompCount,
     confidence: null, reason, receiptsJson: null, usable: [],
   });
 
@@ -281,6 +304,7 @@ export function ownCompsArv(input: {
     psf,
     psfSource,
     compCount: usable.length,
+    parsedCompCount,
     confidence: usable.length >= OWN_COMPS_STRONG_COUNT ? "STRONG" : "THIN",
     reason: null,
     receiptsJson,
