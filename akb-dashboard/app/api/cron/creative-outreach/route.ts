@@ -33,7 +33,8 @@
 import { NextResponse } from "next/server";
 import { getListings, updateListingRecord } from "@/lib/airtable";
 import { audit } from "@/lib/audit-log";
-import { outreachReadyReason } from "@/lib/h2-outreach";
+import { outreachReadyReason, buildDeliveryQuarantineNote } from "@/lib/h2-outreach";
+import { getMessageStatus } from "@/lib/quo";
 import { normalizePhone } from "@/lib/phone-normalize";
 import { evaluateSendWindow } from "@/lib/h2-working-hours";
 import { verifyListing, classifyVerifiedListing } from "@/lib/crawler/sources/firecrawl";
@@ -72,6 +73,14 @@ const DEFAULT_LIMIT = 5;
 const MAX_LIMIT = 15;
 const CLAIM_PREFIX = "creative:dispatch:";
 const CLAIM_TTL_S = 60 * 60 * 24 * 90; // one first touch per record, ~forever
+
+// Delivery-confirmation polling — same envs as the cash lane so ops tuning
+// applies to both. A 2xx from Quo means QUEUED, not DELIVERED; Texted is
+// only stamped on a confirmed terminal success (2026-08-22 external review,
+// Pass B #7 — this lane was stamping Texted on dispatch).
+const POLL_ATTEMPTS = Number(process.env.H2_CRON_POLL_ATTEMPTS ?? "6");
+const POLL_DELAY_MS = Number(process.env.H2_CRON_POLL_DELAY_MS ?? "5000");
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export async function GET(req: Request) {
   const t0 = Date.now();
@@ -272,6 +281,9 @@ export async function GET(req: Request) {
   let claimed = 0;
   let outsideHours = 0;
   let refused = 0;
+  let deliveredCount = 0;
+  let unconfirmedCount = 0;
+  let quarantinedCount = 0;
   const probe = { probes: 0, credits_used: 0, disposed_inactive: 0, content_rejected: 0, infra_skipped: 0 };
   const probeBreaker = dryRun ? null : await checkFirecrawlBreaker().catch(() => null);
 
@@ -355,17 +367,19 @@ export async function GET(req: Request) {
       }
     }
 
-    // Claim BEFORE send: a crashed run must never double-text.
+    // Claim BEFORE send: a crashed run must never double-text. ATOMIC setNx
+    // (2026-08-22 external review, Pass B #2): the v1 get-then-setEx pair let
+    // two overlapping runs both observe "no claim" and both send — the same
+    // race h2's dispatch claim already closes. Exactly one setNx wins.
     if (kvConfigured()) {
       try {
         const key = `${CLAIM_PREFIX}${c.l.id}`;
-        const existing = await kvProd.get(key);
-        if (existing) {
+        const acquired = await kvProd.setNx(key, new Date().toISOString(), CLAIM_TTL_S);
+        if (!acquired) {
           row.action = "idempotent_skipped";
           claimed++;
           continue;
         }
-        await kvProd.setEx(key, new Date().toISOString(), CLAIM_TTL_S);
       } catch {
         row.action = "kv_unavailable_skipped"; // fail toward NOT sending
         continue;
@@ -381,6 +395,20 @@ export async function GET(req: Request) {
       purpose: "first_touch",
       recordId: c.l.id,
       agent: "crier",
+      // The gate's compliance vetoes — doNotText, Blacklist/operator-kill,
+      // NEVER_RESURFACE, renovated — CANNOT fire when listing is omitted, and
+      // v1 of this route omitted it (2026-08-22 external review, Pass B #1;
+      // fourth rail-parity miss). Queue-build eligibility checked these flags
+      // earlier, but data can change between selection and dispatch — the
+      // choke point gets the same fresh snapshot the cash lane passes.
+      listing: {
+        doNotText: c.l.doNotText,
+        renovatedLanguage: c.l.renovatedLanguage ?? null,
+        blacklist: c.l.blacklist ?? null,
+        address: c.l.address,
+        notes: c.l.notes,
+        lastInboundAt: c.l.lastInboundAt,
+      },
       auditContext: { lane: "creative_terms", price: c.offer.price, monthly: c.offer.monthlyPayment, rent_basis: c.rentBasis },
     });
     if (!gate.sent) {
@@ -399,17 +427,78 @@ export async function GET(req: Request) {
     row.action = "sent";
     row.quo_message_id = gate.result?.id ?? null;
 
+    // ── CONFIRM via message-status polling (2026-08-22 external review, Pass
+    // B #7 — h2 parity). A 2xx from Quo means QUEUED, not DELIVERED. Three
+    // outcomes: confirmed success → Texted; confirmed carrier failure →
+    // auto-quarantine Dead + claim released (dead number, never re-fire);
+    // unconfirmed → the sticky receipt (WITH the Quo msg id, so thread-truth
+    // stays informed) but NOT Texted — quo-sync/reconcile flips the status
+    // when the delivery surfaces. The claim is KEPT on unconfirmed: the SMS
+    // may have landed, and a re-text is worse than a stale status.
+    const msgId = gate.result?.id ?? null;
+    let delivered = false;
+    let terminalFailure = false;
+    let confirmedStatus: string | null = gate.result?.status ?? null;
+    if (msgId) {
+      for (let attempt = 0; attempt < POLL_ATTEMPTS; attempt++) {
+        await sleep(POLL_DELAY_MS);
+        try {
+          const st = await getMessageStatus(msgId);
+          confirmedStatus = st.status;
+          if (st.isTerminal) {
+            delivered = st.isSuccess;
+            terminalFailure = !st.isSuccess;
+            break;
+          }
+        } catch (err) {
+          row.poll_error = String(err).slice(0, 120);
+        }
+      }
+    } else {
+      row.poll_error = "send returned no message id — cannot confirm";
+    }
+    row.confirmed_status = confirmedStatus;
+    row.delivered = delivered;
+    if (delivered) deliveredCount++;
+    else if (!terminalFailure) unconfirmedCount++;
+
     const iso = new Date().toISOString();
     const existingNotes = c.l.notes ?? "";
+    if (terminalFailure) {
+      row.action = "delivery_quarantined";
+      quarantinedCount++;
+      await updateListingRecord(c.l.id, {
+        Outreach_Status: "Dead",
+        Verification_Notes: buildDeliveryQuarantineNote(existingNotes, iso, c.toE164, confirmedStatus, msgId),
+      }).catch((err) => {
+        row.airtable_error = String(err).slice(0, 160);
+      });
+      await audit({
+        agent: "crier",
+        event: "creative_delivery_quarantine",
+        status: "confirmed_failure",
+        recordId: c.l.id,
+        externalId: msgId ?? undefined,
+        inputSummary: { phone: c.toE164, confirmedStatus },
+        outputSummary: { quarantined: true, reason: `carrier ${confirmedStatus ?? "undelivered"}` },
+      }).catch(() => {});
+      // Dead record leaves the queue — free the 90-day claim.
+      if (kvConfigured()) await kvProd.del(`${CLAIM_PREFIX}${c.l.id}`).catch(() => {});
+      continue;
+    }
+    const receiptNote =
+      `${existingNotes ? existingNotes + "\n\n" : ""}[CREATIVE terms ${delivered ? "sent" : "sent (delivery unconfirmed)"} ${iso}] Quo msg ${msgId ?? "?"}: ` +
+      `price $${c.offer.price}${c.offer.priceCappedToValue ? " (value-capped, ask $" + c.l.listPrice + ")" : " (full ask)"}, ` +
+      `$${c.offer.downPayment} down, $${c.offer.monthlyPayment}/mo x ${c.offer.termMonths}mo` +
+      `${c.offer.balloonAmount > 0 ? ` + balloon $${c.offer.balloonAmount} at month ${c.offer.termMonths}` : ""}, ` +
+      `rent basis ${c.rentBasis}. Mortgage status asked in opener.`;
     await updateListingRecord(c.l.id, {
-      Outreach_Status: "Texted",
+      // Texted ONLY on confirmed delivery; the unconfirmed receipt still
+      // carries the exact number texted + the Quo id (sticky truth), and the
+      // reconcile lane upgrades the status once Quo shows terminal success.
+      ...(delivered ? { Outreach_Status: "Texted" } : {}),
       Opener_Basis: "seller_finance_terms_v1",
-      Verification_Notes:
-        `${existingNotes ? existingNotes + "\n\n" : ""}[CREATIVE terms sent ${iso}] Quo msg ${gate.result?.id ?? "?"}: ` +
-        `price $${c.offer.price}${c.offer.priceCappedToValue ? " (value-capped, ask $" + c.l.listPrice + ")" : " (full ask)"}, ` +
-        `$${c.offer.downPayment} down, $${c.offer.monthlyPayment}/mo x ${c.offer.termMonths}mo` +
-        `${c.offer.balloonAmount > 0 ? ` + balloon $${c.offer.balloonAmount} at month ${c.offer.termMonths}` : ""}, ` +
-        `rent basis ${c.rentBasis}. Mortgage status asked in opener.`,
+      Verification_Notes: receiptNote,
     }).catch((err) => {
       row.airtable_error = String(err).slice(0, 160);
     });
@@ -437,6 +526,9 @@ export async function GET(req: Request) {
     planned: planned.length,
     daily: { cap: dailyCap, used_at_start: usedAtStart, allowed_this_run: daily.maxPerRunToday, meter_readable: meterReadable },
     sent,
+    delivered: deliveredCount,
+    unconfirmed: unconfirmedCount,
+    delivery_quarantined: quarantinedCount,
     idempotent_skipped: claimed,
     outside_hours: outsideHours,
     refused,
