@@ -14,8 +14,9 @@
 //
 // RAILS — the same stack the cash lane runs on, in the same order:
 //   1. H2_OUTREACH_HARD_DISABLE master kill covers this lane too (503).
-//   2. CREATIVE_OUTREACH_LIVE === "false" ⇒ forced dry regardless of params —
-//      the per-lane kill (the operator approved the template 2026-08-18).
+//   2. CREATIVE_OUTREACH_LIVE must be EXPLICITLY "true" or every run is
+//      forced dry — the per-lane switch (explicit opt-in since 2026-08-23;
+//      an absent, deleted, or malformed var means DARK, never sending).
 //   3. dry_run default TRUE; live needs an explicit ?dry_run=false.
 //   4. isH2Eligible does eligibility (v2, fresh, status, phone, renovated
 //      veto); evaluateSendWindow does quiet hours (TCPA, non-disableable);
@@ -110,12 +111,14 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "outreach_hard_disabled" }, { status: 503 });
   }
 
-  // ── Lane flag: LIVE since 2026-08-18 — the operator approved the v4 terms
-  // template and the 5-year balloon default and ordered the flip ("Build the
-  // 5-year balloon default, then flip the lane live", spine reczqSOSqJ3MTY9fi).
-  // CREATIVE_OUTREACH_LIVE=false in Vercel darkens this lane alone;
+  // ── Lane flag: LIVE since 2026-08-18 (operator ordered the flip, spine
+  // reczqSOSqJ3MTY9fi); EXPLICIT OPT-IN since 2026-08-23 (external review +
+  // operator, after setting CREATIVE_OUTREACH_LIVE=true in Vercel first).
+  // v1 was `!== "false"` — live-by-default, so an absent, deleted, or
+  // malformed var silently ENABLED a lane that texts real people. Now only
+  // the exact string "true" goes live; anything else forces dry-run.
   // H2_OUTREACH_HARD_DISABLE remains the master kill for every SMS lane.
-  const laneLive = process.env.CREATIVE_OUTREACH_LIVE !== "false";
+  const laneLive = process.env.CREATIVE_OUTREACH_LIVE === "true";
   const dryRun = !laneLive || url.searchParams.get("dry_run") !== "false";
 
   const limitRaw = Number(url.searchParams.get("limit"));
