@@ -95,7 +95,13 @@ export function runAllDetectors(input: PulseDetectorInput): PulseDetection[] {
 // him to ignore the channel, which is how the next real outage gets missed.
 // Widen via PULSE_PAGING_DETECTORS (comma-separated detector_ids) rather than
 // by loosening this default.
-const DEFAULT_PAGING_DETECTORS = ["vendor_health", "firecrawl_payment_required"];
+// send_lane_tripwire added 2026-08-23: the tripwire was BUILT to page (its
+// whole spec — "the system now notices its own zero-send failures" — assumed
+// the operator hears about it), but it was never added here, so the 2026-08-23
+// 0-for-10 creative slots fired the detection into the Spine at 16:25Z and the
+// operator's phone stayed silent. A watchdog whose bark stops at the filing
+// cabinet is the 2026-08-04 silent-403 incident with extra steps.
+const DEFAULT_PAGING_DETECTORS = ["vendor_health", "firecrawl_payment_required", "send_lane_tripwire"];
 
 function pagingDetectors(env: Record<string, string | undefined>): Set<string> {
   const raw = env.PULSE_PAGING_DETECTORS;

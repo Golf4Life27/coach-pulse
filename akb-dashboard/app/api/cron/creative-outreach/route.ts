@@ -264,7 +264,18 @@ export async function GET(req: Request) {
   // Lien-aware ordering: free-and-clear > absentee > last-cash-buyer tiers,
   // then the offer-quality score (full-ask first, buyer CoC tiebreak).
   queue.sort((a, b) => creativePriority(b.offer, b.enrichment) - creativePriority(a.offer, a.enrichment));
-  const planned = queue.slice(0, limit);
+  // ── Candidate pool vs send cap (2026-08-23, the Sunday 0-for-10 live-lock).
+  // The gate-parity fix armed thread-truth on this lane, and refusals turned
+  // out to CLUSTER: brokerage switchboard numbers with any recent inbound
+  // refuse every property they carry (doctrine-correct, Canfield rule). v1
+  // planned exactly `limit` candidates, so when the deterministic top-10 all
+  // refused, the slot sent zero — and the next slot rebuilt the SAME top-10:
+  // both 2026-08-23 slots went 0/10 while 127 sendable candidates below never
+  // got tried. Cash-lane parity: try a DEEPER pool, stop at `limit` actual
+  // sends. TRY_FACTOR bounds the Firecrawl probe spend a refusal-heavy slot
+  // can burn (the hourly breaker still rides on top of it).
+  const TRY_FACTOR = 3;
+  const planned = queue.slice(0, limit * TRY_FACTOR);
 
   // ── Shared daily meter (cash + creative bounded together).
   const dailyCap = readDailySendCap();
@@ -277,7 +288,9 @@ export async function GET(req: Request) {
       meterReadable = false;
     }
   } else meterReadable = false;
-  const daily = governDailySends({ maxPerRun: planned.length, dailyCap, usedToday: meterReadable ? usedAtStart : null });
+  // maxPerRun is the SEND cap (`limit`), not the candidate-pool size — the
+  // pool is deliberately deeper so refusals skip to the next candidate.
+  const daily = governDailySends({ maxPerRun: Math.min(limit, planned.length), dailyCap, usedToday: meterReadable ? usedAtStart : null });
 
   const results: Array<Record<string, unknown>> = [];
   let sent = 0;
@@ -290,7 +303,10 @@ export async function GET(req: Request) {
   const probe = { probes: 0, credits_used: 0, disposed_inactive: 0, content_rejected: 0, infra_skipped: 0 };
   const probeBreaker = dryRun ? null : await checkFirecrawlBreaker().catch(() => null);
 
-  for (const c of planned.slice(0, daily.maxPerRunToday)) {
+  for (const c of planned) {
+    // Stop at the SEND cap, not the candidate count — refused candidates do
+    // not consume the slot's allowance.
+    if (!dryRun && sent >= daily.maxPerRunToday) break;
     const row: Record<string, unknown> = {
       recordId: c.l.id,
       address: c.l.address,

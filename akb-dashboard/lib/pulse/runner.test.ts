@@ -336,6 +336,12 @@ describe("runPulseScan → operator paging", () => {
   const env = {
     PULSE_CRON_SILENCE_WARNING_HOURS: "1000",
     PULSE_CRON_SILENCE_CRITICAL_HOURS: "2000",
+    // These tests exercise VENDOR paging in isolation. send_lane_tripwire is
+    // pageable too (2026-08-23), and this fixture's tiny audit window would
+    // otherwise trip its missed-slots rule — suppress it here like the main
+    // describe's base env does.
+    PULSE_SEND_TRIPWIRE_MISSED_SLOTS_WARN: "999",
+    PULSE_SEND_TRIPWIRE_MISSED_SLOTS_CRIT: "999",
     ALERT_PHONE: "+15550001111",
     ALERT_FROM: "+16302505865",
   };
