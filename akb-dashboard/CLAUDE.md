@@ -1,3 +1,5 @@
+> **How to report to Alex:** follow `.claude/skills/plain-language-reporting/SKILL.md` (repo root) in every session — scoreboard line first, plain language, decisions as yes/no with defaults.
+
 @AGENTS.md
 
 # Load the spine first — every session, before acting
