@@ -60,6 +60,8 @@ lib/maverick/data/test-counts.json
 !/docs/system/*.md
 !/docs/compliance/
 !/docs/compliance/*.md
+!/docs/runbooks/
+!/docs/runbooks/*.md
 !/docs/business/
 !/docs/business/*.md
 !/docs/handoffs/system-map.png
