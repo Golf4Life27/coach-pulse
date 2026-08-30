@@ -159,6 +159,9 @@ const SOFT_NO_PATTERNS = [
   // pricing-flavored soft-nos (decisionKind "pricing"):
   /\btoo low\b/i,
   /\bfirm at\b/i,
+  // "seller firm on price" (9251 Plainview, launch night 2026-08-30) — the
+  // prepositional variant of "firm at" with no number attached.
+  /\bfirm\s+on\s+(?:the\s+)?price\b/i,
   /\bnot at (?:that|this) price\b/i,
   // Negated interest + "no"-shapes (2026-07-17, the 3226 Cloverhurst miss):
   // "It's a fast no at $156K. The sellers aren't interested in low ball
@@ -262,6 +265,11 @@ const DISCLOSURE_PATTERNS = [
 const INTEREST_PATTERNS = [
   /\byes\b/i,
   /\binterested\b/i,
+  // TEMPLATE ECHO (2026-08-30, 2805 N Main day-1 miss): the soft opener asks
+  // "if that's in the ballpark" — an affirmative reply echoes our own phrase
+  // ("Definitely in the ballpark"). Negation guard applies via the loop, so
+  // "not in the ballpark" falls through.
+  /\bin\s+the\s+ballpark\b/i,
   /\bsend\s*(me|it|the|a|your)\b/i,
   /\bsend\s*offer\b/i,
   /\bcounter\b/i,

@@ -46,6 +46,28 @@ describe("eval: the documented misses (each was live-misclassified before 2026-0
   it("Richter-class 'not available' decline (2026-08-20, paged as interest)", () => {
     expect(label("Sorry, the property is not available")).toBe("soft_no");
   });
+
+  it("template-echo affirmation reads as interest (2805 N Main, launch night)", () => {
+    expect(label("Definitely in the ballpark.... Fixing to put together a short sale ..")).toBe(
+      "interest",
+    );
+  });
+
+  it("negated ballpark echo does NOT read as interest", () => {
+    expect(label("Unfortunately that's not in the ballpark for my seller")).not.toBe("interest");
+  });
+
+  it("'seller firm on price' reads as a pricing soft-no (9251 Plainview, launch night)", () => {
+    expect(
+      label(
+        "This property is moved in condition. No land contract, needs no repairs, seller firm on price or close to it.",
+      ),
+    ).toBe("soft_no");
+  });
+
+  it("STOP stays a hard opt-out rejection whatever surrounds it", () => {
+    expect(label("Stop")).toBe("rejection");
+  });
 });
 
 describe("eval: pinned correct behavior (must survive every pattern change)", () => {
