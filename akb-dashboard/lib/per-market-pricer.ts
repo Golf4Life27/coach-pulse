@@ -149,8 +149,11 @@ export const NEVER_OVER_LIST_PCT = (() => {
 })();
 
 export type OpenerBasis =
-  | "arv_buybox"          // anchor × (ARV × buy-box − rehab − fee) — the only SEND basis
-  | "hold_no_value_basis"; // no trusted ARV basis (or a guard tripped) → HOLD, never list-anchor
+  | "arv_buybox"          // anchor × (ARV × buy-box − rehab − fee) — the value-anchored SEND basis
+  | "list_anchor_soft"    // 62% × list, SOFT-phrased first-contact opener ONLY (operator ruling
+                          // 2026-08-30, Spine rec8eZG5hH16FFyF2 — two-stage doctrine; produced
+                          // exclusively by lib/pricing/list-anchor-opener, never by this pricer)
+  | "hold_no_value_basis"; // no trusted ARV basis (or a guard tripped) → HOLD
 
 /** ARV input confidence, carried for the receipt + the Review-tiering.
  *  STRONG/THIN come from the comp count upstream (≥5 clean comps = STRONG;

@@ -52,6 +52,7 @@ import {
 } from "@/lib/pricing/vision-queue";
 import { persistDecisionMath } from "@/lib/decision-persist";
 import { priceOpenerWithSeed } from "@/lib/opener-pricing";
+import { isListAnchorMode, priceOpenerListAnchor } from "@/lib/pricing/list-anchor-opener";
 import { serializeDerivation } from "@/lib/pricing/opener-derivation";
 import { getZipArvSeed, seedSelfPricesNonDisclosure, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import { minOfferFloor } from "@/lib/per-market-pricer";
@@ -497,19 +498,28 @@ async function handle(req: Request): Promise<Response> {
     // A non-disclosure ZIP with MLS-sold receipts prices; one without still
     // holds (operator ruling 2026-08-13 — see resolveOpenerArvPctMax).
     const selfPricingSeed = seedSelfPricesNonDisclosure(seed);
-    const pw = priceOpenerWithSeed({
-      listPrice: l.listPrice ?? null,
-      storedArv: l.realArvMedian ?? null,
-      storedArvConfidence: l.arvConfidence ?? null,
-      estRehabMid: l.estRehabMid ?? null,
-      estRehab: l.estRehab ?? null,
-      sqft: l.buildingSqFt ?? null,
-      arvPctMax: openerArvPctMax(market, l.state, { selfPricingSeed }),
-      wholesaleFee: l.wholesaleFeeTarget ?? null,
-      anchorPct,
-      seed,
-      ownCompsJson: l.arvCompDetailsJson ?? null,
-    });
+    // TWO-STAGE DOCTRINE (operator ruling 2026-08-30, Spine rec8eZG5hH16FFyF2):
+    // in list-anchor mode the first-contact opener is pct × list, soft-phrased,
+    // and every ARV/rehab judgement defers to the negotiation stage (which
+    // verifies at comp level before any number is firmed). The value-anchored
+    // pricer below remains the producer in every other mode and for every
+    // negotiation-stage number. Both return the same shape, so all downstream
+    // rails (holds, min-offer floor, sticky receipt, audit) are unchanged.
+    const pw = isListAnchorMode()
+      ? priceOpenerListAnchor(l.listPrice ?? null)
+      : priceOpenerWithSeed({
+          listPrice: l.listPrice ?? null,
+          storedArv: l.realArvMedian ?? null,
+          storedArvConfidence: l.arvConfidence ?? null,
+          estRehabMid: l.estRehabMid ?? null,
+          estRehab: l.estRehab ?? null,
+          sqft: l.buildingSqFt ?? null,
+          arvPctMax: openerArvPctMax(market, l.state, { selfPricingSeed }),
+          wholesaleFee: l.wholesaleFeeTarget ?? null,
+          anchorPct,
+          seed,
+          ownCompsJson: l.arvCompDetailsJson ?? null,
+        });
     const priced = pw.result;
     if (priced.opener == null) {
       openerGuarded.push({
@@ -1181,6 +1191,11 @@ async function handle(req: Request): Promise<Response> {
             const sentFields: Record<string, unknown> = {
               Outreach_Status: "Texted",
               Last_Outbound_At: iso,
+              // Last_Outreach_Date too (2026-08-30): the brief-active sweep
+              // pool filters Texted records on THIS field, not Last_Outbound_At
+              // — a send that skips it is invisible to every downstream scan
+              // (the creative-stamp bug class, Roselawn recncTnM2UzSz1luw).
+              Last_Outreach_Date: iso.slice(0, 10),
               Verification_Notes: buildSentNote(existingNotes, iso, result.id, p.message!),
             };
             // ── STICKY-OFFER RECEIPT (operator 2026-07-25) ──────────────────

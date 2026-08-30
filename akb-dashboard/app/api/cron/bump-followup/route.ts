@@ -528,6 +528,10 @@ async function handle(req: Request): Promise<Response> {
         // reply; the bump position lives in Follow_Up_Count + the stamp.
         await updateListingRecord(p.recordId, {
           Last_Outbound_At: iso,
+          // Last_Outreach_Date too (2026-08-30): the brief-active pool filters
+          // Texted records on this field — a bump that skips it lets the record
+          // age out of every downstream scan (creative-stamp bug class).
+          Last_Outreach_Date: iso.slice(0, 10),
           Follow_Up_Count: p.attempt,
           Verification_Notes: buildBumpSentNote(existingNotes, iso, p.attempt, result.id, p.message),
         });

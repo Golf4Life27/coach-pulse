@@ -31,8 +31,12 @@ const CEIL_MAX_PER_ZIP = 10;
 // Daily send governor: default + hard ceiling for total live sends per UTC
 // day across ALL runs. 100 = the operator's ruled supply target (2026-07-22,
 // "100/day is a SUPPLY TARGET"); the ceiling bounds a fat-fingered env.
+// Ceiling 150→200 (operator ruling 2026-08-30, Spine rec8eZG5hH16FFyF2:
+// "100-200 texts going out a day forever" — the two-stage doctrine's volume
+// target; his Make.com history did 100+/day on this line). Default stays 100;
+// the operator dials H2_DAILY_SEND_CAP up deliberately.
 const DEFAULT_DAILY_SEND_CAP = 100;
-const CEIL_DAILY_SEND_CAP = 150;
+const CEIL_DAILY_SEND_CAP = 200;
 
 export interface SendCapConfig {
   maxPerRun: number;

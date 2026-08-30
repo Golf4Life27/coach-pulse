@@ -516,6 +516,13 @@ export async function GET(req: Request) {
       // carries the exact number texted + the Quo id (sticky truth), and the
       // reconcile lane upgrades the status once Quo shows terminal success.
       ...(delivered ? { Outreach_Status: "Texted" } : {}),
+      // STAMP FIX (2026-08-30, Roselawn recncTnM2UzSz1luw): creative sends
+      // wrote neither Last_Outbound_At nor Last_Outreach_Date, so creative-
+      // touched records were invisible to the brief-active sweep pool AND to
+      // reply-pending scans, and the bump lane could double-send into a live
+      // terms thread. Every outbound stamps both, in every lane.
+      Last_Outbound_At: iso,
+      Last_Outreach_Date: iso.slice(0, 10),
       Opener_Basis: "seller_finance_terms_v1",
       Verification_Notes: receiptNote,
     }).catch((err) => {

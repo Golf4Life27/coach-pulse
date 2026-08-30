@@ -121,9 +121,10 @@ describe("readDailySendCap", () => {
   it("defaults to the operator's 100/day supply target", () => {
     expect(readDailySendCap({} as unknown as NodeJS.ProcessEnv)).toBe(100);
   });
-  it("env tunes down freely but clamps at the 150 hard ceiling", () => {
+  it("env tunes down freely but clamps at the 200 hard ceiling (operator ruling 2026-08-30: 100-200/day)", () => {
     expect(readDailySendCap({ H2_DAILY_SEND_CAP: "40" } as unknown as NodeJS.ProcessEnv)).toBe(40);
-    expect(readDailySendCap({ H2_DAILY_SEND_CAP: "9999" } as unknown as NodeJS.ProcessEnv)).toBe(150);
+    expect(readDailySendCap({ H2_DAILY_SEND_CAP: "200" } as unknown as NodeJS.ProcessEnv)).toBe(200);
+    expect(readDailySendCap({ H2_DAILY_SEND_CAP: "9999" } as unknown as NodeJS.ProcessEnv)).toBe(200);
     expect(readDailySendCap({ H2_DAILY_SEND_CAP: "junk" } as unknown as NodeJS.ProcessEnv)).toBe(100);
   });
 });
