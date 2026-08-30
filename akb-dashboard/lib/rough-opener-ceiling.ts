@@ -55,7 +55,9 @@ export const ROUGH_REHAB_PCT_OF_ARV = (() => {
 export type RoughCeilingSource =
   | "rough_buybox_arv"             // ARV + vision rehab + market buy-box
   | "rough_buybox_arv_placeholder_rehab" // ARV present, no vision rehab → placeholder
-  | "hold_no_value_basis";         // no trusted ARV value basis → HOLD (never list-anchor)
+  | "list_anchor_soft"             // soft 62%-of-list opener — no ceiling computed at the opener
+                                   // stage (two-stage doctrine, operator ruling 2026-08-30)
+  | "hold_no_value_basis";         // no trusted ARV value basis → HOLD
 
 export interface RoughCeilingInput {
   realArvMedian?: number | null;

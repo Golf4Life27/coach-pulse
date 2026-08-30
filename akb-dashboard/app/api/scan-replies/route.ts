@@ -1,6 +1,7 @@
 import { getListings, updateListingRecord } from "@/lib/airtable";
 import { getMessagesForParticipant } from "@/lib/quo";
 import { isSelfEchoOrAutoreply } from "@/lib/conversation-check";
+import { selectThreadListing } from "@/lib/conversation-thread";
 import {
   triageSellerReply,
   type ReplyClassification,
@@ -155,7 +156,14 @@ async function handleScan(req: Request) {
         inboundFound++;
 
         const matchedListings = phoneToListings.get(phone) ?? [];
-        for (const listing of matchedListings) {
+        // ONE thread, ONE listing (2026-08-30 — the Gharian Carver fan-out fix,
+        // ported from scan-comms): an agent repping several properties has one
+        // phone, so this loop used to classify + status-flip EVERY listing
+        // sharing it — one false "rejection" sent N records to Dead from a
+        // single text, daily at 11:00Z. The reply belongs to the listing we
+        // most recently texted; everything in this block is property-specific.
+        const threadListing = selectThreadListing(matchedListings);
+        for (const listing of threadListing ? [threadListing] : []) {
           // ONE classifier: triageSellerReply wraps classifyReply +
           // determineNewStatus and additionally yields decisionKind, which we
           // now PERSIST (2026-07-31). The label used to reach Airtable only as

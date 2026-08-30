@@ -49,6 +49,12 @@ export type AlertTier = "tier_0_auto_close" | "tier_1_decision" | "tier_2_urgent
  *  are deliberately narrow: a strong-buy signal, not generic positivity. */
 const ACCEPTANCE_PATTERNS = [
   /\bsend\s+(?:me\s+)?(?:the\s+|a\s+)?contract\b/i,
+  // "The owner is willing to accept that deal." (2849 Mcguffey, 2026-08-19) —
+  // a real acceptance that fell to UNKNOWN/0.4 and sat unanswered for 11 days
+  // because every pattern above/below wants the subject adjacent to "accept".
+  // Deliberately NOT "(will|would) accept": "you think my client would accept
+  // that?" (7714 E Canfield sarcasm, 2026-07-12) must never read as acceptance.
+  /\bwilling\s+to\s+accept\b/i,
   /\bseller\s+(?:will|would)\s+take\s+(?:it|that|your)\b/i,
   /\bwe(?:'ll|\s+will)?\s+take\s+(?:it|that|your\s+offer)\b/i,
   /\b(?:we|seller|they)\s+accepts?\s+(?:it|that|your\s+offer)\b/i,
@@ -103,8 +109,29 @@ const REJECTION_PATTERNS = [
   // "is not at that price yet, but..." isn't eaten.
   /\b(?:is|are|was|were)\s+not\b(?=[.,;!]|\s*$)/i,
   // "he's not" / "she's not" / "they're not" — the contraction form of the
-  // same ellipsis.
-  /\b(?:he|she|they)'?(?:s|re)\s+not\b/i,
+  // same ellipsis. ANCHORED like its sibling above (2026-08-30, 8883 Sussex
+  // post-mortem): the unanchored form ate "He's not interested in financing.
+  // He wants to sell outright... We can negotiate a price." — a live cash-
+  // pivot invitation auto-closed Dead with no alert, the first false-positive
+  // auto-kill with money attached. Only the elliptical clause ("no he's not.")
+  // is a rejection; a mid-sentence "he's not X" carries its meaning in X and
+  // must fall through to the stance/pivot patterns.
+  /\b(?:he|she|they)'?(?:s|re)\s+not\b(?=[.,;!]|\s*$)/i,
+];
+
+/** CASH-PIVOT — the terms lane's most valuable reply shape: the seller
+ *  declines FINANCING but invites a CASH conversation ("wants to sell
+ *  outright", "would you make a cash offer?", "we can negotiate a price").
+ *  Checked AFTER hard rejection (a gone-deal stays gone) but BEFORE soft-no,
+ *  because these messages usually carry a "not interested [in financing]"
+ *  clause that would otherwise eat them (8883 Sussex 2026-08-24, 125 E
+ *  McKellar 2026-08-23 — 3 of the last 4 money-bearing replies were this
+ *  shape). Routes as interest → Negotiating, tier_1 HIGH. */
+const CASH_PIVOT_PATTERNS = [
+  /\bsell\s+(?:it\s+)?outright\b/i,
+  /\bnegotiate\s+(?:a|the|on)\s+price\b/i,
+  /\b(?:make|making)\s+(?:a|an)?\s*cash\s+offer\b/i,
+  /\bwants?\s+(?:a\s+)?cash\b/i,
 ];
 
 /** SOFT NO — the seller (or agent) declined our number or isn't selling
@@ -151,6 +178,10 @@ const SOFT_NO_PATTERNS = [
   // Price-blowup language with no "too low"/"firm at" keyword present.
   /\binsane\b/i,
   /\btoo\s+far\s+apart\b/i,
+  // "not available" — the listing-side decline shape with no "interested"
+  // token (238 Richter class, 2026-08-20 — paged as interest via a stray
+  // pattern instead of routing to the 2A queue).
+  /\bnot\s+available\b/i,
 ];
 
 /** NEGATION AWARENESS (2026-07-26): a positive-interest phrase preceded or
@@ -291,6 +322,16 @@ export function classifyReply(body: string): {
     if (pat.test(trimmed)) return { classification: "rejection", matchedPattern: pat.source };
   }
 
+  // Cash-pivot BEFORE soft-no: "He's not interested in financing. He wants to
+  // sell outright... We can negotiate a price." carries a "not interested"
+  // clause that soft_no would eat — but the live invitation is the message.
+  for (const pat of CASH_PIVOT_PATTERNS) {
+    const m = pat.exec(trimmed);
+    if (m && !isNegatedNearby(trimmed, m.index, m[0].length)) {
+      return { classification: "interest", matchedPattern: pat.source };
+    }
+  }
+
   // Soft-no AFTER hard rejection (a "sold, no thanks" is still gone-deal) and
   // BEFORE counter/interest ("not at that price" must not read as interest
   // via its price token).
@@ -313,6 +354,15 @@ export function classifyReply(body: string): {
     return { classification: "counter", matchedPattern: mult.source };
   }
 
+  // Directional counter with no number: "needs to be closer to the asking
+  // price" (13123 Indiana, 2026-08-24 — paged "intent unclear") names the
+  // direction and the anchor without a $ token. That is a price conversation,
+  // not an unknown.
+  const towardAsk = /\bcloser\s+to\s+(?:the\s+)?(?:asking|list)(?:\s+price)?\b/i;
+  if (towardAsk.test(trimmed)) {
+    return { classification: "counter", matchedPattern: towardAsk.source };
+  }
+
   // A counter (price token + counter language) outranks seller_costs — "I
   // need $120k to cover the liens" is a NUMBER conversation first.
   if (COUNTER_PRICE_RE.test(trimmed)) {
@@ -331,8 +381,15 @@ export function classifyReply(body: string): {
     if (pat.test(trimmed)) return { classification: "offer_format", matchedPattern: pat.source };
   }
 
-  for (const pat of APPOINTMENT_PATTERNS) {
-    if (pat.test(trimmed)) return { classification: "appointment", matchedPattern: pat.source };
+  // Showing-PROTOCOL guard (Leeds St, 2026-08-22): "no offers via email, text,
+  // nor phone prior to in-person showing" is an instruction ABOUT showings,
+  // not a scheduling ask — the bare "showing" noun must not read as an
+  // appointment. Protocol markers send it to review instead.
+  const showingProtocol = /\bno\s+offers?\b|\bprior\s+to\b/i.test(trimmed);
+  if (!showingProtocol) {
+    for (const pat of APPOINTMENT_PATTERNS) {
+      if (pat.test(trimmed)) return { classification: "appointment", matchedPattern: pat.source };
+    }
   }
 
   for (const pat of INTEREST_PATTERNS) {

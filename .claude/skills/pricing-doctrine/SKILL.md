@@ -1,11 +1,41 @@
 ---
 name: pricing-doctrine
-description: Price a deal and derive an opener exactly per AKB doctrine — the value-anchored formula is the ONLY producer of numbers, the two-lane MAO sits beneath it as the negotiation ceiling, and every guard HOLDs instead of improvising. Use whenever a price is about to be produced, written, or queued — "price this deal", "what's my offer", "derive the opener", "underwrite this", any re-pricing sweep, and before ANY pricing number reaches a record field, a draft, or a send queue. Fires with extra force on re-pricing after a doctrine change and on any request to "just cap it" or "use a percentage of list".
+description: Price a deal per AKB two-stage doctrine (operator ruling 2026-08-30) — first-contact cash openers are 62% × list, phrased soft (list_anchor_soft_v1); from the FIRST REPLY onward the value-anchored formula is the only producer, the two-lane MAO is the negotiation ceiling, and every guard HOLDs instead of improvising. Use whenever a price is about to be produced, written, or queued — "price this deal", "what's my offer", "derive the opener", "underwrite this", any re-pricing sweep, and before ANY pricing number reaches a record field, a draft, or a send queue. Fires with extra force on firming/revising a number in a live thread, on re-pricing after a doctrine change, and on any request to firm up a number without comp-level verification.
 ---
 
 # Pricing Doctrine — AKB
 
 Every pricing disaster this system has had was a constant wearing a formula's clothes: 0.65 × list texted $84.5k at a ~$40k house (Blackmoor, 2026-06-28), and a "defensive cap" silently substituted ~85%-of-list for the derived number on 43 records (capped_to_list, ruled 2026-07-06). The doctrine that survived both is short: valuation prices the asset; rails refuse; nothing improvises.
+
+## 2026-08-30 operator amendment — two-stage doctrine (Spine rec8eZG5hH16FFyF2)
+
+The operator split pricing into two stages. Everything below this section applies
+at the NEGOTIATION and CONTRACT stages; first-contact openers moved to a simpler rule:
+
+- **Opener stage (first contact only):** cash openers are **62% × list price**,
+  phrased SOFT — a conversation-starter explicitly conditioned on scope
+  ("depending on condition, somewhere around $X"), never a bare committed number.
+  `pricing_mode: list_anchor_soft_v1` is a producing mode for openers ONLY, by
+  operator ruling. This deliberately reverses the "no constant ratio" rule at the
+  opener stage: the number's job is volume and response rate, and the soft
+  phrasing is what keeps the sticky-offer rule survivable (the anchor that sticks
+  is a conditional ballpark). Blackmoor-class protection at this stage is the
+  soft phrasing plus the negotiation-stage verification below — not opener math.
+- **Negotiation stage (any reply onward):** unchanged and now load-bearing. The
+  moment a thread goes live, standard 5 applies in full — comp-level
+  verification, independently recomputed ceiling, rehab scope via DD — BEFORE any
+  number is firmed, revised, or reaffirmed. The opener's 62% is walked DOWN here
+  when evidence demands it (the 2026-08-28 backtest says that's ~6 of 10).
+- **Contract stage:** unchanged — the 4-point offer-readiness gate
+  (`lib/offer-readiness.ts`) or written operator override; contract price under
+  the buyer ceiling with fee room.
+- **Standard 2 (ratio detector) is rescoped** to negotiation- and contract-stage
+  numbers: openers in `list_anchor_soft_v1` are a constant ratio by design and
+  do not trip it. A constant ratio appearing in a FIRMED number still trips it.
+- **A/B escalation:** sellers anchored to a fantasy number get the value-anchored
+  derivation (the method below) as the counter-path.
+- **Creative/terms lane:** backup only, after a cash decline; terms price must
+  exceed recorded debt; never first touch. (Roselawn, recncTnM2UzSz1luw.)
 
 ## The one rule
 
@@ -32,6 +62,7 @@ Every pricing disaster this system has had was a constant wearing a formula's cl
 2. **Ratio detector.** If opener ÷ list OR opener ÷ MAO sits within ±1% of a constant across the last 3+ priced records, **HOLD ALL pricing** and surface as Type 2C. This is exactly how capped_to_list was caught — the catch is now doctrine.
 3. **Mode taxonomy.** Every priced record carries a `pricing_mode` from the post-ruling taxonomy; producing modes are value-anchored only; an unknown mode is itself a HOLD. `capped_to_list` is retired as a producer — it survives only as tripwire history.
 4. **Refuse and surface.** Violations are never silently auto-corrected. A wrong number is evidence; correcting it quietly destroys the evidence and re-arms the gun.
+5. **Comp-level verification before every send (operator ruling 2026-08-26, Spine recZy1WuARMOq4MzJ).** Before ANY message that states, revises, reaffirms, or is premised on a price reaches a seller or agent, the sending session must — in that same session — open the record's comp array (or pull fresh comps), scrutinize the comps themselves (recency, distance, size, cluster split, bulk/portfolio smell), independently recompute the ceiling from them, and record which comps carry the number. A stored ARV/MAO field is an input to verify, never verification. Comps that don't support the stored number → HOLD and surface. This extends standard 1 (recompute-before-queue) down to the evidence layer and applies to every send, not just opener queueing — the 12717 Indiana $16,500 reaffirmation (2026-08-26) is the incident that made it a rule.
 
 ## The output
 
@@ -45,4 +76,4 @@ A priced record carries: the derived opener (or the HOLD reason), both MAO lanes
 - A formula cannot see a lying input (the Tiger Flowers 2× sqft lesson). Data armor lives upstream at intake; this skill's recompute standard catches drift, not deception.
 
 ---
-*v1.0 · 2026-07-06 · Input 0: operator ruling recmy2Vwp1wMA1Vs8 (capped_to_list demoted to ceiling tripwire; formula is sole producer). Registry: recOu0ekD2PXkKedx. Supersede only via a logged Spine build_event referencing this version — never a silent edit.*
+*v1.1 · 2026-08-30 · Input 0: operator ruling recmy2Vwp1wMA1Vs8 (capped_to_list demoted to ceiling tripwire; formula is sole producer at negotiation/contract stages). Amended by operator ruling rec8eZG5hH16FFyF2 (two-stage doctrine: list_anchor_soft_v1 openers, verification concentrated at negotiation/contract). Registry: recOu0ekD2PXkKedx. Supersede only via a logged Spine build_event referencing this version — never a silent edit.*

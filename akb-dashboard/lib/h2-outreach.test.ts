@@ -137,6 +137,27 @@ describe("planQueue — first_touch", () => {
   });
 });
 
+describe("buildH2Message — soft variant (two-stage doctrine, operator 2026-08-30)", () => {
+  it("conditions the number and never states a committed offer", () => {
+    const m = buildH2Message("Sam", "9 Oak, Detroit, MI 48238", 74500, "Detroit", { soft: true });
+    expect(m).toContain("Depending on condition");
+    expect(m).toContain("somewhere around $74,500");
+    expect(m).toContain("firm it up after a closer look");
+    expect(m).not.toContain("cash offer at");
+    expect(m).toContain("9 Oak in Detroit");
+  });
+  it("keeps the agent-inventory ask", () => {
+    const soft = buildH2Message("Sam", "9 Oak", 74500, null, { soft: true });
+    const hard = buildH2Message("Sam", "9 Oak", 74500, null);
+    // Both variants end with the same inventory ask paragraph.
+    expect(soft.split("\n\n")[1]).toBe(hard.split("\n\n")[1]);
+  });
+  it("default (no opts) stays the proven hard template", () => {
+    const m = buildH2Message("Sam", "9 Oak", 71250, null);
+    expect(m).toContain("cash offer at $71,250");
+  });
+});
+
 describe("planQueue — bad_phone_quarantine", () => {
   it("quarantines an unnormalizable phone and never sets a destination", () => {
     const [p] = plan([listing({ agentPhone: "555-CALL-NOW" })]);

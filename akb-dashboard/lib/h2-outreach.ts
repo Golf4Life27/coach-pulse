@@ -40,6 +40,7 @@ import { SOURCE_VERSION_V2 } from "@/lib/source-version";
 import { isActionableMarket } from "@/lib/markets/actionable";
 import { isOutreachFresh, DEFAULT_FRESHNESS_HOURS } from "@/lib/outreach-freshness";
 import { agentInventoryAsk } from "@/lib/pricing/bounded-ratio-opener";
+import { isListAnchorMode } from "@/lib/pricing/list-anchor-opener";
 
 export const AUTO_PROCEED = "Auto Proceed";
 export const LIVE_ACTIVE = "Active";
@@ -256,12 +257,29 @@ export function buildH2Message(
   address: string,
   mao: number,
   city?: string | null,
+  opts?: { soft?: boolean },
 ): string {
   const name = firstNameOnly(agentName);
   const offer = `$${Math.round(mao).toLocaleString("en-US")}`;
   const parts = address.split(",");
   const street = parts[0].trim() || address;
   const cityName = (city ?? "").trim() || (parts[1] ?? "").trim();
+  // SOFT VARIANT (two-stage doctrine, operator ruling 2026-08-30, Spine
+  // rec8eZG5hH16FFyF2): the list-anchor opener is a conversation-starter, not
+  // a commitment — "depending on condition" is the clause that lets the
+  // negotiation stage walk the number DOWN honestly once real comps and scope
+  // land (the backtest says that's most replies). The sticky-offer rule
+  // attaches to this conditional ballpark, never to a bare number.
+  if (opts?.soft) {
+    const locClause = cityName ? `${street} in ${cityName}` : street;
+    return (
+      `Hi ${name}, Alex with AKB Solutions — interested in ${locClause} if the ` +
+      `numbers work. Cash, as-is, quick close. Depending on condition I'd ` +
+      `likely land somewhere around ${offer} — if that's in the ballpark for ` +
+      `your seller, happy to firm it up after a closer look.` +
+      `\n\n${agentInventoryAsk()}`
+    );
+  }
   const listingClause = cityName
     ? `I am interested in your listing at ${street} in ${cityName}.`
     : `I am interested in your listing at ${street}.`;
@@ -398,13 +416,16 @@ export function planQueue(
       continue;
     }
 
-    // Step 4 — first touch.
+    // Step 4 — first touch. Soft copy in list-anchor mode (two-stage doctrine,
+    // operator 2026-08-30) — first touches only; bumps re-quote what was sent.
     seenThisRun.set(key, { recordId: l.id, address: l.address });
     plans.push({
       ...base,
       route: "first_touch",
       toE164: e164,
-      message: buildH2Message(l.agentName, l.address, l.mao, l.city),
+      message: buildH2Message(l.agentName, l.address, l.mao, l.city, {
+        soft: isListAnchorMode(),
+      }),
     });
   }
 
