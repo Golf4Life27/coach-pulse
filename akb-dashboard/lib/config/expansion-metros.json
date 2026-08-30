@@ -1,8 +1,13 @@
 {
   "$schema_note": "Frontier expansion queue (chew-and-move-on, operator /goal 2026-07-22). Ordered list of disclosure-state, non-restricted metros with high distressed-SFR inventory. The weekly frontier-rotation pass STAGES ZIPs from here (tier=staged, no crawl spend) in config order — one metro chews through before the next opens — and promotes staged→launch strictly within the RentCast budget capacity the governor computes. Rails that CANNOT be bypassed by editing this file: restricted states (IL/MO/SC/NC/OK/ND) and non-disclosure states (TX/KS/MS/LA/...) are re-filtered in code at stage time AND at promote time; a ZIP already in ZIP_Registry is never re-staged. Deliberately excluded: Philadelphia (city wholesaler-license ordinance), New York metros (regulatory uncertainty — operator call), all non-disclosure states (opener cannot price them until a per-state comp source is proven). Operator-editable: reorder, remove, or append metros freely; ZIP lists are public-record city ZIPs skewed to the distressed housing stock of each metro.",
-  "version": 1,
+  "version": 2,
   "created": "2026-07-22",
+  "reordered": "2026-08-30 — operator ruling (fresh-metro directive, Spine rec8eZG5hH16FFyF2 follow-on): NEW-territory metros jump the queue ahead of the widen-existing entries so the 62% soft-opener lane opens on agents we have never texted. Cincinnati added. Philadelphia REMAINS excluded per the standing note above (city wholesaler-license ordinance) — operator may revisit deliberately, never by default.",
   "metros": [
+    { "id": "pittsburgh_pa", "label": "Pittsburgh, PA", "state": "PA", "market": "Pittsburgh", "zips": ["15204", "15206", "15208", "15210", "15212", "15214", "15221", "15235"] },
+    { "id": "baltimore_md", "label": "Baltimore, MD", "state": "MD", "market": "Baltimore", "zips": ["21205", "21213", "21215", "21216", "21217", "21218", "21223", "21229"] },
+    { "id": "cincinnati_oh", "label": "Cincinnati, OH", "state": "OH", "market": "Cincinnati", "zips": ["45204", "45205", "45211", "45212", "45214", "45216", "45225", "45229", "45232"] },
+    { "id": "milwaukee_wi", "label": "Milwaukee, WI", "state": "WI", "market": "Milwaukee", "zips": ["53204", "53205", "53206", "53208", "53209", "53210", "53212", "53215", "53216", "53218"] },
     { "id": "cleveland_oh_widen", "label": "Cleveland, OH (widen)", "state": "OH", "market": "Cleveland", "zips": ["44104", "44108", "44112", "44119", "44120", "44125", "44127", "44128"] },
     { "id": "toledo_oh", "label": "Toledo, OH", "state": "OH", "market": "Toledo", "zips": ["43605", "43607", "43608", "43609", "43610", "43611", "43612"] },
     { "id": "dayton_oh", "label": "Dayton, OH", "state": "OH", "market": "Dayton", "zips": ["45402", "45403", "45405", "45406", "45410", "45414", "45417", "45426"] },
@@ -22,10 +27,7 @@
     { "id": "montgomery_al", "label": "Montgomery, AL", "state": "AL", "market": "Montgomery", "zips": ["36104", "36105", "36107", "36108", "36110"] },
     { "id": "chattanooga_tn", "label": "Chattanooga, TN", "state": "TN", "market": "Chattanooga", "zips": ["37404", "37406", "37407", "37410", "37411"] },
     { "id": "knoxville_tn", "label": "Knoxville, TN", "state": "TN", "market": "Knoxville", "zips": ["37914", "37915", "37917", "37920", "37921"] },
-    { "id": "pittsburgh_pa", "label": "Pittsburgh, PA", "state": "PA", "market": "Pittsburgh", "zips": ["15204", "15206", "15208", "15210", "15212", "15214", "15221", "15235"] },
     { "id": "erie_pa", "label": "Erie, PA", "state": "PA", "market": "Erie", "zips": ["16502", "16503", "16504", "16507", "16508", "16510"] },
-    { "id": "milwaukee_wi", "label": "Milwaukee, WI", "state": "WI", "market": "Milwaukee", "zips": ["53204", "53205", "53206", "53208", "53209", "53210", "53212", "53215", "53216", "53218"] },
-    { "id": "louisville_ky", "label": "Louisville, KY", "state": "KY", "market": "Louisville", "zips": ["40203", "40208", "40210", "40211", "40212", "40215", "40216", "40218"] },
-    { "id": "baltimore_md", "label": "Baltimore, MD", "state": "MD", "market": "Baltimore", "zips": ["21205", "21213", "21215", "21216", "21217", "21218", "21223", "21229"] }
+    { "id": "louisville_ky", "label": "Louisville, KY", "state": "KY", "market": "Louisville", "zips": ["40203", "40208", "40210", "40211", "40212", "40215", "40216", "40218"] }
   ]
 }
