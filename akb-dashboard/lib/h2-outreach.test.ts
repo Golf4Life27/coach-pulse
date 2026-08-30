@@ -376,3 +376,74 @@ describe("selectOutreachReady / outreachReadyReason — confirmed-live + actiona
     expect(selectOutreachReady(set, NOW).map((l) => l.id)).toEqual(["ready", "memphis"]);
   });
 });
+
+describe("buildPriorContactIndex — recontact cooldown (operator ruling 2026-08-30)", () => {
+  const DAY = 86_400_000;
+  const NOW_MS = Date.parse("2026-08-30T12:00:00Z");
+  const idx = (ls: Listing[], cooldownDays = 60) =>
+    buildPriorContactIndex(ls, { nowMs: NOW_MS, cooldownDays });
+  const daysAgo = (n: number) => new Date(NOW_MS - n * DAY).toISOString();
+
+  it("a Texted record older than the window cools down — agent is fresh again", () => {
+    const old = listing({
+      id: "old",
+      outreachStatus: "Texted",
+      lastOutreachDate: daysAgo(90),
+      agentPhone: "210-555-0001",
+    });
+    expect(idx([old]).size).toBe(0);
+  });
+
+  it("a Texted record inside the window still stalls", () => {
+    const recent = listing({
+      id: "recent",
+      outreachStatus: "Texted",
+      lastOutreachDate: daysAgo(5),
+      agentPhone: "210-555-0001",
+    });
+    expect(idx([recent]).size).toBe(1);
+  });
+
+  it("a live two-way thread NEVER cools down, whatever its age", () => {
+    for (const status of ["Response Received", "Negotiating", "Offer Accepted", "Inbound Lead"]) {
+      const stale = listing({
+        id: "live",
+        outreachStatus: status,
+        lastOutreachDate: daysAgo(300),
+        agentPhone: "210-555-0001",
+      });
+      expect(idx([stale]).size).toBe(1);
+    }
+  });
+
+  it("an UNDATED outbound stalls forever (least-send: pre-stamp-fix sends live only in notes)", () => {
+    const undated = listing({
+      id: "undated",
+      outreachStatus: "Texted",
+      lastOutreachDate: null,
+      agentPhone: "210-555-0001",
+    });
+    expect(idx([undated]).size).toBe(1);
+  });
+
+  it("the freshest record wins per agent: one cooled sibling does not unlock a live one", () => {
+    const cooled = listing({
+      id: "cooled", outreachStatus: "Texted",
+      lastOutreachDate: daysAgo(120), agentPhone: "210-555-0001",
+    });
+    const live = listing({
+      id: "live", outreachStatus: "Negotiating",
+      lastOutreachDate: daysAgo(120), agentPhone: "(210) 555-0001",
+    });
+    expect(idx([cooled, live]).size).toBe(1);
+  });
+
+  it("cooldown length is tunable via opts", () => {
+    const l = listing({
+      id: "l", outreachStatus: "Texted",
+      lastOutreachDate: daysAgo(20), agentPhone: "210-555-0001",
+    });
+    expect(idx([l], 30).size).toBe(1); // 20d touch inside a 30d window
+    expect(idx([l], 14).size).toBe(0); // outside a 14d window
+  });
+});

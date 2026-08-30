@@ -75,6 +75,40 @@ export function hasContactedStatus(l: Listing): boolean {
   return CONTACTED_OUTREACH_STATUSES.has((l.outreachStatus ?? "").trim());
 }
 
+/** RECONTACT COOLDOWN (operator ruling 2026-08-30, Spine rec8eZG5hH16FFyF2
+ *  follow-on: "start fresh… round back to them in a few weeks or months").
+ *  The prior-contact stall used to be PERMANENT — an agent texted once was
+ *  never first-touched again on any listing, which both protected threads and
+ *  silently strangled supply (the stalled-sibling backlog,
+ *  docs/specs/Stall_Release_Policy_v1_Spec.md). Now only a LIVE two-way
+ *  thread stalls forever; an outbound-only touch (Texted / Emailed) cools
+ *  down after this many days and the agent becomes fair game for a fresh
+ *  first-touch on a NEW listing. Opt-outs are untouched by this — Do_Not_Text
+ *  and the opt-out rails are unconditional and enforced elsewhere. */
+export const DEFAULT_RECONTACT_COOLDOWN_DAYS = 60;
+
+const LIVE_THREAD_STATUSES: ReadonlySet<string> = new Set([
+  "Response Received",
+  "Negotiating",
+  "Offer Accepted",
+  "Inbound Lead",
+]);
+
+/** Env-tunable cooldown (H2_RECONTACT_COOLDOWN_DAYS); garbage or ≤0 → 60. */
+export function recontactCooldownDays(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env.H2_RECONTACT_COOLDOWN_DAYS);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_RECONTACT_COOLDOWN_DAYS;
+}
+
+/** Most recent touch on the record, from either stamp field. NaN when the
+ *  record carries no date at all (pre-stamp-fix sends live only in notes). */
+function lastTouchMs(l: Listing): number {
+  const a = l.lastOutboundAt ? Date.parse(l.lastOutboundAt) : NaN;
+  const b = l.lastOutreachDate ? Date.parse(l.lastOutreachDate) : NaN;
+  const best = Math.max(Number.isFinite(a) ? a : -Infinity, Number.isFinite(b) ? b : -Infinity);
+  return best === -Infinity ? NaN : best;
+}
+
 export type H2Route =
   | "first_touch"
   | "prior_contact_stall"
@@ -193,10 +227,23 @@ function phoneKey(raw: string | null | undefined): string | null {
  */
 export function buildPriorContactIndex(
   listings: Listing[],
+  opts: { nowMs?: number; cooldownDays?: number } = {},
 ): Map<string, { recordId: string; address: string; status: string }> {
+  const cooldownMs = (opts.cooldownDays ?? recontactCooldownDays()) * 86_400_000;
+  const nowMs = opts.nowMs ?? Date.now();
   const index = new Map<string, { recordId: string; address: string; status: string }>();
   for (const l of listings) {
     if (!hasContactedStatus(l)) continue;
+    // Cooldown: a live two-way thread stalls its agent forever; an
+    // outbound-only touch stops stalling once its last stamp is older than
+    // the window. An UNDATED outbound still stalls (least-send reading —
+    // pre-stamp-fix sends exist only as notes, and double-texting an agent
+    // touched last week is worse than skipping one touched last year).
+    const status = (l.outreachStatus ?? "").trim();
+    if (!LIVE_THREAD_STATUSES.has(status)) {
+      const touched = lastTouchMs(l);
+      if (Number.isFinite(touched) && nowMs - touched > cooldownMs) continue;
+    }
     const key = phoneKey(l.agentPhone);
     if (!key) continue;
     if (!index.has(key)) {
