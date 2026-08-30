@@ -14,6 +14,7 @@ import {
   buildStallNote,
   buildQuarantineNote,
   buildDeliveryQuarantineNote,
+  buildDeadNumberFanoutNote,
   planQueue,
 } from "./h2-outreach";
 import type { Listing } from "@/lib/types";
@@ -445,5 +446,19 @@ describe("buildPriorContactIndex — recontact cooldown (operator ruling 2026-08
     });
     expect(idx([l], 30).size).toBe(1); // 20d touch inside a 30d window
     expect(idx([l], 14).size).toBe(0); // outside a 14d window
+  });
+});
+
+describe("buildDeadNumberFanoutNote — number-level bounce fan-out (2026-08-30)", () => {
+  it("appends the fanout note with status, phone, and source record", () => {
+    const n = buildDeadNumberFanoutNote("prior", "2026-08-30T22:32:00Z", "+14048432500", "undelivered", "rec36JjvnCuNMW4YB");
+    expect(n).toContain("prior");
+    expect(n).toContain("[H2 dead-number fanout 2026-08-30T22:32:00Z]");
+    expect(n).toContain("undelivered for +14048432500");
+    expect(n).toContain("rec36JjvnCuNMW4YB");
+    expect(n).toContain("Do_Not_Text set number-wide");
+  });
+  it("defaults a null status to undelivered", () => {
+    expect(buildDeadNumberFanoutNote(null, "2026-08-30T22:32:00Z", "+15551234567", null, "recX")).toContain("reported undelivered");
   });
 });

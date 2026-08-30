@@ -87,8 +87,10 @@ import {
   buildStallNote,
   buildQuarantineNote,
   buildDeliveryQuarantineNote,
+  buildDeadNumberFanoutNote,
   type H2Plan,
 } from "@/lib/h2-outreach";
+import { normalizePhone } from "@/lib/phone-normalize";
 import {
   evaluateSendWindow,
   type WorkingHoursMeta,
@@ -1248,6 +1250,9 @@ async function handle(req: Request): Promise<Response> {
             // 1505 17th St / Angela James (+12058756959), carrier "undelivered".
             await updateListingRecord(p.recordId, {
               Outreach_Status: "Dead",
+              // DNT on the quarantined record too — Dead is a disposition, but
+              // Do_Not_Text is the number-level truth every lane checks first.
+              Do_Not_Text: true,
               Verification_Notes: buildDeliveryQuarantineNote(existingNotes, iso, p.toE164!, confirmedStatus, result.id),
             });
             row.airtable_updated = true;
@@ -1261,6 +1266,42 @@ async function handle(req: Request): Promise<Response> {
               inputSummary: { phone: p.toE164, confirmedStatus },
               outputSummary: { quarantined: true, reason: `carrier ${confirmedStatus ?? "undelivered"}` },
             });
+            // ── NUMBER-LEVEL FAN-OUT (2026-08-30, day-1 finding) ────────────
+            // The carrier bounced the NUMBER, not the record — but Dead is
+            // record-scoped and Dead records deliberately don't feed the
+            // prior-contact stall, so sibling/future records with the same
+            // phone kept re-firing at a number Quo already said cannot receive
+            // SMS (1899 King George texted twice via duplicate records; the
+            // Jupiter Dr bounce re-fired 5h later as Bonds Ave — launch day).
+            // A delivery bounce is number truth, like a STOP: set Do_Not_Text
+            // on every listing sharing the phone so isH2Eligible blocks it in
+            // every lane, forever. Bounded + best-effort — the quarantine
+            // above never depends on this loop finishing.
+            const deadSiblings = allListings
+              .filter((l) => l.id !== p.recordId && !l.doNotText && normalizePhone(l.agentPhone) === p.toE164)
+              .slice(0, 15);
+            for (const sib of deadSiblings) {
+              try {
+                await updateListingRecord(sib.id, {
+                  Do_Not_Text: true,
+                  Verification_Notes: buildDeadNumberFanoutNote(
+                    sib.notes ?? null, iso, p.toE164!, confirmedStatus, p.recordId,
+                  ),
+                });
+              } catch (err) {
+                console.error("[h2-outreach] dead-number fanout failed:", sib.id, err);
+              }
+            }
+            if (deadSiblings.length > 0) {
+              await audit({
+                agent: "crier",
+                event: "h2_dead_number_fanout",
+                status: "confirmed_success",
+                recordId: p.recordId,
+                inputSummary: { phone: p.toE164, sibling_ids: deadSiblings.map((s) => s.id) },
+                outputSummary: { dnt_set: deadSiblings.length },
+              });
+            }
             if (claimAcquired) await kvProd.del(claimKey).catch(() => {}); // dead record — free the lock
           } else {
             summary.unconfirmed++; // not stamped Texted; reconcile cron repairs
