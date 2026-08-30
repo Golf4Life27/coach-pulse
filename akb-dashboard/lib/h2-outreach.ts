@@ -402,6 +402,25 @@ export function buildDeliveryQuarantineNote(
   );
 }
 
+/** Note for a SIBLING record whose number a carrier bounced on another
+ *  record's send (2026-08-30, King George/Jupiter day-1 finding): a delivery
+ *  bounce is NUMBER truth, like a STOP — Do_Not_Text fans to every listing
+ *  sharing the phone so no lane ever re-fires at a number the carrier
+ *  already refused. */
+export function buildDeadNumberFanoutNote(
+  existing: string | null,
+  iso: string,
+  phone: string,
+  status: string | null,
+  sourceRecordId: string,
+): string {
+  return append(
+    existing,
+    `[H2 dead-number fanout ${iso}] Carrier reported ${status ?? "undelivered"} for ${phone} ` +
+      `(on record ${sourceRecordId}) — Do_Not_Text set number-wide, no retry.`,
+  );
+}
+
 /**
  * Pure: plan the route for an in-order queue of eligible records.
  *
