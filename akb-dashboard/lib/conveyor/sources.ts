@@ -20,18 +20,22 @@ export interface FastSources {
   visionHolds: VisionHoldRow[] | null;
   /** Machine-work count for the rail — needs_vision, never rendered as cards. */
   needsVisionCount: number | null;
+  /** Decision Queue — pending Tier C listing decisions, already
+   *  ConveyorItem-shaped by /api/decision-queue (operator 2026-09-01). */
+  listingDecisions: ConveyorItem[] | null;
 }
 
 /** The fast sources (Pending proposals, operator action items, curated
  *  priorities, back-half contract lifecycle). Each resolves independently; a
  *  failure is null, not [], so the caller keeps prior data (no empty flicker). */
 export async function fetchFastSources(): Promise<FastSources> {
-  const [p, a, pr, cl, vh] = await Promise.allSettled([
+  const [p, a, pr, cl, vh, dq] = await Promise.allSettled([
     fetch("/api/proposals").then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
     fetch("/api/operator-actions").then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
     fetch("/api/maverick/priorities", { cache: "no-store" }).then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
     fetch("/api/contract-lifecycle", { cache: "no-store" }).then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
     fetch("/api/vision-holds", { cache: "no-store" }).then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
+    fetch("/api/decision-queue", { cache: "no-store" }).then((r) => (r.ok ? r.json() : Promise.reject(r.status))),
   ]);
   return {
     proposals: p.status === "fulfilled" && Array.isArray(p.value) ? (p.value as ProposalRow[]) : null,
@@ -40,6 +44,7 @@ export async function fetchFastSources(): Promise<FastSources> {
     contractItems: cl.status === "fulfilled" ? ((cl.value.items as ConveyorItem[]) ?? []) : null,
     visionHolds: vh.status === "fulfilled" ? ((vh.value.items as VisionHoldRow[]) ?? []) : null,
     needsVisionCount: vh.status === "fulfilled" ? ((vh.value.needs_vision as number) ?? 0) : null,
+    listingDecisions: dq.status === "fulfilled" ? ((dq.value.items as ConveyorItem[]) ?? []) : null,
   };
 }
 

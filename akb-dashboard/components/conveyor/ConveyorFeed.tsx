@@ -10,6 +10,8 @@
 //   /api/operator-actions   Operator_Action_Items  (2B/2C decisions)
 //   /api/maverick/priorities curated strip          (2B/2C with real $ + clocks)
 //   /api/jarvis-brief       Act Now cards           (async — slots in when ready)
+//   /api/decision-queue     Decision Queue          (2B/2C acceptances + counters
+//                           straight off Listings_V1 — operator 2026-09-01, §5)
 //
 // The first three load fast and render immediately; the brief (LLM pass) is
 // progressive — its cards join the ranked feed when they arrive, deduped
@@ -40,6 +42,7 @@ export default function ConveyorFeed() {
   const [broCards, setBroCards] = useState<BroCardRow[]>([]);
   const [contractItems, setContractItems] = useState<ConveyorItem[]>([]);
   const [visionHolds, setVisionHolds] = useState<VisionHoldRow[]>([]);
+  const [listingDecisions, setListingDecisions] = useState<ConveyorItem[]>([]);
   const [needsVision, setNeedsVision] = useState(0);
   const [loading, setLoading] = useState(true);
   const [briefLoading, setBriefLoading] = useState(true);
@@ -58,6 +61,7 @@ export default function ConveyorFeed() {
     if (s.priorities) setPriorities(s.priorities);
     if (s.contractItems) setContractItems(s.contractItems);
     if (s.visionHolds) setVisionHolds(s.visionHolds);
+    if (s.listingDecisions) setListingDecisions(s.listingDecisions);
     if (s.needsVisionCount != null) setNeedsVision(s.needsVisionCount);
     setNowMs(Date.now());
     setLoading(false);
@@ -85,10 +89,10 @@ export default function ConveyorFeed() {
   const { items, hidden } = useMemo(
     () =>
       buildConveyor(
-        { proposals, actionItems, priorities, broCards, contractItems, visionHolds },
+        { proposals, actionItems, priorities, broCards, contractItems, visionHolds, listingDecisions },
         new Date(nowMs).toISOString(),
       ),
-    [proposals, actionItems, priorities, broCards, contractItems, visionHolds, nowMs],
+    [proposals, actionItems, priorities, broCards, contractItems, visionHolds, listingDecisions, nowMs],
   );
 
   const removeItem = useCallback((item: ConveyorItem) => {
@@ -96,6 +100,7 @@ export default function ConveyorFeed() {
     else if (item.source === "action_item") setActionItems((prev) => prev.filter((a) => `action_item:${a.id}` !== item.key));
     else if (item.source === "priority") setPriorities((prev) => prev.filter((p) => `priority:${p.id}` !== item.key));
     else if (item.source === "vision") setVisionHolds((prev) => prev.filter((v) => `vision:${v.recordId}` !== item.key));
+    else if (item.source === "listing") setListingDecisions((prev) => prev.filter((d) => d.key !== item.key));
     else setBroCards((prev) => prev.filter((b) => `brocard:${b.recordId}` !== item.key));
   }, []);
 
@@ -103,6 +108,8 @@ export default function ConveyorFeed() {
     async (item: ConveyorItem, action: ConveyorAction, opts?: { editedBody?: string }) => {
       if (action.kind === "open") return; // links navigate on their own
       if (action.kind === "proposal_reject" && !window.confirm("Kill this card? The proposal is rejected.")) return;
+      if (action.kind === "listing_kill" && !window.confirm("Kill this deal? The record is marked Dead.")) return;
+      if (action.kind === "listing_approve" && !window.confirm(`Approve: ${action.note}?`)) return;
       if (
         action.kind === "proposal_batch" &&
         !window.confirm(`${action.label}? This rules on ${action.proposalIds.length} proposals at once.`)
@@ -173,6 +180,36 @@ export default function ConveyorFeed() {
           });
           ok = res.ok;
           message = ok ? (action.kind === "action_item_resolve" ? "Resolved" : "Deferred") : "Failed";
+        } else if (action.kind === "listing_approve") {
+          // The tap records the operator's word ON THE RECORD (Tier C needs
+          // his word, nothing else); the send itself still goes through the
+          // live-tail discipline in a session. Then the card clears.
+          const stamp = new Date().toISOString();
+          const noted = await fetch("/api/actions/append_note", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              recordId: action.recordId,
+              note: `[OPERATOR APPROVED ${stamp} via Decision Queue] ${action.note}`,
+            }),
+          });
+          const cleared = noted.ok
+            ? await fetch("/api/actions/clear", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ recordId: action.recordId }),
+              })
+            : null;
+          ok = noted.ok && Boolean(cleared?.ok);
+          message = ok ? "Approved — recorded on the deal" : noted.ok ? "Approval noted, card did not clear" : "Failed";
+        } else if (action.kind === "listing_kill") {
+          const res = await fetch("/api/actions/mark_dead", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ recordId: action.recordId }),
+          });
+          ok = res.ok;
+          message = ok ? "Killed — record marked Dead" : "Failed";
         } else if (action.kind === "priority_done") {
           const res = await fetch("/api/maverick/priorities", {
             method: "POST",

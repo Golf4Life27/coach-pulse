@@ -879,6 +879,46 @@ with REPLIES not sends.
 HOLDs. On genuinely cheap asks the value-anchored opener can land above 85% of list, so
 the over-list tripwire may be eating supply in the cheapest markets.
 
+## 8o. NEW 2026-09-01 — Decision Queue source on the conveyor + Maverick Prime routine suite
+
+Operator ruling 2026-09-01 (`docs/handoffs/NEXT_SESSION_DIRECTIVE.md`, Spine
+`recDaxld9i1UBW2Ax`; Tier B ratified `recnvFB7rzuBmYB9V`). Two things shipped.
+
+**Decision Queue = one more SOURCE on the existing conveyor, not a new page.**
+The 2026-07-11 one-feed law stands; the home screen's `ConveyorFeed` now also
+reads `/api/decision-queue`, which maps Listings_V1 straight into cards via the
+pure `lib/conveyor/decision-queue.ts`:
+
+- What renders: `Outreach_Status = Offer Accepted` (2B — terms are money),
+  `Counter Received`, or `Negotiating` with `Latest_Counter_Usd` (2C). A card
+  needs a live inbound (`Last_Inbound_At` within 14 days), no kill flag
+  (`Blacklist` / `Do_Not_Text` / `Pipeline_Stage=dead`), and
+  `Action_Card_State` not Cleared/Held.
+- The math line is SOURCED ONLY (`List_Price`, `Contract_Offer_Price` or
+  `Rough_Opener_Amount`, `Latest_Counter_Usd`, `Buyer_Ceiling`, `Deal_Spread`,
+  `Decision_Verdict`) — blanks render as "—", never an estimate.
+- Taps: **Approve** appends `[OPERATOR APPROVED <ISO> via Decision Queue] <staged
+  action>` to `Verification_Notes` (via `/api/actions/append_note`) and clears
+  the card (`/api/actions/clear`). It texts nobody — the operator's word is now
+  ON THE RECORD, and a session's live-tail send discipline does the send.
+  **Edit** opens the deal room. **Kill** = `/api/actions/mark_dead`.
+- A pending `jarvis_reply` proposal for the same record wins the dedupe (it
+  carries the dispatch rail). Re-opening after a new inbound is the machine's
+  job (`Action_Card_State` back to Open) — not wired yet; today a cleared card
+  stays cleared until a session or cron flips the state.
+- Server feed (`lib/decision-feed-server.ts`, escalation SMS) does NOT include
+  this source yet — follow-up.
+
+**Routine suite (fresh-session Routines, created via claude-code-remote):**
+Triage 3×/day (12:30/17:30/22:30 UTC), Follow-up Engine daily (15:00 UTC),
+Nightly Pipeline Audit (04:30 UTC), Weekly Buyers List (Sun 12:00 UTC). The
+old read-only "AKB daily brief" routine is DISABLED (it stalled on a Gmail send
+approval 2026-09-01 and never delivered). UNVERIFIED at write time: whether
+these Routines inherit MCP connectors (Quo/Airtable/Maverick/Gmail) and whether
+their sends clear the permission gate — first firing is the test; if the audit
+email does not arrive, re-create them from the claude.ai Routines UI with
+connectors attached.
+
 ## 9. Pointers
 
 - Hard rules / invariants: **[`docs/INVARIANTS.md`](../INVARIANTS.md)** — load every session.
