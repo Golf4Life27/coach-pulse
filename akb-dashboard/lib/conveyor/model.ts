@@ -41,12 +41,17 @@ export type ConveyorAction =
   | { kind: "action_item_defer"; itemId: string }
   | { kind: "priority_done"; priorityId: string }
   | { kind: "vision_rerun"; recordId: string; label: string }
+  /** Decision Queue (operator 2026-09-01, directive §5): Approve records the
+   *  operator's word on the record — it texts nobody; the live-tail send
+   *  discipline in a session does that. Kill marks the record Dead. */
+  | { kind: "listing_approve"; recordId: string; label?: string; note: string }
+  | { kind: "listing_kill"; recordId: string }
   | { kind: "open"; href: string; label?: string };
 
 export interface ConveyorItem {
   /** Unique key: `${source}:${id}`. */
   key: string;
-  source: "proposal" | "action_item" | "priority" | "brocard" | "contract" | "vision";
+  source: "proposal" | "action_item" | "priority" | "brocard" | "contract" | "vision" | "listing";
   type: ConveyorType;
   title: string;
   /** One-sentence reasoning — the card never renders more than this. */
@@ -424,13 +429,16 @@ export function rankConveyor(items: ConveyorItem[], nowIso: string): ConveyorIte
   });
 }
 
-/** Dedupe: a synthesized brief card duplicates the actionable proposal for
- *  the same record — the proposal (with its dispatch rail) wins. */
+/** Dedupe: a synthesized brief card or a Decision Queue card duplicates the
+ *  actionable proposal for the same record — the proposal (with its dispatch
+ *  rail) wins. */
 export function dedupeConveyor(items: ConveyorItem[]): ConveyorItem[] {
   const proposalRecords = new Set(
     items.filter((i) => i.source === "proposal" && i.recordId).map((i) => i.recordId as string),
   );
-  return items.filter((i) => !(i.source === "brocard" && i.recordId && proposalRecords.has(i.recordId)));
+  return items.filter(
+    (i) => !((i.source === "brocard" || i.source === "listing") && i.recordId && proposalRecords.has(i.recordId)),
+  );
 }
 
 // ── Vision holds (operator 2026-07-31) ───────────────────────────────────
@@ -581,6 +589,10 @@ export function buildConveyor(
     /** Vision_Queue_State=vision_failed records (2026-07-31). Optional so
      *  existing callers/tests are unaffected. */
     visionHolds?: VisionHoldRow[];
+    /** Decision Queue — pending Tier C listing decisions (acceptances and
+     *  counters), already ConveyorItem-shaped by lib/conveyor/decision-queue
+     *  (operator 2026-09-01, directive §5). Optional. */
+    listingDecisions?: ConveyorItem[];
   },
   nowIso: string,
 ): ConveyorBuildResult {
@@ -596,6 +608,7 @@ export function buildConveyor(
     ...input.broCards.map(fromBroCard),
     ...(input.visionHolds ?? []).map(fromVisionHold),
     ...(input.contractItems ?? []),
+    ...(input.listingDecisions ?? []),
   ];
   return {
     items: rankConveyor(dedupeConveyor(items), nowIso),

@@ -71,7 +71,7 @@ export default function ConveyorCard({ item, nowMs, busy, onAction }: ConveyorCa
 
   const primary = item.actions[0];
   const snooze = item.actions.find((a) => a.kind === "proposal_snooze" || a.kind === "action_item_defer");
-  const kill = item.actions.find((a) => a.kind === "proposal_reject");
+  const kill = item.actions.find((a) => a.kind === "proposal_reject" || a.kind === "listing_kill");
   const done = item.actions.find((a) => a.kind === "priority_done" || a.kind === "action_item_resolve");
   // A secondary "open" (the vision lane's spot-check-the-images fallback).
   // Without this the action existed in the model and rendered nowhere.
@@ -175,7 +175,7 @@ export default function ConveyorCard({ item, nowMs, busy, onAction }: ConveyorCa
           >
             {busy
               ? "Working…"
-              : primary.kind === "proposal_approve"
+              : primary.kind === "proposal_approve" || primary.kind === "listing_approve"
                 ? (primary.label ?? "Approve")
                 : primary.kind === "proposal_batch"
                   ? primary.label
