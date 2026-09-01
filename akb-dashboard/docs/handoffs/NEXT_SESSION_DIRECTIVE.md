@@ -25,25 +25,26 @@
   made. Every send is stamped on its record in the same turn.
 - **Live thread outranks record notes.** Same-turn tail pull before every send, always.
 
-## 2. Autonomy ladder (Tier B pending operator ratification)
+## 2. Autonomy ladder (Tier B RATIFIED by operator 2026-09-01)
 
 - **Tier A — fully autonomous (already live):** openers at 62%-of-list soft phrasing,
   intake, classification, record hygiene, comp pulls, spine writes, routine scheduling,
   dashboard/code work, pool exclusions on machine-dead records.
-- **Tier B — autonomous sends, PROPOSED (fires only after the operator ratifies with
-  "approve tier B"):** replies that follow doctrine mechanically with no new number —
+- **Tier B — autonomous sends, RATIFIED 2026-09-01 ("Approve tier B" — operator's
+  words):** replies that follow doctrine mechanically with no new number —
   reaffirming an already-approved number; answering process/info questions (am-I-local,
   will-you-inspect, what's-your-email); polite walk-aways where the math is dead by
   comp-verified margin; follow-up bumps on silent threads per the cadence in §4. Every
   Tier B send: tail-pull gated, comp-verified where a number is premised, logged to spine,
-  surfaced to the operator AFTER the fact in the daily brief — never silently.
+  surfaced to the operator AFTER the fact in the daily brief — never silently. A send
+  that arguably introduces a new number or changes deal terms is NOT Tier B — it
+  escalates to Tier C; when in doubt, escalate.
 - **Tier C — operator approval always:** any NEW number to a counterparty, any contract
   or signature, EMD or money movement, creative/terms structures, reviving an
   operator-killed deal, anything TCPA-adjacent, any doctrine change.
 
-Until Tier B is ratified, all sends remain operator-approved (standing rule, Canfield
-incident). The ladder exists so the operator can delegate with one word instead of
-approving forever.
+The Canfield send-discipline mechanics (same-turn tail pull, least-send reading of
+terse instructions) apply to every tier, forever.
 
 ## 3. Session architecture (Jarvis pattern)
 
