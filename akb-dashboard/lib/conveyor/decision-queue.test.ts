@@ -7,6 +7,7 @@ import {
   mathLine,
   ourNumber,
   stagedAction,
+  toListingDecisionRow,
   type ListingDecisionRow,
 } from "./decision-queue";
 import { buildConveyor, dedupeConveyor, type ProposalRow } from "./model";
@@ -158,5 +159,42 @@ describe("buildDecisionQueue + conveyor integration", () => {
     );
     expect(items.map((i) => i.source)).toEqual(["proposal"]);
     expect(dedupeConveyor([fromListingDecision(row())]).length).toBe(1);
+  });
+});
+
+describe("toListingDecisionRow", () => {
+  it("shapes a Listing by prop name and drops junk types", () => {
+    const r = toListingDecisionRow({
+      id: "recX",
+      address: "766 Garfield St, Akron, OH 44310",
+      agentName: "Ira Bachelor",
+      outreachStatus: "Negotiating",
+      listPrice: 75_000,
+      roughOpenerAmount: 49_500,
+      latestCounterUsd: 66_000,
+      buyerCeiling: "not a number",
+      lastInboundAt: "2026-08-31T17:40:34Z",
+      blacklist: false,
+      doNotText: "yes",
+    });
+    expect(r).toEqual({
+      id: "recX",
+      address: "766 Garfield St, Akron, OH 44310",
+      agentName: "Ira Bachelor",
+      outreachStatus: "Negotiating",
+      pipelineStage: null,
+      listPrice: 75_000,
+      roughOpenerAmount: 49_500,
+      contractOfferPrice: null,
+      latestCounterUsd: 66_000,
+      buyerCeiling: null,
+      dealSpread: null,
+      decisionVerdict: null,
+      lastInboundAt: "2026-08-31T17:40:34Z",
+      lastOutboundAt: null,
+      actionCardState: null,
+      blacklist: false,
+      doNotText: false,
+    });
   });
 });

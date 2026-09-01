@@ -150,6 +150,38 @@ export function fromListingDecision(row: ListingDecisionRow): ConveyorItem {
   };
 }
 
+function num(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+function str(v: unknown): string | null {
+  return typeof v === "string" && v.trim() ? v : null;
+}
+
+/** Shape a Listing (lib/airtable prop names) into a decision row. Lives here,
+ *  not in the route file — an App Router route may export only HTTP methods
+ *  and config, and this needs a unit test anyway. */
+export function toListingDecisionRow(l: { id: string } & Record<string, unknown>): ListingDecisionRow {
+  return {
+    id: String(l.id),
+    address: str(l.address),
+    agentName: str(l.agentName),
+    outreachStatus: str(l.outreachStatus),
+    pipelineStage: str(l.pipelineStage),
+    listPrice: num(l.listPrice),
+    roughOpenerAmount: num(l.roughOpenerAmount),
+    contractOfferPrice: num(l.contractOfferPrice),
+    latestCounterUsd: num(l.latestCounterUsd),
+    buyerCeiling: num(l.buyerCeiling),
+    dealSpread: num(l.dealSpread),
+    decisionVerdict: str(l.decisionVerdict),
+    lastInboundAt: str(l.lastInboundAt),
+    lastOutboundAt: str(l.lastOutboundAt),
+    actionCardState: str(l.actionCardState),
+    blacklist: l.blacklist === true,
+    doNotText: l.doNotText === true,
+  };
+}
+
 /** Pure: the pending Tier C listing decisions as conveyor items. Ranking is
  *  the conveyor's job (buildConveyor) — this only selects and maps. */
 export function buildDecisionQueue(rows: ListingDecisionRow[], nowIso: string): ConveyorItem[] {
