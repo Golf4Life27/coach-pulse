@@ -919,6 +919,29 @@ their sends clear the permission gate — first firing is the test; if the audit
 email does not arrive, re-create them from the claude.ai Routines UI with
 connectors attached.
 
+## 8p. NEW 2026-09-02 — Quo 402 breaker, pager email fallback, Machine Health screen
+
+The prepaid-credits outage: Quo returned 402 from ~13:05Z; nine outreach slots and
+the bump lane each processed 20 records, burned ~40 Firecrawl probe credits per run,
+sent nothing, and the Pulse pager died on the same 402. Three fixes:
+
+- **`lib/outreach/send-lane-breaker.ts`** — `isQuoCreditsExhausted(err)`,
+  `checkSendLaneBreaker`, `tripSendLaneBreaker(lane, err)`, `clearSendLaneBreaker`.
+  KV key `send_lane:quo_402`, TTL `SEND_LANE_402_TTL_S` (default 20 min so a top-up is
+  picked up within a slot). `lib/quo.ts` now throws `QuoSendError` with a structural
+  `httpStatus`. `h2-outreach` and `bump-followup` check the breaker before the loop,
+  `break` on the first 402 (no further probes), trip it, and report
+  `quo_breaker: { tripped, tripped_at }` in their audit summary. One audit row per trip:
+  `crier/quo_credits_exhausted`. Dry runs never trip or honour it.
+- **`lib/pulse/runner.ts`** — `pageOperator` (now exported) falls back to
+  `sendEmail` → `ALERT_EMAIL` (default alex@akb-properties.com) when the SMS page
+  throws; audit `pulse_page_email_fallback`. Dep seam `emailFn` (null disables).
+- **`/health`** (`app/health/page.tsx`, pure shaping in `lib/health/machine-health.ts`)
+  — read-only Machine Health: texts sent today vs cap, slots fired blank, Quo credits
+  (from the breaker's audit row), replies drafted, connector rows (Quo / Firecrawl /
+  RentCast-ATTOM / cron) from Pulse detections, last-24h send-slot table, detections.
+  Data: `/api/agents/pulse/scan` + `/api/admin/audit-tail` only. Nav tab HEALTH.
+
 ## 9. Pointers
 
 - Hard rules / invariants: **[`docs/INVARIANTS.md`](../INVARIANTS.md)** — load every session.

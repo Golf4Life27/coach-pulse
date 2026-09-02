@@ -105,6 +105,7 @@ import {
 } from "@/lib/h2-outreach/supply-floor";
 import { verifyListing, classifyVerifiedListing } from "@/lib/crawler/sources/firecrawl";
 import { checkFirecrawlBreaker, recordFirecrawlSpend } from "@/lib/crawler/firecrawl-circuit-breaker";
+import { checkSendLaneBreaker, isQuoCreditsExhausted, tripSendLaneBreaker } from "@/lib/outreach/send-lane-breaker";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -877,7 +878,14 @@ async function handle(req: Request): Promise<Response> {
     }
   }
 
+  // Quo 402 breaker (2026-09-02): once the account cannot pay for a text,
+  // stop processing — every further record would burn a Firecrawl probe and
+  // fail the same way. Dry runs never send, so they never trip or honour it.
+  const laneBreaker = dryRun ? { tripped: false, tripped_at: null } : await checkSendLaneBreaker();
+  let laneTripped = laneBreaker.tripped;
+
   for (const p of dispatchPlans) {
+    if (laneTripped) break;
     const row: ProcessedRow = {
       record_id: p.recordId,
       address: p.address,
@@ -1312,6 +1320,10 @@ async function handle(req: Request): Promise<Response> {
     } catch (err) {
       row.error = err instanceof Error ? err.message : String(err);
       summary.errors++;
+      if (!dryRun && !laneTripped && isQuoCreditsExhausted(err)) {
+        laneTripped = true;
+        await tripSendLaneBreaker("h2_outreach", err);
+      }
       // Release the claim ONLY if the SEND itself failed (no SMS went out), so
       // a later run retries cleanly. If the send succeeded but the status write
       // failed, KEEP the claim — a re-text is worse than a transiently-stale
@@ -1350,6 +1362,7 @@ async function handle(req: Request): Promise<Response> {
       processed: processed.length,
       ...summary,
       send_cap: sendCapSummary,
+      quo_breaker: { tripped: laneTripped, tripped_at: laneBreaker.tripped_at },
       // ── volume-worry instrument (2026-08-04): why ~354 eligible plans
       // 1-5 sends/slot. Landed in the audit trail so it's queryable later,
       // not just visible on the one JSON response that happened to be read.

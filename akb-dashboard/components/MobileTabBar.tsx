@@ -10,7 +10,7 @@ const TABS: Array<{ href: string; label: string; icon: string; match: (p: string
   { href: "/", label: "Cockpit", icon: "🎛", match: (p) => p === "/" || p.startsWith("/queue") },
   { href: "/pipeline", label: "Pipeline", icon: "🏭", match: (p) => p.startsWith("/pipeline") },
   { href: "/deals", label: "Deals", icon: "🤝", match: (p) => p.startsWith("/deals") },
-  { href: "/pulse", label: "Pulse", icon: "🫀", match: (p) => p.startsWith("/pulse") || p.startsWith("/system") },
+  { href: "/pulse", label: "Pulse", icon: "🫀", match: (p) => p.startsWith("/pulse") || p.startsWith("/system") || p.startsWith("/health") },
 ];
 
 export default function MobileTabBar() {

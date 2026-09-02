@@ -35,6 +35,7 @@ import { getListings, getListing, updateListingRecord } from "@/lib/airtable";
 import { getMessageStatus, getMessagesForParticipant } from "@/lib/quo";
 import { sendGuarded } from "@/lib/outreach/send-gate";
 import { audit } from "@/lib/audit-log";
+import { checkSendLaneBreaker, isQuoCreditsExhausted, tripSendLaneBreaker } from "@/lib/outreach/send-lane-breaker";
 import { checkOfferOverList } from "@/lib/outreach-economics";
 import { readSendCapConfig, resolveCoverage, applySendCap } from "@/lib/outreach/send-cap";
 import {
@@ -274,7 +275,12 @@ async function handle(req: Request): Promise<Response> {
   const seedCache = new Map<string, ZipArvSeed | null>();
   const anchorCache = new Map<string, number>();
 
+  // Quo 402 breaker (2026-09-02) — see lib/outreach/send-lane-breaker.
+  const laneBreaker = dryRun ? { tripped: false, tripped_at: null } : await checkSendLaneBreaker();
+  let laneTripped = laneBreaker.tripped;
+
   for (const p of dispatchPlans) {
+    if (laneTripped) break;
     const row: ProcessedRow = {
       record_id: p.recordId,
       address: p.address,
@@ -562,6 +568,10 @@ async function handle(req: Request): Promise<Response> {
     } catch (err) {
       row.error = err instanceof Error ? err.message : String(err);
       summary.errors++;
+      if (!dryRun && !laneTripped && isQuoCreditsExhausted(err)) {
+        laneTripped = true;
+        await tripSendLaneBreaker("h2_bump", err);
+      }
       if (claimAcquired && !row.sms_fired) {
         await kvProd.del(claimKey).catch(() => {});
       }
@@ -575,6 +585,7 @@ async function handle(req: Request): Promise<Response> {
     status: summary.errors > 0 ? "uncertain" : "confirmed_success",
     inputSummary: { auth_kind: authKind, dry_run: dryRun, limit, live_env: liveEnv },
     outputSummary: {
+      quo_breaker: { tripped: laneTripped, tripped_at: laneBreaker.tripped_at },
       due_total: due.length,
       planned: plans.length,
       processed: processed.length,
