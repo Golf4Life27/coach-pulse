@@ -10,6 +10,7 @@ const tabs = [
   { name: "BUYERS", href: "/buyers" },
   { name: "QUEUE", href: "/queue" },
   { name: "SYSTEM", href: "/system" },
+  { name: "HEALTH", href: "/health" },
 ];
 
 // V2 surfaces being absorbed into the V1 shell (charter pivot 6/10). Gated

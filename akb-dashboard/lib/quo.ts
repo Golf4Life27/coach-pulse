@@ -117,6 +117,20 @@ export interface QuoSendResult {
   raw: unknown;
 }
 
+/** A non-2xx from Quo's send endpoint. Carries the HTTP status structurally
+ *  so callers can branch on it (402 = prepaid credits exhausted, 2026-09-02:
+ *  nine slots fired blank and burned ~360 probe credits because the status
+ *  only lived inside the message string). Message text is unchanged so
+ *  existing string matches keep working. */
+export class QuoSendError extends Error {
+  readonly httpStatus: number;
+  constructor(httpStatus: number, raw: unknown) {
+    super(`Quo send error ${httpStatus}: ${JSON.stringify(raw) || "(no body)"}`);
+    this.name = "QuoSendError";
+    this.httpStatus = httpStatus;
+  }
+}
+
 export async function sendMessageWithId(
   to: string,
   content: string,
@@ -146,9 +160,7 @@ export async function sendMessageWithId(
   const raw = await res.json().catch(() => null);
 
   if (!res.ok) {
-    throw new Error(
-      `Quo send error ${res.status}: ${JSON.stringify(raw) || "(no body)"}`,
-    );
+    throw new QuoSendError(res.status, raw);
   }
 
   const data = (raw as { data?: Record<string, unknown> } | null)?.data ?? null;

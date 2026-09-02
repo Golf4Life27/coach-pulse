@@ -39,6 +39,7 @@ import { detectVendorHealth } from "./detectors/vendor-health";
 
 import { audit } from "@/lib/audit-log";
 import { sendMessage } from "@/lib/quo";
+import { sendEmail } from "@/lib/gmail";
 import { writeState, type WriteStateDeps } from "@/lib/maverick/write-state";
 
 export interface PulseScanResult {
@@ -120,11 +121,15 @@ function pagingDetectors(env: Record<string, string | undefined>): Set<string> {
  *  falling back — the hard rule beats delivery. This path is deliberately
  *  OUTSIDE sendGuarded per INVARIANTS §7: it carries no listing and no
  *  seller, and the active-set diff is its dedupe. */
-async function pageOperator(
+/** Where the email fallback goes when the SMS page cannot be sent. */
+export const DEFAULT_ALERT_EMAIL = "alex@akb-properties.com";
+
+export async function pageOperator(
   det: PulseDetection,
   env: Record<string, string | undefined>,
   auditFn: typeof audit,
   sendFn: typeof sendMessage,
+  emailFn: typeof sendEmail | null = sendEmail,
 ): Promise<boolean> {
   const to = (env.ALERT_PHONE ?? "").trim();
   const from = (env.ALERT_FROM ?? "").trim();
@@ -167,6 +172,45 @@ async function pageOperator(
       event: "pulse_page_failed",
       status: "confirmed_failure",
       inputSummary: { detection_id: det.id, to_masked: `${to.slice(0, 4)}…${to.slice(-4)}` },
+      outputSummary: { sent: false, error: String(err).slice(0, 200) },
+    });
+    // EMAIL FALLBACK (2026-09-02): the SMS page died on Quo's own 402 — the
+    // outage that most needs paging is the one that mutes the pager. Email
+    // rides a different vendor. Best-effort, never throws.
+    return pageOperatorByEmail(det, env, auditFn, emailFn, String(err));
+  }
+}
+
+async function pageOperatorByEmail(
+  det: PulseDetection,
+  env: Record<string, string | undefined>,
+  auditFn: typeof audit,
+  emailFn: typeof sendEmail | null,
+  smsError: string,
+): Promise<boolean> {
+  const to = (env.ALERT_EMAIL ?? DEFAULT_ALERT_EMAIL).trim();
+  if (!emailFn || !to) return false;
+  try {
+    const r = await emailFn({
+      to,
+      subject: `AKB ${det.severity === "critical" ? "CRITICAL" : "WARNING"}: ${det.title}`.slice(0, 200),
+      body: `${det.title}\n\n${det.description}\n\nSuggested action: ${det.suggested_action ?? "(none)"}\n\n(SMS page failed: ${smsError.slice(0, 200)})`,
+    });
+    await auditFn({
+      agent: "pulse",
+      event: "pulse_page_email_fallback",
+      status: r.success ? "confirmed_success" : "confirmed_failure",
+      inputSummary: { detection_id: det.id, to },
+      outputSummary: { sent: r.success, audit_status: r.audit_status, error: r.error ?? null },
+      decision: det.severity,
+    });
+    return r.success;
+  } catch (err) {
+    await auditFn({
+      agent: "pulse",
+      event: "pulse_page_email_fallback",
+      status: "confirmed_failure",
+      inputSummary: { detection_id: det.id, to },
       outputSummary: { sent: false, error: String(err).slice(0, 200) },
     });
     return false;
@@ -214,6 +258,8 @@ export interface PulseRunnerDeps {
   writeStateStore?: typeof writePulseState;
   /** Operator-paging SMS sender — same testability seam. */
   sendFn?: typeof sendMessage;
+  /** Email fallback for a failed page — same seam; null disables. */
+  emailFn?: typeof sendEmail | null;
 }
 
 const FIRST_SEEN_FALLBACK = (now: Date) => now.toISOString();
@@ -230,6 +276,7 @@ export async function runPulseScan(
   const writeStateFn = deps.writeStateFn ?? writeState;
   const auditFn = deps.auditFn ?? audit;
   const sendFn = deps.sendFn ?? sendMessage;
+  const emailFn = deps.emailFn === undefined ? sendEmail : deps.emailFn;
   const pageable = pagingDetectors(input.env);
   const pagedIds: string[] = [];
 
@@ -275,7 +322,7 @@ export async function runPulseScan(
     // Edge-triggered by construction: this loop is the off→on transition, so
     // a standing outage pages ONCE, not on every scan.
     if (pageable.has(det.detector_id)) {
-      if (await pageOperator(det, input.env, auditFn, sendFn)) pagedIds.push(id);
+      if (await pageOperator(det, input.env, auditFn, sendFn, emailFn)) pagedIds.push(id);
     }
   }
 
