@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AKB Wholesale System — Build Status & Redesign</title>
+<style>
+  :root{
+    --bg:#0b0f17; --panel:#121826; --panel2:#161d2e; --ink:#e8edf6; --dim:#9aa7bd; --line:#26304a;
+    --green:#3fb950; --amber:#d9a23b; --blue:#4c9aff; --purple:#a371f7; --gray:#6b7689; --red:#f0556b;
+    --accent:#5ee0c0;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:linear-gradient(180deg,#0b0f17,#0c1220);color:var(--ink);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;padding:0 0 80px}
+  .wrap{max-width:1180px;margin:0 auto;padding:0 22px}
+  code,.mono{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:.86em}
+  h1{font-size:30px;margin:0 0 4px;letter-spacing:-.4px}
+  h2{font-size:21px;margin:0 0 4px;letter-spacing:-.2px}
+  .sub{color:var(--dim);font-size:14px}
+  header.hero{padding:46px 0 26px;border-bottom:1px solid var(--line);
+    background:radial-gradient(900px 240px at 18% -40%,rgba(94,224,192,.10),transparent)}
+  .eyebrow{color:var(--accent);font-size:12px;letter-spacing:2.4px;text-transform:uppercase;font-weight:700;margin-bottom:10px}
+  section{padding:40px 0 8px;border-bottom:1px solid var(--line)}
+  .secnum{color:var(--accent);font-weight:700;font-size:13px;letter-spacing:1.5px}
+  .lead{color:var(--dim);max-width:820px;margin:8px 0 26px}
+
+  /* legend */
+  .legend{display:flex;flex-wrap:wrap;gap:8px 16px;margin:18px 0 4px;font-size:12.5px;color:var(--dim)}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  .dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+  .d-green{background:var(--green)} .d-amber{background:var(--amber)} .d-blue{background:var(--blue)}
+  .d-purple{background:var(--purple)} .d-gray{background:var(--gray)} .d-red{background:var(--red)}
+
+  /* belt */
+  .belt{display:flex;gap:0;flex-wrap:wrap;margin:8px 0 6px}
+  .stage{flex:1 1 190px;min-width:172px;background:var(--panel);border:1px solid var(--line);
+    border-radius:12px;padding:13px 13px 12px;margin:6px;position:relative}
+  .stage .n{position:absolute;top:-9px;left:12px;background:var(--panel2);border:1px solid var(--line);
+    color:var(--dim);font-size:11px;font-weight:700;border-radius:20px;padding:1px 8px}
+  .stage h4{margin:6px 0 2px;font-size:14.5px}
+  .stage p{margin:0;color:var(--dim);font-size:12px;min-height:30px}
+  .pill{display:inline-block;margin-top:9px;font-size:11px;font-weight:700;border-radius:20px;padding:3px 9px;
+    border:1px solid transparent}
+  .p-green{background:rgba(63,185,80,.13);color:#7ee495;border-color:rgba(63,185,80,.35)}
+  .p-amber{background:rgba(217,162,59,.13);color:#e8c172;border-color:rgba(217,162,59,.35)}
+  .p-blue{background:rgba(76,154,255,.13);color:#8cc0ff;border-color:rgba(76,154,255,.35)}
+  .p-purple{background:rgba(163,113,247,.14);color:#c4a6fb;border-color:rgba(163,113,247,.35)}
+  .p-gray{background:rgba(107,118,137,.16);color:#aab4c6;border-color:rgba(107,118,137,.4)}
+  .edge{border-left:3px solid var(--green)}
+  .edge-a{border-left:3px solid var(--amber)} .edge-b{border-left:3px solid var(--blue)}
+  .edge-p{border-left:3px solid var(--purple)} .edge-g{border-left:3px solid var(--gray)}
+
+  .grid{display:grid;gap:14px}
+  .g3{grid-template-columns:repeat(3,1fr)} .g2{grid-template-columns:repeat(2,1fr)}
+  @media(max-width:820px){.g3,.g2{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+  .card h4{margin:0 0 7px;font-size:14.5px;display:flex;align-items:center;gap:8px}
+  .card .k{color:var(--dim);font-size:12.5px}
+  .stat{font-size:26px;font-weight:800;letter-spacing:-.5px}
+  .stat.green{color:#7ee495}.stat.amber{color:#e8c172}.stat.blue{color:#8cc0ff}.stat.red{color:#ff8092}
+
+  .callout{background:linear-gradient(180deg,#13203a,#101a30);border:1px solid #2a3c63;border-left:4px solid var(--accent);
+    border-radius:12px;padding:16px 18px;margin:18px 0 4px}
+  .callout b{color:#bff5e7}
+
+  /* principle cards */
+  .pcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:9px}
+  .pcard .ttl{font-weight:700;font-size:14.5px}
+  .pcard .row{font-size:12.7px;display:flex;gap:8px;align-items:flex-start}
+  .pcard .tag{flex:0 0 54px;font-weight:700;font-size:10.5px;letter-spacing:.5px;text-transform:uppercase;padding-top:1px}
+  .t-pain{color:#ff8092}.t-fix{color:#8cc0ff}.t-win{color:#7ee495}
+
+  /* diff two-column */
+  .diff{display:grid;grid-template-columns:1fr 56px 1fr;gap:0;align-items:stretch;margin:10px 0}
+  @media(max-width:820px){.diff{grid-template-columns:1fr}}
+  .col{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+  .col.today{border-color:#5a3550} .col.future{border-color:#2f5a4e}
+  .col h3{margin:0 0 3px;font-size:16px}
+  .col .tg{font-size:11px;letter-spacing:1.4px;text-transform:uppercase;font-weight:700}
+  .today .tg{color:#e98ac0} .future .tg{color:#5ee0c0}
+  .layerlist{list-style:none;margin:12px 0 0;padding:0;display:flex;flex-direction:column;gap:8px}
+  .layerlist li{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:9px 11px;font-size:12.7px}
+  .layerlist li b{font-size:13px}
+  .arrowcol{display:flex;align-items:center;justify-content:center;color:var(--accent);font-size:24px}
+  @media(max-width:820px){.arrowcol{height:34px;transform:rotate(90deg)}}
+
+  table{width:100%;border-collapse:collapse;margin:14px 0 2px;font-size:13px}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);font-size:11.5px;letter-spacing:.5px;text-transform:uppercase;font-weight:700}
+  td.dim{color:var(--dim)} td .why{color:#7ee495;font-size:12px}
+  tr:last-child td{border-bottom:none}
+
+  /* bridge */
+  .bridge{display:flex;flex-direction:column;gap:10px;margin-top:8px}
+  .step{display:flex;gap:14px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .step .idx{flex:0 0 38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;
+    font-weight:800;font-size:16px;background:#15203a;border:1px solid #2a3c63;color:#8cc0ff}
+  .step.now .idx{background:#14271c;border-color:#2f5a3e;color:#7ee495}
+  .step.later .idx{background:#241c33;border-color:#46356a;color:#c4a6fb}
+  .step h4{margin:0 0 3px;font-size:14.5px}
+  .step p{margin:0;color:var(--dim);font-size:12.8px}
+  .step .eff{font-size:11px;font-weight:700;border-radius:20px;padding:2px 9px;white-space:nowrap;align-self:flex-start;margin-left:auto}
+  .e-s{background:rgba(63,185,80,.13);color:#7ee495} .e-m{background:rgba(217,162,59,.13);color:#e8c172}
+  .e-l{background:rgba(163,113,247,.14);color:#c4a6fb}
+  .foot{color:var(--dim);font-size:12px;padding-top:26px}
+  .tinyflag{font-family:"SF Mono",ui-monospace,monospace;font-size:11px;background:#0e1626;border:1px solid var(--line);
+    border-radius:5px;padding:1px 5px;color:#9fd0ff}
+</style>
+</head>
+<body>
+<header class="hero"><div class="wrap">
+  <div class="eyebrow">AKB Solutions · Wholesale Engine</div>
+  <h1>System Build Status &amp; Redesign</h1>
+  <div class="sub">Where V1 actually stands today, a from-scratch north star, and the bridge between them — 2026-06-24</div>
+</div></header>
+
+<!-- ===================== SECTION 1 ===================== -->
+<section><div class="wrap">
+  <div class="secnum">01 — BUILD STATUS</div>
+  <h2>The belt, as actually built</h2>
+  <p class="lead">Your deal flows left→right through ten stages. Color = real state today, not the dream. Most of the
+  machine exists and is correct; the throttle is mostly <i>off on purpose</i> (cost safety) while we light it up stage by stage.</p>
+
+  <div class="legend">
+    <span><i class="dot d-green"></i> Live / running</span>
+    <span><i class="dot d-amber"></i> Built · gated dark (master switch off)</span>
+    <span><i class="dot d-blue"></i> Built · operator-triggered / on-demand</span>
+    <span><i class="dot d-purple"></i> Paused (off the clock, on-demand only)</span>
+    <span><i class="dot d-gray"></i> Manual · operator-reserved</span>
+  </div>
+
+  <div class="belt">
+    <div class="stage edge-p"><span class="n">01</span><h4>Source</h4><p>RentCast <code>fetchListingsByZip</code> — distress sourcing by ZIP.</p><span class="pill p-purple">Paused · on-demand</span></div>
+    <div class="stage edge-p"><span class="n">02</span><h4>Verify</h4><p>Firecrawl re-verify (still-active + URL confirm).</p><span class="pill p-purple">Pausing tonight</span></div>
+    <div class="stage edge-a"><span class="n">03</span><h4>Enrich / Price</h4><p>RentCast AVM·comps·rent·tax → Appraiser ARV·Rehab·BuyerIntel.</p><span class="pill p-amber">Gated dark</span></div>
+    <div class="stage edge"><span class="n">04</span><h4>Underwrite + Gates</h4><p>MAO, offer-readiness, opener floor, &gt;85%-of-list block.</p><span class="pill p-green">Live (formulas)</span></div>
+    <div class="stage edge-a"><span class="n">05</span><h4>Promote / Sync</h4><p>Write eligibility fields from the math result.</p><span class="pill p-amber">Gated · manual patch</span></div>
+    <div class="stage edge"><span class="n">06</span><h4>Outreach · H2</h4><p>First-touch SMS via Quo. Dedup · quiet-hours · send-cap.</p><span class="pill p-green">LIVE today</span></div>
+    <div class="stage edge"><span class="n">07</span><h4>Reply Handling</h4><p><code>scan-comms</code> */10 → triage → auto-close / ack / alert.</p><span class="pill p-green">Live (ack off)</span></div>
+    <div class="stage edge-g"><span class="n">08</span><h4>Negotiate</h4><p>Counters, advanced comms — you drive.</p><span class="pill p-gray">You</span></div>
+    <div class="stage edge-g"><span class="n">09</span><h4>Contract</h4><p>Pre-contract math (INV-023) · DocuSign signatures.</p><span class="pill p-gray">You · built</span></div>
+    <div class="stage edge-b"><span class="n">10</span><h4>Dispo</h4><p>Assignment-spread gate · buyer fire-blast.</p><span class="pill p-blue">Built · your go</span></div>
+  </div>
+
+  <div class="grid g3" style="margin-top:22px">
+    <div class="card"><div class="k">Crons on a clock</div><div class="stat blue">17</div><div class="k">after pausing 2 Firecrawl crons tonight · most gated by one master switch</div></div>
+    <div class="card"><div class="k">Records in actionable statuses</div><div class="stat amber">~78</div><div class="k">mostly older SA / Memphis / Dallas inventory, not the focus</div></div>
+    <div class="card"><div class="k">Fresh Detroit leads send-ready</div><div class="stat green">3</div><div class="k">2 sendable after the dedup fix (Gallagher = brokerage line)</div></div>
+  </div>
+
+  <div class="callout">
+    <b>Where V1 stands right now.</b> The send path went <b>live today</b> (env deployed, route off the 503).
+    Math gates are computing correctly. The single thing between you and first revenue is small and queued: merge the
+    agent-dedup fix, then <span class="tinyflag">dry preview → your approval → 2 texts</span> tomorrow in business hours.
+    Cost is near zero — RentCast <b>$0</b> (gated/removed), Firecrawl <b>$0</b> once tonight's pause merges.
+    Everything expensive is off a clock by design.
+  </div>
+</div></section>
+
+<!-- ===================== SECTION 2 ===================== -->
+<section><div class="wrap">
+  <div class="secnum">02 — IF I BUILT IT FROM SCRATCH</div>
+  <h2>One spine, not four substrates</h2>
+  <p class="lead">Step back, and the root cause of the “endless loop of errors” is one thing: <b>business logic and state
+  live in four places that must be hand-synced</b> — Airtable formulas, TypeScript “replicas” of those formulas,
+  a dozen env flags, and Vercel KV. Almost every bug we hit traced to a desync between them. A from-scratch design
+  collapses those four into one source of truth. Seven moves do it.</p>
+
+  <div class="grid g2">
+    <div class="pcard"><div class="ttl">1 · One decision engine</div>
+      <div class="row"><span class="tag t-pain">Today</span><span>Pricing/gating logic lives in Airtable formulas <i>and</i> a TS replica. They drift — the dry-run reported 0 deals while live produced “Auto Proceed.”</span></div>
+      <div class="row"><span class="tag t-fix">Redesign</span><span>One typed, tested module computes MAO / stage / eligibility. Airtable is a dumb store + UI.</span></div>
+      <div class="row"><span class="tag t-win">Payoff</span><span>Zero drift. The dry-run and the live run are the same code.</span></div>
+    </div>
+    <div class="pcard"><div class="ttl">2 · One state machine per deal</div>
+      <div class="row"><span class="tag t-pain">Today</span><span>A deal’s state is spread over <code>Live_Status</code> + <code>Execution_Path</code> + <code>Outreach_Status</code> + a formula twin. They desync — fresh leads sat “stuck” with blank fields.</span></div>
+      <div class="row"><span class="tag t-fix">Redesign</span><span>One status field = a real state machine with typed, guarded transitions.</span></div>
+      <div class="row"><span class="tag t-win">Payoff</span><span>“Why is this lead stuck?” is always answerable in one place.</span></div>
+    </div>
+    <div class="pcard"><div class="ttl">3 · Config, not env-flag sprawl</div>
+      <div class="row"><span class="tag t-pain">Today</span><span>~12 env flags, each needing a <b>redeploy</b> to take effect → the 503 confusion, “which to create vs change.”</span></div>
+      <div class="row"><span class="tag t-fix">Redesign</span><span>One runtime config record. Going live = flip a value, effective instantly.</span></div>
+      <div class="row"><span class="tag t-win">Payoff</span><span>Kills the whole “changed but not deployed” class of bug.</span></div>
+    </div>
+    <div class="pcard"><div class="ttl">4 · One metered spend gateway</div>
+      <div class="row"><span class="tag t-pain">Today</span><span>Paid calls (RentCast/Firecrawl) scattered across crons; cost controlled by <i>yanking cron entries</i>. “Am I burning credits?” needs a code audit.</span></div>
+      <div class="row"><span class="tag t-fix">Redesign</span><span>Every paid call routes through one gateway with a hard daily budget + kill switch + live meter.</span></div>
+      <div class="row"><span class="tag t-win">Payoff</span><span>Cost is structural and visible, not a thing you police by hand.</span></div>
+    </div>
+    <div class="pcard"><div class="ttl">5 · Event-driven, not clock-driven</div>
+      <div class="row"><span class="tag t-pain">Today</span><span>~17 polling crons do work on timers, whether or not there’s work — the burn risk you keep having to gate.</span></div>
+      <div class="row"><span class="tag t-fix">Redesign</span><span>A lead’s state change triggers the next step. Paid work happens once per lead, at the right moment.</span></div>
+      <div class="row"><span class="tag t-win">Payoff</span><span>“Nothing expensive on a clock” becomes the architecture, not a chore.</span></div>
+    </div>
+    <div class="pcard"><div class="ttl">6 · One autonomy line + one queue</div>
+      <div class="row"><span class="tag t-pain">Today</span><span>Operator touch-points scattered across Manual-Review statuses, proposals, and SMS alerts.</span></div>
+      <div class="row"><span class="tag t-fix">Redesign</span><span>One explicit line: auto left of it (source→price→first-touch→ack), you right of it (counters, signatures, money) — via one decision queue.</span></div>
+      <div class="row"><span class="tag t-win">Payoff</span><span>You always know exactly what needs <i>you</i>, in one inbox.</span></div>
+    </div>
+  </div>
+  <div class="pcard" style="margin-top:14px">
+    <div class="ttl">7 · Observability built in</div>
+    <div class="row"><span class="tag t-pain">Today</span><span>Answering “what’s running / flowing / stuck / costing” means grepping routes and reading Airtable by hand (this whole session).</span></div>
+    <div class="row"><span class="tag t-fix">Redesign</span><span>One dashboard: pipeline funnel by stage, live spend meter, what’s gated, what’s stuck and why.</span></div>
+    <div class="row"><span class="tag t-win">Payoff</span><span>The system reports its own state — so decisions stop vaporizing between sessions.</span></div>
+  </div>
+</div></section>
+
+<!-- ===================== SECTION 3 ===================== -->
+<section><div class="wrap">
+  <div class="secnum">03 — HOW THE TWO DIFFER</div>
+  <h2>Four scattered layers → one spine</h2>
+  <p class="lead">Same business (source → price → offer → negotiate → contract → dispo). The difference is entirely in the
+  <i>plumbing</i> — where logic, state, config, and cost live.</p>
+
+  <div class="diff">
+    <div class="col today">
+      <span class="tg">Today · organic V1</span>
+      <h3>Logic &amp; state, scattered</h3>
+      <ul class="layerlist">
+        <li><b>Logic ×2</b> — Airtable formulas <i>+</i> TS replicas (drift)</li>
+        <li><b>State ×4</b> — Live_Status · Execution_Path · Outreach_Status · formula twin</li>
+        <li><b>Config</b> — ~12 env flags, deploy-coupled</li>
+        <li><b>Cost</b> — policed by adding/removing crons</li>
+        <li><b>Engine</b> — ~17 polling crons + 1 master switch</li>
+        <li><b>Visibility</b> — grep the code / read Airtable</li>
+      </ul>
+    </div>
+    <div class="arrowcol">⟶</div>
+    <div class="col future">
+      <span class="tg">Redesign · one spine</span>
+      <h3>One source of truth</h3>
+      <ul class="layerlist">
+        <li><b>Logic ×1</b> — one typed decision engine</li>
+        <li><b>State ×1</b> — one state machine per deal</li>
+        <li><b>Config ×1</b> — runtime record, flip-to-go-live</li>
+        <li><b>Cost</b> — one metered gateway + budget</li>
+        <li><b>Engine</b> — event-driven, work-on-arrival</li>
+        <li><b>Visibility</b> — one self-reporting funnel</li>
+      </ul>
+    </div>
+  </div>
+
+  <table>
+    <thead><tr><th>Dimension</th><th>Today</th><th>Redesign</th><th>Why it’s more effective</th></tr></thead>
+    <tbody>
+      <tr><td><b>Business logic</b></td><td class="dim">Airtable formula + TS replica</td><td class="dim">Single engine</td><td><span class="why">No drift; test once</span></td></tr>
+      <tr><td><b>Deal state</b></td><td class="dim">4 fields, hand-synced</td><td class="dim">1 state machine</td><td><span class="why">Never silently “stuck”</span></td></tr>
+      <tr><td><b>Go-live</b></td><td class="dim">Set env → redeploy</td><td class="dim">Flip one config</td><td><span class="why">Instant, no 503s</span></td></tr>
+      <tr><td><b>Cost control</b></td><td class="dim">Yank cron entries</td><td class="dim">Metered gateway + cap</td><td><span class="why">Structural, visible</span></td></tr>
+      <tr><td><b>Work trigger</b></td><td class="dim">~17 clocks</td><td class="dim">Events</td><td><span class="why">Pay per deal, not per tick</span></td></tr>
+      <tr><td><b>Operator touch</b></td><td class="dim">Scattered</td><td class="dim">One decision queue</td><td><span class="why">One inbox of “needs you”</span></td></tr>
+      <tr><td><b>Knowing status</b></td><td class="dim">Manual audit</td><td class="dim">Live funnel</td><td><span class="why">Context survives sessions</span></td></tr>
+    </tbody>
+  </table>
+</div></section>
+
+<!-- ===================== SECTION 4 ===================== -->
+<section><div class="wrap">
+  <div class="secnum">04 — THE BRIDGE</div>
+  <h2>Don’t rewrite. Migrate, after revenue.</h2>
+  <p class="lead">Your goal is to <b>activate V1 and make money now</b>, then “clone and expand after seeing success.” A
+  from-scratch rebuild would be the wrong move — it’s a north star, not a next step. The current system <i>works</i> and
+  is one merge from sending. Each move below is small, independently shippable, no parallel build, and removes a whole
+  class of the errors we’ve been fighting — in the order that pays off fastest.</p>
+
+  <div class="bridge">
+    <div class="step now"><div class="idx">0</div><div><h4>Ship V1 to first revenue</h4><p>Merge the two staged branches, send the 2 Detroit offers, work the replies. Touch <i>no</i> architecture. Prove the loop makes money.</p></div><span class="eff e-s">this week</span></div>
+    <div class="step"><div class="idx">1</div><div><h4>One runtime config replaces the env-flag toggles</h4><p>Move the go-live switches into a single config record. Going live becomes a flip, not a redeploy — kills the 503 / “not deployed” class outright.</p></div><span class="eff e-s">small</span></div>
+    <div class="step"><div class="idx">2</div><div><h4>Make eligibility self-syncing</h4><p>Have promote write <code>Execution_Path</code> straight from the math result, so fresh leads never sit blank again (no more manual patch like tonight).</p></div><span class="eff e-s">small</span></div>
+    <div class="step"><div class="idx">3</div><div><h4>One metered spend gateway</h4><p>Route every RentCast/Firecrawl call through a single budgeted gateway with a live meter. “Am I burning credits?” becomes a number on a screen.</p></div><span class="eff e-m">medium</span></div>
+    <div class="step"><div class="idx">4</div><div><h4>Collapse Airtable-formula logic into the engine</h4><p>Make the TS engine the only place stage/MAO/distress is computed; Airtable becomes store + UI. Ends replica drift for good.</p></div><span class="eff e-m">medium</span></div>
+    <div class="step later"><div class="idx">5</div><div><h4>Event-driven pipeline (only at scale)</h4><p>Replace polling crons with state-change events — when volume actually justifies it. This is the “clone &amp; expand” phase, not before.</p></div><span class="eff e-l">later</span></div>
+  </div>
+
+  <div class="callout" style="margin-top:20px">
+    <b>The one-line takeaway.</b> Today’s system is a capable organic V1 whose pain is plumbing, not business logic.
+    The redesign isn’t “build it again” — it’s <b>collapse four hand-synced layers into one spine</b>, incrementally,
+    <i>after</i> the current machine has proven it makes money. Moves 1–2 alone would have erased most of what we fought through this week.
+  </div>
+
+  <div class="foot">Generated for Alex · AKB Solutions · grounded in the as-built repo state (akb-dashboard, main @ dd37960). Status reflects live env + crons as of 2026-06-24.</div>
+</div></section>
+</body>
+</html>
