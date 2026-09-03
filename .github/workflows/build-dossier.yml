@@ -1,0 +1,132 @@
+# Deal File builder — controlled single-record dossier build with operator-CMA
+# overrides. Mirrors the CRON_SECRET pattern of comp-coverage-sweep.yml.
+#
+# WHY. The offer-readiness checklist's "CMA" item reads the Deal File's
+# "Operator-CMA Overrides" section. The operator produces CMAs in PropStream
+# and hands the session the figures; this workflow lets the session write
+# them through GET /api/admin/build-dossier (which underwrites against ATTOM
+# + the overrides and writes ONE Deal_Dossiers row — no listing writes).
+# Numeric inputs go through the route's input-integrity guard: clean verbatim
+# figures only, prose is rejected and surfaced in Section 11.
+
+name: Build Deal File (controlled)
+
+on:
+  workflow_dispatch:
+    inputs:
+      record_id:
+        description: "Listings_V1 record id (rec...)."
+        required: true
+        type: string
+      deal:
+        description: "Deal number for the dossier header (integer)."
+        required: false
+        default: "0"
+        type: string
+      floor:
+        description: "Sticky floor — the seller's stated number, if any (integer dollars)."
+        required: false
+        default: ""
+        type: string
+      cma_arv_low:
+        description: "Operator CMA conservative ARV (integer dollars)."
+        required: false
+        default: ""
+        type: string
+      cma_arv_high:
+        description: "Operator CMA optimistic ARV (integer dollars)."
+        required: false
+        default: ""
+        type: string
+      cma_ppsf_low:
+        description: "Operator CMA conservative $/sqft (number)."
+        required: false
+        default: ""
+        type: string
+      cma_ppsf_high:
+        description: "Operator CMA optimistic $/sqft (number)."
+        required: false
+        default: ""
+        type: string
+      cma_rehab_mid:
+        description: "Operator CMA rehab mid (integer dollars)."
+        required: false
+        default: ""
+        type: string
+      cma_rehab_high:
+        description: "Operator CMA rehab high (integer dollars)."
+        required: false
+        default: ""
+        type: string
+      cma_source:
+        description: "Source label written to Section 11 (e.g. propstream_cma_2026-09-03)."
+        required: false
+        default: "operator_cma"
+        type: string
+      cma_summary:
+        description: "One-paragraph CMA summary (comps kept / dropped). Plain text."
+        required: false
+        default: ""
+        type: string
+      base_url:
+        description: "Production base URL (override only for staging tests)."
+        required: false
+        default: "https://coach-pulse-ten.vercel.app"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RECORD_ID: ${{ inputs.record_id }}
+      DEAL: ${{ inputs.deal }}
+      FLOOR: ${{ inputs.floor }}
+      CMA_ARV_LOW: ${{ inputs.cma_arv_low }}
+      CMA_ARV_HIGH: ${{ inputs.cma_arv_high }}
+      CMA_PPSF_LOW: ${{ inputs.cma_ppsf_low }}
+      CMA_PPSF_HIGH: ${{ inputs.cma_ppsf_high }}
+      CMA_REHAB_MID: ${{ inputs.cma_rehab_mid }}
+      CMA_REHAB_HIGH: ${{ inputs.cma_rehab_high }}
+      CMA_SOURCE: ${{ inputs.cma_source }}
+      CMA_SUMMARY: ${{ inputs.cma_summary }}
+      BASE_URL: ${{ inputs.base_url }}
+    steps:
+      - name: Refuse to run when CRON_SECRET is missing
+        run: |
+          if [ -z "${{ secrets.CRON_SECRET }}" ]; then
+            echo "::error::CRON_SECRET is not configured as a GitHub Actions secret."
+            exit 1
+          fi
+          echo "CRON_SECRET present; proceeding."
+
+      - name: GET /api/admin/build-dossier
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          case "${RECORD_ID}" in rec*) ;; *) echo "::error::record_id must start with rec"; exit 1;; esac
+          # Build the query string with proper URL encoding; empty inputs are omitted.
+          Q=$(jq -rn \
+            --arg recordId "$RECORD_ID" --arg deal "$DEAL" --arg floor "$FLOOR" \
+            --arg cma_arv_low "$CMA_ARV_LOW" --arg cma_arv_high "$CMA_ARV_HIGH" \
+            --arg cma_ppsf_low "$CMA_PPSF_LOW" --arg cma_ppsf_high "$CMA_PPSF_HIGH" \
+            --arg cma_rehab_mid "$CMA_REHAB_MID" --arg cma_rehab_high "$CMA_REHAB_HIGH" \
+            --arg cma_source "$CMA_SOURCE" --arg cma_summary "$CMA_SUMMARY" \
+            '[$ARGS.named | to_entries[] | select(.value != "") | "\(.key)=\(.value|@uri)"] | join("&")')
+          echo "record=${RECORD_ID} deal=${DEAL} floor=${FLOOR} arv_low=${CMA_ARV_LOW} rehab_mid=${CMA_REHAB_MID} source=${CMA_SOURCE}"
+          HTTP_CODE=$(curl -sS -o /tmp/dossier.json -w "%{http_code}" \
+            --max-time 150 \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "x-vercel-cron: 1" \
+            "${BASE_URL}/api/admin/build-dossier?${Q}")
+          echo "HTTP ${HTTP_CODE}"
+          echo "--- response (markdown omitted) ---"
+          jq 'del(.markdown, .dossier_markdown)' /tmp/dossier.json 2>/dev/null || head -c 4000 /tmp/dossier.json
+          if [ "${HTTP_CODE}" -ge 400 ]; then
+            echo "::error::build-dossier returned HTTP ${HTTP_CODE}"
+            exit 1
+          fi
