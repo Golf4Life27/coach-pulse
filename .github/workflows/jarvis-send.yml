@@ -1,0 +1,88 @@
+# Jarvis send — controlled single-message send through the production app.
+#
+# WHY. The claude.ai Quo connector's key dies every few hours; the app's own
+# Quo key (Vercel env) never has. Sending through POST /api/jarvis-send puts
+# every session send behind the same auth waterfall and sendGuarded
+# thread-truth gate the pipeline uses (tail pull, dedupe, opt-out rails),
+# which is strictly better than a raw MCP send. Same CRON_SECRET pattern as
+# h2-send.yml / maverick-actions.yml.
+#
+# One message per dispatch, by design. The record id is required so the
+# send lands in the audit trail against the listing it belongs to.
+
+name: Jarvis send (controlled)
+
+on:
+  workflow_dispatch:
+    inputs:
+      record_id:
+        description: "Listings_V1 record id (rec...) the message belongs to."
+        required: true
+        type: string
+      to:
+        description: "Recipient in E.164 (+1...)."
+        required: true
+        type: string
+      message:
+        description: "Message body, verbatim."
+        required: true
+        type: string
+      proposal_id:
+        description: "Proposal id for the audit trail. Defaults to session-<run id>."
+        required: false
+        default: ""
+        type: string
+      base_url:
+        description: "Production base URL (override only for staging tests)."
+        required: false
+        default: "https://coach-pulse-ten.vercel.app"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RECORD_ID: ${{ inputs.record_id }}
+      TO: ${{ inputs.to }}
+      MESSAGE: ${{ inputs.message }}
+      PROPOSAL_ID: ${{ inputs.proposal_id }}
+      BASE_URL: ${{ inputs.base_url }}
+    steps:
+      - name: Refuse to run when CRON_SECRET is missing
+        run: |
+          if [ -z "${{ secrets.CRON_SECRET }}" ]; then
+            echo "::error::CRON_SECRET is not configured as a GitHub Actions secret."
+            exit 1
+          fi
+          echo "CRON_SECRET present; proceeding."
+
+      - name: POST /api/jarvis-send
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          case "${RECORD_ID}" in rec*) ;; *) echo "::error::record_id must start with rec"; exit 1;; esac
+          case "${TO}" in +1[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;; *) echo "::error::to must be E.164 (+1XXXXXXXXXX)"; exit 1;; esac
+          PID="${PROPOSAL_ID:-session-${GITHUB_RUN_ID}}"
+          PAYLOAD=$(jq -cn --arg p "$PID" --arg t "$TO" --arg m "$MESSAGE" --arg r "$RECORD_ID" \
+            '{proposalId:$p, to:$t, message:$m, recordId:$r}')
+          echo "to=***${TO: -4} record=${RECORD_ID} proposal=${PID} len=${#MESSAGE}"
+          HTTP_CODE=$(printf '%s' "${PAYLOAD}" | curl -sS -o /tmp/js.json -w "%{http_code}" \
+            --max-time 120 \
+            -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "x-vercel-cron: 1" \
+            -H "Content-Type: application/json" \
+            --data-binary @- \
+            "${BASE_URL}/api/jarvis-send")
+          echo "HTTP ${HTTP_CODE}"
+          echo "--- response body ---"
+          jq . /tmp/js.json 2>/dev/null || cat /tmp/js.json
+          if [ "${HTTP_CODE}" -ge 400 ]; then
+            echo "::error::jarvis-send returned HTTP ${HTTP_CODE}"
+            exit 1
+          fi
