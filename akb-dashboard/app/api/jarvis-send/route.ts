@@ -105,7 +105,11 @@ export async function POST(req: Request) {
   // The duplicate check is the fix for the double-send that reached the same
   // agent twice across two same-phone listings: per-record claims could not
   // see it, a per-NUMBER claim can.
-  const listing = await getListing(recordId).catch(() => null);
+  // fresh: the session send path stamps the prior Quo id into Verification_Notes
+  // immediately before calling this route; the 60s in-memory listing cache
+  // otherwise serves the pre-stamp record and the thread-truth gate refuses
+  // with unrecorded_outbound_in_thread (103 Saint Charles, 2026-09-03 17:54Z).
+  const listing = await getListing(recordId, { fresh: true }).catch(() => null);
   let sendResult;
   try {
     const gated = await sendGuarded({
