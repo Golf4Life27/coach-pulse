@@ -53,6 +53,7 @@ import {
 import { persistDecisionMath } from "@/lib/decision-persist";
 import { priceOpenerWithSeed } from "@/lib/opener-pricing";
 import { isListAnchorMode, priceOpenerListAnchor } from "@/lib/pricing/list-anchor-opener";
+import { anchorPctForZip, SOLD_FEEDBACK_KV_KEY, type SoldFeedbackReport } from "@/lib/sold-feedback";
 import { serializeDerivation } from "@/lib/pricing/opener-derivation";
 import { getZipArvSeed, seedSelfPricesNonDisclosure, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
 import { minOfferFloor } from "@/lib/per-market-pricer";
@@ -359,6 +360,17 @@ async function handle(req: Request): Promise<Response> {
   // a 100-record cohort doesn't hit KV per record.
   const anchorCache = new Map<string, number>();
   const seedCache = new Map<string, ZipArvSeed | null>();
+  // SOLD-FOR FEEDBACK MAP: one KV read per run, only when the flag is on
+  // (see lib/sold-feedback.anchorPctForZip — advisory inside the 60-65% band).
+  let soldFeedbackReport: SoldFeedbackReport | null = null;
+  if ((process.env.H2_SOLD_FEEDBACK_MAP ?? "").trim() === "1" && kvConfigured()) {
+    try {
+      const raw = await kvProd.get(SOLD_FEEDBACK_KV_KEY);
+      soldFeedbackReport = raw ? (JSON.parse(raw) as SoldFeedbackReport) : null;
+    } catch (err) {
+      console.error("[h2-outreach] sold-feedback map read failed:", err);
+    }
+  }
   // ── HEAD-OF-QUEUE STARVATION FIX (2026-07-11) ── the queue used to be
   // sliced to `limit` BEFORE pricing. Once the top-`limit` ranked records
   // were all stable pricer HOLDs (over-ARV asks whose status never changes),
@@ -508,8 +520,13 @@ async function handle(req: Request): Promise<Response> {
     // pricer below remains the producer in every other mode and for every
     // negotiation-stage number. Both return the same shape, so all downstream
     // rails (holds, min-offer floor, sticky receipt, audit) are unchanged.
+    // SOLD-FOR FEEDBACK MAP (operator 2026-09-05, flag H2_SOLD_FEEDBACK_MAP=1):
+    // per-zip opener pct learned from agent-reported sale prices, ALWAYS inside
+    // the ruling's 60-65% band; default 62% when the flag is off, the report
+    // is missing, or the zip has fewer than 3 samples. Advisory by design.
+    const zipPct = anchorPctForZip(zip5, soldFeedbackReport);
     const pw = isListAnchorMode()
-      ? priceOpenerListAnchor(l.listPrice ?? null)
+      ? priceOpenerListAnchor(l.listPrice ?? null, zipPct.pct)
       : priceOpenerWithSeed({
           listPrice: l.listPrice ?? null,
           storedArv: l.realArvMedian ?? null,

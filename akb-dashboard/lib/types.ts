@@ -87,6 +87,10 @@ export interface Listing {
   decisionInputsHash?: string | null;
   underwriteConfidence?: "High" | "Med" | "Low" | null;
   latestCounterUsd?: number | null;
+  // Sold-for feedback loop (2026-09-05): agent-reported closed/contract price
+  // and the date it was reported. See lib/sold-feedback.ts.
+  reportedSalePrice?: number | null;
+  reportedSaleDate?: string | null;
   /** Opener_Basis receipt (capped_to_list / arv_buybox_seed / …). */
   openerBasis?: string | null;
   /** Serialized OpenerDerivation — the opener's arithmetic receipt, so the

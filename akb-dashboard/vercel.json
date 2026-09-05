@@ -133,6 +133,10 @@
       "schedule": "10 4 * * *"
     },
     {
+      "path": "/api/admin/sold-feedback",
+      "schedule": "30 5 * * *"
+    },
+    {
       "path": "/api/cron/gmail-sync?limit=40&hours_back=48",
       "schedule": "40 * * * *"
     },
