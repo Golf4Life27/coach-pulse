@@ -186,6 +186,7 @@ export async function GET(req: Request) {
     // Tier 0 auto-close outcomes (sent / skipped + reason), surfaced in the
     // response so the daily digest + audit trail have the full picture.
     const autoCloseResults: Array<{ recordId: string; sent: boolean; reason: string | null }> = [];
+    const silentResults: Array<{ recordId: string; classification: string; status: string | null }> = [];
     const autoAckResults: Array<{ recordId: string; sent: boolean; reason: string | null }> = [];
     const autoAnswerResults: Array<{ recordId: string; sent: boolean; reason: string | null; classification: string }> = [];
     // Tier-0 rejections whose Outreach_Status this run flipped to Dead (P3).
@@ -299,6 +300,28 @@ export async function GET(req: Request) {
                 : null,
             street: (listing.address ?? "").split(",")[0].trim() || null,
           });
+
+          // ── TIER 0 SILENT (2026-09-05): hostile / list-anchored / flat-no /
+          // auto-reply. Operator rule 2026-09-03 22:20Z: these threads get
+          // NOTHING — not the polite close, not a proposal, not an alert.
+          // Park the record (determineNewStatus decides; a record with paper
+          // moving stays put), persist the classification, move on.
+          if (triage.tier === "tier_0_silent") {
+            silentResults.push({ recordId: listing.id, classification: triage.classification, status: triage.queueStatus });
+            try {
+              const stamp = new Date().toLocaleDateString("en-US", { month: "numeric", day: "numeric", year: "2-digit" });
+              const silentNote = `${stamp} — [Reply Triage] Inbound from ${listing.agentName ?? "agent"}: "${inbound.body.slice(0, 200)}". Classified ${triage.classification.toUpperCase().replace(/_/g, "-")} (${triage.matchedPattern ?? "pattern"}). ${triage.queueStatus ? `Status → ${triage.queueStatus}` : "Status unchanged"} — silent per operator rule 2026-09-03 (no reply, no bump).`;
+              await updateListingRecord(listing.id, {
+                ...(triage.queueStatus && listing.outreachStatus !== triage.queueStatus ? { Outreach_Status: triage.queueStatus } : {}),
+                Last_Inbound_At: inbound.createdAt,
+                Verification_Notes: listing.notes ? `${listing.notes}\n\n${silentNote}` : silentNote,
+                ...buildReplyClassificationFields(triage, inbound.createdAt),
+              });
+            } catch (err) {
+              errors.push(`${listing.address}: silent-park write failed: ${String(err)}`);
+            }
+            continue;
+          }
 
           // ── TIER 0: high-confidence rejection → system auto-close. ──
           // No proposal, no alert, no Claude draft. The close rides the
@@ -582,7 +605,9 @@ export async function GET(req: Request) {
       inboundFound,
       matched,
       proposalsCreated: created,
-      skippedDedupe: matched - newProposals.length - autoCloseResults.length,
+      skippedDedupe: matched - newProposals.length - autoCloseResults.length - silentResults.length,
+      silentParked: silentResults.length,
+      silentResults: silentResults.length > 0 ? silentResults : undefined,
       alertsAttempted: alertResults.length,
       alertsSent: alertResults.filter((r) => r.sent).length,
       alertResults: alertResults.length > 0 ? alertResults : undefined,

@@ -15,12 +15,28 @@
 //
 // Pure. No I/O. Tested in lib/reply-triage.test.ts.
 
+import { looksLikeBotAutoreply } from "@/lib/conversation-check";
+
 export type ReplyClassification =
   | "rejection"
   | "soft_no"
   | "interest"
   | "counter"
   | "acceptance"
+  // SILENT CLASSES (operator rule 2026-09-03 22:20Z, recYEtBpeMx3Mqq06; built
+  // 2026-09-05 after 9 of 19 replies in one day landed UNCLASSIFIED and a
+  // hostile message scored INTEREST): these threads get NO reply, no draft,
+  // no alert — Outreach_Status Parked, out of the bump cadence. The operator
+  // reads them in the notes; nobody texts them.
+  | "hostile"           // sarcasm / hostility ("stay out of our market", "lol… put in the work")
+  | "list_anchored"     // "closer to asking", "seller wants list", "current list is $X"
+  | "flat_no"           // a plain decline the soft-no list had no keyword for ("won't consider", "her reply is no")
+  // ROUTED CLASSES (tier 1, the operator answers once):
+  | "identity_question" // "are you a wholesaler?" / "are you going to assign?" — the operator's standing line
+  | "agent_redirect"    // "<name> (<phone>) handles that one" — fix the contact, re-deliver the opener
+  // NOT A HUMAN: automated responder that slipped past the pre-triage filter
+  // ("You've reached me outside business hours" scored INTEREST on 9/5).
+  | "auto_reply"
   // RECOMMENDED-REPLIES extension (operator 2026-07-12, the 9360 Cheyenne
   // miss: "Are you covering costs? There is a water bill, and a tax bill...
   // And I need to be paid." fell through to UNCLASSIFIED with no next step):
@@ -40,8 +56,13 @@ export type ReplyClassification =
  *   tier_1_decision   — interest, counter, unknown. Needs-decision proposal
  *                       + SMS that LEADS with the decision (never the body).
  *   tier_2_urgent     — acceptance / strong-buy signals. "ACT NOW:" prefix.
+ *   tier_0_silent     — hostile / list-anchored / flat-no / auto-reply. NO
+ *                       send of any kind (not even the polite close), no
+ *                       proposal, no alert. Status → Parked where applicable.
+ *                       Operator rule 2026-09-03 22:20Z: "those threads get
+ *                       silence"; a probe into hostility costs the agent.
  */
-export type AlertTier = "tier_0_auto_close" | "tier_1_decision" | "tier_2_urgent";
+export type AlertTier = "tier_0_auto_close" | "tier_0_silent" | "tier_1_decision" | "tier_2_urgent";
 
 /** Acceptance — the seller said yes / asked for the contract. Checked FIRST
  *  (before rejection) because the rejection patches match "accepted ... offer"
@@ -87,6 +108,15 @@ const REJECTION_PATTERNS = [
   /\bno longer\b.*\b(available|listed)\b/i,
   /\bwithdrawn\b/i,
   /\bpending\b/i,
+  // 2026-09-05 misses (all landed UNCLASSIFIED and were closed by hand):
+  // "We just buttoned up a contract on that property" (1313 Hartford);
+  // "We have an offer right now. Over asking, please don't bother me anymore"
+  // (1212 W Chambers — ALSO an opt-out, see lib/outreach/opt-out);
+  // "multiple offers for their property all above 31,000" (19350 Glastonbury).
+  /\b(?:buttoned\s+up|signed|executed|ratified|finalized)\s+(?:a\s+|the\s+)?contract\b/i,
+  /\b(?:have|has|got)\s+(?:an?\s+)?(?:offer|contract)\s+(?:right\s+now|in\s+hand|already|on\s+it)\b/i,
+  /\bmultiple\s+offers\b/i,
+  /\b(?:don'?t|dont|do\s+not|please\s+don'?t)\s+bother\s+(?:me|us)\b/i,
   // Patches 2026-06-10 — shrink the UNCLASSIFIED bucket toward "rejection"
   // ONLY when paired with an acceptance / possession / commitment verb (the
   // seller is comparing OUR offer to another deal in hand, not asking us to
@@ -187,6 +217,113 @@ const SOFT_NO_PATTERNS = [
   /\bnot\s+available\b/i,
 ];
 
+/** HOSTILE / SARCASTIC — operator rule 2026-09-03 22:20Z (recYEtBpeMx3Mqq06):
+ *  "Is there a way to stop the replies to angry agents?" A hostile reply has
+ *  already given its posture (no) and usually its number (list); probing it
+ *  reads as tone-deaf automation and burns the agent for future deals.
+ *  Silence, Parked, no bump. Checked BEFORE cash-pivot / soft-no / interest so
+ *  a dollar mention inside the insult ("where would you get the idea a seller
+ *  would take $100,000 less… stay out of our market", 4708 S Rosette 9/5)
+ *  can never score as interest again. Patterns are deliberately specific —
+ *  a polite decline must fall through to soft_no / flat_no, not here. */
+const HOSTILE_PATTERNS = [
+  /\bstay\s+(?:in\s+your|out\s+of\s+our)\s+(?:own\s+)?(?:market|lane|city|state|area|town)\b/i,
+  /\bdo\s+your\s+(?:due\s+diligence|homework|research)\b/i,
+  /\bput\s+in\s+the\s+work\b/i,
+  /\byou\s+clearly\b/i,
+  /\bwaste\s+of\s+(?:my|our|your|everyone'?s)\s+time\b/i,
+  /^\s*(?:lol|lmao|lmfao|haha+|rofl|smh)\b/i,
+  /\b(?:is\s+this|are\s+you)\s+(?:a\s+joke|joking|kidding|serious|for\s+real)\b/i,
+  /\binsult(?:ing|ed)?\b/i,
+  /\badd\s+another\s+\$?\s*\d/i,
+  /\bnot\s+(?:nearly|even\s+remotely|remotely)\s+(?:enough|close)\b/i,
+  /\bscam(?:mer)?s?\b/i,
+  /\b(?:ridiculous|absurd|laughable|offensive)\b/i,
+  /\bgo\s+(?:try|find|bother)\s+someone\s+else\b/i,
+  /\bget\s+(?:real|lost|a\s+clue)\b/i,
+  // "We arent even in the same State let alone ballpark" (925 Sims 9/5)
+  /\b(?:not|aren'?t|isn'?t|ain'?t|arent|isnt)\s+(?:even\s+)?in\s+the\s+same\s+(?:state|ballpark|universe|zip\s?code|county|planet|galaxy|league)\b/i,
+];
+
+/** LIST-ANCHORED — same operator rule: "closer to list", "seller wants list",
+ *  "firm at list", "current list is $X so this won't work". The seller's
+ *  number IS the list price; there is no negotiation to probe. Silence,
+ *  Parked, no bump. SUPERSEDES the 2026-08-24 "directional counter" reading
+ *  (13123 Indiana / Schylbea: "closer to the asking price" → counter) — the
+ *  operator ruled on 9/3 that this shape gets no reply, and the 9/5 triage
+ *  reset every COUNTER-tagged "closer to asking" back to Parked by hand. */
+const LIST_ANCHORED_PATTERNS = [
+  /\bcloser\s+to\s+(?:the\s+)?(?:asking|list(?:ing)?|ask)(?:\s+price)?\b/i,
+  /\b(?:in\s*-?\s*)?line\s+with\s+(?:the\s+)?(?:current\s+)?(?:list(?:ing)?|asking)(?:\s+price)?\b/i,
+  /\bfirm\s+(?:at|on)\s+(?:the\s+)?(?:list(?:ing)?|asking)(?:\s+price)?\b/i,
+  /\b(?:wants?|needs?|expects?|looking\s+for|holding\s+(?:out\s+)?for|is\s+at|are\s+at)\s+(?:the\s+)?(?:full\s+)?(?:list(?:ing)?|asking)(?:\s+price)?\b/i,
+  /\b(?:current\s+)?list(?:ing)?\s+(?:price\s+)?is\s+\$?\s*\d/i,
+  /\b(?:has|have)\s+set\s+(?:that|the)\s+(?:number|price)\s+at\b/i,
+  /\bfull\s+(?:list|asking)\s+price\b/i,
+  /\bnear(?:er)?\s+(?:to\s+)?(?:the\s+)?(?:list(?:ing)?|asking)(?:\s+price)?\b/i,
+];
+
+/** FLAT NO — a plain decline in words the soft-no list never keyed on. Nine
+ *  of these landed UNCLASSIFIED on 2026-09-05 alone ("He won't consider that
+ *  price range", "No, they would not be open to that ballpark", "I'm sorry
+ *  her reply is no", "Not even close.", "He paid more for it than that",
+ *  "doesn't need work… good luck to you"). Under the 2026-09-03 rule a flat
+ *  no gets no reply: silence, Parked, no bump. Checked AFTER soft_no so the
+ *  P1 anchors ("no thanks", bare "no", "pass") keep their approval-gated 2A
+ *  re-engagement path unchanged. */
+const FLAT_NO_PATTERNS = [
+  /\bwon'?t\s+(?:consider|entertain|accept|take|look\s+at|go\s+(?:that|this)\s+low)\b/i,
+  /\b(?:would|will|is|are|am)\s+not\s+(?:be\s+)?open\s+to\b/i,
+  /\bnot\s+open\s+to\b/i,
+  /\b(?:reply|answer|response)\s+(?:is|was)\s+(?:a\s+)?no\b/i,
+  /\bnot\s+in\s+(?:the|that|this|our|my|your)\s+(?:ballpark|range|price\s+range|neighborhood|wheelhouse)\b/i,
+  /\bnowhere\s+(?:near|close)\b/i,
+  /\bnot\s+even\s+close\b/i,
+  /\b(?:would|will)\s+never\s+(?:accept|take|consider|entertain|go)\b/i,
+  /\bdeclined?\b/i,
+  /\bpaid\s+(?:more|way\s+more|a\s+lot\s+more|\$?\s*\d[\d,.]*\s*k?)\s+(?:for|than)\b/i,
+  /\bdoesn'?t\s+need\s+(?:any\s+)?work\b/i,
+  /\bgood\s+luck\b/i,
+  /\bthanks?\s+anyways?\b/i,
+  /\bnot\s+what\s+(?:they|we|he|she|the\s+seller)(?:'re|'s|\s+are|\s+is)?\s+looking\s+for\b/i,
+  /\bnot\s+(?:going\s+to|gonna)\s+(?:work|happen|fly)\b/i,
+  /\btoo\s+far\s+(?:off|below|under)\b/i,
+  /\bnot\s+(?:a\s+)?(?:good\s+)?(?:fit|match)\b/i,
+  /\bno\s+(?:way|chance)\b/i,
+  /\bworth\s+(?:far|way|a\s+lot|much|considerably)\s+more\b/i,
+  /\b(?:hold|keep)\s+(?:it|the\s+(?:property|house))\s+and\s+(?:rent|lease)\b/i,
+];
+
+/** IDENTITY / REPRESENTATION QUESTION — "Alex are you a whole saler?" (6561
+ *  Firwood 9/5), "Are you going to try to assign the contract" (101 Willow
+ *  9/5). Not a price signal, not a decline: the agent is asking who we are.
+ *  Routes tier 1 with NO auto-draft (the doctrine prompt would have to talk
+ *  about assignment, which it must never do) — the operator answers from a
+ *  standing line once he sets one. The 2026-09-03 rule allows one graceful
+ *  answer to a direct question. */
+const IDENTITY_QUESTION_PATTERNS = [
+  /\bare\s+you\s+(?:a\s+|an\s+)?(?:whole\s?saler|investor|licensed|realtor|(?:real\s+estate\s+)?agent|broker|bot|ai|robot|real\s+person|local|the\s+(?:actual\s+|end\s+)?buyer)\b/i,
+  /\bwhole\s?sal(?:e|er|ers|ing)\b/i,
+  /\b(?:going\s+to|gonna|plan(?:ning)?\s+(?:to|on)|intend(?:ing)?\s+to|try\s+to)\s+assign\b/i,
+  /\bassign(?:ing|ment)?\s+(?:the\s+|this\s+|your\s+)?contract\b/i,
+  /\bwho\s+are\s+you\b/i,
+  /\bis\s+this\s+(?:a\s+)?(?:bot|an?\s+ai|automated|a\s+real\s+person)\b/i,
+];
+
+/** AGENT REDIRECT — the number we texted is not the decision-maker and names
+ *  who is ("Jim Conard (937-974-7758) handles that property", 66 Victor Ave
+ *  9/4). Nothing to price; the contact fields need updating and the opener
+ *  re-delivered. Routes tier 1 review, no status change, no draft. */
+const AGENT_REDIRECT_PATTERNS = [
+  /\b(?:is|are)\s+the\s+(?:listing\s+|selling\s+)?agent\b/i,
+  /\bhandles?\s+(?:that|this|the)\s+(?:property|listing|one|house|sale)\b/i,
+  /\bnot\s+(?:my|our)\s+listing\b/i,
+  /\b(?:i|we)(?:'m|\s+am|\s+are|'re)\s+not\s+the\s+(?:listing\s+)?agent\b/i,
+  /\b(?:contact|reach\s+out\s+to|call|text|email)\s+(?:him|her|them)\s+(?:at|on|directly)\b/i,
+  /\bwrong\s+agent\b/i,
+  /\b(?:listing|selling)\s+agent\s+is\b/i,
+];
+
 /** NEGATION AWARENESS (2026-07-26): a positive-interest phrase preceded or
  *  followed by a negation ("not", "isn't", "won't", "no longer", "n't", …)
  *  within ~4 words must NOT read as interest — this is the second line of
@@ -229,8 +366,10 @@ const SELLER_COSTS_PATTERNS = [
  *  offer), zero pricing content. */
 const OFFER_FORMAT_PATTERNS = [
   /\bemail\s+(?:me\s+)?(?:the\s+|your\s+|an?\s+)?offer\b/i,
-  /\b(?:gar|trec|far\s?bar)\b[^.?!]{0,30}\b(?:form|contract)\b/i,
-  /\bon\s+(?:a\s+)?(?:gar|trec|far\s?bar|state)\s+(?:form|contract)\b/i,
+  /\b(?:gar|trec|far\s?bar|aar|nwmls|car)\b[^.?!]{0,30}\b(?:form|contract)\b/i,
+  /\bon\s+(?:a\s+|an\s+)?(?:gar|trec|far\s?bar|aar|state|standard)\s+(?:form|contract)\b/i,
+  // "I only present offers to my seller on an AAR contract" (10238 E Watson 9/5)
+  /\bpresent\s+offers?\b[^.?!]{0,40}\bcontract\b/i,
   /\b(?:official|formal|written)\s+offer\b/i,
   /\bin\s+writing\b/i,
   /\bsubmit\s+(?:it|the\s+offer|your\s+offer)?\s*(?:through|via|to|on)\b/i,
@@ -290,8 +429,15 @@ const INTEREST_PATTERNS = [
 // A counter is detected when the seller quotes a specific number range or
 // floor — distinct from a generic interest signal. We require a price
 // reference plus counter-flavored language.
-const COUNTER_PRICE_RE = /\$\s*\d{1,3}[\s,.]?(?:\d{3}|k)\b/i;
+// WIDENED 2026-09-05 (820 W Keefe: "we'd have to be over 100k. It's rented
+// for 2100" landed UNCLASSIFIED because the token had no "$"): a price is a
+// "$" figure, a comma-grouped figure, or a 1-3 digit "k" figure. A bare
+// 4-digit run ("rented for 2100", "3/2 1958") is deliberately NOT a price.
+const COUNTER_PRICE_RE = /\$\s*\d{1,3}(?:[\s,.]?\d{3})*\b|\b\d{1,3}(?:,\d{3})+\b|\b\d{1,3}\s?k\b/i;
 const COUNTER_LANGUAGE_PATTERNS = [
+  // "we'd have to be over 100k" / "needs to be at least $120k" — a stated floor.
+  /\b(?:have|has|need|needs|got)\s+to\s+be\s+(?:over|above|at\s+least|north\s+of|around|at)\s+\$?\s*\d/i,
+  /\b(?:over|above|at\s+least|north\s+of|minimum\s+of|no\s+less\s+than)\s+\$?\s*\d{1,3}(?:[,.]\d{3}|\s?k)\b/i,
   /\bcounter\b/i,
   /\bcome\s+(?:up|down)\b/i,
   /\bin\s+the\s+\$?\d/i,
@@ -319,6 +465,15 @@ export function classifyReply(body: string): {
   const trimmed = (body ?? "").trim();
   if (!trimmed) return { classification: "unknown", matchedPattern: null };
 
+  // Automated responder — not a human answer. Callers are supposed to strip
+  // these before triage (lib/inbound/capture), but the quo-sync reconciler
+  // stamps a class straight from here, and "You've reached me outside
+  // business hours" flipped 6100 Gertrude to Negotiating on 9/5. Belt and
+  // braces: the classifier itself knows a bot when it sees one.
+  if (looksLikeBotAutoreply(trimmed)) {
+    return { classification: "auto_reply", matchedPattern: "bot_autoreply" };
+  }
+
   // Acceptance FIRST — a true "we accept your offer" must not be eaten by
   // the rejection patches (which match "accepted ... offer" shapes when the
   // seller is comparing us to another deal in hand).
@@ -328,6 +483,18 @@ export function classifyReply(body: string): {
 
   for (const pat of REJECTION_PATTERNS) {
     if (pat.test(trimmed)) return { classification: "rejection", matchedPattern: pat.source };
+  }
+
+  // Agent redirect right after hard rejection: "I'm not the agent, contact
+  // Jim at …" carries a "not" that the stance lists must not read as a no.
+  for (const pat of AGENT_REDIRECT_PATTERNS) {
+    if (pat.test(trimmed)) return { classification: "agent_redirect", matchedPattern: pat.source };
+  }
+
+  // Hostile / sarcastic BEFORE cash-pivot, soft-no, counter and interest —
+  // an insult with a dollar figure in it is still an insult.
+  for (const pat of HOSTILE_PATTERNS) {
+    if (pat.test(trimmed)) return { classification: "hostile", matchedPattern: pat.source };
   }
 
   // Cash-pivot BEFORE soft-no: "He's not interested in financing. He wants to
@@ -340,12 +507,20 @@ export function classifyReply(body: string): {
     }
   }
 
+  // List-anchored BEFORE soft-no: "firm at asking" used to read as a pricing
+  // soft-no with a re-engagement draft; under the 2026-09-03 rule it is the
+  // list price restated, and the thread goes silent.
+  for (const pat of LIST_ANCHORED_PATTERNS) {
+    if (pat.test(trimmed)) return { classification: "list_anchored", matchedPattern: pat.source };
+  }
+
   // Soft-no AFTER hard rejection (a "sold, no thanks" is still gone-deal) and
   // BEFORE counter/interest ("not at that price" must not read as interest
   // via its price token).
   for (const pat of SOFT_NO_PATTERNS) {
     if (pat.test(trimmed)) return { classification: "soft_no", matchedPattern: pat.source };
   }
+
 
   // Disclosure steps BEFORE everything price-flavored — an IABS blast often
   // contains zero deal content and must never draft an acknowledgment.
@@ -362,14 +537,9 @@ export function classifyReply(body: string): {
     return { classification: "counter", matchedPattern: mult.source };
   }
 
-  // Directional counter with no number: "needs to be closer to the asking
-  // price" (13123 Indiana, 2026-08-24 — paged "intent unclear") names the
-  // direction and the anchor without a $ token. That is a price conversation,
-  // not an unknown.
-  const towardAsk = /\bcloser\s+to\s+(?:the\s+)?(?:asking|list)(?:\s+price)?\b/i;
-  if (towardAsk.test(trimmed)) {
-    return { classification: "counter", matchedPattern: towardAsk.source };
-  }
+  // (The 2026-08-24 "closer to the asking price → counter" block that lived
+  // here is superseded by LIST_ANCHORED_PATTERNS above, per the operator's
+  // 2026-09-03 22:20Z rule.)
 
   // A counter (price token + counter language) outranks seller_costs — "I
   // need $120k to cover the liens" is a NUMBER conversation first.
@@ -377,6 +547,20 @@ export function classifyReply(body: string): {
     for (const pat of COUNTER_LANGUAGE_PATTERNS) {
       if (pat.test(trimmed)) return { classification: "counter", matchedPattern: pat.source };
     }
+  }
+
+  // Flat no AFTER soft-no (the P1 anchors keep their 2A path) and BEFORE
+  // everything price- or interest-flavored: "not in the ballpark for my
+  // seller" carries our own template phrase and must not echo as interest.
+  for (const pat of FLAT_NO_PATTERNS) {
+    if (pat.test(trimmed)) return { classification: "flat_no", matchedPattern: pat.source };
+  }
+
+  // Who-are-you questions before the price/interest lists: "are you going to
+  // assign the contract" contains "contract" and must not read as acceptance
+  // language further down.
+  for (const pat of IDENTITY_QUESTION_PATTERNS) {
+    if (pat.test(trimmed)) return { classification: "identity_question", matchedPattern: pat.source };
   }
 
   // Seller-costs BEFORE interest — "are you covering closing costs?" must
@@ -420,6 +604,28 @@ export function determineNewStatus(
   currentStatus: string | null,
 ): string | null {
   if (classification === "rejection") return "Dead";
+  // A bot spoke, not a person: the record is exactly where it was.
+  if (classification === "auto_reply") return null;
+  // SILENT classes (operator rule 2026-09-03 22:20Z): Parked, out of the bump
+  // cadence, no reply. Never yank a record that already has paper moving —
+  // a flat no after a counter or an acceptance is the operator's read, so
+  // those stay put and surface in the notes instead.
+  if (classification === "hostile" || classification === "list_anchored" || classification === "flat_no") {
+    if (currentStatus === "Parked" || currentStatus === "Offer Accepted" || currentStatus === "Counter Received") {
+      return null;
+    }
+    return "Parked";
+  }
+  // "Are you a wholesaler?" is a live thread waiting on one answer — promote
+  // a first-touch record so it is visible, never downgrade one further along.
+  if (classification === "identity_question") {
+    if (currentStatus === "Texted" || currentStatus === "Parked" || currentStatus == null || currentStatus === "") {
+      return "Response Received";
+    }
+    return null;
+  }
+  // A redirect changes WHO we talk to, not where the deal stands.
+  if (classification === "agent_redirect") return null;
   // Soft-no: the thread stays ALIVE in the needs-decision lane. Promote a
   // first-touch/parked record to Response Received; never downgrade a record
   // that has already advanced (Negotiating / Counter Received / etc.).
@@ -643,6 +849,78 @@ export function triageSellerReply(
         priority: "NORMAL",
         queueStatus,
         reasoning: `Seller declined (matched /${matchedPattern}/) — route to Dead; system sends the one-time polite close (no alert). Reply: "${snippet}"`,
+        matchedPattern,
+        suggestedReply: null,
+      };
+    case "hostile":
+      return {
+        classification,
+        tier: "tier_0_silent",
+        needsDecision: false,
+        decisionKind: "none",
+        priority: "NORMAL",
+        queueStatus,
+        reasoning: `Hostile / sarcastic reply (matched /${matchedPattern}/) — operator rule 2026-09-03: NO reply of any kind, Parked, no bump. Reply: "${snippet}"`,
+        matchedPattern,
+        suggestedReply: null,
+      };
+    case "list_anchored":
+      return {
+        classification,
+        tier: "tier_0_silent",
+        needsDecision: false,
+        decisionKind: "none",
+        priority: "NORMAL",
+        queueStatus,
+        reasoning: `List-anchored reply (matched /${matchedPattern}/) — the seller's number is the list price; operator rule 2026-09-03: no probe, no reply, Parked, no bump. Reply: "${snippet}"`,
+        matchedPattern,
+        suggestedReply: null,
+      };
+    case "flat_no":
+      return {
+        classification,
+        tier: "tier_0_silent",
+        needsDecision: false,
+        decisionKind: "none",
+        priority: "NORMAL",
+        queueStatus,
+        reasoning: `Flat decline (matched /${matchedPattern}/) — no number, no question, no room; operator rule 2026-09-03: no reply, Parked, no bump. Reply: "${snippet}"`,
+        matchedPattern,
+        suggestedReply: null,
+      };
+    case "auto_reply":
+      return {
+        classification,
+        tier: "tier_0_silent",
+        needsDecision: false,
+        decisionKind: "none",
+        priority: "NORMAL",
+        queueStatus,
+        reasoning: `Automated responder (out-of-office / outside business hours), not a human answer — nothing to do; the opener stands as unanswered. Reply: "${snippet}"`,
+        matchedPattern,
+        suggestedReply: null,
+      };
+    case "identity_question":
+      return {
+        classification,
+        tier: "tier_1_decision",
+        needsDecision: true,
+        decisionKind: "engagement",
+        priority: "NORMAL",
+        queueStatus,
+        reasoning: `Agent asked WHO WE ARE (wholesaler / assign / licensed) — one graceful answer from the operator's standing line, no number, never explain assignment mechanics. Reply: "${snippet}"`,
+        matchedPattern,
+        suggestedReply: null,
+      };
+    case "agent_redirect":
+      return {
+        classification,
+        tier: "tier_1_decision",
+        needsDecision: true,
+        decisionKind: "review",
+        priority: "NORMAL",
+        queueStatus,
+        reasoning: `Wrong contact — the reply names who actually handles the listing. Update Agent_Name / Agent_Phone and re-deliver the same opener to them; nothing to price. Reply: "${snippet}"`,
         matchedPattern,
         suggestedReply: null,
       };

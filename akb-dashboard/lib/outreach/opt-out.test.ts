@@ -98,3 +98,14 @@ describe("inboundStampAdvances — Last_Inbound_At forward-only guard", () => {
     expect(inboundStampAdvances("not-a-date", "2026-06-18T00:00:00.000Z")).toBe(false);
   });
 });
+
+describe("natural-language revocations (2026-09-05, 1212 W Chambers)", () => {
+  it("'please don't bother me anymore' is an opt-out", () => {
+    expect(detectOptOut("We have an offer right now.Over asking, please don't bother me anymore").optOut).toBe(true);
+    expect(detectOptOut("leave me alone").optOut).toBe(true);
+    expect(detectOptOut("never text me again").optOut).toBe(true);
+  });
+  it("a benign 'bother' does not trip it", () => {
+    expect(detectOptOut("sorry to bother you, is the offer still good?").optOut).toBe(false);
+  });
+});

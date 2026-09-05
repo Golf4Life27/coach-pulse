@@ -21,7 +21,9 @@ describe("classifyReply", () => {
     expect(classifyReply("the house is not for sale").classification).toBe("soft_no");
     // pricing-flavored soft-nos:
     expect(classifyReply("too low").classification).toBe("soft_no");
-    expect(classifyReply("seller is firm at asking").classification).toBe("soft_no");
+    // "firm at asking" moved to list_anchored (operator rule 2026-09-03 22:20Z:
+    // list-price anchors get silence, not a re-engagement draft).
+    expect(classifyReply("seller is firm at asking").classification).toBe("list_anchored");
     // bare-"no" must NOT fire inside longer unrelated sentences:
     expect(classifyReply("no problem, when can you close?").classification).not.toBe("soft_no");
   });

@@ -63,15 +63,33 @@ const BOT_AUTOREPLY_PATTERNS = [
   /\bcannot be (?:reached|delivered)\b/i,
   /\bthis (?:number|line) (?:is|has been) (?:disconnected|unassigned)\b/i,
   /\bi(?:'m| am) (?:currently )?(?:away|unavailable|out)\b/i,
-  /\bthank you for (?:your interest|reaching out|contacting)\b/i,
+  // NARROWED 2026-09-05: the bare "thank you for contacting" ate a human
+  // decline (19350 Glastonbury: "Hello thank you for contacting me. We have
+  // multiple offers…") — the inbound was never stamped. A brokerage bot
+  // says thanks AND promises a callback in the same breath; a person
+  // says thanks and then says something.
+  /\bthank you for (?:your interest|reaching out|contacting)\b[^.!?\n]*[.!?\n]?\s*(?:we|i|someone|an?\s+(?:team\s+)?(?:member|agent|representative|rep|associate)|one of (?:our|my)|our\s+(?:team|office))\s+(?:will|'ll|shall)\b/i,
+  // …or the WHOLE message is the thanks line and nothing else.
+  /^\s*thank you for (?:your interest|reaching out|contacting)\b[^.!?\n]*[.!?]?\s*$/i,
   /\bwill (?:get back|respond) to you (?:as soon as|when)\b/i,
+  // 2026-09-05, 6100 Gertrude: "You've reached me outside business hours. I
+  // can't wait to talk shop when I'm back in the office…" scored INTEREST and
+  // flipped the record to Negotiating. The office-hours family:
+  /\b(?:outside|after)\s+(?:of\s+)?(?:our\s+|my\s+|normal\s+|regular\s+)?(?:business|office|working)\s+hours\b/i,
+  /\byou(?:'ve| have)\s+reached\s+(?:me|us)\b/i,
+  /\bwhen\s+i(?:'m| am)\s+back\s+in\s+the\s+office\b/i,
+  /\b(?:currently|temporarily)\s+(?:closed|unavailable|away)\b/i,
+  /\bthis\s+is\s+an?\s+(?:automated|automatic|auto)\b/i,
 ];
 
 function looksLikeSelfEcho(body: string): boolean {
   return SELF_ECHO_PATTERNS.some((p) => p.test(body));
 }
 
-function looksLikeBotAutoreply(body: string): boolean {
+/** Exported 2026-09-05 so lib/reply-triage can label an autoreply that
+ *  reaches the classifier directly (the quo-sync reconciler stamps a class
+ *  without the pre-triage strip). */
+export function looksLikeBotAutoreply(body: string): boolean {
   return BOT_AUTOREPLY_PATTERNS.some((p) => p.test(body));
 }
 

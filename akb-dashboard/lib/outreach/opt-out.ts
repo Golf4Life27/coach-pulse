@@ -38,6 +38,15 @@ const OPT_OUT_PATTERNS: RegExp[] = [
   /\bopt(?:ed)?\s*-?\s*out\b/i,
   /\bno\s+more\s+(?:texts?|messages?|msgs?|calls?)\b/i,
   /\blose\s+my\s+number\b/i,
+  // Natural-language revocations (2026-09-05, 1212 W Chambers: "please don't
+  // bother me anymore" was left UNCLASSIFIED and closed by hand). Detection
+  // leans wide by design — a false positive parks a lead; a miss is a TCPA
+  // violation.
+  /\b(?:don'?t|dont|do\s+not|stop|quit|never)\s+bother(?:ing)?\s+(?:me|us)\b/i,
+  /\bleave\s+(?:me|us)\s+alone\b/i,
+  /\bquit\s+(?:texting|contacting|messaging|calling)\b/i,
+  /\bnever\s+(?:text|contact|call|message)\s+(?:me|us)\s+again\b/i,
+  /\bnot\s+interested\s+in\s+(?:any\s+)?(?:further|more|future)\s+(?:contact|texts?|messages?|communication)\b/i,
 ];
 
 // Benign "stop" uses that must NOT count as an opt-out (a bare \bstop\b would

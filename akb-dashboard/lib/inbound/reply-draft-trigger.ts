@@ -89,6 +89,7 @@ export type DraftSkipReason =
   | "already_drafted"
   | "pending_proposal"
   | "tier0_auto_close"
+  | "tier0_silent"
   | "no_reply_needed";
 
 export interface DraftTriggerResult {
@@ -223,6 +224,11 @@ export async function buildInboundReplyDraft(args: {
   // Tier-0 rejections ride the existing auto-close lane; no draft here.
   if (triage.tier === "tier_0_auto_close") {
     return skip("tier0_auto_close", triage.classification);
+  }
+  // Silent tier (hostile / list-anchored / flat-no / auto-reply, 2026-09-05):
+  // no draft, no close, nothing — operator rule 2026-09-03 22:20Z.
+  if (triage.tier === "tier_0_silent") {
+    return skip("tier0_silent", triage.classification);
   }
 
   // Idempotency 2: another path already queued a reply for this record.

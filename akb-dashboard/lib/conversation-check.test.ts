@@ -216,3 +216,17 @@ describe("isSelfEchoOrAutoreply (live-triage export)", () => {
     expect(isSelfEchoOrAutoreply("")).toBe(false);
   });
 });
+
+describe("office-hours autoresponders (2026-09-05, 6100 Gertrude)", () => {
+  it("'outside business hours' is a bot, not a reply", () => {
+    expect(
+      isSelfEchoOrAutoreply(
+        "You've reached me outside business hours. I can't wait to talk shop when I'm back in the office. For questions about any interested properties, email us at info@dwellingnetwork.com.",
+      ),
+    ).toBe(true);
+    expect(isSelfEchoOrAutoreply("This is an automated text. Our office is currently closed.")).toBe(true);
+  });
+  it("a human mentioning the office is still a human", () => {
+    expect(isSelfEchoOrAutoreply("I'll be in the office tomorrow, send the offer over then")).toBe(false);
+  });
+});

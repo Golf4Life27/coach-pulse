@@ -116,6 +116,15 @@ export function stickyOfferFromNotes(notes: string | null | undefined): number |
 export function draftPolicy(classification: ReplyClassification): "draft" | "hold" | "none" {
   if (classification === "disclosure_step") return "hold";
   if (classification === "rejection") return "none";
+  // Silent classes (operator rule 2026-09-03 22:20Z, built 2026-09-05): a
+  // hostile, list-anchored or flat-no thread gets NOTHING — no probe, no
+  // close, no draft. An auto-responder is not a person. Identity questions
+  // and agent redirects HOLD: the drafter must never explain assignment
+  // mechanics, and a redirect needs the contact fixed, not a reply.
+  if (classification === "hostile" || classification === "list_anchored" || classification === "flat_no" || classification === "auto_reply") {
+    return "none";
+  }
+  if (classification === "identity_question" || classification === "agent_redirect") return "hold";
   return "draft";
 }
 

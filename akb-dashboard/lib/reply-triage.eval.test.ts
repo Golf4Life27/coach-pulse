@@ -9,7 +9,7 @@
 // Add every future miss here FIRST, watch it fail, then fix the pattern.
 
 import { describe, it, expect } from "vitest";
-import { classifyReply } from "./reply-triage";
+import { classifyReply, determineNewStatus, triageSellerReply } from "./reply-triage";
 
 const label = (body: string) => classifyReply(body).classification;
 
@@ -29,11 +29,11 @@ describe("eval: the documented misses (each was live-misclassified before 2026-0
     expect(label("Would you be willing to make a cash offer?")).toBe("interest");
   });
 
-  it("Schylbea directional counter (2026-08-24, paged 'intent unclear')", () => {
+  it("Schylbea 'closer to the asking price' (2026-08-24 read as counter; operator rule 2026-09-03 makes it list-anchored)", () => {
     const schylbea =
       "There is a family situation that must close without any drawn out " +
       "payments and needs to be closer to the asking price";
-    expect(label(schylbea)).toBe("counter");
+    expect(label(schylbea)).toBe("list_anchored");
   });
 
   it("Leeds showing-protocol (2026-08-22, mislabeled 'appointment')", () => {
@@ -128,5 +128,164 @@ describe("eval: pinned correct behavior (must survive every pattern change)", ()
 
   it("a real scheduling ask still reads appointment", () => {
     expect(label("Can we schedule a showing for Tuesday?")).toBe("appointment");
+  });
+});
+
+// ── 2026-09-05: nine of nineteen replies in one day landed UNCLASSIFIED, one
+// hostile message scored INTEREST, one auto-responder flipped a record to
+// Negotiating, and "closer to asking" was tagged COUNTER with no number. The
+// hourly triage session closed every one by hand (spine rec24GkAwhWOyHLrv
+// and the 15:10Z–19:10Z wakes). Verbatim, typos kept.
+describe("eval: the 2026-09-05 corpus (operator: 'Fix the classifier')", () => {
+  it("hostile with a dollar figure inside the insult (4708 S Rosette) — was INTEREST", () => {
+    expect(
+      label(
+        "And where would you possibly get the idea that a solid would take $100,000 less " +
+          "there's a lot of people that would probably buy it at that stay in your market and stay out of our",
+      ),
+    ).toBe("hostile");
+  });
+
+  it("opt-out in plain words plus an offer in hand (1212 W Chambers) — was UNCLASSIFIED", () => {
+    expect(label("We have an offer right now.Over asking, please don't bother me anymore")).toBe("rejection");
+  });
+
+  it("sarcastic list anchor (925 Sims: 'not even in the same State')", () => {
+    // "around 250" on a $250,000 list — the rule parks it silent either way.
+    const c = label("Seller would like to land around 250. We arent even in the same State let alone ballpark on price...");
+    expect(["hostile", "list_anchored", "flat_no"]).toContain(c);
+  });
+
+  it("under contract in new words (1313 Hartford: 'buttoned up a contract') — was UNCLASSIFIED", () => {
+    expect(label("We just buttoned up a contract on that property but thanks for reaching out t")).toBe("rejection");
+  });
+
+  it("flat no: 'won't consider that price range' (521 Birch) — was UNCLASSIFIED", () => {
+    expect(label("He won't consider that price range ")).toBe("flat_no");
+  });
+
+  it("agent-only contract form request (10238 E Watson) stays offer_format, not a decline", () => {
+    expect(
+      label("Hello Alex, I only present offers to my seller on an AAR contract. If you would like to send one, I can it to the seller."),
+    ).toBe("offer_format");
+  });
+
+  it("hostile + payoff wall (1939 Delwood: 'Lol she owes over 200k… put in the work') — was UNCLASSIFIED", () => {
+    expect(label("Lol she owes over 200k you clearly know what is owed if you did your due diligence. Put in the work furst")).toBe("hostile");
+  });
+
+  it("stated floor with a k-figure and no $ (820 W Keefe) — was UNCLASSIFIED, is a counter", () => {
+    expect(label("Sorry Alex, we'd have to be over 100k. It's rented for 2100 so it's worth more than that. Cash cow ")).toBe("counter");
+  });
+
+  it("'They need closer to asking sorry' (194 Brownlee) — was COUNTER with no number", () => {
+    expect(label("They need closer to asking sorry")).toBe("list_anchored");
+  });
+
+  it("out-of-office autoresponder (6100 Gertrude) — was INTEREST → Negotiating", () => {
+    expect(
+      label(
+        "You've reached me outside business hours. I can't wait to talk shop when I'm back in the office. " +
+          "For questions about any interested properties, email us at info@dwellingnetwork.com.  Dwellingnetwork.com",
+      ),
+    ).toBe("auto_reply");
+  });
+
+  it("flat polite no (114 Bailey: 'would not be open to that ballpark') — was UNCLASSIFIED", () => {
+    expect(label("No, they would not be open to that ballpark")).toBe("flat_no");
+  });
+
+  it("dismissive close (3550 E New York: 'doesn't need work… good luck to you') — was UNCLASSIFIED", () => {
+    expect(
+      label(
+        "The home on New York doesn't need work and the seller isn't looking for \"speed\", he is looking for a fair offer. " +
+          "Thanks for your interest and good luck to you",
+      ),
+    ).toBe("flat_no");
+  });
+
+  it("cost-anchored decline (1945 Atkinson: 'He paid more for it than that') — was UNCLASSIFIED", () => {
+    expect(label("He paid more for it than that. ")).toBe("flat_no");
+    expect(label("Hi, that not in the ballpark. He paid 30k for it")).toBe("flat_no");
+  });
+
+  it("identity question (6561 Firwood: 'are you a whole saler?') — was UNCLASSIFIED", () => {
+    expect(label("Alex sre you a whole saler?")).toBe("identity_question");
+    expect(label("Are you going to try to assign the contract")).toBe("identity_question");
+  });
+
+  it("list-anchored with the list price quoted (1011 Center) — was INTEREST → Negotiating", () => {
+    expect(
+      label(
+        "Good evening! I have cc'd my co-listing agent, Kathy Baize, on this text. I presented your offer (below) to our Clients " +
+          "this evening and they have respectfully declined. That aside, you are welcome to submit a new offer more inline with current list price of $130K. Respectfully,\nJames",
+      ),
+    ).toBe("list_anchored");
+  });
+
+  it("sarcastic 'add another $100,000' (4086 E Montecito) — was INTEREST → Negotiating", () => {
+    expect(label("Add another $100,000 to that number and we can make it work!  The last offer I received was for $245,000!")).toBe("hostile");
+  });
+
+  it("'Not even close.' (9552 E Irene) and 'I'm sorry her reply is no.' (1333 Weller) — were UNCLASSIFIED", () => {
+    expect(label("Not even close. ")).toBe("flat_no");
+    expect(label("I'm sorry her reply is no.")).toBe("flat_no");
+  });
+
+  it("value-anchored hold-and-lease decline (4376 Hovenweep) parks silent", () => {
+    expect(
+      label("Hello\nNo he's not interested in anything in that range. It's worth far more than that. He'll hold it and lease it. \nNot the greatest market for sellers. \nHave a nice weekend. "),
+    ).not.toBe("interest");
+  });
+
+  it("multiple offers above ours (19350 Glastonbury) — was UNCLASSIFIED, is a gone-deal", () => {
+    expect(
+      label("Hello thank you for contacting me.  We have multiple offers for their property all above 31,000 so the seller will not consider that. Thank you for your interest."),
+    ).toBe("rejection");
+  });
+
+  it("agent redirect (66 Victor Ave, 9/4: office manager names the agent)", () => {
+    expect(label("Jim Conard (937-974-7758) is the agent handling that property, please reach out to him directly.")).toBe("agent_redirect");
+  });
+
+  it("guard: the P1 soft-no anchors and the money-bearing shapes are untouched", () => {
+    expect(label("No go")).toBe("soft_no");
+    expect(label("no thanks")).toBe("soft_no");
+    expect(label("The owner is willing to accept that deal. ")).toBe("acceptance");
+    expect(label("Would you be willing to make a cash offer?")).toBe("interest");
+    expect(label("seller is looking for $185,000")).toBe("counter");
+    expect(label("Definitely in the ballpark.... Fixing to put together a short sale ..")).toBe("interest");
+  });
+});
+
+describe("eval: the silent classes route to Parked with no draft, no close, no alert", () => {
+  it("hostile → tier_0_silent, Parked, needsDecision false", () => {
+    const t = triageSellerReply("Lol do your due diligence. Put in the work first", "Negotiating");
+    expect(t.classification).toBe("hostile");
+    expect(t.tier).toBe("tier_0_silent");
+    expect(t.needsDecision).toBe(false);
+    expect(t.queueStatus).toBe("Parked");
+    expect(t.suggestedReply).toBeNull();
+  });
+
+  it("a flat no never yanks a record that already has paper moving", () => {
+    expect(determineNewStatus("flat_no", "Offer Accepted")).toBeNull();
+    expect(determineNewStatus("flat_no", "Counter Received")).toBeNull();
+    expect(determineNewStatus("flat_no", "Parked")).toBeNull();
+    expect(determineNewStatus("flat_no", "Texted")).toBe("Parked");
+    expect(determineNewStatus("list_anchored", "Response Received")).toBe("Parked");
+  });
+
+  it("auto-reply leaves the record exactly where it was", () => {
+    const t = triageSellerReply("You've reached me outside business hours.", "Texted");
+    expect(t.tier).toBe("tier_0_silent");
+    expect(t.queueStatus).toBeNull();
+  });
+
+  it("identity question is a live tier-1 thread with no auto-draft", () => {
+    const t = triageSellerReply("Alex sre you a whole saler?", "Texted");
+    expect(t.tier).toBe("tier_1_decision");
+    expect(t.queueStatus).toBe("Response Received");
+    expect(t.needsDecision).toBe(true);
   });
 });

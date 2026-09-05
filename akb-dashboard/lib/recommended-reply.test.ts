@@ -432,3 +432,16 @@ describe("placeholder guard — scaffolding never reaches a Send button (2026-07
     expect(v.ok).toBe(true);
   });
 });
+
+describe("draftPolicy — the 2026-09-05 silent classes", () => {
+  it("hostile / list-anchored / flat-no / auto-reply draft nothing", () => {
+    expect(draftPolicy("hostile")).toBe("none");
+    expect(draftPolicy("list_anchored")).toBe("none");
+    expect(draftPolicy("flat_no")).toBe("none");
+    expect(draftPolicy("auto_reply")).toBe("none");
+  });
+  it("identity questions and agent redirects hold for the operator", () => {
+    expect(draftPolicy("identity_question")).toBe("hold");
+    expect(draftPolicy("agent_redirect")).toBe("hold");
+  });
+});
