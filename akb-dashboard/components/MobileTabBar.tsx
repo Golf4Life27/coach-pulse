@@ -15,6 +15,10 @@ const TABS: Array<{ href: string; label: string; icon: string; match: (p: string
 
 export default function MobileTabBar() {
   const pathname = usePathname() ?? "/";
+
+  // Public buyer-facing pages have no dashboard chrome (2026-09-05).
+  if (pathname.startsWith("/d/") || pathname.startsWith("/buyer-intake")) return null;
+
   return (
     <nav
       className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-[#0d1117]/95 backdrop-blur border-t border-[#21262d]"

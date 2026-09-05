@@ -137,6 +137,14 @@
       "schedule": "30 5 * * *"
     },
     {
+      "path": "/api/cron/dispo-trigger",
+      "schedule": "25,55 * * * *"
+    },
+    {
+      "path": "/api/cron/option-tripwire",
+      "schedule": "5 13 * * *"
+    },
+    {
       "path": "/api/cron/gmail-sync?limit=40&hours_back=48",
       "schedule": "40 * * * *"
     },

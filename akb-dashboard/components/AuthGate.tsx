@@ -3,7 +3,10 @@
 import { useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
 
-const PUBLIC_PATH_PREFIXES = ["/buyer-intake"];
+// "/d/" = public deal pages (dispo, 2026-09-05). The page shell is public;
+// the data comes from /api/public/deal/[recordId], which enforces Dispo_Public
+// server-side and never returns contract price, ARV, rehab or fee.
+const PUBLIC_PATH_PREFIXES = ["/buyer-intake", "/d/"];
 
 export default function AuthGate({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();

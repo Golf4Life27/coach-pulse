@@ -17,12 +17,25 @@ import {
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { sendMessage } from "@/lib/quo";
 import { fetchConveyorItemsServer } from "@/lib/decision-feed-server";
-import { composeDigestSms, type DigestBelt } from "@/lib/escalation";
+import { composeDigestSms, type DigestBelt, type DigestBuild } from "@/lib/escalation";
+import { fetchBuildLedger, summarizeBuildLedger } from "@/lib/build-ledger";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 const BASE_URL = () => process.env.DASHBOARD_BASE_URL || "https://coach-pulse-ten.vercel.app";
+
+/** Best-effort — a Build Ledger failure must never break the digest send. */
+async function fetchBuild(): Promise<DigestBuild | null> {
+  try {
+    const steps = await fetchBuildLedger();
+    const summary = summarizeBuildLedger(steps, new Date());
+    return { inWorks: summary.counts.inWorks, operatorActions: summary.counts.operatorActions };
+  } catch (err) {
+    console.error("[morning-digest] build ledger read failed:", err);
+    return null;
+  }
+}
 
 async function fetchBelt(origin: string, cookie: string | null, authorization: string | null): Promise<DigestBelt | null> {
   try {
@@ -66,11 +79,12 @@ export async function GET(req: Request) {
   const nowIso = new Date().toISOString();
   const phone = (process.env.OPERATOR_PERSONAL_PHONE ?? "").trim() || null;
 
-  const [items, belt] = await Promise.all([
+  const [items, belt, build] = await Promise.all([
     fetchConveyorItemsServer(nowIso),
     fetchBelt(`${url.protocol}//${url.host}`, cookieHeader, req.headers.get("authorization")),
+    fetchBuild(),
   ]);
-  const sms = composeDigestSms(items, belt, BASE_URL());
+  const sms = composeDigestSms(items, belt, BASE_URL(), build);
 
   let sent = false;
   let skipReason: string | null = null;

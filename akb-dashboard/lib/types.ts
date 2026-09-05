@@ -91,6 +91,12 @@ export interface Listing {
   // and the date it was reported. See lib/sold-feedback.ts.
   reportedSalePrice?: number | null;
   reportedSaleDate?: string | null;
+  // Dispo step 1 (2026-09-05): buyer-facing assignment price, blast stamp,
+  // persisted photo URLs (JSON array string), public deal page switch.
+  assignmentPrice?: number | null;
+  dispoBlastFiredAt?: string | null;
+  dealPhotoUrls?: string | null;
+  dispoPublic?: boolean | null;
   /** Opener_Basis receipt (capped_to_list / arv_buybox_seed / …). */
   openerBasis?: string | null;
   /** Serialized OpenerDerivation — the opener's arithmetic receipt, so the

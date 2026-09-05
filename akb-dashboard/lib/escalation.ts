@@ -114,8 +114,22 @@ export interface DigestBelt {
   repliesYesterday: number | null;
 }
 
-/** The single 8:30am digest — decisions waiting, $ at stake, belt status. */
-export function composeDigestSms(items: ConveyorItem[], belt: DigestBelt | null, baseUrl: string): string {
+/** Build Ledger counts (operator directive 2026-09-05) — optional, one
+ *  short line appended to the digest when present. */
+export interface DigestBuild {
+  inWorks: number;
+  operatorActions: number;
+}
+
+/** The single 8:30am digest — decisions waiting, $ at stake, belt status,
+ *  and (when supplied) the build ledger's one-line status. Kept under
+ *  ~300 chars total. */
+export function composeDigestSms(
+  items: ConveyorItem[],
+  belt: DigestBelt | null,
+  baseUrl: string,
+  build?: DigestBuild | null,
+): string {
   const byType = { "2A": 0, "2B": 0, "2C": 0 } as Record<ConveyorItem["type"], number>;
   let dollars = 0;
   for (const i of items) {
@@ -130,6 +144,7 @@ export function composeDigestSms(items: ConveyorItem[], belt: DigestBelt | null,
       ? `belt: intake ${belt.intakeFreshness ?? "?"} · send ${belt.sendFreshness ?? "?"}` +
         (belt.sentYesterday != null ? ` · yday ${belt.sentYesterday} sent/${belt.repliesYesterday ?? 0} replies` : "")
       : null,
+    build ? `Build: ${build.inWorks} in works · ${build.operatorActions} need you` : null,
     baseUrl,
   ].filter(Boolean);
   return parts.join(". ");
