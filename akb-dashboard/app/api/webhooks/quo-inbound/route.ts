@@ -27,6 +27,7 @@ import {
   fetchPendingReplyProposalRecordIds,
 } from "@/lib/inbound/reply-draft-trigger";
 import { persistDecisionMath } from "@/lib/decision-persist";
+import { detectReportedSale, reportedSaleFields } from "@/lib/sold-feedback";
 import type { MatchableListing } from "@/lib/inbound/types";
 
 export const runtime = "nodejs";
@@ -142,6 +143,12 @@ async function handle(req: Request) {
     const fields: Record<string, unknown> = { Last_Inbound_At: msg.receivedAt };
     if (append.newEvents.length > 0) fields.Verification_Notes = append.notes;
     if (plan.newStatus) fields.Outreach_Status = plan.newStatus;
+    // SOLD-FOR FEEDBACK (operator 2026-09-05): a decline that names the
+    // price the house actually sold / went under contract for is data, not
+    // noise — stamp it so the daily roll-up can learn from it. Status still
+    // follows the triage (a gone-deal is still Dead); this only adds fields.
+    const reportedSale = append.newEvents.length > 0 ? detectReportedSale(msg.body) : null;
+    if (reportedSale) Object.assign(fields, reportedSaleFields(reportedSale, msg.receivedAt));
 
     // ── ONE PIPELINE (unification, 2026-07-13): the draft happens AT CAPTURE,
     // in the same pass as the notes/status write — every inbound leaves this
@@ -209,7 +216,7 @@ async function handle(req: Request) {
       status: "confirmed_success",
       recordId: plan.listingId,
       inputSummary: { channel: msg.channel, sender: msg.sender },
-      outputSummary: { classification: plan.triage.classification, new_status: plan.newStatus, escalate: plan.escalate, appended: append.newEvents.length, draft: draftOutcome },
+      outputSummary: { classification: plan.triage.classification, new_status: plan.newStatus, escalate: plan.escalate, appended: append.newEvents.length, draft: draftOutcome, reported_sale: reportedSale ? { price: reportedSale.price, kind: reportedSale.kind } : null },
       decision: plan.escalate ? "escalate" : "capture",
     });
     return NextResponse.json({ ok: true, plan: "matched", recordId: plan.listingId, newStatus: plan.newStatus, draft: draftOutcome });

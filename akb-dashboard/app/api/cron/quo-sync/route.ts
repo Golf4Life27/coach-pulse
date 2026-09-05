@@ -21,6 +21,7 @@ import { getThreadVerified } from "@/lib/quo";
 import { normalizePhone } from "@/lib/phone-normalize";
 import { toE164 } from "@/lib/phone";
 import { appendQuoMessagesToNotes, newestInboundIso } from "@/lib/outreach/quo-sync";
+import { detectReportedSale, reportedSaleFields } from "@/lib/sold-feedback";
 import { detectL3DollarAmounts } from "@/lib/outreach/l3-amount-detector";
 import { isSelfEchoOrAutoreply } from "@/lib/conversation-check";
 import { weOpenedThreadForListing } from "@/lib/conversation-thread";
@@ -150,6 +151,14 @@ async function handle(req: Request) {
         const newest = newestInboundIso(r.newEvents);
         if (newest && (!l.lastInboundAt || new Date(newest) > new Date(l.lastInboundAt))) {
           fields["Last_Inbound_At"] = newest;
+        }
+        // SOLD-FOR FEEDBACK (operator 2026-09-05): same stamp the webhook
+        // writes, for replies the reconciler is the first to see.
+        if (!(typeof l.reportedSalePrice === "number" && l.reportedSalePrice > 0)) {
+          for (const e of r.newEvents) {
+            const sale = detectReportedSale(e.body);
+            if (sale) { Object.assign(fields, reportedSaleFields(sale, e.createdAt)); break; }
+          }
         }
       }
 

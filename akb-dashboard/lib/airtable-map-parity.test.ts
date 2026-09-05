@@ -186,6 +186,9 @@ const EXPECTED_LISTING_FIELDS: Record<string, string> = {
   "fldTSadqhYKeyKd89": "underwrittenMao",
   "fldFuePOkTlAl3NUT": "underwrittenMaoTrack",
   "fldJZpyn5uqYfP0Oc": "underwrittenPropertyMao",
+  // Sold-for feedback loop (2026-09-05) — deliberate snapshot update, same commit as the registry entries.
+  "fldgX3xYzUhchN1wA": "reportedSalePrice",
+  "fldhKl47kMO1BRpTr": "reportedSaleDate",
 };
 
 // Characterization snapshot of LISTING_NAME_MAP (field NAME -> prop),
@@ -303,6 +306,8 @@ const EXPECTED_LISTING_NAME_MAP: Record<string, string> = {
   "Annual_Taxes_Source": "confirmedTaxesSource",
   "Auto_Approve_v2": "autoApproveV2",
   "ARV_Validated_At": "arvValidatedAt",
+  "Reported_Sale_Price": "reportedSalePrice",
+  "Reported_Sale_Date": "reportedSaleDate",
 };
 
 describe("two-map rule: bulk (fld-ID) and single (name) reads see the same surface", () => {

@@ -243,6 +243,12 @@ const LISTING_FIELD_REGISTRY: ReadonlyArray<ListingFieldRegistryEntry> = [
   { prop: "confirmedTaxesSource", fieldId: "fldm8UB2wT9jkWvNs", name: "Annual_Taxes_Source" },
   { prop: "autoApproveV2", fieldId: "fldAvk2aIBU1Lh3Dz", name: "Auto_Approve_v2" },
   { prop: "arvValidatedAt", fieldId: "fldvHDqtftWehMJR7", name: "ARV_Validated_At" },
+  // Sold-for feedback loop (operator 2026-09-05, Spine recSPi62i3U3vgJVe):
+  // the price an agent REPORTED in a reply ("sold for $163,250") and when.
+  // Written by the inbound capture path (webhook + quo-sync reconciler);
+  // read by /api/admin/sold-feedback. Agent-reported, not public record.
+  { prop: "reportedSalePrice", fieldId: "fldgX3xYzUhchN1wA", name: "Reported_Sale_Price" },
+  { prop: "reportedSaleDate", fieldId: "fldhKl47kMO1BRpTr", name: "Reported_Sale_Date" },
   // Underwritten_Property_MAO (keystone rewrite 2026-06-12, adjudication
   // recXJrM7EYK3pEFmF item 5): the ONLY field that authorizes Tier-C
   // autonomous property-up pricing. Underwritten_MAO above is demoted to
