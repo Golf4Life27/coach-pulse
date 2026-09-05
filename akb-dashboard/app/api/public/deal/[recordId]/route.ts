@@ -36,7 +36,11 @@ export async function GET(
   try {
     listing = await getListing(recordId, { fresh: true });
   } catch (err) {
-    return NextResponse.json({ error: "lookup_failed", detail: String(err).slice(0, 200) }, { status: 502 });
+    // Anonymous surface: never echo the upstream error (Airtable answers an
+    // unknown record id with a 403 MODEL_NOT_FOUND body, not a 404). Log it,
+    // answer 404 — an attacker probing ids learns nothing either way.
+    console.error("[public/deal] lookup failed:", String(err).slice(0, 200));
+    return notFound();
   }
 
   if (!listing) return notFound();
