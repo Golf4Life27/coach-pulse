@@ -184,7 +184,8 @@ async function handleScan(req: Request) {
             : classification === "interest" ? "INTEREST"
             : classification === "counter" ? "COUNTER"
             : classification === "acceptance" ? "ACCEPTANCE"
-            : "UNCLASSIFIED";
+            : classification === "unknown" ? "UNCLASSIFIED"
+            : classification.toUpperCase().replace(/_/g, "-");
           const noteText = `Inbound from ${listing.agentName ?? "agent"}: "${inbound.body.slice(0, 300)}". Classified: ${classLabel}.${newStatus ? ` Status → ${newStatus}.` : " Status unchanged."}`;
 
           fields[F.notes] = appendNote(listing.notes, noteText);

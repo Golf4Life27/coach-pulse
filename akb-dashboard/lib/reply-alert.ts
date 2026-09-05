@@ -93,6 +93,15 @@ export function alertAction(classification: ReplyClassification): string {
     case "appointment": return "Agent proposed a showing/call time";
     case "seller_costs": return "Agent asked who pays what";
     case "disclosure_step": return "Compliance disclosure — needs you personally";
+    // The silent classes (2026-09-05) never reach an alert — scan-comms
+    // `continue`s before the proposal — but the label must exist so a future
+    // path that does page carries the truth, not "intent unclear".
+    case "hostile": return "Hostile reply, parked silent";
+    case "list_anchored": return "Agent anchored to list price, parked silent";
+    case "flat_no": return "Agent declined flat, parked silent";
+    case "auto_reply": return "Auto-responder, ignored";
+    case "identity_question": return "Agent asked who we are (wholesaler/assign)";
+    case "agent_redirect": return "Wrong contact, agent named who handles it";
     case "unknown": return "Agent replied, intent unclear";
     default: {
       // Exhaustiveness: a NEW classification added to the union lands here at

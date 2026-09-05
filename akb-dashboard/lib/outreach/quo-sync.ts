@@ -121,7 +121,7 @@ export function appendQuoMessagesToNotes(
           // unconditionally — "No go" on 2718 Ave I died here. Stamp the
           // real classification from the shared triage module.
           const c = classifyReply(e.body).classification;
-          return c === "unknown" ? "UNCLASSIFIED" : c.toUpperCase().replace("_", "-");
+          return c === "unknown" ? "UNCLASSIFIED" : c.toUpperCase().replace(/_/g, "-");
         })()}. Body: ${e.body}`,
         `[Quo inbound msg ${e.id} ts=${e.createdAt} src=${source} ingested_at=${ingestedAt}${dollarTag}]`,
       ].join("\n");
