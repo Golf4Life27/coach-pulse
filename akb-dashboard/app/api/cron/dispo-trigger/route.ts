@@ -111,7 +111,12 @@ export async function GET(req: Request) {
   }
 
   const url = new URL(req.url);
-  const dryRun = url.searchParams.get("dry_run") === "1";
+  // Operator hold (2026-09-05, "hold the first blast for my eyes"): the lane
+  // is DARK until DISPO_BLAST_LIVE=true. Dark = every run is a dry run —
+  // gate, shortlist, and preview are computed and reported, nothing is
+  // sent, published, or stamped.
+  const held = process.env.DISPO_BLAST_LIVE !== "true";
+  const dryRun = held || url.searchParams.get("dry_run") === "1";
   const onlyRecord = url.searchParams.get("record_id");
 
   let candidates: Listing[];
@@ -124,7 +129,7 @@ export async function GET(req: Request) {
 
   const outcomes: RecordOutcome[] = [];
   if (candidates.length === 0) {
-    return NextResponse.json({ ok: true, dry_run: dryRun, candidates: 0, outcomes, ms: Date.now() - t0 });
+    return NextResponse.json({ ok: true, dry_run: dryRun, held, candidates: 0, outcomes, ms: Date.now() - t0 });
   }
 
   let buyers: Awaited<ReturnType<typeof getBuyers>> = [];
@@ -279,5 +284,5 @@ export async function GET(req: Request) {
     }
   }
 
-  return NextResponse.json({ ok: true, dry_run: dryRun, candidates: candidates.length, outcomes, ms: Date.now() - t0 });
+  return NextResponse.json({ ok: true, dry_run: dryRun, held, candidates: candidates.length, outcomes, ms: Date.now() - t0 });
 }
