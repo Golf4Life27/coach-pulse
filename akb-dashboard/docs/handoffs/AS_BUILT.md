@@ -971,7 +971,9 @@ KV claim `dispo:blast:<rec>` 1h → `evaluateAssignmentSpread` gate (block/hold 
 `buildBuyerShortlist` top slice with email (`selectBlastRecipients`, cap `DISPO_BLAST_MAX_RECIPIENTS`
 default 10) → deterministic `composeDispoBlastEmail` (one number + `/d/<rec>` link, no LLM) via Gmail →
 buyer `Email_Sent_At` → notes + `Dispo_Blast_Fired_At` → audit `dispo_blast_fired`. All-sends-failed = no
-stamp = retry next slot. **Buyer SMS is OFF** (Tier C). `?dry_run=1`, `?record_id=`.
+stamp = retry next slot. **Buyer SMS is OFF** (Tier C). `?dry_run=1`, `?record_id=`. **DARK until
+`DISPO_BLAST_LIVE=true`** (operator hold 2026-09-05: first blast is reviewed by eye) — dark runs report the
+gate + recipients + email preview and send nothing.
 
 **Public deal page** `/d/[recordId]` + `GET /api/public/deal/[recordId]` — the ONE unauthenticated read
 path. `lib/dispo/public-deal.ts` is the allowlist projection (404 unless `Dispo_Public`); leak-tested
