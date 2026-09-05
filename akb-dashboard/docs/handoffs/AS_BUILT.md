@@ -60,6 +60,9 @@
 | `0 15 * * *` | `/api/cron/rehab-vision-retry` | Re-run vision on manual rehab; flag drift, never auto-overwrite | `[sweep]` |
 | `0 16 * * *` | `/api/cron/data-federation-pull` | Hydrate Property_Intel (RentCast/ScraperAPI/FEMA) | `[sweep]` |
 | `0 6 * * 1` | `/api/cron/anchor-calibration` | Weekly per-market anchor calibration → KV | `[sweep]` |
+| `30 5 * * *` | `/api/admin/sold-feedback` | Roll up agent-reported sale prices by zip → KV `sold_feedback:latest` | Opener map dark until `H2_SOLD_FEEDBACK_MAP=1` (§8q) |
+| `25,55 * * * *` | `/api/cron/dispo-trigger` | Contract executed + no blast → publish deal page, email buyer shortlist | Email only; spread gate blocks money-losers (§8q) |
+| `5 13 * * *` | `/api/cron/option-tripwire` | T-5 / T-2 / lapsed option-deadline SMS + action item, once per stage | Lapsed window 14 days; KV dedupe 30d (§8q) |
 
 ### 1b. Key routes for the deal pipeline `[verified — read this session unless tagged]`
 
@@ -947,3 +950,42 @@ sent nothing, and the Pulse pager died on the same 402. Three fixes:
 - Hard rules / invariants: **[`docs/INVARIANTS.md`](../INVARIANTS.md)** — load every session.
 - Operator narrative + charter: `docs/handoffs/SYSTEM_HANDOFF.md`.
 - Positive-confirmation (three-state truth) principle: `docs/Positive_Confirmation_Principle.md`.
+
+## 8q. NEW 2026-09-05 — Dispo step 1 (hunted → contracted → dispo'ed) + Build Ledger
+
+Operator directive: "Unpark the email engine and build step 1, deal pages public"; "my morning briefing
+[must] include build data… It should all live in my dashboard." Delegation rule recorded on the spine
+(recCNcyyqpLOz4FT5): top model plans/reviews/merges, Sonnet builds bounded pieces.
+
+**Contract trigger.** `POST /api/contract-lifecycle/executed/[recordId]` (dashboard cookie / CRON_SECRET /
+OAuth) — the first code writer of `Contract_Executed_At`. Pure math in `lib/dispo/contract-lifecycle.ts`:
+option +10d (every contract keeps the option, EMD-cap rule), EMD +3d, close +21d, `Contract_Offer_Price`,
+`Assignment_Price` (default contract + $10K). Refuses Dead, refuses re-stamp without `?force=1`, flips
+status to Offer Accepted, appends a note line. Button: `components/MarkContractExecuted.tsx` on
+`/pipeline/[id]`.
+
+**Dispo trigger cron** `/api/cron/dispo-trigger` (25,55 * * * *): candidates via
+`getDispoTriggerCandidates()` (server formula: executed, no `Dispo_Blast_Fired_At`, not Dead). Per record:
+KV claim `dispo:blast:<rec>` 1h → `evaluateAssignmentSpread` gate (block/hold = no send, audited
+`dispo_blast_gated`) → `collectPhotos` once → `Deal_Photo_URLs` (JSON array) + `Dispo_Public=true` →
+`buildBuyerShortlist` top slice with email (`selectBlastRecipients`, cap `DISPO_BLAST_MAX_RECIPIENTS`
+default 10) → deterministic `composeDispoBlastEmail` (one number + `/d/<rec>` link, no LLM) via Gmail →
+buyer `Email_Sent_At` → notes + `Dispo_Blast_Fired_At` → audit `dispo_blast_fired`. All-sends-failed = no
+stamp = retry next slot. **Buyer SMS is OFF** (Tier C). `?dry_run=1`, `?record_id=`.
+
+**Public deal page** `/d/[recordId]` + `GET /api/public/deal/[recordId]` — the ONE unauthenticated read
+path. `lib/dispo/public-deal.ts` is the allowlist projection (404 unless `Dispo_Public`); leak-tested
+against contract/ARV/rehab/agent/notes. Intake form posts to `/api/buyers/intake`. AuthGate +
+Navigation + MobileTabBar exempt `/d/`.
+
+**Option tripwire cron** `/api/cron/option-tripwire` (5 13 * * *): `lib/dispo/option-tripwire.ts` stages
+t5 (3<d≤5), t2 (0≤d≤2), lapsed (-14≤d<0). One fire per (record, stage) via KV `tripwire:<rec>:<stage>`
+30d; writes Operator_Action_Items row + operator SMS (`OPERATOR_PERSONAL_PHONE`); audit
+`option_tripwire_fired` / `option_tripwire_run`.
+
+**Build Ledger** table `tblqMmkZ6zsPhxKBx`: `lib/build-ledger.ts` (fetch / upsert on Project+Step /
+pure `summarizeBuildLedger`), `GET|POST /api/build-ledger`, dashboard tab `/build`, `build` section in
+`/api/morning-briefing`, one "Build: N in works · M need you" line in the 8:30 digest SMS.
+
+New Listings_V1 fields: `Assignment_Price` fldfXqvaRkjCaTTF3, `Dispo_Blast_Fired_At` fld9mpSy76DJ3FLfY,
+`Deal_Photo_URLs` fldGWr6THoaLrBafp, `Dispo_Public` fldjGAK9f3tnCvpvU.

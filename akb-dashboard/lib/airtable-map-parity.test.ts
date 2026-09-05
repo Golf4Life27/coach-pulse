@@ -189,6 +189,11 @@ const EXPECTED_LISTING_FIELDS: Record<string, string> = {
   // Sold-for feedback loop (2026-09-05) — deliberate snapshot update, same commit as the registry entries.
   "fldgX3xYzUhchN1wA": "reportedSalePrice",
   "fldhKl47kMO1BRpTr": "reportedSaleDate",
+  // Dispo step 1 (2026-09-05) — deliberate snapshot update, same commit as the registry entries.
+  "fldfXqvaRkjCaTTF3": "assignmentPrice",
+  "fld9mpSy76DJ3FLfY": "dispoBlastFiredAt",
+  "fldGWr6THoaLrBafp": "dealPhotoUrls",
+  "fldjGAK9f3tnCvpvU": "dispoPublic",
 };
 
 // Characterization snapshot of LISTING_NAME_MAP (field NAME -> prop),
@@ -308,6 +313,10 @@ const EXPECTED_LISTING_NAME_MAP: Record<string, string> = {
   "ARV_Validated_At": "arvValidatedAt",
   "Reported_Sale_Price": "reportedSalePrice",
   "Reported_Sale_Date": "reportedSaleDate",
+  "Assignment_Price": "assignmentPrice",
+  "Dispo_Blast_Fired_At": "dispoBlastFiredAt",
+  "Deal_Photo_URLs": "dealPhotoUrls",
+  "Dispo_Public": "dispoPublic",
 };
 
 describe("two-map rule: bulk (fld-ID) and single (name) reads see the same surface", () => {

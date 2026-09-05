@@ -249,6 +249,13 @@ const LISTING_FIELD_REGISTRY: ReadonlyArray<ListingFieldRegistryEntry> = [
   // read by /api/admin/sold-feedback. Agent-reported, not public record.
   { prop: "reportedSalePrice", fieldId: "fldgX3xYzUhchN1wA", name: "Reported_Sale_Price" },
   { prop: "reportedSaleDate", fieldId: "fldhKl47kMO1BRpTr", name: "Reported_Sale_Date" },
+  // Dispo step 1 (operator 2026-09-05): the buyer-facing number, the blast
+  // idempotency stamp, persisted photo URLs for the public deal page, and the
+  // public-page switch. See lib/dispo/* and app/api/cron/dispo-trigger.
+  { prop: "assignmentPrice", fieldId: "fldfXqvaRkjCaTTF3", name: "Assignment_Price" },
+  { prop: "dispoBlastFiredAt", fieldId: "fld9mpSy76DJ3FLfY", name: "Dispo_Blast_Fired_At" },
+  { prop: "dealPhotoUrls", fieldId: "fldGWr6THoaLrBafp", name: "Deal_Photo_URLs" },
+  { prop: "dispoPublic", fieldId: "fldjGAK9f3tnCvpvU", name: "Dispo_Public" },
   // Underwritten_Property_MAO (keystone rewrite 2026-06-12, adjudication
   // recXJrM7EYK3pEFmF item 5): the ONLY field that authorizes Tier-C
   // autonomous property-up pricing. Underwritten_MAO above is demoted to
@@ -534,6 +541,18 @@ export async function getActiveListingsForBrief(opts: {
   const listings = records.map((r) => mapRecord<Listing>(r, LISTING_FIELDS));
   setCache(cacheKey, listings);
   return listings;
+}
+
+// Dispo-trigger candidates (2026-09-05): contract executed, no blast on record,
+// not Dead. Contract_Executed_At survives a dead deal (spine warning), so the
+// status exclusion is load-bearing. Server-side filtered — this runs every 30m.
+export async function getDispoTriggerCandidates(): Promise<Listing[]> {
+  const formula = `AND({Contract_Executed_At}!='', {Dispo_Blast_Fired_At}='', {Outreach_Status}!='Dead')`;
+  const records = await fetchRecords(LISTINGS_TABLE, Object.keys(LISTING_FIELDS), {
+    filterByFormula: formula,
+    maxRecords: 20,
+  });
+  return records.map((r) => mapRecord<Listing>(r, LISTING_FIELDS));
 }
 
 // Resurrection candidate fetch — Dead-status records with a Last_Inbound_At

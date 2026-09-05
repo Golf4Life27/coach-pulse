@@ -81,6 +81,19 @@ describe("composition", () => {
     expect(sms).toContain("$40,000 at stake");
     expect(sms).toContain("belt: intake ok · send ok · yday 8 sent/2 replies");
   });
+
+  it("appends the build ledger line when supplied, and omits it when not", () => {
+    const withBuild = composeDigestSms(
+      [item()],
+      null,
+      "https://coach-pulse-ten.vercel.app",
+      { inWorks: 4, operatorActions: 2 },
+    );
+    expect(withBuild).toContain("Build: 4 in works · 2 need you");
+
+    const withoutBuild = composeDigestSms([item()], null, "https://coach-pulse-ten.vercel.app");
+    expect(withoutBuild).not.toContain("Build:");
+  });
 });
 
 describe("insideChicagoWindow", () => {

@@ -11,6 +11,7 @@ const tabs = [
   { name: "QUEUE", href: "/queue" },
   { name: "SYSTEM", href: "/system" },
   { name: "HEALTH", href: "/health" },
+  { name: "BUILD", href: "/build" },
 ];
 
 // V2 surfaces being absorbed into the V1 shell (charter pivot 6/10). Gated
@@ -23,6 +24,10 @@ const v2Tabs = [
 
 export default function Navigation({ v2 = false }: { v2?: boolean }) {
   const pathname = usePathname();
+
+  // Public buyer-facing pages have no dashboard chrome (2026-09-05).
+  if (pathname?.startsWith("/d/") || pathname?.startsWith("/buyer-intake")) return null;
+
   const allTabs = v2 ? [...v2Tabs, ...tabs] : tabs;
 
   return (

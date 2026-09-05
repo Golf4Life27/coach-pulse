@@ -1,6 +1,7 @@
 import { getListings, getDeals } from "@/lib/airtable";
 import { parseConversation } from "@/lib/notes";
 import { listUnmatchedReplies } from "@/lib/inbound/store";
+import { fetchBuildLedger, summarizeBuildLedger } from "@/lib/build-ledger";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -36,6 +37,15 @@ interface UnmatchedReplyItem {
   reasoning: string;
 }
 
+/** Build Ledger digest (operator directive 2026-09-05) — best-effort, never
+ *  fails the briefing. Null when the ledger read/summarize failed. */
+interface BuildBriefing {
+  inWorks: number;
+  operatorActions: number;
+  actionItems: Array<{ project: string; step: string; actionItem: string; updatedAt: string | null }>;
+  projects: Array<{ project: string; progressPct: number; nextStep: string | null }>;
+}
+
 interface MorningBriefing {
   signNow: BriefingItem[];
   respondToday: BriefingItem[];
@@ -53,6 +63,29 @@ interface MorningBriefing {
     dead: number;
     unmatchedReplies: number;
   };
+  build: BuildBriefing | null;
+}
+
+/** Best-effort: a Build Ledger read/shaping failure must never blank the
+ *  morning briefing. */
+async function fetchBuildBriefing(): Promise<BuildBriefing | null> {
+  try {
+    const steps = await fetchBuildLedger();
+    const summary = summarizeBuildLedger(steps, new Date());
+    return {
+      inWorks: summary.counts.inWorks,
+      operatorActions: summary.counts.operatorActions,
+      actionItems: summary.operatorActionItems.slice(0, 5),
+      projects: summary.projects.map((p) => ({
+        project: p.project,
+        progressPct: p.progressPct,
+        nextStep: p.nextSteps[0] ?? null,
+      })),
+    };
+  } catch (err) {
+    console.error("[morning-briefing] build ledger read failed:", err);
+    return null;
+  }
 }
 
 function daysSince(iso: string | null | undefined): number | null {
@@ -126,7 +159,7 @@ function toBriefingItem(l: {
 export async function GET(req: Request) {
   try {
     const includeLegacy = new URL(req.url).searchParams.get("include_legacy") === "true";
-    const [listings] = await Promise.all([getListings({ includeLegacy })]);
+    const [listings, build] = await Promise.all([getListings({ includeLegacy }), fetchBuildBriefing()]);
 
     // Filter out dead/rejected/cleared. Pipeline_Stage is the source of
     // truth (Spine recUS0oHqXLtEM3lG Track B, 2026-06-02) — when set,
@@ -280,6 +313,7 @@ export async function GET(req: Request) {
       stale,
       unmatchedReplies,
       stats,
+      build,
     } as MorningBriefing);
   } catch (err) {
     console.error("[morning-briefing] error:", err);

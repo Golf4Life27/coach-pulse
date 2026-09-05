@@ -21,6 +21,7 @@ import RelatedDealsRecall from "@/components/RelatedDealsRecall";
 import ScribeDealCommentary from "@/components/ScribeDealCommentary";
 import PricingSanityRail from "@/components/PricingSanityRail";
 import PreContractGate from "@/components/PreContractGate";
+import MarkContractExecuted from "@/components/MarkContractExecuted";
 import type { DealContext } from "@/types/jarvis";
 
 function cleanPhone(phone: string): string {
@@ -326,6 +327,10 @@ export default function DealWorkspace() {
           {listing.outreachStatus ?? "No Status"}
         </span>
       </div>
+
+      {/* Back-half contract lifecycle (2026-09-05) — flips the deal into
+          under-contract/dispo clocks. See components/MarkContractExecuted. */}
+      <MarkContractExecuted recordId={listing.id} contractOfferPrice={listing.contractOfferPrice ?? null} />
 
       {/* COMMS INTEGRITY — a capture gap is an ALERT, never silent (the
           3731 Baltimore class: the record's stamps claim a message the
