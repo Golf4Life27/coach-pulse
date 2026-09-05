@@ -22,6 +22,7 @@ import {
   summarizeSqftBackfill,
   type SqftGapRecord,
 } from "@/lib/crawler/sqft-backfill";
+import { withSpendLane } from "@/lib/spend/lane-context";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -78,7 +79,7 @@ async function fetchGaps(limit: number): Promise<SqftGapRecord[]> {
   return out;
 }
 
-export async function GET(req: Request) {
+async function handleGet(req: Request) {
   const t0 = Date.now();
   const url = new URL(req.url);
   const dryRun = url.searchParams.get("dry_run") === "1";
@@ -135,4 +136,11 @@ export async function GET(req: Request) {
   });
 
   return NextResponse.json(summary);
+}
+
+// Spend lane (2026-09-05 RentCast throttle): every paid call made while this
+// route runs yields at the "sweep" share of the daily RentCast cap, so the
+// live-deal lane keeps its headroom. See lib/spend/lane-context.ts.
+export async function GET(req: Request) {
+  return withSpendLane("sweep", () => handleGet(req));
 }

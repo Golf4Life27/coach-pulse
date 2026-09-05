@@ -46,6 +46,7 @@ import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { getSubjectFacts } from "@/lib/rentcast";
 import { ENRICHMENT_SOURCE } from "@/lib/conveyor/enrichment-source";
 import type { Listing } from "@/lib/types";
+import { withSpendLane } from "@/lib/spend/lane-context";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -76,7 +77,7 @@ interface EnrichWrite {
   error: string | null;
 }
 
-export async function GET(req: Request) {
+async function handleGet(req: Request) {
   const t0 = Date.now();
 
   // ── Auth waterfall ───────────────────────────────────────────────
@@ -287,4 +288,11 @@ export async function GET(req: Request) {
     },
     duration_ms: Date.now() - t0,
   });
+}
+
+// Spend lane (2026-09-05 RentCast throttle): every paid call made while this
+// route runs yields at the "sweep" share of the daily RentCast cap, so the
+// live-deal lane keeps its headroom. See lib/spend/lane-context.ts.
+export async function GET(req: Request) {
+  return withSpendLane("sweep", () => handleGet(req));
 }

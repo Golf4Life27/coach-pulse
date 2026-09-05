@@ -38,6 +38,7 @@ import { decideAutoSeed, runAutoSeed } from "@/lib/crawler/auto-seed";
 import { audit, readRecentFromKv } from "@/lib/audit-log";
 import { countCallsBySource24h } from "@/lib/spend/derive";
 import { checkLaneSpend } from "@/lib/spend/paid-call-lanes";
+import { withSpendLane } from "@/lib/spend/lane-context";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -48,7 +49,7 @@ const MAX_LIMIT = 100;
 // pulls + the trailing audit finish cleanly; the rest roll to the next run.
 const WALL_CLOCK_BUDGET_MS = 270_000;
 
-export async function GET(req: Request) {
+async function handleGet(req: Request) {
   const t0 = Date.now();
   const url = new URL(req.url);
   const apply = url.searchParams.get("apply") === "1";
@@ -230,4 +231,11 @@ export async function GET(req: Request) {
   });
 
   return NextResponse.json({ mode: "apply", summary, results, duration_ms: Date.now() - t0 });
+}
+
+// Spend lane (2026-09-05 RentCast throttle): every paid call made while this
+// route runs yields at the "discovery" share of the daily RentCast cap, so the
+// live-deal lane keeps its headroom. See lib/spend/lane-context.ts.
+export async function GET(req: Request) {
+  return withSpendLane("discovery", () => handleGet(req));
 }

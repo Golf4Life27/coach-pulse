@@ -86,6 +86,7 @@ import { priceOpenerWithSeed } from "@/lib/opener-pricing";
 import { serializeDerivation } from "@/lib/pricing/opener-derivation";
 import { getMarketForListing, openerArvPctMax } from "@/lib/markets/registry";
 import { resolveAnchorPct } from "@/lib/markets/anchor";
+import { withSpendLane } from "@/lib/spend/lane-context";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -220,7 +221,7 @@ async function createIntakeListing(
   return id;
 }
 
-export async function GET(req: Request) {
+async function handleGet(req: Request) {
   const t0 = Date.now();
   const url = new URL(req.url);
 
@@ -1581,4 +1582,11 @@ export async function GET(req: Request) {
         }
       : {}),
   });
+}
+
+// Spend lane (2026-09-05 RentCast throttle): every paid call made while this
+// route runs yields at the "discovery" share of the daily RentCast cap, so the
+// live-deal lane keeps its headroom. See lib/spend/lane-context.ts.
+export async function GET(req: Request) {
+  return withSpendLane("discovery", () => handleGet(req));
 }

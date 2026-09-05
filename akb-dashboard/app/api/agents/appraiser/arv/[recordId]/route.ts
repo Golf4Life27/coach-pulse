@@ -41,11 +41,12 @@ import {
   readAuthHeaders,
 } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
+import { laneFromRequest, withSpendLane } from "@/lib/spend/lane-context";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
-export async function GET(
+async function handleGet(
   req: Request,
   { params }: { params: Promise<{ recordId: string }> },
 ) {
@@ -276,4 +277,12 @@ export async function GET(
       duration_ms: Date.now() - t0,
     },
   });
+}
+
+// Spend lane (2026-09-05 RentCast throttle): a per-record route is LIVE work
+// (a seller replied, an operator pressed a button) unless the caller is a
+// sweep that forwarded x-spend-lane — then its paid calls yield at the
+// sweep's share of the daily cap. See lib/spend/lane-context.ts.
+export async function GET(req: Request, ctx: { params: Promise<{ recordId: string }> }) {
+  return withSpendLane(laneFromRequest(req, "live"), () => handleGet(req, ctx));
 }

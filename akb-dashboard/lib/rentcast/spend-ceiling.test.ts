@@ -94,3 +94,55 @@ describe("KV bucket keys", () => {
     expect(dayKey(new Date("2026-06-10T00:00:01.000Z"))).toBe("rc:spend:d:2026-06-10");
   });
 });
+
+describe("the 2026-09-05 throttle — lane share of the day cap", () => {
+  // Day cap 80 (the throttle default): sweep yields at 20, batch at 40,
+  // discovery at 60, live keeps all 80.
+  const THROTTLED: SpendWindows = { invocation: 60, day: 80, month: 5000 };
+
+  it("a sweep is refused once a quarter of the day is spent, while live work still runs", () => {
+    const sweep = evaluateSpendCeiling({ invocation: 1, day: 20, month: 100 }, THROTTLED, "sweep");
+    expect(sweep.allowed).toBe(false);
+    expect(sweep.blockedBy).toBe("day");
+    expect(sweep.lane).toBe("sweep");
+    expect(sweep.laneDayCap).toBe(20);
+    expect(sweep.reason).toContain("sweep lane share 20");
+
+    const live = evaluateSpendCeiling({ invocation: 1, day: 20, month: 100 }, THROTTLED, "live");
+    expect(live.allowed).toBe(true);
+    expect(live.laneDayCap).toBe(80);
+  });
+
+  it("the morning sweeps cannot spend the seller's rent estimate: at 79 calls live still goes, batch does not", () => {
+    expect(evaluateSpendCeiling({ invocation: 1, day: 79, month: 100 }, THROTTLED, "live").allowed).toBe(true);
+    expect(evaluateSpendCeiling({ invocation: 1, day: 79, month: 100 }, THROTTLED, "batch").allowed).toBe(false);
+    expect(evaluateSpendCeiling({ invocation: 1, day: 79, month: 100 }, THROTTLED, "discovery").allowed).toBe(false);
+  });
+
+  it("live is refused only at the full day cap", () => {
+    const v = evaluateSpendCeiling({ invocation: 1, day: 80, month: 100 }, THROTTLED, "live");
+    expect(v.allowed).toBe(false);
+    expect(v.blockedBy).toBe("day");
+  });
+
+  it("lane defaults to live so existing callers keep the plain cap", () => {
+    const v = evaluateSpendCeiling({ invocation: 1, day: 60, month: 100 }, THROTTLED);
+    expect(v.lane).toBe("live");
+    expect(v.allowed).toBe(true);
+  });
+
+  it("the invocation trip still wins over the lane share — a loop is the worst case", () => {
+    const v = evaluateSpendCeiling({ invocation: 60, day: 0, month: 0 }, THROTTLED, "sweep");
+    expect(v.blockedBy).toBe("invocation");
+  });
+});
+
+describe("the effective day cap is the smaller of hard ceiling and throttle", () => {
+  it("defaults: throttle 80 under a 300 hard ceiling → 80", async () => {
+    const mod = await import("./spend-ceiling");
+    expect(mod.RENTCAST_DAILY_THROTTLE).toBe(80);
+    expect(mod.RENTCAST_HARD_CEILING).toBe(300);
+    expect(mod.RENTCAST_DAILY_CAP).toBe(80);
+    expect(mod.currentCaps().day).toBe(80);
+  });
+});

@@ -131,7 +131,7 @@ async function paidFetch(
       http: 598,
       ms: 0,
       recordId,
-      error: `spend_ceiling_${ceiling.blockedBy} (invocation=${ceiling.spent.invocation}, day=${ceiling.spent.day}, month=${ceiling.spent.month})`,
+      error: `spend_ceiling_${ceiling.blockedBy} (lane=${ceiling.lane}, invocation=${ceiling.spent.invocation}, day=${ceiling.spent.day}/${ceiling.laneDayCap}, month=${ceiling.spent.month})`,
     });
     await audit({
       agent: "sentry",
@@ -139,7 +139,14 @@ async function paidFetch(
       status: "confirmed_success",
       decision: ceiling.reason ?? "refused",
       recordId,
-      outputSummary: { endpoint, blocked_by: ceiling.blockedBy, spent: ceiling.spent, caps: ceiling.caps },
+      outputSummary: {
+        endpoint,
+        blocked_by: ceiling.blockedBy,
+        lane: ceiling.lane,
+        lane_day_cap: ceiling.laneDayCap,
+        spent: ceiling.spent,
+        caps: ceiling.caps,
+      },
     }).catch(() => {});
     return ceilingShortCircuitResponse(ceiling);
   }
