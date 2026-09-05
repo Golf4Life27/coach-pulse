@@ -46,6 +46,7 @@ import {
   buildHydrationFields,
 } from "@/lib/federation/property-intel-store";
 import { hydrateRecord } from "@/lib/federation/federation-orchestration";
+import { withSpendLane } from "@/lib/spend/lane-context";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -70,7 +71,7 @@ interface FederationSummary {
   errors: Array<{ recordId: string; address: string; error: string }>;
 }
 
-export async function GET(req: Request) {
+async function handleGet(req: Request) {
   const t0 = Date.now();
 
   // ── Auth waterfall (mirrors /api/cron/rehab-vision-retry) ───────
@@ -246,4 +247,11 @@ export async function GET(req: Request) {
     rentcast_budget_remaining: rentcastBudget,
     ...summary,
   });
+}
+
+// Spend lane (2026-09-05 RentCast throttle): every paid call made while this
+// route runs yields at the "sweep" share of the daily RentCast cap, so the
+// live-deal lane keeps its headroom. See lib/spend/lane-context.ts.
+export async function GET(req: Request) {
+  return withSpendLane("sweep", () => handleGet(req));
 }

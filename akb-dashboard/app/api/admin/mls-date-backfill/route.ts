@@ -28,13 +28,14 @@ import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { fetchListingsByZip } from "@/lib/crawler/sources/rentcast";
 import { normalizeAddressKey } from "@/lib/crawler/intake-filter";
 import { projectMlsRouting } from "@/lib/admin/mls-date-projection";
+import { withSpendLane } from "@/lib/spend/lane-context";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
 const DETROIT_ZIPS = ["48204", "48213", "48219"];
 
-export async function GET(req: Request) {
+async function handleGet(req: Request) {
   const t0 = Date.now();
   const url = new URL(req.url);
 
@@ -159,4 +160,11 @@ export async function GET(req: Request) {
     outputSummary: { ...summary, written: writes.filter((w) => w.written).length },
   });
   return NextResponse.json({ mode: "live", rentcast, summary, written: writes.filter((w) => w.written).length, writes, duration_ms: Date.now() - t0 });
+}
+
+// Spend lane (2026-09-05 RentCast throttle): every paid call made while this
+// route runs yields at the "sweep" share of the daily RentCast cap, so the
+// live-deal lane keeps its headroom. See lib/spend/lane-context.ts.
+export async function GET(req: Request) {
+  return withSpendLane("sweep", () => handleGet(req));
 }

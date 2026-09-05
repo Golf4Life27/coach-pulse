@@ -587,8 +587,20 @@ fire hundreds of calls before the first write lands.
 | Env | Default | Note |
 |---|---|---|
 | `RENTCAST_PER_INVOCATION_CAP` | 60 | new; the KV-independent backstop |
-| `RENTCAST_24H_HARD_CEILING` | **300** | **raised from 150** |
+| `RENTCAST_24H_HARD_CEILING` | **300** | **raised from 150** — the runaway brake |
+| `RENTCAST_DAILY_THROTTLE` | **80** | 2026-09-05 operator throttle; effective day cap = min(hard ceiling, throttle) |
 | `RENTCAST_MONTHLY_CAP` | 1000 | = Foundation plan's included requests |
+
+**Lane priority on the day window (2026-09-05):** the choke point reads the
+work class from `lib/spend/lane-context` (Node AsyncLocalStorage, set by
+`withSpendLane()` in each route; per-record appraiser routes inherit a
+sweep's lane via the `x-spend-lane` header, otherwise they are `live`).
+Sweeps yield at 25% of the day cap, batch (the default for untagged work) at
+50%, discovery at 75%, live at 100% — so the morning sweeps can never spend
+the rent estimate a seller's reply needs at 3pm. Operator's word: "Throttle
+rentcast, we should be able to use Cowork to do most of its job" — comps, CMA
+and rehab evidence on the deals that matter come from the Cowork PropStream +
+Zillow pass; RentCast under the throttle is rent, subject facts and discovery.
 
 The daily raise is deliberate: observed July baseline is **~120 calls/day**, so a
 150 *global* ceiling would trip on an ordinary busy day and silently starve ARV

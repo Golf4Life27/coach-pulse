@@ -64,6 +64,7 @@ import {
   type RecordLegPlan,
 } from "@/lib/admin/p2-done-gate";
 import { nextRehabSweepSlice } from "@/lib/admin/rehab-sweep-cursor";
+import { SPEND_LANE_HEADER, withSpendLane } from "@/lib/spend/lane-context";
 
 function originFromReq(req: Request): string {
   const url = new URL(req.url);
@@ -143,6 +144,10 @@ async function callEndpoint(
     if (cookie) headers.cookie = cookie;
     if (authorization) headers.authorization = authorization;
     if (xVercelCron) headers["x-vercel-cron"] = xVercelCron;
+    // The appraiser routes treat a bare request as LIVE work; tell them this
+    // is the sweep so their RentCast calls yield at the sweep's share of the
+    // daily cap (2026-09-05 throttle, lib/spend/lane-context).
+    headers[SPEND_LANE_HEADER] = "sweep";
     const res = await fetch(`${origin}${path}`, { headers, cache: "no-store" });
     const elapsed = Date.now() - t;
     if (!res.ok) {
@@ -185,7 +190,7 @@ interface BackfillRecordOutcome {
   outreach_status: string | null;
 }
 
-export async function GET(req: Request) {
+async function handleGet(req: Request) {
   const t0 = Date.now();
   const url = new URL(req.url);
   const limitParam = url.searchParams.get("limit");
@@ -838,4 +843,11 @@ export async function GET(req: Request) {
       current: o.record.current,
     })),
   });
+}
+
+// Spend lane (2026-09-05 RentCast throttle): every paid call made while this
+// route runs yields at the "sweep" share of the daily RentCast cap, so the
+// live-deal lane keeps its headroom. See lib/spend/lane-context.ts.
+export async function GET(req: Request) {
+  return withSpendLane("sweep", () => handleGet(req));
 }

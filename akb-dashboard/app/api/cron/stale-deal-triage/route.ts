@@ -75,6 +75,7 @@ import {
 } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import type { Listing } from "@/lib/types";
+import { withSpendLane } from "@/lib/spend/lane-context";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -532,10 +533,17 @@ async function handle(req: Request, params: TriageParams) {
   });
 }
 
-export async function GET(req: Request) {
+async function handleGet(req: Request) {
   return handle(req, parseParams(req));
 }
 
 export async function POST(req: Request) {
   return handle(req, parseParams(req));
+}
+
+// Spend lane (2026-09-05 RentCast throttle): every paid call made while this
+// route runs yields at the "sweep" share of the daily RentCast cap, so the
+// live-deal lane keeps its headroom. See lib/spend/lane-context.ts.
+export async function GET(req: Request) {
+  return withSpendLane("sweep", () => handleGet(req));
 }

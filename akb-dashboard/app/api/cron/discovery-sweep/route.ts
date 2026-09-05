@@ -45,6 +45,7 @@ import {
 } from "@/lib/crawler/sweep-enrich";
 import { fetchListingsByZip } from "@/lib/crawler/sources/rentcast";
 import { buildIntakeListingFields } from "@/lib/crawler/intake-fields";
+import { withSpendLane } from "@/lib/spend/lane-context";
 
 const AIRTABLE_BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
 const AIRTABLE_LISTINGS_TABLE = process.env.AIRTABLE_LISTINGS_TABLE || "tbldMjKBgPiq45Jjs";
@@ -67,7 +68,7 @@ const MAX_ENRICH_PER_RUN = Math.max(0, Number(process.env.SWEEP_MAX_ENRICH_PER_R
 const sweepKey = (zip: string) => `sweep:zip:${zip}`;
 const SWEEP_TTL_S = 60 * 86_400;
 
-export async function GET(req: Request) {
+async function handleGet(req: Request) {
   const t0 = Date.now();
   const url = new URL(req.url);
   const dryRun = url.searchParams.get("apply") !== "1";
@@ -333,4 +334,11 @@ export async function GET(req: Request) {
     errors,
     elapsed_ms: Date.now() - t0,
   });
+}
+
+// Spend lane (2026-09-05 RentCast throttle): every paid call made while this
+// route runs yields at the "discovery" share of the daily RentCast cap, so the
+// live-deal lane keeps its headroom. See lib/spend/lane-context.ts.
+export async function GET(req: Request) {
+  return withSpendLane("discovery", () => handleGet(req));
 }

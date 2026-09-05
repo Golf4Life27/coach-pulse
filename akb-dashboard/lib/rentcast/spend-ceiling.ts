@@ -41,6 +41,8 @@
 //     ceiling, it never removes it.
 
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
+import { laneCeiling, type SpendLane } from "@/lib/spend/paid-call-lanes";
+import { currentSpendLane } from "@/lib/spend/lane-context";
 
 // ── Caps ───────────────────────────────────────────────────────────────
 // Env names are the EXISTING ones (RENTCAST_24H_HARD_CEILING,
@@ -60,10 +62,34 @@ import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
  *  Side effect, stated plainly: auto-underwrite-engaged's own ceiling reads
  *  the same env and therefore loosens 150 → 300. That is the intended
  *  consolidation — one number for "RentCast calls per day", not two. */
-export const RENTCAST_DAILY_CAP = (() => {
+export const RENTCAST_HARD_CEILING = (() => {
   const raw = Number(process.env.RENTCAST_24H_HARD_CEILING);
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 300;
 })();
+
+/** THE THROTTLE (operator word 2026-09-05: "Throttle rentcast, we should be
+ *  able to use Cowork to do most of its job"). Per UTC day. Default 80.
+ *
+ *  Why a second knob instead of lowering the hard ceiling: the hard ceiling
+ *  is a RUNAWAY BRAKE and may already be pinned high in the Vercel env; a
+ *  code default cannot override an env that is set. The throttle is the
+ *  OPERATING level and always applies — the effective daily cap is the
+ *  smaller of the two, so neither knob can silently loosen the other.
+ *
+ *  Sizing: burn on 9/5 was ~295/day against 3,820 calls left and 26 days to
+ *  the plan reset — exhaustion around 9/18. 80/day × 26 days = 2,080, inside
+ *  the remaining allowance with room for a bad day. Comps, CMA and rehab on
+ *  the deals that matter come from the operator's Cowork pass (PropStream +
+ *  Zillow) and ATTOM; RentCast's automated job shrinks to rent estimates,
+ *  subject facts and discovery under this cap. Raise via
+ *  RENTCAST_DAILY_THROTTLE only alongside a plan change. */
+export const RENTCAST_DAILY_THROTTLE = (() => {
+  const raw = Number(process.env.RENTCAST_DAILY_THROTTLE);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 80;
+})();
+
+/** Effective per-day cap = min(hard ceiling, throttle). */
+export const RENTCAST_DAILY_CAP = Math.min(RENTCAST_HARD_CEILING, RENTCAST_DAILY_THROTTLE);
 
 /** Per UTC month. Default 1000 = the Foundation plan's included requests, so
  *  the default posture is "never knowingly enter overage". Raise this to the
@@ -102,15 +128,32 @@ export interface CeilingVerdict {
   blockedBy: CeilingWindow | null;
   spent: SpendWindows;
   caps: SpendWindows;
+  /** The work class making the call (lib/spend/lane-context). */
+  lane: SpendLane;
+  /** The share of caps.day this lane may consume before yielding — the full
+   *  cap for "live", a fraction for everything else (LANE_BUDGET_FRACTION). */
+  laneDayCap: number;
   /** Operator-readable reason; null when allowed. */
   reason: string | null;
 }
 
 /** Pure: may one more paid call proceed? Checked cheapest-first, and the
  *  order also encodes severity — an invocation trip means a loop is running
- *  RIGHT NOW, a month trip means the bill is the problem. */
-export function evaluateSpendCeiling(spent: SpendWindows, caps: SpendWindows): CeilingVerdict {
-  const base = { spent, caps };
+ *  RIGHT NOW, a month trip means the bill is the problem.
+ *
+ *  LANE PRIORITY on the day window (2026-09-05 throttle): sweeps yield at 25%
+ *  of the day cap, batch at 50%, discovery at 75%, live at 100% — so once the
+ *  morning sweeps have spent their share the remaining calls are reserved for
+ *  a seller who replied. `lane` defaults to "live" so a caller that does not
+ *  know its lane gets the plain cap (existing behaviour); the choke point
+ *  passes the real lane from the request context. */
+export function evaluateSpendCeiling(
+  spent: SpendWindows,
+  caps: SpendWindows,
+  lane: SpendLane = "live",
+): CeilingVerdict {
+  const laneDayCap = laneCeiling(lane, caps.day);
+  const base = { spent, caps, lane, laneDayCap };
   if (spent.invocation >= caps.invocation) {
     return {
       ...base,
@@ -119,12 +162,12 @@ export function evaluateSpendCeiling(spent: SpendWindows, caps: SpendWindows): C
       reason: `rentcast_invocation_cap — ${spent.invocation} paid calls in a single invocation ≥ cap ${caps.invocation}; a loop is running. Refusing further calls.`,
     };
   }
-  if (spent.day >= caps.day) {
+  if (spent.day >= laneDayCap) {
     return {
       ...base,
       allowed: false,
       blockedBy: "day",
-      reason: `rentcast_daily_cap — ${spent.day} paid calls today ≥ cap ${caps.day} (UTC day). Refusing until the bucket rolls.`,
+      reason: `rentcast_daily_cap — ${spent.day} paid calls today ≥ ${lane} lane share ${laneDayCap} of day cap ${caps.day} (UTC day). Refusing until the bucket rolls; live work keeps the full cap.`,
     };
   }
   if (spent.month >= caps.month) {
@@ -243,6 +286,7 @@ export async function checkSpendCeiling(now: Date = new Date()): Promise<Ceiling
   const verdict = evaluateSpendCeiling(
     { invocation: invocationSpend(), day: kv.day, month: kv.month },
     currentCaps(),
+    currentSpendLane(),
   );
   return { ...verdict, kvAvailable: kv.kvAvailable };
 }

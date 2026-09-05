@@ -42,6 +42,7 @@ import {
   openerArvPctMax,
   NON_DISCLOSURE_STATES,
 } from "@/lib/markets/registry";
+import { withSpendLane } from "@/lib/spend/lane-context";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -50,7 +51,7 @@ export const maxDuration = 120;
  *  legacy paused backlog re-enters the queue over weeks, not one tick. */
 const MAX_REVIVALS_PER_PASS = 10;
 
-export async function GET(req: Request) {
+async function handleGet(req: Request) {
   const t0 = Date.now();
 
   const cookieHeader = req.headers.get("cookie");
@@ -314,4 +315,11 @@ export async function GET(req: Request) {
     },
     duration_ms: Date.now() - t0,
   });
+}
+
+// Spend lane (2026-09-05 RentCast throttle): every paid call made while this
+// route runs yields at the "discovery" share of the daily RentCast cap, so the
+// live-deal lane keeps its headroom. See lib/spend/lane-context.ts.
+export async function GET(req: Request) {
+  return withSpendLane("discovery", () => handleGet(req));
 }
