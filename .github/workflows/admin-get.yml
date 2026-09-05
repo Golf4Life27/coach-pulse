@@ -1,0 +1,66 @@
+# Generic controlled GET against a production admin/cron route with the
+# CRON_SECRET bearer — the read-only sibling of maverick-actions.yml.
+#
+# Use it to dry-run a cron (?dry_run=1), read a report route, or trigger a
+# backfill the route itself gates. The route's own auth waterfall + kill
+# switch still apply; this only supplies the credential.
+
+name: Admin GET (controlled)
+
+on:
+  workflow_dispatch:
+    inputs:
+      path:
+        description: "Route path, e.g. /api/cron/dispo-trigger"
+        required: true
+        type: string
+      query:
+        description: "Query string without the leading ?, e.g. dry_run=1&record_id=rec..."
+        required: false
+        default: ""
+        type: string
+      base_url:
+        description: "Production base URL (override only for staging tests)."
+        required: false
+        default: "https://coach-pulse-ten.vercel.app"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      ROUTE_PATH: ${{ inputs.path }}
+      QUERY: ${{ inputs.query }}
+      BASE_URL: ${{ inputs.base_url }}
+    steps:
+      - name: Refuse to run when CRON_SECRET is missing
+        run: |
+          if [ -z "${{ secrets.CRON_SECRET }}" ]; then
+            echo "::error::CRON_SECRET is not configured as a GitHub Actions secret."
+            exit 1
+          fi
+      - name: GET
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          case "${ROUTE_PATH}" in
+            /api/*) ;;
+            *) echo "::error::path must start with /api/"; exit 1 ;;
+          esac
+          URL="${BASE_URL}${ROUTE_PATH}"
+          if [ -n "${QUERY}" ]; then URL="${URL}?${QUERY}"; fi
+          HTTP_CODE=$(curl -sS -o /tmp/out.json -w "%{http_code}" --max-time 300 \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            "${URL}")
+          echo "HTTP ${HTTP_CODE} ${ROUTE_PATH}"
+          echo "--- response body ---"
+          jq . /tmp/out.json 2>/dev/null || cat /tmp/out.json
+          if [ "${HTTP_CODE}" -ge 400 ]; then
+            echo "::error::GET returned HTTP ${HTTP_CODE}"
+            exit 1
+          fi
