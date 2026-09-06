@@ -18,6 +18,26 @@ describe("eval: the documented misses (each was live-misclassified before 2026-0
     expect(label("The owner is willing to accept that deal. ")).toBe("acceptance");
   });
 
+  it("1162 N Olive decline (2026-09-06: 'willing to accept' inside a firm decline read as ACCEPTANCE; two ACT NOW pages on a no)", () => {
+    const marie =
+      "Thank you for the offer and sending his interest in the property. After careful consideration, " +
+      "I have decided to respectfully decline the offer. The proposed price is significantly below what " +
+      "I am willing to accept, and at this time, I am not interested in further negotiations that aren't " +
+      "close to the asking price.\n\nI do appreciate his interest tho.";
+    const r = classifyReply(marie);
+    expect(r.classification).not.toBe("acceptance");
+    expect(r.classification).toBe("list_anchored");
+    const t = triageSellerReply(marie, "Texted", {});
+    expect(t.tier).toBe("tier_0_silent");
+    expect(t.queueStatus).toBe("Parked");
+  });
+
+  it("decline shapes never read as acceptance even with an accept verb present", () => {
+    expect(label("We would not accept that, sorry")).not.toBe("acceptance");
+    expect(label("Seller declined. He is willing to accept 250k though")).not.toBe("acceptance");
+    expect(label("Not interested, thanks. Let's do it another time maybe")).not.toBe("acceptance");
+  });
+
   it("Sussex cash-pivot (2026-08-24, tier-0 auto-killed by unanchored \"he's not\")", () => {
     const sussex =
       "He's not interested in financing. He wants to sell outright. " +

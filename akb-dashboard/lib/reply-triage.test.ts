@@ -45,12 +45,16 @@ describe("classifyReply", () => {
       "Hi Alex! It's a fast no at $156K. The sellers aren't interested in low ball offers.",
     );
     expect(cloverhurst.classification).toBe("soft_no");
-    // The follow-up correction, verbatim:
+    // The follow-up correction, verbatim. Was soft_no; under the operator's
+    // 2026-09-03 rule "at or close to the listing price" IS the seller's
+    // number restated → list_anchored (silent, Parked), same as "closer to
+    // asking" (2026-09-05 build) and 1162 N Olive's "close to the asking
+    // price" (2026-09-06). Never interest, never acceptance.
     expect(
       classifyReply(
         "You misread my text. There is no interest in any lowball offers. If you all aren't submitting an offer that is at or close to the listing price my clients are not interested. Thank you.",
       ).classification,
-    ).toBe("soft_no");
+    ).toBe("list_anchored");
     // Other negation shapes:
     expect(classifyReply("Seller isn't interested").classification).toBe("soft_no");
     expect(classifyReply("we are no longer interested").classification).toBe("soft_no");
