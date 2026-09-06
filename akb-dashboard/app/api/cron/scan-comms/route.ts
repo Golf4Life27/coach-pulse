@@ -19,7 +19,7 @@ import { extractScopeTier, scopeReprice } from "@/lib/reply/scope-intel";
 import { sendAutoClose } from "@/lib/auto-close";
 import { sendAutoAck } from "@/lib/auto-ack";
 import { detectOptOut, applyOptOut, inboundStampAdvances } from "@/lib/outreach/opt-out";
-import { selectThreadListing } from "@/lib/conversation-thread";
+import { selectThreadListing, isNeverTextedSibling } from "@/lib/conversation-thread";
 import { resolveAlertNumbers } from "@/lib/outreach-economics";
 
 export const runtime = "nodejs";
@@ -191,6 +191,8 @@ export async function GET(req: Request) {
     const autoAnswerResults: Array<{ recordId: string; sent: boolean; reason: string | null; classification: string }> = [];
     // Tier-0 rejections whose Outreach_Status this run flipped to Dead (P3).
     let deadFlipped = 0;
+    // Never-texted siblings excluded from property-specific handling (2026-09-06).
+    let siblingsSkipped = 0;
     // M8 / Gate 3 — STOP/opt-out (operator 2026-06-18).
     let optOutDetected = 0;
     let optOutFlipped = 0;
@@ -269,7 +271,22 @@ export async function GET(req: Request) {
         // fanned an alert onto Fielding). Property-specific handling below
         // targets the ONE thread listing; the number-level opt-out above stays
         // fanned across all matched listings.
-        const threadListing = selectThreadListing(matchedListings);
+        // NEVER-TEXTED SIBLING GATE (819 N Hamilton, 2026-09-06): when the
+        // real thread listing drops out of the actionable set (Olive was
+        // Parked at 17:10Z), selectThreadListing fell back to the agent's
+        // OTHER listing — an April intake we never texted — and this pass
+        // classified Marie's Olive decline against it, flipped it to
+        // Negotiating and paged ACT NOW. A listing with no outbound stamped
+        // and none of our outbounds in this thread naming its street is not
+        // a candidate for anything property-specific. Opt-out above stays
+        // number-level and unaffected.
+        const ownedListings = matchedListings.filter(
+          (l) => !isNeverTextedSibling(l, messages.filter((m) => m.direction === "outgoing").map((m) => m.body)),
+        );
+        if (ownedListings.length < matchedListings.length) {
+          siblingsSkipped += matchedListings.length - ownedListings.length;
+        }
+        const threadListing = selectThreadListing(ownedListings);
         const replyTargets = threadListing ? [threadListing] : [];
         for (const listing of replyTargets) {
           matched++;
@@ -615,6 +632,7 @@ export async function GET(req: Request) {
       autoCloseSent: autoCloseResults.filter((r) => r.sent).length,
       autoCloseResults: autoCloseResults.length > 0 ? autoCloseResults : undefined,
       rejectionDeadFlipped: deadFlipped,
+      neverTextedSiblingsSkipped: siblingsSkipped,
       autoAckAttempted: autoAckResults.length,
       autoAckSent: autoAckResults.filter((r) => r.sent).length,
       autoAckResults: autoAckResults.length > 0 ? autoAckResults : undefined,

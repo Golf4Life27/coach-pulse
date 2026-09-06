@@ -83,3 +83,22 @@ export function weOpenedThreadForListing(
   if (!street) return false;
   return outboundBodies.some((b) => (b ?? "").toLowerCase().includes(street));
 }
+
+/** Pure: is this listing a NEVER-TEXTED sibling on a shared agent phone —
+ *  no outbound ever stamped on the record AND none of our outbounds in the
+ *  thread name its street? Such a record has no conversation of its own, so
+ *  a shared-phone inbound must not be written onto it at all: not notes, not
+ *  Last_Inbound_At, not a classification. 819 N Hamilton (2026-09-06): the
+ *  hourly reconciler copied Marie Crabb's decline on 1162 N Olive onto this
+ *  April-intake sibling (same phone, never texted); the :30 scan then saw a
+ *  fresh inbound with no outbound, classified it, flipped it to Negotiating
+ *  and paged the operator "ACT NOW" on a house we never offered on. A record
+ *  WITH a stamped outbound keeps today's behaviour (the opener body is the
+ *  ownership signal for drafting; notes still land as thread history). */
+export function isNeverTextedSibling(
+  listing: { lastOutboundAt?: string | null; address?: string | null },
+  outboundBodies: readonly (string | null | undefined)[],
+): boolean {
+  if (listing.lastOutboundAt) return false;
+  return !weOpenedThreadForListing(outboundBodies, listing.address);
+}

@@ -44,7 +44,7 @@ describe("selectThreadListing — the Gharian Carver fan-out fix", () => {
   });
 });
 
-import { weOpenedThreadForListing } from "./conversation-thread";
+import { weOpenedThreadForListing, isNeverTextedSibling } from "./conversation-thread";
 
 describe("weOpenedThreadForListing — the never-texted phantom-draft gate", () => {
   const holmesOutbounds = [
@@ -70,5 +70,30 @@ describe("weOpenedThreadForListing — the never-texted phantom-draft gate", () 
 
   it("tolerates null/blank message bodies in the thread", () => {
     expect(weOpenedThreadForListing([null, undefined, "", "offer on 7545 Holmes St"], "7545 Holmes St")).toBe(true);
+  });
+});
+
+describe("isNeverTextedSibling — the shared-phone mirror gate (819 N Hamilton, 2026-09-06)", () => {
+  // Marie Crabb reps 1162 N Olive (we opened 9/5) AND 819 N Hamilton (April
+  // intake, never texted). Her 9/6 decline is about Olive only.
+  const marieOutbounds = [
+    "Hi Marie, Alex with AKB Solutions — interested in 1162 N Olive St in San Antonio if the numbers work.",
+    "Hi Marie, this is Alex with AKB Solutions. I am interested in your listing at 2106 Schley Ave in San Antonio.",
+  ];
+
+  it("a never-texted sibling with no outbound naming its street is a sibling: skip it", () => {
+    expect(isNeverTextedSibling({ lastOutboundAt: null, address: "819 N Hamilton St" }, marieOutbounds)).toBe(true);
+  });
+
+  it("the listing we actually opened is never a sibling, even with no Last_Outbound_At stamp", () => {
+    expect(isNeverTextedSibling({ lastOutboundAt: null, address: "1162 N Olive St, San Antonio, TX 78202" }, marieOutbounds)).toBe(false);
+  });
+
+  it("a record with a stamped outbound is never a sibling (we texted it; body match is not required)", () => {
+    expect(isNeverTextedSibling({ lastOutboundAt: "2026-09-05T16:32:08.623Z", address: "819 N Hamilton St" }, marieOutbounds)).toBe(false);
+  });
+
+  it("no address and no outbound → sibling (nothing can prove ownership)", () => {
+    expect(isNeverTextedSibling({ lastOutboundAt: null, address: null }, marieOutbounds)).toBe(true);
   });
 });

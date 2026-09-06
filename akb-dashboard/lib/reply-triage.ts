@@ -84,6 +84,27 @@ const ACCEPTANCE_PATTERNS = [
   /\bwrite\s+(?:it|the\s+offer|the\s+contract)\s+up\b/i,
 ];
 
+/** DECLINE OVERRIDES ACCEPTANCE — "After careful consideration, I have
+ *  decided to respectfully decline the offer. The proposed price is
+ *  significantly below what I am willing to accept" (1162 N Olive, Marie
+ *  Crabb, 2026-09-06 16:40Z). ACCEPTANCE_PATTERNS run first by design and
+ *  "willing to accept" fired on a firm decline: status flipped to Offer
+ *  Accepted, a draft queued, and the operator was paged ACT NOW twice (the
+ *  second time on a never-texted sibling record). An explicit decline verb,
+ *  a "not interested", or a "below/under what … accept" comparison in the
+ *  same message means the accept-shaped phrase is the seller's FLOOR, not a
+ *  yes. When one of these is present the acceptance list is skipped and the
+ *  message falls through to the ordinary ordering (list-anchored / soft-no /
+ *  flat-no), which is where a polite decline belongs. */
+const DECLINE_OVERRIDES_ACCEPTANCE = [
+  /\bdeclin(?:e|ed|es|ing)\b/i,
+  /\bnot\s+interested\b/i,
+  /\b(?:below|under|less\s+than|short\s+of|beneath)\s+what\b/i,
+  /\b(?:not|never)\s+(?:be\s+)?willing\s+to\s+accept\b/i,
+  /\b(?:would|will|could|can)\s+(?:not|n'?t)\s+accept\b/i,
+  /\bwon'?t\s+accept\b/i,
+];
+
 /** HARD rejection — the thread must die and STAY dead. Two shapes only:
  *  (a) compliance opt-outs (STOP/unsubscribe/do-not-contact) — non-negotiable,
  *  never re-engaged, feeds the opt-out rails; (b) gone-deals (sold, under
@@ -254,6 +275,9 @@ const HOSTILE_PATTERNS = [
  *  reset every COUNTER-tagged "closer to asking" back to Parked by hand. */
 const LIST_ANCHORED_PATTERNS = [
   /\bcloser\s+to\s+(?:the\s+)?(?:asking|list(?:ing)?|ask)(?:\s+price)?\b/i,
+  // "not interested in further negotiations that aren't close to the asking
+  // price" (1162 N Olive, 2026-09-06) — same shape without the comparative.
+  /\bclose\s+to\s+(?:the\s+)?(?:asking|list(?:ing)?|ask)(?:\s+price)?\b/i,
   /\b(?:in\s*-?\s*)?line\s+with\s+(?:the\s+)?(?:current\s+)?(?:list(?:ing)?|asking)(?:\s+price)?\b/i,
   /\bfirm\s+(?:at|on)\s+(?:the\s+)?(?:list(?:ing)?|asking)(?:\s+price)?\b/i,
   /\b(?:wants?|needs?|expects?|looking\s+for|holding\s+(?:out\s+)?for|is\s+at|are\s+at)\s+(?:the\s+)?(?:full\s+)?(?:list(?:ing)?|asking)(?:\s+price)?\b/i,
@@ -477,8 +501,12 @@ export function classifyReply(body: string): {
   // Acceptance FIRST — a true "we accept your offer" must not be eaten by
   // the rejection patches (which match "accepted ... offer" shapes when the
   // seller is comparing us to another deal in hand).
-  for (const pat of ACCEPTANCE_PATTERNS) {
-    if (pat.test(trimmed)) return { classification: "acceptance", matchedPattern: pat.source };
+  // …unless the same message carries an explicit decline (1162 N Olive,
+  // 2026-09-06: "respectfully decline … below what I am willing to accept").
+  if (!DECLINE_OVERRIDES_ACCEPTANCE.some((pat) => pat.test(trimmed))) {
+    for (const pat of ACCEPTANCE_PATTERNS) {
+      if (pat.test(trimmed)) return { classification: "acceptance", matchedPattern: pat.source };
+    }
   }
 
   for (const pat of REJECTION_PATTERNS) {

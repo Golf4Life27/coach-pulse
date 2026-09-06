@@ -24,7 +24,7 @@ import { appendQuoMessagesToNotes, newestInboundIso } from "@/lib/outreach/quo-s
 import { detectReportedSale, reportedSaleFields } from "@/lib/sold-feedback";
 import { detectL3DollarAmounts } from "@/lib/outreach/l3-amount-detector";
 import { isSelfEchoOrAutoreply } from "@/lib/conversation-check";
-import { weOpenedThreadForListing } from "@/lib/conversation-thread";
+import { weOpenedThreadForListing, isNeverTextedSibling } from "@/lib/conversation-thread";
 import { selectSweepCohort } from "@/lib/inbound/gmail-thread-link";
 import {
   buildInboundReplyDraft,
@@ -142,6 +142,30 @@ async function handle(req: Request) {
           outputSummary: { feed_only_ids: thread.feedOnlyIds, body_divergence_ids: thread.bodyDivergenceIds },
         });
       }
+      // NEVER-TEXTED SIBLING GATE (819 N Hamilton, 2026-09-06): the draft
+      // path below already refuses to draft/flip a listing we never opened,
+      // but the notes append + Last_Inbound_At stamp were NOT gated — so
+      // Marie Crabb's decline on 1162 N Olive was copied onto 819 N Hamilton
+      // (same phone, April intake, no opener ever sent), and the :30
+      // scan-comms pass then classified that mirrored text, flipped the
+      // record to Negotiating and paged "ACT NOW" on a house we never
+      // offered on. A record with no outbound stamped and no outbound in
+      // the thread naming its street has no conversation of its own:
+      // write nothing, audit the skip, move on.
+      const outboundBodies = msgs.filter((m) => m.direction === "outgoing").map((m) => m.body);
+      if (msgs.some((m) => m.direction === "incoming") && isNeverTextedSibling(l, outboundBodies)) {
+        await audit({
+          agent: "outreach",
+          event: "quo_sync_sibling_skipped",
+          status: "confirmed_success",
+          recordId: l.id,
+          inputSummary: { address: l.address, agent_phone: phone },
+          outputSummary: { incoming_in_window: msgs.filter((m) => m.direction === "incoming").length },
+          decision: "never_texted_sibling — inbound belongs to another listing on this phone; nothing written",
+        });
+        outcomes.push({ recordId: l.id, address: l.address, agent_phone: phone, new_events: 0, escalations: 0, skipped_already_present: 0, error: "never_texted_sibling" });
+        continue;
+      }
       const r = appendQuoMessagesToNotes(l.notes, msgs.map((m) => ({ id: m.id, body: m.body, createdAt: m.createdAt, direction: m.direction })), { syncMarkerSource: "quo_sync" });
       const fields: Record<string, unknown> = {};
       if (r.newEvents.length > 0) {
@@ -190,10 +214,7 @@ async function handle(req: Request) {
         // names THIS listing's street — the pollution-proof "we opened this
         // conversation" signal (Last_Outbound_At gets fanned; the opener body
         // does not). Never-texted siblings are skipped.
-        const weOpenedThis = weOpenedThreadForListing(
-          msgs.filter((m) => m.direction === "outgoing").map((m) => m.body),
-          l.address,
-        );
+        const weOpenedThis = weOpenedThreadForListing(outboundBodies, l.address);
         if (newestInbound && ballInCourt && weOpenedThis) {
           const draft = await buildInboundReplyDraft({
             listing: {
