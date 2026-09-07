@@ -410,6 +410,36 @@ describe("sendGuarded thread-truth", () => {
     expect(r.reason).toBe("unrecorded_outbound_in_thread");
   });
 
+  // 2026-09-06 wedge fix: the refusal must carry the offending message so a
+  // caller (the H2 cron) can stamp Last_Outbound_At from thread truth and
+  // stop re-selecting an already-contacted record as a fresh candidate every
+  // slot (audit 2026-09-06 — Fairburn/Mansfield/31st St occupied every batch,
+  // sent 0, for 24h+ because this evidence never reached the caller).
+  it("carries the offending message as `evidence` on an unrecorded_outbound_in_thread refusal", async () => {
+    const r = await sendGuarded(base, {
+      kv: makeMemoryKv(),
+      send: okSend as never,
+      fetchThread: async () => [
+        { id: "ACAB123400000000000000000000000A", from: "", to: "", body: "Hi Alexis, Alex with AKB Solutions — interested in 17360 Mansfield St in Detroit", direction: "outgoing", createdAt: "2026-08-31T13:05:56.066Z" },
+      ],
+    });
+    expect(r.refused).toBe(true);
+    expect(r.reason).toBe("unrecorded_outbound_in_thread");
+    expect(r.evidence).toEqual({
+      id: "ACAB123400000000000000000000000A",
+      direction: "outgoing",
+      createdAt: "2026-08-31T13:05:56.066Z",
+      bodyPreview: "Hi Alexis, Alex with AKB Solutions — interested in 17360 Mansfield St in Detroit",
+    });
+  });
+
+  it("`evidence` is null on a clean send", async () => {
+    const s = spySender();
+    const r = await sendGuarded(base, { kv: makeMemoryKv(), send: s.fn, fetchThread: async () => [] });
+    expect(r.sent).toBe(true);
+    expect(r.evidence).toBeNull();
+  });
+
   // ── SCOPE FIX (2026-08-06): a conversation is a PHONE NUMBER, not a record.
   // Agent phones are brokerage switchboards — 734-838-9197 carries ~60 listings
   // — so the per-record read of rule (a) capped outbound at one property per

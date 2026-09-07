@@ -15,6 +15,8 @@ import {
   buildQuarantineNote,
   buildDeliveryQuarantineNote,
   buildDeadNumberFanoutNote,
+  buildThreadTruthStampNote,
+  isForwardOutboundStamp,
   planQueue,
 } from "./h2-outreach";
 import type { Listing } from "@/lib/types";
@@ -91,6 +93,9 @@ describe("isH2Eligible", () => {
     expect(isH2Eligible(listing({ sourceVersion: "v1_legacy" }))).toBe(false);
     expect(isH2Eligible(listing({ sourceVersion: null }))).toBe(false);
     expect(isH2Eligible(listing({ sourceVersion: "v2_post_2026-05-26" }))).toBe(true);
+  });
+  it("excludes a record already carrying a Last_Outbound_At stamp even with Outreach_Status empty (2026-09-06 thread-truth wedge: 405 Fairburn/17360 Mansfield/1532 31st St — the gate correctly refused an already-texted thread every 15 minutes because the record's own stamp never recorded it, so the SAME small batch occupied every slot forever and real candidates never got a turn)", () => {
+    expect(isH2Eligible(listing({ outreachStatus: "", lastOutboundAt: "2026-08-31T13:05:56.066Z" }))).toBe(false);
   });
   it("selectH2Eligible filters a mixed set", () => {
     const set = [
@@ -331,11 +336,28 @@ describe("ineligibleReasonForListing", () => {
 
   it("names each failing gate in isH2Eligible order", () => {
     expect(ineligibleReasonForListing(listing({ ...eligible(), outreachStatus: "Texted" }))).toContain("Outreach_Status already set");
+    expect(ineligibleReasonForListing(listing({ ...eligible(), lastOutboundAt: "2026-08-31T13:05:56.066Z" }))).toContain("Last_Outbound_At");
     expect(ineligibleReasonForListing(listing({ ...eligible(), liveStatus: "Off Market" }))).toContain("not Active");
     expect(ineligibleReasonForListing(listing({ ...eligible(), executionPath: "Reject" }))).toContain("not Auto Proceed");
     expect(ineligibleReasonForListing(listing({ ...eligible(), doNotText: true }))).toContain("Do_Not_Text");
     expect(ineligibleReasonForListing(listing({ ...eligible(), agentPhone: "" }))).toContain("Agent_Phone is empty");
     expect(ineligibleReasonForListing(listing({ ...eligible(), sourceVersion: "v1_legacy" }))).toContain("not v2");
+  });
+});
+
+describe("isForwardOutboundStamp — thread-truth stamp-back never moves Last_Outbound_At backward", () => {
+  it("stamps when the record has no existing Last_Outbound_At", () => {
+    expect(isForwardOutboundStamp(null, "2026-08-31T13:05:56.066Z")).toBe(true);
+  });
+  it("stamps when the evidence is newer than the existing stamp", () => {
+    expect(isForwardOutboundStamp("2026-01-01T00:00:00.000Z", "2026-08-31T13:05:56.066Z")).toBe(true);
+  });
+  it("does NOT stamp when the evidence is older than or equal to the existing stamp", () => {
+    expect(isForwardOutboundStamp("2026-09-01T00:00:00.000Z", "2026-08-31T13:05:56.066Z")).toBe(false);
+    expect(isForwardOutboundStamp("2026-08-31T13:05:56.066Z", "2026-08-31T13:05:56.066Z")).toBe(false);
+  });
+  it("does NOT stamp on an unparseable evidence timestamp", () => {
+    expect(isForwardOutboundStamp(null, "not-a-date")).toBe(false);
   });
 });
 
@@ -460,5 +482,19 @@ describe("buildDeadNumberFanoutNote — number-level bounce fan-out (2026-08-30)
   });
   it("defaults a null status to undelivered", () => {
     expect(buildDeadNumberFanoutNote(null, "2026-08-30T22:32:00Z", "+15551234567", null, "recX")).toContain("reported undelivered");
+  });
+});
+
+describe("buildThreadTruthStampNote — 2026-09-06 wedge fix", () => {
+  it("appends a note carrying the Quo msg id in the standard 'Quo msg <ID>' form so a re-fetch of these notes records it as known (parseKnownQuoIds picks it up)", () => {
+    const n = buildThreadTruthStampNote("prior notes", "2026-09-06T23:45:00.000Z", {
+      id: "ACAB123400000000000000000000000A",
+      createdAt: "2026-08-31T13:05:56.066Z",
+      bodyPreview: "Hi Alexis, Alex with AKB Solutions — interested in 17360 Mansfield St in Detroit",
+    });
+    expect(n).toContain("prior notes");
+    expect(n).toContain("[H2 thread-truth stamp 2026-09-06T23:45:00.000Z]");
+    expect(n).toContain("Quo msg ACAB123400000000000000000000000A");
+    expect(n).toContain("2026-08-31T13:05:56.066Z");
   });
 });

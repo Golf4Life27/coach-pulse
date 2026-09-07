@@ -137,6 +137,23 @@ function outreachStatusEmpty(l: Listing): boolean {
   return !l.outreachStatus || l.outreachStatus.trim() === "";
 }
 
+/** No recorded evidence this record was ever texted. A non-null
+ *  Last_Outbound_At alongside an empty Outreach_Status is a DATA
+ *  INCONSISTENCY, not a fresh candidate — every real send stamps both fields
+ *  together (see the Texted write-back in the cron route), so the only way
+ *  to reach this state is the 2026-09-06 thread-truth wedge: the send gate
+ *  refused because the live thread already held our outbound, and the
+ *  refusal's own stamp-back (buildThreadTruthStampNote / the cron's refusal
+ *  handler) backfilled Last_Outbound_At without ever getting to write
+ *  Outreach_Status. Without this check that record is indistinguishable from
+ *  a genuine first-touch candidate, so it gets re-selected, re-refused, and
+ *  re-occupies the batch every slot forever (405 Fairburn/17360
+ *  Mansfield/1532 31st St sent 0 texts for 24h+ while real candidates never
+ *  got a turn). */
+function outboundStampEmpty(l: Listing): boolean {
+  return !l.lastOutboundAt;
+}
+
 function agentPhonePresent(l: Listing): boolean {
   return !!l.agentPhone && l.agentPhone.trim() !== "";
 }
@@ -148,6 +165,7 @@ function agentPhonePresent(l: Listing): boolean {
 export function isH2Eligible(l: Listing): boolean {
   return (
     outreachStatusEmpty(l) &&
+    outboundStampEmpty(l) &&
     l.liveStatus === LIVE_ACTIVE &&
     l.executionPath === AUTO_PROCEED &&
     l.doNotText !== true &&
@@ -200,6 +218,7 @@ export function selectOutreachReady(
  *  rejection. Order matches isH2Eligible. */
 export function ineligibleReasonForListing(l: Listing): string | null {
   if (!outreachStatusEmpty(l)) return `Outreach_Status already set ('${l.outreachStatus}')`;
+  if (!outboundStampEmpty(l)) return `Last_Outbound_At is stamped ('${l.lastOutboundAt}') — already contacted, not a fresh first-touch candidate`;
   if (l.liveStatus !== LIVE_ACTIVE) return `Live_Status is '${l.liveStatus}', not Active`;
   if (l.executionPath !== AUTO_PROCEED) return `Execution_Path is '${l.executionPath}', not Auto Proceed`;
   if (l.doNotText === true) return "Do_Not_Text is set";
@@ -418,6 +437,40 @@ export function buildDeadNumberFanoutNote(
     existing,
     `[H2 dead-number fanout ${iso}] Carrier reported ${status ?? "undelivered"} for ${phone} ` +
       `(on record ${sourceRecordId}) — Do_Not_Text set number-wide, no retry.`,
+  );
+}
+
+/** THREAD-TRUTH STAMP-BACK (2026-09-06 wedge fix). Pure: whether `evidenceIso`
+ *  (the createdAt of the outbound message the send gate found unrecorded in
+ *  the live thread) should become the record's new Last_Outbound_At.
+ *  Forward-only — never move the stamp backward, and never stamp from an
+ *  unparseable timestamp. */
+export function isForwardOutboundStamp(
+  currentIso: string | null | undefined,
+  evidenceIso: string,
+): boolean {
+  const evidenceMs = Date.parse(evidenceIso);
+  if (!Number.isFinite(evidenceMs)) return false;
+  const currentMs = currentIso ? Date.parse(currentIso) : NaN;
+  return !Number.isFinite(currentMs) || evidenceMs > currentMs;
+}
+
+/** Note for the thread-truth stamp-back: the send gate refused this send
+ *  because the live thread already held one of OUR outbound messages that
+ *  this record's own notes/stamp never recorded (an old opener, or an
+ *  untracked lane). Deliberately in the same "Quo msg <ID>" form every other
+ *  H2 note uses so a re-read of these notes (lib/outreach/thread-truth
+ *  parseKnownQuoIds) records this message as known, not just the
+ *  Last_Outbound_At field. */
+export function buildThreadTruthStampNote(
+  existing: string | null,
+  iso: string,
+  evidence: { id: string; createdAt: string; bodyPreview: string },
+): string {
+  return append(
+    existing,
+    `[H2 thread-truth stamp ${iso}] Quo msg ${evidence.id}: ${evidence.bodyPreview} ` +
+      `(sent ${evidence.createdAt}, backfilled from the live thread — not previously recorded on this record).`,
   );
 }
 

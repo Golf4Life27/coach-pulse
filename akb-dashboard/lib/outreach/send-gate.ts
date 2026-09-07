@@ -153,6 +153,13 @@ export interface SendGateResult {
   /** Duplicate-suppression telemetry. `degraded` = KV unavailable, the check
    *  could not run, and the send was allowed through (fail-open). */
   dedupe: { key: string | null; enforced: boolean; degraded: boolean };
+  /** Present only on a thread-truth refusal (unrecorded_outbound_in_thread /
+   *  unseen_inbound_in_thread) — the live-thread message that triggered it.
+   *  Callers can use this to recover state the record's own notes/stamps
+   *  never captured (e.g. backfilling Last_Outbound_At from a real outbound
+   *  the gate found but the record never recorded — see the H2 cron's
+   *  thread-truth stamp-back, 2026-09-06). Null for every other outcome. */
+  evidence: { id: string; direction: string; createdAt: string; bodyPreview: string } | null;
 }
 
 // ── PURE HELPERS (unit-testable with no KV, no network) ────────────────
@@ -270,6 +277,7 @@ export async function sendGuarded(
   const refuse = async (
     reason: SendRefusalReason,
     dedupe: SendGateResult["dedupe"],
+    evidence: SendGateResult["evidence"] = null,
   ): Promise<SendGateResult> => {
     await audit({
       agent,
@@ -285,7 +293,7 @@ export async function sendGuarded(
       outputSummary: { sent: false, reason, dedupe_key: dedupe.key },
       decision: reason,
     });
-    return { sent: false, refused: true, reason, result: null, dedupe };
+    return { sent: false, refused: true, reason, result: null, dedupe, evidence };
   };
 
   const noDedupe: SendGateResult["dedupe"] = { key: null, enforced: false, degraded: false };
@@ -387,7 +395,7 @@ export async function sendGuarded(
           outputSummary: { reason: verdict.reason, evidence: verdict.evidence },
           decision: verdict.reason ?? "thread_truth_refused",
         });
-        return refuse(verdict.reason as SendRefusalReason, noDedupe);
+        return refuse(verdict.reason as SendRefusalReason, noDedupe, verdict.evidence);
       }
     }
   } else {
@@ -443,7 +451,7 @@ export async function sendGuarded(
 
   try {
     const result = await send(req.to, req.body, req.from ? { from: req.from } : {});
-    return { sent: true, refused: false, reason: null, result, dedupe };
+    return { sent: true, refused: false, reason: null, result, dedupe, evidence: null };
   } catch (err) {
     // A throw means nothing went out. Release the claim so a retry is not
     // locked out for 30 minutes (the lesson from approve-send's stuck claim).
