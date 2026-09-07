@@ -54,4 +54,26 @@ write path was discretionary and got skipped. Do not let that recur:
   end with commits but no spine write — it is a backstop, not permission to defer. Write
   as you go.
 
+# Delegate the build work down-tier — operator ruling 2026-09-06 (Spine recZ8ukn1iLKpVHeT)
+
+Operator, verbatim: "Deploy lower level agents to fix that to save Fable credits. That
+needs to be a rule established." Model spend is under the same cash constraint as EMD.
+
+- **Bounded engineering work goes to a subagent on a lower-tier model** via the Agent
+  tool — `model: "sonnet"` by default, `"haiku"` for mechanical work (renames, fixture
+  updates, log reads). That covers: a bug fix with a known cause, a new test, a refactor,
+  a lane or route change, a backfill script, a docs edit. Anything touching more than one
+  file or needing a new test goes down-tier; a one-line pattern or typo may stay in-session.
+- **The session model keeps the judgment work:** diagnosis from the evidence trail
+  (audit_log, Vercel logs, the record, spine, git), deciding what the fix should be,
+  reviewing the subagent's diff before merge, any number that reaches a seller (pricing
+  doctrine), operator-facing reports, and every spine write.
+- **The brief is the deliverable of the parent.** Give the subagent: the evidence, the
+  failing case, the constraints (YAGNI, never loosen a test or a gate, no model names in
+  code/commits), the validation commands (`npx vitest run`, `npx tsc --noEmit`), and the
+  exact git mechanics (branch, commit trailers, push; the parent opens the PR).
+- **Merge stays with the parent:** read the diff, run the checks, open the PR, drive it to
+  green, merge under the standing default, verify the deploy, write the spine.
+- If a subagent's result fails review twice, the parent takes the task over — no loops.
+
 > Note: `AGENTS.md` (imported above) says **Hobby / daily-cron cap** — that is **STALE**. Production is Vercel **Pro** (sub-daily crons are live in `vercel.json`; see AS_BUILT §0). Don't architect around a daily-cron limit that no longer applies.

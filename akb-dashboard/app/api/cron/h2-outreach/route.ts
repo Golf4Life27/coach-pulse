@@ -89,6 +89,8 @@ import {
   buildQuarantineNote,
   buildDeliveryQuarantineNote,
   buildDeadNumberFanoutNote,
+  buildThreadTruthStampNote,
+  isForwardOutboundStamp,
   type H2Plan,
 } from "@/lib/h2-outreach";
 import { normalizePhone } from "@/lib/phone-normalize";
@@ -1172,6 +1174,31 @@ async function handle(req: Request): Promise<Response> {
           if (!gated.sent) {
             row.error = `send_gate_refused: ${gated.reason}`;
             summary.errors++;
+            // THREAD-TRUTH STAMP-BACK (2026-09-06 wedge, audit finding: 405
+            // Fairburn/17360 Mansfield/1532 31st St occupied every 15-minute
+            // slot and sent 0 texts for 24h+). The gate correctly refused —
+            // the live thread already held one of our outbound messages this
+            // record's own Last_Outbound_At never recorded — but until now
+            // nothing acted on that finding, so the record looked like a
+            // fresh first-touch candidate again next slot, forever. Backfill
+            // Last_Outbound_At from the gate's own evidence (forward-only)
+            // so isH2Eligible excludes it going forward, same as any other
+            // already-contacted record. Best-effort: a write failure here
+            // just means the next slot's refusal tries again.
+            if (gated.reason === "unrecorded_outbound_in_thread" && gated.evidence) {
+              const evidence = gated.evidence;
+              if (isForwardOutboundStamp(fresh?.lastOutboundAt ?? null, evidence.createdAt)) {
+                try {
+                  await updateListingRecord(p.recordId, {
+                    Last_Outbound_At: evidence.createdAt,
+                    Verification_Notes: buildThreadTruthStampNote(existingNotes, iso, evidence),
+                  });
+                  row.airtable_updated = true;
+                } catch (err) {
+                  console.error("[h2-outreach] thread-truth stamp-back failed:", p.recordId, err);
+                }
+              }
+            }
             // No SMS went out — release the claim so the refusal (which the
             // gate re-evaluates fresh each run) can't poison the record for
             // the full claim TTL.
