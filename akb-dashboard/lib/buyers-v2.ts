@@ -54,6 +54,21 @@ export const BUYER_V2_FIELDS = {
   Form_Completed_At: "Form_Completed_At",
   Last_Engagement_At: "Last_Engagement_At",
   Notes: "Notes",
+  // Dispo buyer-reply ingestion (2026-09-07, lib/dispo/buyer-reply.ts +
+  // app/api/cron/dispo-buyer-replies). dispo-trigger stamps the two blast
+  // fields the moment a send succeeds — the Gmail thread id is the durable
+  // key a reply is matched back by, same role Gmail_Thread_Ids plays for
+  // seller threads (lib/inbound/gmail-thread-link.ts), just buyer-scoped.
+  // Dispo_Blast_Thread_Id / Dispo_Blast_Listing_Id were CREATED on the
+  // physical Buyers table 2026-09-07 (single-line text) alongside this
+  // change; Last_Response_At (date) and Buyer_Notes (long text) already
+  // existed. Airtable does NOT create unknown fields on write (typecast only
+  // coerces values), so a missing field here is a 422 on the stamp and an
+  // invalid-formula error on listBuyersWithDispoBlastThread — add it by hand.
+  Dispo_Blast_Thread_Id: "Dispo_Blast_Thread_Id",
+  Dispo_Blast_Listing_Id: "Dispo_Blast_Listing_Id",
+  Last_Response_At: "Last_Response_At",
+  Buyer_Notes: "Buyer_Notes",
 } as const;
 
 function asString(v: unknown): string | null {
@@ -111,6 +126,10 @@ function mapRecord(record: { id: string; fields: Record<string, unknown> }): Buy
     formCompletedAt: asString(f[BUYER_V2_FIELDS.Form_Completed_At]),
     lastEngagementAt: asString(f[BUYER_V2_FIELDS.Last_Engagement_At]),
     notes: asString(f[BUYER_V2_FIELDS.Notes]),
+    dispoBlastThreadId: asString(f[BUYER_V2_FIELDS.Dispo_Blast_Thread_Id]),
+    dispoBlastListingId: asString(f[BUYER_V2_FIELDS.Dispo_Blast_Listing_Id]),
+    lastResponseAt: asString(f[BUYER_V2_FIELDS.Last_Response_At]),
+    buyerNotes: asString(f[BUYER_V2_FIELDS.Buyer_Notes]),
   };
 }
 
@@ -160,6 +179,14 @@ export async function getBuyerV2(id: string): Promise<BuyerRecord | null> {
   }
   const data = (await res.json()) as { id: string; fields: Record<string, unknown> };
   return mapRecord(data);
+}
+
+/** Buyers with a dispo blast thread on record — the population the reply
+ *  cron (app/api/cron/dispo-buyer-replies) polls. Small by construction:
+ *  only buyers who were actually blasted, ever. */
+export async function listBuyersWithDispoBlastThread(): Promise<BuyerRecord[]> {
+  const formula = `{${BUYER_V2_FIELDS.Dispo_Blast_Thread_Id}}!=''`;
+  return listBuyersV2({ filterByFormula: formula });
 }
 
 export async function findBuyerByEmail(email: string): Promise<BuyerRecord | null> {

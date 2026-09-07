@@ -497,6 +497,12 @@ export interface BuyerRecord {
   pofExpiryDate: string | null;
   preferredStates: string | null;
   strategyType: string[] | null;
+  // Dispo buyer-reply ingestion (2026-09-07). See BUYER_V2_FIELDS in
+  // lib/buyers-v2.ts for the field-level rationale.
+  dispoBlastThreadId: string | null;
+  dispoBlastListingId: string | null;
+  lastResponseAt: string | null;
+  buyerNotes: string | null;
 }
 
 export interface BuyerMatch {
