@@ -229,10 +229,21 @@ export async function GET(req: Request) {
           sent++;
           const nowIso = new Date().toISOString();
           try {
-            await updateBuyerV2(r.buyerId, {
+            const buyerFields: Record<string, unknown> = {
               [BUYER_V2_FIELDS.Email_Sent_At]: nowIso,
               [BUYER_V2_FIELDS.Last_Engagement_At]: nowIso,
-            });
+            };
+            // Reply-ingestion key (app/api/cron/dispo-buyer-replies): the
+            // Gmail thread id Gmail assigned this send is the durable
+            // handle a buyer's reply is matched back by. Best-effort — a
+            // missing threadId (Gmail not configured, etc.) just means this
+            // buyer's reply won't be auto-ingested; the send itself is
+            // unaffected.
+            if (res.threadId) {
+              buyerFields[BUYER_V2_FIELDS.Dispo_Blast_Thread_Id] = res.threadId;
+              buyerFields[BUYER_V2_FIELDS.Dispo_Blast_Listing_Id] = recordId;
+            }
+            await updateBuyerV2(r.buyerId, buyerFields);
           } catch (err) {
             console.error(`[dispo-trigger] buyer stamp failed ${r.buyerId}:`, err);
           }

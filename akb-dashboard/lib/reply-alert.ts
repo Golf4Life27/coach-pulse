@@ -152,26 +152,33 @@ export function buildReplyAlertBody(input: ReplyAlertInput): { body: string; pri
   };
 }
 
-/** Best-effort SMS via Quo to ALERT_PHONE. Never throws. Tier 0 is a no-op
- *  by contract (the caller shouldn't route it here; double-guarded anyway).
+/** Shared skeleton: ALERT_PHONE/ALERT_FROM checks, the Quo send, and the
+ *  audit trail — identical for every alert this module sends regardless of
+ *  what built the body. Extracted so a differently-shaped alert (e.g. the
+ *  dispo buyer-interest ping, which has no ReplyClassification to hang a
+ *  body off) doesn't have to duplicate the channel-separation rule or the
+ *  audit contract.
  *
  *  CHANNEL SEPARATION (operator 2026-06-10): operator alerts send FROM the
  *  dedicated Maverick line (ALERT_FROM env — Quo inbox PNMhSUQXFw,
  *  +16302505865), NEVER from the agent-facing outreach line. When
  *  ALERT_FROM is unset the alert REFUSES (audited) rather than fall back
- *  to the outreach line — the hard rule beats delivery. */
-export async function sendReplyAlert(input: ReplyAlertInput): Promise<ReplyAlertResult> {
-  if (input.tier === "tier_0_auto_close") {
-    return { sent: false, reason: "tier_0_no_alert", priceGap: false };
-  }
+ *  to the outreach line — the hard rule beats delivery. Never throws. */
+async function sendAlertSms(opts: {
+  recordId: string;
+  tier: AlertTier;
+  classification: string;
+  body: string;
+  priceGap: boolean;
+}): Promise<ReplyAlertResult> {
   const to = (process.env.ALERT_PHONE ?? "").trim();
   if (!to) {
     await audit({
       agent: "crier",
       event: "reply_alert_skipped",
       status: "uncertain",
-      recordId: input.recordId,
-      inputSummary: { reason: "ALERT_PHONE not set", tier: input.tier },
+      recordId: opts.recordId,
+      inputSummary: { reason: "ALERT_PHONE not set", tier: opts.tier },
       outputSummary: { sent: false },
     });
     return { sent: false, reason: "alert_phone_not_set", priceGap: false };
@@ -182,42 +189,78 @@ export async function sendReplyAlert(input: ReplyAlertInput): Promise<ReplyAlert
       agent: "crier",
       event: "reply_alert_skipped",
       status: "uncertain",
-      recordId: input.recordId,
-      inputSummary: { reason: "ALERT_FROM not set — refusing to send from the agent-facing outreach line (channel separation)", tier: input.tier },
+      recordId: opts.recordId,
+      inputSummary: { reason: "ALERT_FROM not set — refusing to send from the agent-facing outreach line (channel separation)", tier: opts.tier },
       outputSummary: { sent: false },
     });
     return { sent: false, reason: "alert_from_not_set", priceGap: false };
   }
-  const { body, priceGap } = buildReplyAlertBody(input);
   try {
-    await sendMessage(to, body, { from });
+    await sendMessage(to, opts.body, { from });
     await audit({
       agent: "crier",
       event: "reply_alert_sent",
       status: "confirmed_success",
-      recordId: input.recordId,
+      recordId: opts.recordId,
       inputSummary: {
         to_masked: `${to.slice(0, 4)}…${to.slice(-4)}`,
-        tier: input.tier,
-        classification: input.classification,
-        body_len: body.length,
+        tier: opts.tier,
+        classification: opts.classification,
+        body_len: opts.body.length,
         // Surface the null-price gap per the approved ruling — the SMS said
         // "hold sticky opener" because the record's opener/MAO were missing.
-        price_gap: priceGap,
+        price_gap: opts.priceGap,
       },
       outputSummary: { sent: true },
     });
-    return { sent: true, reason: null, priceGap };
+    return { sent: true, reason: null, priceGap: opts.priceGap };
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
     await audit({
       agent: "crier",
       event: "reply_alert_failed",
       status: "confirmed_failure",
-      recordId: input.recordId,
-      inputSummary: { to_masked: `${to.slice(0, 4)}…${to.slice(-4)}`, tier: input.tier },
+      recordId: opts.recordId,
+      inputSummary: { to_masked: `${to.slice(0, 4)}…${to.slice(-4)}`, tier: opts.tier },
       outputSummary: { sent: false, error: reason.slice(0, 200) },
     });
-    return { sent: false, reason: reason.slice(0, 200), priceGap };
+    return { sent: false, reason: reason.slice(0, 200), priceGap: opts.priceGap };
   }
+}
+
+export async function sendReplyAlert(input: ReplyAlertInput): Promise<ReplyAlertResult> {
+  if (input.tier === "tier_0_auto_close") {
+    return { sent: false, reason: "tier_0_no_alert", priceGap: false };
+  }
+  const { body, priceGap } = buildReplyAlertBody(input);
+  return sendAlertSms({ recordId: input.recordId, tier: input.tier, classification: input.classification, body, priceGap });
+}
+
+/** DISPO BUYER INTEREST alert (2026-09-07) — the buyer-reply twin of
+ *  sendReplyAlert. A buyer reply has no ReplyClassification (that union is
+ *  seller/agent-shaped) and its body doesn't fit alertAction/
+ *  buildReplyAlertBody's decision-recommendation shape, so it composes its
+ *  own tier_2_urgent body here instead of forcing a foreign classification
+ *  through the seller path — but it goes out through the exact same
+ *  ALERT_PHONE/ALERT_FROM/audit skeleton, so channel separation and the
+ *  audit contract can't drift between the two lanes. Buyer interest is
+ *  always urgent (a 10-day option period, one buyer at a time) — there is
+ *  no tier_1 buyer alert. */
+export async function sendBuyerReplyAlert(input: {
+  recordId: string;
+  address: string | null;
+  buyerName: string;
+  amountUsd: number | null;
+  dealUrl: string;
+}): Promise<ReplyAlertResult> {
+  const addr = shortAddress(input.address);
+  const amountPart = input.amountUsd != null ? usd(input.amountUsd) : "wants contract";
+  const body = `ACT NOW (buyer): ${addr} — ${input.buyerName} ${amountPart}. ${input.dealUrl}`;
+  return sendAlertSms({
+    recordId: input.recordId,
+    tier: "tier_2_urgent",
+    classification: "buyer_interest",
+    body,
+    priceGap: false,
+  });
 }

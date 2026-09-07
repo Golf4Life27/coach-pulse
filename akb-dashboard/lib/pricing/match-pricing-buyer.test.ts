@@ -20,6 +20,8 @@ function buyer(over: Partial<BuyerRecord> = {}): BuyerRecord {
     minAssignmentFeeTarget: null, maxRehab: null, preferredCondition: null,
     pofOnFile: true, pofExpiryDate: null,
     preferredStates: "MI", strategyType: null,
+    dispoBlastThreadId: null, dispoBlastListingId: null,
+    lastResponseAt: null, buyerNotes: null,
     ...over,
   };
 }
