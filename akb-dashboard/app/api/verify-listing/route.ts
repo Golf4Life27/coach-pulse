@@ -1,6 +1,7 @@
 import { canAutoDispose, disposeDeal, parkDeal } from "@/lib/conveyor/park";
 import { hasDeliveredOfferFor, hasOpenThreadFrom } from "@/lib/conveyor/off-market";
 import { auditPaidCall } from "@/lib/spend/audit-paid-call";
+import { isRentcastFrozen } from "@/lib/rentcast/spend-ceiling";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -46,6 +47,19 @@ async function queryRentCast(
   });
 
   const t0 = Date.now();
+  // Operator freeze (2026-09-07, Spine recxIki2g0rSXS8xD): this raw fetch
+  // bypasses lib/rentcast's choke point, so it honours the freeze here.
+  if (isRentcastFrozen()) {
+    await auditPaidCall({
+      source: "rentcast",
+      endpoint: "listings/sale",
+      http: 598,
+      ms: 0,
+      recordId,
+      error: "rentcast_frozen_by_operator",
+    });
+    return [];
+  }
   let res: Response;
   try {
     res = await fetch(

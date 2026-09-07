@@ -7,6 +7,8 @@ import {
   dayKey,
   monthKey,
   type SpendWindows,
+  isRentcastFrozen,
+  RENTCAST_FREEZE_UNTIL,
 } from "./spend-ceiling";
 
 const CAPS: SpendWindows = { invocation: 60, day: 150, month: 1000 };
@@ -144,5 +146,22 @@ describe("the effective day cap is the smaller of hard ceiling and throttle", ()
     expect(mod.RENTCAST_HARD_CEILING).toBe(300);
     expect(mod.RENTCAST_DAILY_CAP).toBe(80);
     expect(mod.currentCaps().day).toBe(80);
+  });
+});
+
+describe("operator freeze (2026-09-07: stop ALL RentCast calls until the plan month resets)", () => {
+  it("is frozen before the freeze-until instant and open at/after it", () => {
+    const until = new Date("2026-09-13T00:00:00Z");
+    expect(isRentcastFrozen(new Date("2026-09-07T15:30:00Z"), until)).toBe(true);
+    expect(isRentcastFrozen(new Date("2026-09-12T23:59:59Z"), until)).toBe(true);
+    expect(isRentcastFrozen(new Date("2026-09-13T00:00:00Z"), until)).toBe(false);
+    expect(isRentcastFrozen(new Date("2026-10-01T00:00:00Z"), until)).toBe(false);
+  });
+
+  it("defaults to a date past the operator's stated 4-5 day reset from 9/7", () => {
+    if (process.env.RENTCAST_FREEZE_UNTIL === undefined) {
+      expect(RENTCAST_FREEZE_UNTIL.toISOString()).toBe("2026-09-13T00:00:00.000Z");
+      expect(isRentcastFrozen(new Date("2026-09-07T16:00:00Z"))).toBe(true);
+    }
   });
 });

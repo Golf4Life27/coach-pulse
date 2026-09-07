@@ -114,7 +114,27 @@ export const RENTCAST_PER_INVOCATION_CAP = (() => {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 60;
 })();
 
-export type CeilingWindow = "invocation" | "day" | "month";
+export type CeilingWindow = "invocation" | "day" | "month" | "freeze";
+
+/** OPERATOR FREEZE (2026-09-07, Spine recxIki2g0rSXS8xD). Operator, verbatim:
+ *  "First order of business is to stop any rentcast calls...not raise the
+ *  limit! I am over budget and overages are super expensive. It resets in
+ *  4-5 days." Every paid RentCast call is refused until this instant, for
+ *  every lane including "live" — a human button press is not an exception.
+ *  Defaults to a date safely past the reset so a redeploy cannot silently
+ *  re-enable spend; RENTCAST_FREEZE_UNTIL (ISO) moves it, and an unparseable
+ *  or past value lifts the freeze. Re-arm by setting it forward again. */
+export const RENTCAST_FREEZE_UNTIL: Date = (() => {
+  const raw = process.env.RENTCAST_FREEZE_UNTIL;
+  if (raw === undefined) return new Date("2026-09-13T00:00:00Z");
+  const d = new Date(raw);
+  return Number.isFinite(d.getTime()) ? d : new Date(0);
+})();
+
+/** Pure: is the operator freeze in force at `now`? */
+export function isRentcastFrozen(now: Date = new Date(), until: Date = RENTCAST_FREEZE_UNTIL): boolean {
+  return now.getTime() < until.getTime();
+}
 
 export interface SpendWindows {
   invocation: number;
@@ -282,6 +302,20 @@ export async function recordKvSpend(now: Date = new Date()): Promise<void> {
 
 /** The full check the choke point runs before every paid call. */
 export async function checkSpendCeiling(now: Date = new Date()): Promise<CeilingVerdict & { kvAvailable: boolean }> {
+  // Operator freeze outranks every window and never touches KV: a refused
+  // call must cost nothing, not even a meter read.
+  if (isRentcastFrozen(now)) {
+    return {
+      allowed: false,
+      blockedBy: "freeze",
+      spent: { invocation: invocationSpend(), day: -1, month: -1 },
+      caps: currentCaps(),
+      lane: currentSpendLane(),
+      laneDayCap: 0,
+      reason: `rentcast_frozen_by_operator until ${RENTCAST_FREEZE_UNTIL.toISOString()} (operator 2026-09-07: over budget, overages expensive — no paid RentCast calls from any lane)`,
+      kvAvailable: true,
+    };
+  }
   const kv = await readKvSpend(now);
   const verdict = evaluateSpendCeiling(
     { invocation: invocationSpend(), day: kv.day, month: kv.month },
