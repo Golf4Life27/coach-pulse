@@ -59,11 +59,12 @@ export const BUYER_V2_FIELDS = {
   // fields the moment a send succeeds — the Gmail thread id is the durable
   // key a reply is matched back by, same role Gmail_Thread_Ids plays for
   // seller threads (lib/inbound/gmail-thread-link.ts), just buyer-scoped.
-  // NEW FIELDS — not present on the physical Buyers table before this
-  // change; typecast=true on every write here lets Airtable create them.
-  // If a write ever comes back with them silently dropped, add manually as
-  // single-line text (Dispo_Blast_Thread_Id, Dispo_Blast_Listing_Id),
-  // date (Last_Response_At), and long text (Buyer_Notes).
+  // Dispo_Blast_Thread_Id / Dispo_Blast_Listing_Id were CREATED on the
+  // physical Buyers table 2026-09-07 (single-line text) alongside this
+  // change; Last_Response_At (date) and Buyer_Notes (long text) already
+  // existed. Airtable does NOT create unknown fields on write (typecast only
+  // coerces values), so a missing field here is a 422 on the stamp and an
+  // invalid-formula error on listBuyersWithDispoBlastThread — add it by hand.
   Dispo_Blast_Thread_Id: "Dispo_Blast_Thread_Id",
   Dispo_Blast_Listing_Id: "Dispo_Blast_Listing_Id",
   Last_Response_At: "Last_Response_At",
