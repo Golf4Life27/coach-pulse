@@ -11,6 +11,10 @@
 // be set before that module is imported — vi.hoisted runs before imports.
 vi.hoisted(() => {
   process.env.RENTCAST_API_KEY = "test-key";
+  // This file exercises the loop breaker behind the choke point; the
+  // operator freeze (lib/rentcast/spend-ceiling RENTCAST_FREEZE_UNTIL) is
+  // covered by its own test and must be lifted here or nothing reaches fetch.
+  process.env.RENTCAST_FREEZE_UNTIL = "1970-01-01T00:00:00Z";
 });
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";

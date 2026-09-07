@@ -12,6 +12,7 @@
 // Spec v1.1 §5 Step 1.
 
 import { runWithTimeout } from "../timeout";
+import { isRentcastFrozen } from "@/lib/rentcast/spend-ceiling";
 import type { FetchOpts, SourceResult } from "../types";
 
 const DEFAULT_TIMEOUT_MS = 3_000;
@@ -43,7 +44,8 @@ export async function fetchExternalRentCastState(
     async (signal) => {
       const probeStart = Date.now();
       let apiResponsive = false;
-      if (RENTCAST_API_KEY) {
+      // Operator freeze (2026-09-07): the probe is a paid call too. Skip it.
+      if (RENTCAST_API_KEY && !isRentcastFrozen()) {
         try {
           // Lightweight probe: hit the avm/value endpoint with a
           // syntactically valid but cheap query. We only check the

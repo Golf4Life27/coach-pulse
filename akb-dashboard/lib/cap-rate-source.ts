@@ -1,3 +1,4 @@
+import { isRentcastFrozen } from "@/lib/rentcast/spend-ceiling";
 // Market-implied cap — FLOOR SANITY-CHECK ONLY (Track 2; corrected
 // 2026-06-05 per operator).
 // @agent: appraiser
@@ -92,6 +93,9 @@ export interface CapRateSourceDeps {
 }
 
 async function defaultFetchMarkets(zip: string): Promise<{ status: number; body: Record<string, unknown> | null }> {
+  // Operator freeze (2026-09-07, Spine recxIki2g0rSXS8xD): no paid RentCast
+  // call from any path. 598 mirrors the choke point's refusal status.
+  if (isRentcastFrozen()) return { status: 598, body: null };
   const res = await fetch(`${BASE}/markets?zipCode=${encodeURIComponent(zip)}&dataType=All`, {
     headers: { "X-Api-Key": RENTCAST_API_KEY ?? "" },
     cache: "no-store",
