@@ -41,6 +41,7 @@ import { isActionableMarket } from "@/lib/markets/actionable";
 import { isOutreachFresh, DEFAULT_FRESHNESS_HOURS } from "@/lib/outreach-freshness";
 import { agentInventoryAsk } from "@/lib/pricing/bounded-ratio-opener";
 import { isListAnchorMode } from "@/lib/pricing/list-anchor-opener";
+import type { LowballTier } from "@/lib/lowball-eligibility";
 
 export const AUTO_PROCEED = "Auto Proceed";
 export const LIVE_ACTIVE = "Active";
@@ -549,4 +550,32 @@ export function planQueue(
   }
 
   return plans;
+}
+
+// ── LOWBALL FRONT-GATE FIX (operator instruction 2026-09-08) ──────────────
+// lib/lowball-eligibility decides who gets the AGGRESSIVE (65%-style)
+// opener — but that opener no longer exists: the two-stage doctrine
+// (operator ruling 2026-08-30, Spine rec8eZG5hH16FFyF2) made the soft
+// list-anchor opener the ONLY first-touch send. The front gate was still
+// rationing an opener nobody sends anymore, skipping ~136-156 otherwise-
+// sendable records a slot on tier "not_eligible_unsure" (a lone,
+// uncorroborated distress signal) while the lane sent 2-6 texts.
+//
+// lib/lowball-eligibility itself is unchanged — its verdict stays correct
+// for what it answers, and it has other callers. This is the routing
+// decision at the H2 call site: release an "unsure" record to pricing
+// instead of skipping it. A "not_eligible_clean" record (no signal at all)
+// is unaffected — still simply skipped, same as every eligible tier is
+// unaffected — still simply proceeds.
+
+/** Pure: should a lowball-ineligible "not_eligible_unsure" record be
+ *  RELEASED to pricing rather than skipped? Only when the release switch is
+ *  on AND the run is actually pricing in soft list-anchor mode — gating on
+ *  soft mode is the guard that a released record can never receive a
+ *  harder (non-soft) opener than it would have received before this fix. */
+export function shouldReleaseLowballUnsure(
+  tier: LowballTier,
+  opts: { releaseEnabled: boolean; listAnchorModeActive: boolean },
+): boolean {
+  return opts.releaseEnabled && tier === "not_eligible_unsure" && opts.listAnchorModeActive;
 }
