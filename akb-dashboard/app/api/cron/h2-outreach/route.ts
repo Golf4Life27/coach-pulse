@@ -91,6 +91,7 @@ import {
   buildDeadNumberFanoutNote,
   buildThreadTruthStampNote,
   isForwardOutboundStamp,
+  shouldReleaseLowballUnsure,
   type H2Plan,
 } from "@/lib/h2-outreach";
 import { normalizePhone } from "@/lib/phone-normalize";
@@ -116,6 +117,10 @@ export const maxDuration = 300;
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
 const DEFAULT_SEND_DELAY_MS = 60_000;
+// LOWBALL FRONT-GATE FIX escape hatch (operator instruction 2026-09-08): set
+// H2_RELEASE_UNSURE=false to restore the old skip-everything-unsure behavior
+// with no deploy. Defaults ON — see the note at the front gate below.
+const RELEASE_UNSURE_TO_SOFT_OPENER = process.env.H2_RELEASE_UNSURE !== "false";
 // Stop starting NEW work this late into the 300s lambda so in-flight writes
 // finish cleanly instead of being killed. Remaining records roll to next run.
 const WALL_CLOCK_BUDGET_MS = 270_000;
@@ -157,6 +162,10 @@ interface ProcessedRow {
   airtable_updated: boolean;
   error: string | null;
   working_hours_meta: WorkingHoursMeta | null;
+  /** Set to "lowball_unsure_released_soft" when the front-gate fix (2026-09-08)
+   *  released this record — tier "not_eligible_unsure" — to pricing instead of
+   *  skipping it. Null for every record the lowball gate did not touch. */
+  lowball_release: string | null;
 }
 
 /** Human-readable reason a record_id target fails the eligibility filter. */
@@ -408,8 +417,19 @@ async function handle(req: Request): Promise<Response> {
     evaluated: 0,
     eligible: 0,
     not_eligible: 0,
+    // Records with tier "not_eligible_unsure" released to pricing instead of
+    // skipped — see the front-gate fix note below. Counted separately from
+    // `eligible` (lib/lowball-eligibility's own verdict is untouched).
+    released_unsure: 0,
     by_tier: {} as Record<string, number>,
   };
+  // recordId of every released "unsure" record, for the per-record trail
+  // (ProcessedRow.lowball_release, set where `row` is built below).
+  const releasedUnsureRecordIds = new Set<string>();
+  // Computed once per run — every record in this run's scan prices in the
+  // SAME mode (isListAnchorMode is a global env switch, not per-record), so
+  // one read up front is correct and cheap. See shouldReleaseLowballUnsure.
+  const listAnchorModeActive = isListAnchorMode();
   // ── HOLD-reason instrument, wired into the LIVE cron (2026-08-04) ──────
   // The candidate scan already computes every signal lib/pricing/hold-reason
   // needs (arvDistrusted, flooredToFallback, flagReseed, arvSource,
@@ -474,21 +494,43 @@ async function handle(req: Request): Promise<Response> {
     lowballGate.by_tier[lowball.tier] = (lowballGate.by_tier[lowball.tier] ?? 0) + 1;
     if (!lowball.eligible) {
       lowballGate.not_eligible++;
-      openerGuarded.push({
-        recordId: l.id,
-        address: l.address ?? null,
-        listPrice: l.listPrice ?? null,
-        action: "skipped",
-        reason: `lowball_not_eligible_${lowball.tier}`,
-        ceiling: null,
-        ceilingSource: "lowball_eligibility_gate",
-        anchorPct: null,
-        opener: null,
-        source: dom.source ?? null,
+      // FRONT-GATE FIX (operator instruction 2026-09-08, measured symptom:
+      // eligible_count 136-156, processed 2-6/slot, by_reason showing
+      // 134-150 lowball_not_eligible_not_eligible_unsure). lib/lowball-
+      // eligibility decides who gets the AGGRESSIVE 65%-style opener — but
+      // that opener no longer exists: the two-stage doctrine (operator
+      // ruling 2026-08-30, Spine rec8eZG5hH16FFyF2) made the soft list-
+      // anchor opener the ONLY first-touch send. The gate was rationing an
+      // opener nobody sends anymore. Release a "not_eligible_unsure" record
+      // (a lone/uncorroborated distress signal) to pricing instead of
+      // skipping it — gated on listAnchorModeActive so a released record
+      // can NEVER be priced by the aggressive value-anchored pricer, only
+      // the soft one (shouldReleaseLowballUnsure, lib/h2-outreach.ts). A
+      // "not_eligible_clean" record (no signal at all) is unaffected.
+      const releaseUnsure = shouldReleaseLowballUnsure(lowball.tier, {
+        releaseEnabled: RELEASE_UNSURE_TO_SOFT_OPENER,
+        listAnchorModeActive,
       });
-      continue;
+      if (!releaseUnsure) {
+        openerGuarded.push({
+          recordId: l.id,
+          address: l.address ?? null,
+          listPrice: l.listPrice ?? null,
+          action: "skipped",
+          reason: `lowball_not_eligible_${lowball.tier}`,
+          ceiling: null,
+          ceilingSource: "lowball_eligibility_gate",
+          anchorPct: null,
+          opener: null,
+          source: dom.source ?? null,
+        });
+        continue;
+      }
+      lowballGate.released_unsure++;
+      releasedUnsureRecordIds.add(l.id);
+    } else {
+      lowballGate.eligible++;
     }
-    lowballGate.eligible++;
 
     const market = getMarketForListing({ state: l.state, zip: l.zip });
     const marketId = market?.id ?? "";
@@ -919,6 +961,7 @@ async function handle(req: Request): Promise<Response> {
       airtable_updated: false,
       error: null,
       working_hours_meta: null,
+      lowball_release: releasedUnsureRecordIds.has(p.recordId) ? "lowball_unsure_released_soft" : null,
     };
     const iso = new Date().toISOString();
     const listing = byId.get(p.recordId);

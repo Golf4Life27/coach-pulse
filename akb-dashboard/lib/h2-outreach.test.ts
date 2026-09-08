@@ -18,6 +18,7 @@ import {
   buildThreadTruthStampNote,
   isForwardOutboundStamp,
   planQueue,
+  shouldReleaseLowballUnsure,
 } from "./h2-outreach";
 import type { Listing } from "@/lib/types";
 
@@ -496,5 +497,52 @@ describe("buildThreadTruthStampNote — 2026-09-06 wedge fix", () => {
     expect(n).toContain("[H2 thread-truth stamp 2026-09-06T23:45:00.000Z]");
     expect(n).toContain("Quo msg ACAB123400000000000000000000000A");
     expect(n).toContain("2026-08-31T13:05:56.066Z");
+  });
+});
+
+describe("shouldReleaseLowballUnsure — front-gate fix (operator instruction 2026-09-08)", () => {
+  it("releases not_eligible_unsure when the release switch is on and the run is pricing in soft list-anchor mode", () => {
+    expect(
+      shouldReleaseLowballUnsure("not_eligible_unsure", {
+        releaseEnabled: true,
+        listAnchorModeActive: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("never releases not_eligible_clean — a clean record is simply skipped, same as before", () => {
+    expect(
+      shouldReleaseLowballUnsure("not_eligible_clean", {
+        releaseEnabled: true,
+        listAnchorModeActive: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("never releases either eligible tier — they already proceed via lowball.eligible, untouched by this fix", () => {
+    expect(
+      shouldReleaseLowballUnsure("dom_ge_threshold", { releaseEnabled: true, listAnchorModeActive: true }),
+    ).toBe(false);
+    expect(
+      shouldReleaseLowballUnsure("distress_corroborated", { releaseEnabled: true, listAnchorModeActive: true }),
+    ).toBe(false);
+  });
+
+  it("refuses to release when the run is NOT pricing in soft mode — a released record must never receive a harder opener than before", () => {
+    expect(
+      shouldReleaseLowballUnsure("not_eligible_unsure", {
+        releaseEnabled: true,
+        listAnchorModeActive: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("escape hatch: H2_RELEASE_UNSURE=false restores the old skip-everything-unsure behavior even in soft mode", () => {
+    expect(
+      shouldReleaseLowballUnsure("not_eligible_unsure", {
+        releaseEnabled: false,
+        listAnchorModeActive: true,
+      }),
+    ).toBe(false);
   });
 });
