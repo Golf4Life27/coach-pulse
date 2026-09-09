@@ -174,3 +174,37 @@ export function inboundStampAdvances(candidateIso: string, storedIso: string | n
   const s = Date.parse(storedIso);
   return !Number.isFinite(s) || c > s;
 }
+
+/** Minimal shape needed to decide suppression scope. */
+export interface PhoneBearingListing {
+  agentPhone?: string | null;
+}
+
+/** Pure: every listing routing to `e164`, WHATEVER its Outreach_Status.
+ *
+ *  THE RULE THIS ENCODES (2026-09-09, the Danielle Dale miss): a TCPA opt-out
+ *  is number-level, not record-level. scan-comms builds its working map from
+ *  ACTIONABLE listings only (Negotiating / Response Received / Offer Accepted
+ *  / Texted), which is correct for SCANNING comms — you only look for replies
+ *  on threads you have engaged. It is exactly wrong for HONOURING an opt-out:
+ *  Danielle Dale's "Stop" was applied to the listing in her thread, while her
+ *  other listing on the same number sat at a blank status, invisible to that
+ *  map, and the send lane attempted her number on every run for six weeks.
+ *
+ *  A never-contacted sibling is precisely the record that gets texted NEXT.
+ *  Suppressing an already-Dead record is a harmless no-op; missing a live one
+ *  is a violation. So the scope here is deliberately everything.
+ *
+ *  A sweep on 2026-09-09 found 448 such siblings across 67 opted-out numbers,
+ *  319 of them still textable. */
+export function suppressionTargetsForPhone<T extends PhoneBearingListing>(
+  all: readonly T[],
+  e164: string,
+  toE164: (phone: string) => string,
+): T[] {
+  if (!e164) return [];
+  return all.filter((l) => {
+    const p = l.agentPhone;
+    return typeof p === "string" && p.trim() !== "" && toE164(p) === e164;
+  });
+}

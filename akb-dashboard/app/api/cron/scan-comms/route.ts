@@ -18,7 +18,7 @@ import { sendReplyAlert, type ReplyAlertInput } from "@/lib/reply-alert";
 import { extractScopeTier, scopeReprice } from "@/lib/reply/scope-intel";
 import { sendAutoClose } from "@/lib/auto-close";
 import { sendAutoAck } from "@/lib/auto-ack";
-import { detectOptOut, applyOptOut, inboundStampAdvances } from "@/lib/outreach/opt-out";
+import { detectOptOut, applyOptOut, inboundStampAdvances, suppressionTargetsForPhone } from "@/lib/outreach/opt-out";
 import { selectThreadListing, isNeverTextedSibling } from "@/lib/conversation-thread";
 import { resolveAlertNumbers } from "@/lib/outreach-economics";
 
@@ -165,6 +165,26 @@ export async function GET(req: Request) {
       phoneToListings.set(e164, existing);
     }
 
+    // TCPA FAN-OUT SCOPE (2026-09-09, the Danielle Dale miss). The map above is
+    // built from ACTIONABLE listings only — Negotiating / Response Received /
+    // Offer Accepted / Texted. That is the right scope for SCANNING comms: you
+    // only look for replies on threads you have engaged.
+    //
+    // It is exactly the WRONG scope for honouring an opt-out. Danielle Dale
+    // texted "Stop" on 2026-07-26 and it was correctly flipped on 416 Colburn
+    // St, the listing in that thread. Her OTHER listing on the same number,
+    // 3359 N Detroit Ave, had a blank Outreach_Status — never contacted — so it
+    // was never in actionableListings, never in the map, and never suppressed.
+    // The send lane then attempted that number on every run for six weeks; the
+    // only thing preventing an unlawful text was the carrier rejecting it.
+    //
+    // A never-contacted sibling is precisely the record that gets texted NEXT,
+    // so the suppression write fans out over EVERY listing carrying the number,
+    // whatever its status. Suppressing an already-Dead record is a no-op;
+    // missing a live one is a violation.
+    // Scope lives in lib/outreach/opt-out.suppressionTargetsForPhone so the
+    // rule has one definition and one set of tests.
+
     // Cap phones per run to stay within timeout
     const phones = Array.from(phoneToListings.keys()).slice(
       0,
@@ -196,7 +216,7 @@ export async function GET(req: Request) {
     // M8 / Gate 3 — STOP/opt-out (operator 2026-06-18).
     let optOutDetected = 0;
     let optOutFlipped = 0;
-    const optOutApplied: Array<{ phone: string; matched: string; records: number; flipped: string[] }> = [];
+    const optOutApplied: Array<{ phone: string; matched: string; records: number; beyond_actionable: number; flipped: string[] }> = [];
     // 2026-06-08: was string[]. Now carries the INBOUND's actual createdAt,
     // not wall-clock now — the prior shape stamped Last_Inbound_At with
     // "right now" on every cron tick (line 278 used new Date()), so the
@@ -239,13 +259,23 @@ export async function GET(req: Request) {
         if (optOut.optOut) {
           optOutDetected++;
           let flipped: string[] = [];
-          if (process.env.STOP_OPT_OUT_LIVE === "true" && matchedListings.length > 0) {
-            const res = await applyOptOut(matchedListings, optOut.matched ?? "stop", { updateListing: updateListingRecord });
+          // Number-level, across EVERY status — see the phoneToAllListings note.
+          const suppressionTargets = suppressionTargetsForPhone(listings, phone, toE164);
+          if (process.env.STOP_OPT_OUT_LIVE === "true" && suppressionTargets.length > 0) {
+            const res = await applyOptOut(suppressionTargets, optOut.matched ?? "stop", { updateListing: updateListingRecord });
             flipped = res.flipped;
             optOutFlipped += res.flipped.length;
             if (res.failed.length > 0) errors.push(`opt_out_write_failed: ${res.failed.map((f) => f.id).join(",")}`);
           }
-          optOutApplied.push({ phone, matched: optOut.matched ?? "stop", records: matchedListings.length, flipped });
+          optOutApplied.push({
+            phone,
+            matched: optOut.matched ?? "stop",
+            records: suppressionTargets.length,
+            // Siblings outside the actionable set that this fan-out now reaches
+            // and the old scope silently missed.
+            beyond_actionable: suppressionTargets.length - matchedListings.length,
+            flipped,
+          });
           // INTEGRITY FIX (2026-07-27): this `continue` used to exit before the
           // Last_Inbound_At stamp further down in this loop, so a genuine STOP
           // reply never updated the timeline (recxr0LJiqwYQe8lE,
