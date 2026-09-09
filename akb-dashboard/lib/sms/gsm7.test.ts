@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalizeForGsm7, estimateSmsSegments } from "./gsm7";
+import { normalizeForGsm7, estimateSmsSegments, findNonGsm7Chars } from "./gsm7";
 import { IDENTITY_QUESTION_STANDING_ANSWER } from "@/lib/standing-answers";
 
 describe("normalizeForGsm7", () => {
@@ -101,5 +101,29 @@ describe("estimateSmsSegments", () => {
     const r = estimateSmsSegments(IDENTITY_QUESTION_STANDING_ANSWER);
     expect(r.encoding).toBe("gsm7");
     expect(r.segments).toBe(3);
+  });
+});
+
+describe("the denylist holes that shipped (2026-09-09)", () => {
+  it("normalizes the middle dot, which forced UCS-2 straight past the choke point", () => {
+    expect(normalizeForGsm7("a \u00B7 b")).toBe("a - b");
+  });
+
+  it("normalizes the rightwards arrow, which was live in the reply-alert scope line", () => {
+    expect(normalizeForGsm7("rehab $40,000 \u2192 ceiling $50,000")).toBe(
+      "rehab $40,000 -> ceiling $50,000",
+    );
+  });
+
+  it("findNonGsm7Chars reports nothing once a smart body is normalized", () => {
+    const dirty = "Yes\u2014I buy cash\u00B7 rehab \u2192 ceiling\u2026 \u201Cas-is\u201D";
+    expect(findNonGsm7Chars(dirty).length).toBeGreaterThan(0);
+    expect(findNonGsm7Chars(normalizeForGsm7(dirty))).toEqual([]);
+    expect(estimateSmsSegments(normalizeForGsm7(dirty)).encoding).toBe("gsm7");
+  });
+
+  it("findNonGsm7Chars names the offender rather than failing silently", () => {
+    expect(findNonGsm7Chars("plain ascii")).toEqual([]);
+    expect(findNonGsm7Chars("emoji \u{1F600}").length).toBeGreaterThan(0);
   });
 });

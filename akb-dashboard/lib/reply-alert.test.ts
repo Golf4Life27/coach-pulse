@@ -6,7 +6,7 @@ vi.mock("@/lib/quo", () => ({ sendMessage: (...a: unknown[]) => sendMessage(...a
 vi.mock("@/lib/audit-log", () => ({ audit: vi.fn(async () => {}) }));
 
 import { buildReplyAlertBody, alertAction, alertRecommendation, sendBuyerReplyAlert } from "./reply-alert";
-import { estimateSmsSegments } from "./sms/gsm7";
+import { estimateSmsSegments, findNonGsm7Chars } from "./sms/gsm7";
 
 describe("buildReplyAlertBody — tiered, decision-first (operator 2026-06-10)", () => {
   it("tier 1 counter: leads with DECISION NEEDED, short address, action, recommendation with real numbers, link", () => {
@@ -174,6 +174,31 @@ describe("sendBuyerReplyAlert — buyer body composition stays GSM-7 clean", () 
     expect(sendMessage).toHaveBeenCalledTimes(1);
     const body = sendMessage.mock.calls[0]?.[1] as string;
     expect(body).toBe("ACT NOW (buyer): 123 Main St - Marcus $42,000. https://coach-pulse-ten.vercel.app/dispo/recBUYER1");
+    expect(estimateSmsSegments(body).encoding).toBe("gsm7");
+  });
+});
+
+describe("scope line — GSM-7 safety (untested path that shipped a U+2192, 2026-09-09)", () => {
+  const withScope = () =>
+    buildReplyAlertBody({
+      recordId: "recbHNKmFSiGXrfus",
+      address: "1005 2nd St, Birmingham, AL 35214",
+      tier: "tier_1_decision",
+      classification: "counter",
+      outreachOfferPrice: 74500,
+      underwrittenMao: 80000,
+      scope: { tier: "heavy", scopeRehab: 146300, storedRehab: 22937, ceiling: 51708 },
+    });
+
+  it("renders the scope line with an ASCII arrow", () => {
+    const { body } = withScope();
+    expect(body).toContain("-> ceiling $51,708");
+    expect(body).not.toContain("\u2192");
+  });
+
+  it("bills as GSM-7 — the whole point of the fix", () => {
+    const { body } = withScope();
+    expect(findNonGsm7Chars(body)).toEqual([]);
     expect(estimateSmsSegments(body).encoding).toBe("gsm7");
   });
 });

@@ -30,6 +30,10 @@ const REPLACEMENTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/…/g, "..."],
   // non-breaking space / narrow no-break space -> regular space.
   [/[  ]/g, " "],
+  // middle dot (used as a separator) -> plain hyphen.
+  [/·/g, "-"],
+  // rightwards arrow (used in scope/ceiling lines) -> ASCII arrow.
+  [/→/g, "->"],
 ];
 
 /** Pure: replace smart-character offenders with their GSM-7-safe
@@ -99,4 +103,21 @@ export function estimateSmsSegments(text: string): SmsSegmentEstimate {
     units,
     segments: units <= 160 ? 1 : Math.ceil(units / 153),
   };
+}
+
+/** Pure: the characters in `text` that GSM-7 cannot represent, deduped and in
+ *  first-seen order. Empty array means the body bills as GSM-7.
+ *
+ *  This exists because normalizeForGsm7 is a DENYLIST, and a denylist silently
+ *  fails on the offender nobody thought of. It shipped without the middle dot
+ *  and the rightwards arrow, both of which were live in outbound bodies and
+ *  both of which forced UCS-2 straight past the choke point (2026-09-09).
+ *  Assert on this in template tests so the next miss fails CI instead of
+ *  quietly doubling a bill nobody reconciles. */
+export function findNonGsm7Chars(text: string): string[] {
+  const seen = new Set<string>();
+  for (const ch of text) {
+    if (!GSM7_BASIC_SET.has(ch) && !GSM7_EXTENDED_SET.has(ch)) seen.add(ch);
+  }
+  return [...seen];
 }

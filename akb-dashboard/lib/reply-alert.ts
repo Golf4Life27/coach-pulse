@@ -144,7 +144,7 @@ export function buildReplyAlertBody(input: ReplyAlertInput): { body: string; pri
   const s = input.scope;
   const scopeLine =
     s && s.ceiling != null && s.scopeRehab != null
-      ? ` Agent scope ~${s.tier}: rehab ${usd(s.scopeRehab)}${s.storedRehab != null ? ` (filed ${usd(s.storedRehab)})` : ""} → ceiling ${usd(s.ceiling)}.`
+      ? ` Agent scope ~${s.tier}: rehab ${usd(s.scopeRehab)}${s.storedRehab != null ? ` (filed ${usd(s.storedRehab)})` : ""} -> ceiling ${usd(s.ceiling)}.`
       : "";
   return {
     body: `DECISION NEEDED: ${addr}. ${alertAction(input.classification)}. Recommend: ${rec.text}.${scopeLine} ${link}`,
