@@ -33,6 +33,8 @@
 import { audit } from "@/lib/audit-log";
 import { sendMessageWithId, type QuoSendResult } from "@/lib/quo";
 import type { KvClient } from "./oauth/kv";
+import { TIER_VISUAL } from "./severity";
+import { normalizeForGsm7 } from "@/lib/sms/gsm7";
 import type { PrioritySignal } from "./severity";
 import { inferPrioritySignals } from "./severity";
 import type { StructuredBriefing, SourceHealth } from "./briefing";
@@ -105,6 +107,8 @@ export function readStage4Env(): Stage4Env {
  * to the same KV entry. Falls back to a content hash when id is
  * absent. Pure.
  */
+const SMS_MAX_LEN = 300;
+
 export function deriveSignalKey(signal: PrioritySignal): string {
   if (signal.id) return signal.id.replace(/[^a-zA-Z0-9_:.-]/g, "_").slice(0, 80);
   const parts = [signal.tier, signal.agent ?? "_", signal.title].join("|");
@@ -126,14 +130,50 @@ export function signalFingerprint(signal: PrioritySignal): string {
  * Concise SMS body. Aims under 160 chars but accepts multi-segment
  * when the content warrants. Pure.
  */
+/** Trim to `max` characters at a WORD boundary. The blind `.slice(0, 120)`
+ *  this replaces is what produced "the cron-misfire / skipped-production-deplo"
+ *  on the operator's phone (2026-09-09) - a sentence cut mid-word carries less
+ *  information than no sentence at all. */
+function trimAtWord(text: string, max: number): string {
+  if (max <= 3) return "";
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max - 3);
+  const lastSpace = cut.lastIndexOf(" ");
+  return `${(lastSpace > max * 0.5 ? cut.slice(0, lastSpace) : cut).trimEnd()}...`;
+}
+
+/** Compose the operator SMS for a critical signal.
+ *
+ *  THREE DEFECTS FIXED HERE (2026-09-09, from a screenshot of the operator's
+ *  own inbox):
+ *  1. The header carried a dog emoji AND an em-dash. Either one alone forces
+ *     the whole message out of GSM-7 into UCS-2, which HALVES the per-segment
+ *     budget from 160 characters to 70 - so every alert truncated roughly
+ *     twice as early as it should have, and billed double. See lib/sms/gsm7.
+ *  2. "TIER 3" was hardcoded: a lie for any other tier, and meaningless to a
+ *     human either way. TIER_VISUAL already carries the operator-facing words
+ *     ("Critical", "Priority", "Needs eyes") - use those.
+ *  3. The reason was cut at a fixed 120 characters with no regard for what
+ *     else was in the message or where a word ended.
+ *
+ *  The whole body is normalized and budgeted so it bills as GSM-7. */
 export function formatStage4Message(signal: PrioritySignal): string {
-  const lines: string[] = ["🐕 Maverick — TIER 3", signal.title];
-  if (signal.reason) {
-    lines.push(signal.reason.slice(0, 120));
-  }
-  if (signal.agent) {
-    lines.push(`@${signal.agent.toUpperCase()}`);
-  }
+  const label = (TIER_VISUAL[signal.tier]?.label ?? "Priority").toUpperCase();
+  const head = `Maverick / ${label}`;
+  const agent = signal.agent ? `@${signal.agent.toUpperCase()}` : null;
+
+  // Budget in priority order: header and agent are fixed, the title gets what
+  // is left, and the reason gets whatever the title did not use. A long title
+  // must be trimmed too — the earlier version budgeted only the reason and a
+  // 295-char title alone blew past the segment cap.
+  const overhead = head.length + 1 + (agent ? agent.length + 1 : 0);
+  const title = trimAtWord(normalizeForGsm7(signal.title ?? ""), SMS_MAX_LEN - overhead);
+  const room = SMS_MAX_LEN - overhead - title.length - 1; // -1 for the reason's newline
+  const reason = signal.reason ? trimAtWord(normalizeForGsm7(signal.reason), room) : "";
+
+  const lines: string[] = [head, title];
+  if (reason) lines.push(reason);
+  if (agent) lines.push(agent);
   return lines.join("\n");
 }
 

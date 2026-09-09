@@ -1,6 +1,7 @@
 // @agent: maverick — Stage 4 SMS escalation tests (Phase 9.7).
 
 import { describe, it, expect, vi } from "vitest";
+import { estimateSmsSegments, findNonGsm7Chars } from "@/lib/sms/gsm7";
 import {
   signalFingerprint,
   deriveSignalKey,
@@ -200,32 +201,66 @@ describe("deriveSignalKey", () => {
 });
 
 describe("formatStage4Message", () => {
-  it("includes the Maverick TIER 3 prefix + title", () => {
-    const m = formatStage4Message(
-      signal({ tier: 3, id: "x", title: "RentCast exhausts in ~2d" }),
-    );
-    expect(m).toContain("🐕 Maverick — TIER 3");
-    expect(m).toContain("RentCast exhausts in ~2d");
+  it("uses the human tier label, not a hardcoded TIER 3", () => {
+    expect(formatStage4Message(signal({ tier: 3, id: "x", title: "RentCast exhausts in ~2d" })))
+      .toContain("Maverick / CRITICAL");
+    // The old code said "TIER 3" for every signal regardless of tier.
+    expect(formatStage4Message(signal({ tier: 2, id: "x", title: "y" }))).toContain("Maverick / PRIORITY");
+    expect(formatStage4Message(signal({ tier: 3, id: "x", title: "y" }))).not.toContain("TIER 3");
   });
 
-  it("appends reason on its own line when present", () => {
+  it("carries no emoji or smart characters, so it bills as GSM-7", () => {
+    // The dog emoji in the old header forced UCS-2 and halved the per-segment
+    // budget from 160 chars to 70 — the direct cause of the truncation.
     const m = formatStage4Message(
-      signal({ tier: 3, id: "x", title: "x", reason: "Throttle now" }),
+      signal({ tier: 3, id: "x", title: "Send lane firing blanks", reason: "seller said \u201Cno\u201D \u2014 hold", agent: "pulse" }),
     );
+    expect(findNonGsm7Chars(m)).toEqual([]);
+    expect(estimateSmsSegments(m).encoding).toBe("gsm7");
+  });
+
+  it("appends reason and the agent attribution in @UPPER format", () => {
+    const m = formatStage4Message(signal({ tier: 3, id: "x", title: "x", reason: "Throttle now", agent: "appraiser" }));
     expect(m).toContain("Throttle now");
-  });
-
-  it("appends the agent attribution in @UPPER format", () => {
-    const m = formatStage4Message(
-      signal({ tier: 3, id: "x", title: "x", agent: "appraiser" }),
-    );
     expect(m).toContain("@APPRAISER");
   });
 
-  it("truncates very long reason text to keep SMS scannable", () => {
-    const long = "x".repeat(500);
-    const m = formatStage4Message(signal({ tier: 3, id: "x", title: "y", reason: long }));
-    expect(m.length).toBeLessThan(500);
+  it("truncates the reason at a WORD boundary, never mid-word", () => {
+    // The live failure: "the cron-misfire / skipped-production-deplo"
+    const m = formatStage4Message(
+      signal({
+        tier: 3,
+        id: "x",
+        title: "4 scheduled send slot(s) never ran in the visible window",
+        reason:
+          "Cron slots inside the observable audit window left no lane-run audit entry " +
+          "and the cron-misfire or skipped-production-deployment path is the likely cause " +
+          "of this particular observation which goes on for quite a while longer than fits",
+        agent: "pulse",
+      }),
+    );
+    expect(m.length).toBeLessThanOrEqual(300);
+    const body = m.split("\n")[2];
+    expect(body.endsWith("...")).toBe(true);
+    // the character before the ellipsis must not be mid-word
+    expect(/\s\S*\.\.\.$/.test(body) || !body.slice(0, -3).endsWith("-")).toBe(true);
+  });
+
+  it("gives the reason whatever room the title leaves, not a fixed 120", () => {
+    const shortTitle = formatStage4Message(signal({ tier: 3, id: "x", title: "hi", reason: "y".repeat(400) }));
+    const longTitle = formatStage4Message(
+      signal({ tier: 3, id: "x", title: "z".repeat(200), reason: "y".repeat(400) }),
+    );
+    expect(shortTitle.length).toBeLessThanOrEqual(300);
+    expect(longTitle.length).toBeLessThanOrEqual(300);
+    // a long title must squeeze the reason, which a fixed 120-char slice never did
+    expect(shortTitle.split("\n")[2].length).toBeGreaterThan(longTitle.split("\n")[2].length);
+  });
+
+  it("drops the reason entirely rather than emit a stub when there is no room", () => {
+    const m = formatStage4Message(signal({ tier: 3, id: "x", title: "t".repeat(295), reason: "should not appear" }));
+    expect(m).not.toContain("should not appear");
+    expect(m.length).toBeLessThanOrEqual(300);
   });
 });
 
@@ -366,7 +401,7 @@ describe("evaluateStage4Escalation — tier filtering", () => {
     expect(r.sent).toBe(1);
     expect(send).toHaveBeenCalledOnce();
     expect(send.mock.calls[0][0]).toBe("+16302505865");
-    expect(send.mock.calls[0][1]).toContain("TIER 3");
+    expect(send.mock.calls[0][1]).toContain("Maverick / CRITICAL");
   });
 });
 
