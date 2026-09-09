@@ -31,10 +31,19 @@ export function normalizePhone(input: string | null | undefined): string | null 
   // Keep only digits.
   const digits = cleanedExt.replace(/\D/g, "");
 
+  // A NANP area code can never begin with 0 or 1. A stored "1313702367"
+  // (26295 Kathy St, a dropped digit off a 313 number) is ten digits, so it
+  // used to normalize to +11313702367 — area code "131", structurally
+  // impossible. Being non-null, it skipped bad_phone_quarantine and was handed
+  // to Quo on every run, which rejected it forever: an invisible poison record
+  // that stalled the whole send queue (2026-09-09). Reject it here so it
+  // routes to the existing quarantine path instead.
   if (digits.length === 10) {
+    if (digits[0] === "0" || digits[0] === "1") return null;
     return `+1${digits}`;
   }
   if (digits.length === 11 && digits.startsWith("1")) {
+    if (digits[1] === "0" || digits[1] === "1") return null;
     return `+${digits}`;
   }
   return null;
