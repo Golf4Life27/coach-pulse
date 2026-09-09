@@ -314,3 +314,39 @@ describe("eval: the silent classes route to Parked with no draft, no close, no a
     }
   });
 });
+
+describe("1005 2nd St — the yes that routed as a costs question (2026-09-08)", () => {
+  // Pamela Calamusa's verbatim reply. It says yes AND asks who pays fees in
+  // the same sentence; SELLER_COSTS_PATTERNS won and the thread routed tier_1
+  // instead of ACT NOW. Six hours and three sessions before a human saw it.
+  const PAMELA =
+    "I'm surprised, but she's willing to do it. It is as is she pays no fees " +
+    "of any kind of cash sale only please send it over or am I to send it to you?";
+
+  it("reads as acceptance, not seller_costs", () => {
+    expect(label(PAMELA)).toBe("acceptance");
+  });
+
+  it("routes ACT NOW so the operator is paged, at HIGH priority", () => {
+    const t = triageSellerReply(PAMELA, "Negotiating", { sentOfferUsd: 74500, street: "1005 2nd St" });
+    expect(t.classification).toBe("acceptance");
+    expect(t.tier).toBe("tier_2_urgent");
+    expect(t.priority).toBe("HIGH");
+    expect(t.needsDecision).toBe(true);
+  });
+
+  it("catches the sibling phrasings that carry no 'accept' token", () => {
+    expect(label("She is willing to move forward at that number")).toBe("acceptance");
+    expect(label("Owner is willing to proceed with your offer")).toBe("acceptance");
+  });
+
+  it("NEGATED forms are never acceptance — the broadened decline override", () => {
+    expect(label("She is not willing to do it at that price.")).not.toBe("acceptance");
+    expect(label("He is not willing to move forward")).not.toBe("acceptance");
+    expect(label("Seller is never willing to proceed under 100k")).not.toBe("acceptance");
+  });
+
+  it("still refuses the sarcasm shape that has no 'willing'", () => {
+    expect(label("You think my client would do it at that price?")).not.toBe("acceptance");
+  });
+});

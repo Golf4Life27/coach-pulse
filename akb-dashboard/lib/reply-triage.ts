@@ -77,6 +77,15 @@ const ACCEPTANCE_PATTERNS = [
   // Deliberately NOT "(will|would) accept": "you think my client would accept
   // that?" (7714 E Canfield sarcasm, 2026-07-12) must never read as acceptance.
   /\bwilling\s+to\s+accept\b/i,
+  // "I'm surprised, but she's willing to do it." (1005 2nd St, Pamela
+  // Calamusa, 2026-09-08 21:38Z) — a seller SAYING YES with no "accept"
+  // token anywhere. It carried a costs question in the same breath ("she
+  // pays no fees of any kind"), so SELLER_COSTS_PATTERNS caught it first
+  // and the thread routed tier_1 instead of ACT NOW. It sat six hours and
+  // three sessions before a human found it. Acceptance outranks a costs
+  // question for the same reason a counter does (see COUNTER_PRICE_RE
+  // below): the yes is the message, the costs question is the follow-up.
+  /\bwilling\s+to\s+(?:do\s+it|move\s+forward|proceed)\b/i,
   /\bseller\s+(?:will|would)\s+take\s+(?:it|that|your)\b/i,
   /\bwe(?:'ll|\s+will)?\s+take\s+(?:it|that|your\s+offer)\b/i,
   /\b(?:we|seller|they)\s+accepts?\s+(?:it|that|your\s+offer)\b/i,
@@ -101,7 +110,10 @@ const DECLINE_OVERRIDES_ACCEPTANCE = [
   /\bdeclin(?:e|ed|es|ing)\b/i,
   /\bnot\s+interested\b/i,
   /\b(?:below|under|less\s+than|short\s+of|beneath)\s+what\b/i,
-  /\b(?:not|never)\s+(?:be\s+)?willing\s+to\s+accept\b/i,
+  // Broadened from "not willing to accept" (2026-09-09): the acceptance list
+  // now matches "willing to do it" / "move forward" / "proceed", so the
+  // negated form of EVERY one of them has to be caught here, not just accept.
+  /\b(?:not|never)\s+(?:be\s+)?willing\s+to\b/i,
   /\b(?:would|will|could|can)\s+(?:not|n'?t)\s+accept\b/i,
   /\bwon'?t\s+accept\b/i,
 ];
