@@ -10,6 +10,7 @@
 
 import { describe, it, expect } from "vitest";
 import { classifyReply, determineNewStatus, triageSellerReply } from "./reply-triage";
+import { IDENTITY_QUESTION_STANDING_ANSWER } from "./standing-answers";
 
 const label = (body: string) => classifyReply(body).classification;
 
@@ -302,10 +303,14 @@ describe("eval: the silent classes route to Parked with no draft, no close, no a
     expect(t.queueStatus).toBeNull();
   });
 
-  it("identity question is a live tier-1 thread with no auto-draft", () => {
-    const t = triageSellerReply("Alex sre you a whole saler?", "Texted");
-    expect(t.tier).toBe("tier_1_decision");
-    expect(t.queueStatus).toBe("Response Received");
-    expect(t.needsDecision).toBe(true);
+  it("identity question is a live tier-1 thread carrying the operator-approved standing answer (ruling 2026-09-09)", () => {
+    for (const body of ["Alex sre you a whole saler?", "Are you going to try to assign the contract"]) {
+      const t = triageSellerReply(body, "Texted");
+      expect(t.classification).toBe("identity_question");
+      expect(t.tier).toBe("tier_1_decision");
+      expect(t.queueStatus).toBe("Response Received");
+      expect(t.needsDecision).toBe(true);
+      expect(t.suggestedReply).toBe(IDENTITY_QUESTION_STANDING_ANSWER);
+    }
   });
 });

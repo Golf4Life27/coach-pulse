@@ -16,6 +16,7 @@
 // Pure. No I/O. Tested in lib/reply-triage.test.ts.
 
 import { looksLikeBotAutoreply } from "@/lib/conversation-check";
+import { IDENTITY_QUESTION_STANDING_ANSWER } from "@/lib/standing-answers";
 
 export type ReplyClassification =
   | "rejection"
@@ -936,9 +937,9 @@ export function triageSellerReply(
         decisionKind: "engagement",
         priority: "NORMAL",
         queueStatus,
-        reasoning: `Agent asked WHO WE ARE (wholesaler / assign / licensed) — one graceful answer from the operator's standing line, no number, never explain assignment mechanics. Reply: "${snippet}"`,
+        reasoning: `Agent asked WHO WE ARE (wholesaler / assign / licensed) — operator-approved standing answer attached (ruling 2026-09-09, lib/standing-answers.ts): discloses assignment, proves performance, no number. Reply: "${snippet}"`,
         matchedPattern,
-        suggestedReply: null,
+        suggestedReply: IDENTITY_QUESTION_STANDING_ANSWER,
       };
     case "agent_redirect":
       return {
