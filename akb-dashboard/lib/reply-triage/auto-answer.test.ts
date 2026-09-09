@@ -132,7 +132,7 @@ describe("seller_costs — a policy answer, and it names no money", () => {
   it("reads cleanly with no street on the record", () => {
     const body = composeSellerCosts({ street: null });
     expect(body).not.toMatch(/ on ,/);
-    expect(body.startsWith("Good question — those all come out of the seller's proceeds at closing,")).toBe(true);
+    expect(body.startsWith("Good question - those all come out of the seller's proceeds at closing,")).toBe(true);
   });
 });
 

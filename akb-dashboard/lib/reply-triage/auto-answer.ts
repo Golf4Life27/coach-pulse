@@ -109,10 +109,10 @@ export function composeSellerCosts(opts: { street?: string | null }): string {
   const street = (opts.street ?? "").trim();
   const at = street ? ` on ${street}` : "";
   return (
-    `Good question — those all come out of the seller's proceeds at closing${at}, ` +
+    `Good question - those all come out of the seller's proceeds at closing${at}, ` +
     `not on top of my offer, so the number I gave you is what I pay. ` +
     `Liens, back taxes and any unpaid bills get settled by the title company out of the ` +
-    `sale, and they'll verify what's actually owed. Nothing out of pocket for the seller. – Alex`
+    `sale, and they'll verify what's actually owed. Nothing out of pocket for the seller. - Alex`
   );
 }
 
@@ -124,9 +124,9 @@ export function composeOfferFormat(opts: { stickyOfferUsd: number; street?: stri
   const at = street ? ` for ${street}` : "";
   const amount = `$${Math.round(opts.stickyOfferUsd).toLocaleString("en-US")}`;
   return (
-    `Absolutely — I'll send it over in writing. To confirm, it's ${amount} cash${at}, ` +
+    `Absolutely - I'll send it over in writing. To confirm, it's ${amount} cash${at}, ` +
     `as-is with no repairs or cleanout, no financing contingency, and we close on your ` +
-    `timeline. What's the best email to send it to? – Alex`
+    `timeline. What's the best email to send it to? - Alex`
   );
 }
 

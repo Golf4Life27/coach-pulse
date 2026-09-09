@@ -68,7 +68,7 @@ export function renderTermsOpener(input: {
     ? `I can offer ${usd(offer.price)} seller-financed`
     : `I can offer the full ${usd(offer.price)} asking price seller-financed`;
   return (
-    `Hi ${name} — Alex with AKB Solutions, about ${input.address}. ` +
+    `Hi ${name} - Alex with AKB Solutions, about ${input.address}. ` +
     `Assuming the numbers hold, ${priceLine}. ` +
     `${usd(offer.downPayment)} at closing, then ${usd(offer.monthlyPayment)}/month until the full amount is paid. ` +
     `Your commission is paid in full at closing, and the seller nets more than any cash offer. ` +

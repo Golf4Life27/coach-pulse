@@ -87,11 +87,11 @@ export function composeTripwireSms(listing: Listing, stage: TripwireStage, daysL
   const build = (addr: string): string => {
     switch (stage) {
       case "t5":
-        return `OPTION T-5: ${addr} — offers in hand? assign / extend / terminate by ${date}`;
+        return `OPTION T-5: ${addr} - offers in hand? assign / extend / terminate by ${date}`;
       case "t2":
-        return `OPTION T-2: ${addr} — DECIDE: assign, extend, or TERMINATE by ${date} or the $1,000 EMD is at risk`;
+        return `OPTION T-2: ${addr} - DECIDE: assign, extend, or TERMINATE by ${date} or the $1,000 EMD is at risk`;
       case "lapsed":
-        return `OPTION LAPSED: ${addr} — deadline ${date} passed; confirm status with title TODAY`;
+        return `OPTION LAPSED: ${addr} - deadline ${date} passed; confirm status with title TODAY`;
     }
   };
 
@@ -100,7 +100,7 @@ export function composeTripwireSms(listing: Listing, stage: TripwireStage, daysL
     // Trim the address down until the message fits, preferring to keep the
     // decision language (the part after the address) intact.
     const overBy = sms.length - SMS_MAX_LEN;
-    const trimmedAddress = address.length > overBy + 1 ? `${address.slice(0, Math.max(0, address.length - overBy - 1))}…` : address.slice(0, 1);
+    const trimmedAddress = address.length > overBy + 1 ? `${address.slice(0, Math.max(0, address.length - overBy - 1))}...` : address.slice(0, 1);
     sms = build(trimmedAddress).slice(0, SMS_MAX_LEN);
   }
   return sms;

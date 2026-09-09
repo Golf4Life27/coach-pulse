@@ -288,14 +288,14 @@ export function buildBumpMessage(
   const street = address.split(",")[0].trim() || address;
   if (attempt <= 1) {
     return (
-      `Hi ${name}, Alex with AKB Solutions — following up on ${street}. My cash ` +
+      `Hi ${name}, Alex with AKB Solutions - following up on ${street}. My cash ` +
       `offer of ${offer} still stands: as-is, no repairs or cleanout, and we close ` +
       `on your timeline. Happy to answer any questions.`
     );
   }
   return (
     `Hi ${name}, last follow-up from me on ${street}. ${offer} cash, as-is, ` +
-    `quick close — if the seller's moved on, no worries at all. Otherwise ` +
+    `quick close - if the seller's moved on, no worries at all. Otherwise ` +
     `I'm ready when you are.`
   );
 }

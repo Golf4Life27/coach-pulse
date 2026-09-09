@@ -104,7 +104,7 @@ export function composeEscalationSms(item: ConveyorItem, baseUrl: string, ageHou
     item.type === "2A" ? "reply approval" : item.type === "2B" ? "money/signature decision" : "ruling";
   const waiting = ageHours != null ? ` waiting ${Math.round(ageHours)}h` : "";
   const link = item.href ? `${baseUrl}${item.href}` : baseUrl;
-  return `AKB: ${money(item.dollars ?? 0)} ${what} on ${item.title}${waiting} — ${link}`;
+  return `AKB: ${money(item.dollars ?? 0)} ${what} on ${item.title}${waiting} - ${link}`;
 }
 
 export interface DigestBelt {
@@ -137,14 +137,14 @@ export function composeDigestSms(
     if (i.dollars != null) dollars += i.dollars;
   }
   const parts = [
-    `AKB 8:30 — ${items.length} decision${items.length === 1 ? "" : "s"} waiting` +
+    `AKB 8:30 - ${items.length} decision${items.length === 1 ? "" : "s"} waiting` +
       (items.length > 0 ? ` (${byType["2A"]} sends, ${byType["2B"]} money, ${byType["2C"]} rulings)` : ""),
     dollars > 0 ? `${money(dollars)} at stake` : null,
     belt
-      ? `belt: intake ${belt.intakeFreshness ?? "?"} · send ${belt.sendFreshness ?? "?"}` +
-        (belt.sentYesterday != null ? ` · yday ${belt.sentYesterday} sent/${belt.repliesYesterday ?? 0} replies` : "")
+      ? `belt: intake ${belt.intakeFreshness ?? "?"} | send ${belt.sendFreshness ?? "?"}` +
+        (belt.sentYesterday != null ? ` | yday ${belt.sentYesterday} sent/${belt.repliesYesterday ?? 0} replies` : "")
       : null,
-    build ? `Build: ${build.inWorks} in works · ${build.operatorActions} need you` : null,
+    build ? `Build: ${build.inWorks} in works | ${build.operatorActions} need you` : null,
     baseUrl,
   ].filter(Boolean);
   return parts.join(". ");

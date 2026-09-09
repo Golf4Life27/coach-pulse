@@ -67,7 +67,7 @@ describe("composition", () => {
   it("escalation SMS is one plain sentence with a deep link", () => {
     const sms = composeEscalationSms(item(), "https://coach-pulse-ten.vercel.app", 10);
     expect(sms).toBe(
-      "AKB: $28,000 money/signature decision on COGO letter batch waiting 10h — https://coach-pulse-ten.vercel.app/pipeline/recLIST000000001",
+      "AKB: $28,000 money/signature decision on COGO letter batch waiting 10h - https://coach-pulse-ten.vercel.app/pipeline/recLIST000000001",
     );
   });
 
@@ -79,7 +79,7 @@ describe("composition", () => {
     );
     expect(sms).toContain("2 decisions waiting (1 sends, 1 money, 0 rulings)");
     expect(sms).toContain("$40,000 at stake");
-    expect(sms).toContain("belt: intake ok · send ok · yday 8 sent/2 replies");
+    expect(sms).toContain("belt: intake ok | send ok | yday 8 sent/2 replies");
   });
 
   it("appends the build ledger line when supplied, and omits it when not", () => {
@@ -89,7 +89,7 @@ describe("composition", () => {
       "https://coach-pulse-ten.vercel.app",
       { inWorks: 4, operatorActions: 2 },
     );
-    expect(withBuild).toContain("Build: 4 in works · 2 need you");
+    expect(withBuild).toContain("Build: 4 in works | 2 need you");
 
     const withoutBuild = composeDigestSms([item()], null, "https://coach-pulse-ten.vercel.app");
     expect(withoutBuild).not.toContain("Build:");

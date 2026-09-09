@@ -174,5 +174,5 @@ export function computeBoundedRatioOpener(input: BoundedRatioInput): BoundedRati
  *  inventory we cannot see from any portal. An agent who passes on this listing
  *  may still have three others in a drawer. */
 export function agentInventoryAsk(): string {
-  return "Also — if you have anything else that needs work, or a seller who needs speed, send it my way. I buy cash and close fast.";
+  return "Also - if you have anything else that needs work, or a seller who needs speed, send it my way. I buy cash and close fast.";
 }

@@ -122,7 +122,7 @@ describe("alertAction covers EVERY classification triage can produce", () => {
     expect(alertAction("appointment")).toBe("Agent proposed a showing/call time");
     expect(alertAction("offer_format")).toBe("Agent wants the offer in writing");
     expect(alertAction("seller_costs")).toBe("Agent asked who pays what");
-    expect(alertAction("disclosure_step")).toBe("Compliance disclosure — needs you personally");
+    expect(alertAction("disclosure_step")).toBe("Compliance disclosure - needs you personally");
   });
 
   it("reserves 'intent unclear' for the ONLY case that is genuinely unclear", () => {

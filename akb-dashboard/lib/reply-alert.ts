@@ -92,7 +92,7 @@ export function alertAction(classification: ReplyClassification): string {
     case "offer_format": return "Agent wants the offer in writing";
     case "appointment": return "Agent proposed a showing/call time";
     case "seller_costs": return "Agent asked who pays what";
-    case "disclosure_step": return "Compliance disclosure — needs you personally";
+    case "disclosure_step": return "Compliance disclosure - needs you personally";
     // The silent classes (2026-09-05) never reach an alert — scan-comms
     // `continue`s before the proposal — but the label must exist so a future
     // path that does page carries the truth, not "intent unclear".
