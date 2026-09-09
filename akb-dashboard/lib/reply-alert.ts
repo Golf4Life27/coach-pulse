@@ -255,7 +255,7 @@ export async function sendBuyerReplyAlert(input: {
 }): Promise<ReplyAlertResult> {
   const addr = shortAddress(input.address);
   const amountPart = input.amountUsd != null ? usd(input.amountUsd) : "wants contract";
-  const body = `ACT NOW (buyer): ${addr} — ${input.buyerName} ${amountPart}. ${input.dealUrl}`;
+  const body = `ACT NOW (buyer): ${addr} - ${input.buyerName} ${amountPart}. ${input.dealUrl}`;
   return sendAlertSms({
     recordId: input.recordId,
     tier: "tier_2_urgent",
