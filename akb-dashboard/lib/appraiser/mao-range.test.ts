@@ -425,3 +425,34 @@ describe("computeMaoRange — modifier_inputs preservation", () => {
     expect(r5.target).toBe(r1.target);
   });
 });
+
+describe("ARV confidence provenance cap — non-disclosure states (2026-09-10)", () => {
+  it("caps a Texas ARV at LOW no matter how many comps back it", () => {
+    // 513 Lamar was stamped HIGH off 15 ATTOM comps. Texas does not make sale
+    // prices public record, so none of those 15 prices is a recorded number.
+    expect(classifyArvConfidenceByCount(15, "TX")).toBe("LOW");
+    expect(classifyArvConfidenceByCount(99, "TX")).toBe("LOW");
+    expect(classifyArvConfidenceByCount(5, "tx")).toBe("LOW"); // case-insensitive
+    expect(classifyArvConfidenceByCount(5, " TX ")).toBe("LOW"); // and trimmed
+  });
+
+  it("caps every legally non-disclosure state, not just Texas", () => {
+    for (const st of ["AK", "ID", "KS", "LA", "MS", "MO", "MT", "ND", "NM", "TX", "UT", "WY"]) {
+      expect(classifyArvConfidenceByCount(15, st)).toBe("LOW");
+    }
+  });
+
+  it("leaves disclosure states on the count rule — most of the footprint", () => {
+    // MI/OH/IN/AL/GA/TN etc. record real prices; the count still means something.
+    expect(classifyArvConfidenceByCount(15, "MI")).toBe("HIGH");
+    expect(classifyArvConfidenceByCount(15, "AL")).toBe("HIGH");
+    expect(classifyArvConfidenceByCount(4, "OH")).toBe("MED");
+    expect(classifyArvConfidenceByCount(1, "TN")).toBe("LOW");
+  });
+
+  it("is backward compatible when no state is supplied", () => {
+    expect(classifyArvConfidenceByCount(15)).toBe("HIGH");
+    expect(classifyArvConfidenceByCount(15, null)).toBe("HIGH");
+    expect(classifyArvConfidenceByCount(15, "")).toBe("HIGH");
+  });
+});

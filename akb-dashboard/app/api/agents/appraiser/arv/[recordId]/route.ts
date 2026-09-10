@@ -162,7 +162,7 @@ async function handleGet(
   // The internal arv.confidence is informational (cluster quality + market
   // type + filter survival). The dashboard-facing label goes by comp
   // count per the spec: HIGH 5+, MED 3-4, LOW <3 → Manual Review.
-  const confidence = classifyArvConfidenceByCount(arv.comp_count_used);
+  const confidence = classifyArvConfidenceByCount(arv.comp_count_used, listing.state);
   const manualReview = requiresManualReview(confidence);
 
   // ── v1.3 MAO range envelope ─────────────────────────────────────
