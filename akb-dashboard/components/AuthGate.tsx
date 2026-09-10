@@ -6,7 +6,15 @@ import { usePathname } from "next/navigation";
 // "/d/" = public deal pages (dispo, 2026-09-05). The page shell is public;
 // the data comes from /api/public/deal/[recordId], which enforces Dispo_Public
 // server-side and never returns contract price, ARV, rehab or fee.
-const PUBLIC_PATH_PREFIXES = ["/buyer-intake", "/d/"];
+//
+// "/a/" = Maverick Decision Cards (2026-09-10). These open from a link in an
+// SMS on the operator's phone, where he is NOT carrying the dashboard cookie
+// and cannot be expected to type a password one-handed — that round trip is
+// the exact thing the card channel exists to delete. Same shape as "/d/": the
+// shell is public and the SERVER enforces the rules, in this case a 43-char
+// single-use token that only permits choosing among options Maverick already
+// wrote into the card (see lib/maverick/decision-card.ts).
+const PUBLIC_PATH_PREFIXES = ["/buyer-intake", "/d/", "/a/"];
 
 export default function AuthGate({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();

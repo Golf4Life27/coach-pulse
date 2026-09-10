@@ -108,6 +108,10 @@ export function readStage4Env(): Stage4Env {
  * absent. Pure.
  */
 const SMS_MAX_LEN = 300;
+/** A card link is only worth carrying if the message can still say WHY it is
+ *  being sent. Below this many characters of title the alert becomes a bare
+ *  link, which reads like phishing on a phone — drop the link instead. */
+const MIN_TITLE_CHARS = 40;
 
 export function deriveSignalKey(signal: PrioritySignal): string {
   if (signal.id) return signal.id.replace(/[^a-zA-Z0-9_:.-]/g, "_").slice(0, 80);
@@ -156,17 +160,37 @@ function trimAtWord(text: string, max: number): string {
  *  3. The reason was cut at a fixed 120 characters with no regard for what
  *     else was in the message or where a word ended.
  *
- *  The whole body is normalized and budgeted so it bills as GSM-7. */
-export function formatStage4Message(signal: PrioritySignal): string {
+ *  The whole body is normalized and budgeted so it bills as GSM-7.
+ *
+ *  `cardUrl` (Layer 2 of the coordinator) is the Decision Card link, and it
+ *  is budgeted FIRST — ahead of the title and the reason. A trimmed sentence
+ *  still informs; a trimmed URL is garbage that costs him a laptop trip, which
+ *  is the exact round trip this channel exists to delete. If the URL somehow
+ *  cannot fit whole, it is DROPPED rather than truncated. Callers must pass a
+ *  URL built by cardUrl() in lib/maverick/decision-card — base64url tokens and
+ *  https:// are entirely within the GSM-7 basic set, so the link never forces
+ *  the message into UCS-2. */
+export function formatStage4Message(
+  signal: PrioritySignal,
+  cardUrl?: string | null,
+): string {
   const label = (TIER_VISUAL[signal.tier]?.label ?? "Priority").toUpperCase();
   const head = `Maverick / ${label}`;
   const agent = signal.agent ? `@${signal.agent.toUpperCase()}` : null;
 
-  // Budget in priority order: header and agent are fixed, the title gets what
-  // is left, and the reason gets whatever the title did not use. A long title
-  // must be trimmed too — the earlier version budgeted only the reason and a
-  // 295-char title alone blew past the segment cap.
-  const overhead = head.length + 1 + (agent ? agent.length + 1 : 0);
+  // Budget in priority order: header, agent and the card link are fixed, the
+  // title gets what is left, and the reason gets whatever the title did not
+  // use. A long title must be trimmed too — the earlier version budgeted only
+  // the reason and a 295-char title alone blew past the segment cap.
+  const url = cardUrl ? normalizeForGsm7(cardUrl.trim()) : "";
+  const headOverhead = head.length + 1 + (agent ? agent.length + 1 : 0);
+  // Only keep the link if it fits WHOLE and still leaves room to say something.
+  const urlOverhead =
+    url && headOverhead + url.length + 1 + MIN_TITLE_CHARS <= SMS_MAX_LEN
+      ? url.length + 1
+      : 0;
+  const overhead = headOverhead + urlOverhead;
+
   const title = trimAtWord(normalizeForGsm7(signal.title ?? ""), SMS_MAX_LEN - overhead);
   const room = SMS_MAX_LEN - overhead - title.length - 1; // -1 for the reason's newline
   const reason = signal.reason ? trimAtWord(normalizeForGsm7(signal.reason), room) : "";
@@ -174,6 +198,7 @@ export function formatStage4Message(signal: PrioritySignal): string {
   const lines: string[] = [head, title];
   if (reason) lines.push(reason);
   if (agent) lines.push(agent);
+  if (urlOverhead > 0) lines.push(url);
   return lines.join("\n");
 }
 

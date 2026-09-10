@@ -200,6 +200,63 @@ describe("deriveSignalKey", () => {
   });
 });
 
+describe("formatStage4Message - the Decision Card link (Layer 2)", () => {
+  // A real card URL: https + 43 base64url chars, every one of them inside the
+  // GSM-7 basic set. If this ever bills as UCS-2 the per-segment budget halves
+  // and the link is what gets cut.
+  const URL = "https://dash.akb.dev/a/" + "aB3-_x".repeat(7) + "z";
+
+  it("carries the link and still bills as GSM-7", () => {
+    const sms = formatStage4Message(
+      { tier: 3, title: "Joyce countered at 210k on Tiger Flowers", reason: "Comps support 225-230k. She wants an answer today.", agent: "closer" } as never,
+      URL,
+    );
+    expect(sms).toContain(URL);
+    expect(findNonGsm7Chars(sms)).toEqual([]);
+    expect(estimateSmsSegments(sms).encoding).toBe("gsm7");
+    expect(sms.length).toBeLessThanOrEqual(300);
+  });
+
+  it("trims the REASON to make room, never the URL", () => {
+    const sms = formatStage4Message(
+      { tier: 3, title: "Joyce countered at 210k", reason: "x".repeat(400), agent: "closer" } as never,
+      URL,
+    );
+    // The whole URL survives intact - a half-URL costs him a laptop trip.
+    expect(sms).toContain(URL);
+    expect(sms).toContain("...");
+    expect(sms.length).toBeLessThanOrEqual(300);
+  });
+
+  it("trims a pathological TITLE too, and still keeps the link whole", () => {
+    const sms = formatStage4Message(
+      { tier: 3, title: "T".repeat(400), reason: "r".repeat(400) } as never,
+      URL,
+    );
+    expect(sms).toContain(URL);
+    expect(sms.length).toBeLessThanOrEqual(300);
+  });
+
+  it("DROPS the link rather than send a bare link with no explanation", () => {
+    // A URL so long that keeping it would leave no room to say why he is being
+    // texted. A naked link on a phone reads like phishing - send words instead.
+    const huge = "https://dash.akb.dev/a/" + "q".repeat(280);
+    const sms = formatStage4Message(
+      { tier: 3, title: "Joyce countered at 210k on Tiger Flowers", reason: "Comps support 225-230k." } as never,
+      huge,
+    );
+    expect(sms).not.toContain(huge);
+    expect(sms).toContain("Joyce countered");
+    expect(sms.length).toBeLessThanOrEqual(300);
+  });
+
+  it("is unchanged when no card exists", () => {
+    const signal = { tier: 3, title: "Send lane firing blanks", reason: "13 of 200 sends.", agent: "pulse" } as never;
+    expect(formatStage4Message(signal, null)).toBe(formatStage4Message(signal));
+    expect(formatStage4Message(signal, "")).toBe(formatStage4Message(signal));
+  });
+});
+
 describe("formatStage4Message", () => {
   it("uses the human tier label, not a hardcoded TIER 3", () => {
     expect(formatStage4Message(signal({ tier: 3, id: "x", title: "RentCast exhausts in ~2d" })))

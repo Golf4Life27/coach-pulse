@@ -97,6 +97,10 @@ function describeFailure(reason: string): string {
     case "unknown_option":
       return "That option isn't on this card anymore.";
     default:
-      return `Something went wrong (${reason}). Nothing was changed.`;
+      // Deliberately does NOT promise "nothing was changed": a failure from
+      // the action executor lands AFTER the card is spent, so the write may
+      // have partially happened. Telling him it definitely did not, and being
+      // wrong, is worse than telling him to look.
+      return `Something went wrong (${reason}). Check the record before retrying.`;
   }
 }
