@@ -118,11 +118,26 @@ const DECLINE_OVERRIDES_ACCEPTANCE = [
   /\bwon'?t\s+accept\b/i,
 ];
 
-/** HARD rejection — the thread must die and STAY dead. Two shapes only:
- *  (a) compliance opt-outs (STOP/unsubscribe/do-not-contact) — non-negotiable,
- *  never re-engaged, feeds the opt-out rails; (b) gone-deals (sold, under
- *  contract, escrow, withdrawn, comparing-offers-in-hand) — there is nothing
- *  left to re-engage. Route: tier_0 auto-close → Dead.
+/** HARD rejection — the thread must die and STAY dead. Two shapes with
+ *  DIFFERENT risk profiles, split into two arrays (2026-09-10, the 1005 2nd
+ *  St / Pamela Calamusa false-positive auto-kill — see the live-ask override
+ *  below for the full incident):
+ *
+ *  (a) COMPLIANCE_PATTERNS — opt-outs (STOP/unsubscribe/do-not-contact/
+ *      don't-bother-me) — non-negotiable, TCPA is not a judgment call, never
+ *      re-engaged, feeds the opt-out rails. ABSOLUTE: nothing overrides a
+ *      compliance match, ever (see requirement note above
+ *      classifyReply's compliance loop).
+ *  (b) GONE_DEAL_PATTERNS — sold, under contract, escrow, withdrawn,
+ *      multiple-offers, comparing-offers-in-hand — there is nothing left to
+ *      re-engage ON THAT PROPERTY. But an agent describing a DIFFERENT deal
+ *      ("I have two flips, one under contract with them") while asking us
+ *      something about OURS is not a gone-deal signal for the property in
+ *      front of us — see the GONE_DEAL_PATTERNS + live-ask override in
+ *      classifyReply below.
+ *
+ *  Route: tier_0 auto-close → Dead — UNLESS a gone-deal match rides with a
+ *  live ask/question, which routes to manual review instead (see override).
  *
  *  P1 split (2026-07-08, ruling context recmy2Vwp1wMA1Vs8 era): STANCE
  *  rejections ("not interested", "no go", "too low") moved OUT of this list
@@ -130,27 +145,34 @@ const DECLINE_OVERRIDES_ACCEPTANCE = [
  *  re-engagement candidate, not a corpse. 2718 Ave I's "No go" died
  *  UNCLASSIFIED under the old list; that class now routes to the 2A queue
  *  with an operator-approved re-engagement draft. */
-const REJECTION_PATTERNS = [
+export const COMPLIANCE_PATTERNS = [
   /\bstop\b/i,
+  /\bremove\b.*\bnumber\b/i,
+  /\bdo not\b.*\b(text|contact|call)\b/i,
+  /\bunsubscribe\b/i,
+  // "We have an offer right now. Over asking, please don't bother me
+  // anymore" (1212 W Chambers, 2026-09-05) IS an opt-out even though it also
+  // carries an offer-in-hand clause. This pattern lives in the COMPLIANCE
+  // half on purpose: "don't bother me" is one of the docstring's own (a)
+  // examples, and compliance never gets the live-ask override (requirement
+  // 4 below) — TCPA is not a judgment call.
+  /\b(?:don'?t|dont|do\s+not|please\s+don'?t)\s+bother\s+(?:me|us)\b/i,
+];
+
+export const GONE_DEAL_PATTERNS = [
   /\bunder contract\b/i,
   /\boff the market\b/i,
   /\bsold\b/i,
   /\bexpired\b/i,
-  /\bremove\b.*\bnumber\b/i,
-  /\bdo not\b.*\b(text|contact|call)\b/i,
-  /\bunsubscribe\b/i,
   /\bno longer\b.*\b(available|listed)\b/i,
   /\bwithdrawn\b/i,
   /\bpending\b/i,
   // 2026-09-05 misses (all landed UNCLASSIFIED and were closed by hand):
   // "We just buttoned up a contract on that property" (1313 Hartford);
-  // "We have an offer right now. Over asking, please don't bother me anymore"
-  // (1212 W Chambers — ALSO an opt-out, see lib/outreach/opt-out);
   // "multiple offers for their property all above 31,000" (19350 Glastonbury).
   /\b(?:buttoned\s+up|signed|executed|ratified|finalized)\s+(?:a\s+|the\s+)?contract\b/i,
   /\b(?:have|has|got)\s+(?:an?\s+)?(?:offer|contract)\s+(?:right\s+now|in\s+hand|already|on\s+it)\b/i,
   /\bmultiple\s+offers\b/i,
-  /\b(?:don'?t|dont|do\s+not|please\s+don'?t)\s+bother\s+(?:me|us)\b/i,
   // Patches 2026-06-10 — shrink the UNCLASSIFIED bucket toward "rejection"
   // ONLY when paired with an acceptance / possession / commitment verb (the
   // seller is comparing OUR offer to another deal in hand, not asking us to
@@ -170,7 +192,9 @@ const REJECTION_PATTERNS = [
   // clause): elliptical "X is not [interested]." — the complement is
   // dropped but the negation stands alone as the whole clause. Requires
   // trailing punctuation (or end of string) so a mid-sentence hedge like
-  // "is not at that price yet, but..." isn't eaten.
+  // "is not at that price yet, but..." isn't eaten. Bucketed as GONE_DEAL
+  // (not compliance — it isn't an opt-out request) so it still gets the
+  // live-ask override below.
   /\b(?:is|are|was|were)\s+not\b(?=[.,;!]|\s*$)/i,
   // "he's not" / "she's not" / "they're not" — the contraction form of the
   // same ellipsis. ANCHORED like its sibling above (2026-08-30, 8883 Sussex
@@ -182,6 +206,50 @@ const REJECTION_PATTERNS = [
   // must fall through to the stance/pivot patterns.
   /\b(?:he|she|they)'?(?:s|re)\s+not\b(?=[.,;!]|\s*$)/i,
 ];
+
+/** LIVE-ASK OVERRIDE (2026-09-10, THIRD instance of this failure class — see
+ *  the 2026-08-30 8883 Sussex comment above and the 2026-07-26 negation-
+ *  awareness comment: this is the same "false-positive auto-kill" shape for
+ *  the third time, so it's fixed as a class instead of patching one more
+ *  phrase).
+ *
+ *  Anchor case: recbHNKmFSiGXrfus, 1005 2nd St Birmingham, listing agent
+ *  Pamela Calamusa, 2026-09-09T20:57:43Z: "...this is why I only deal with
+ *  the investors out of my office. I already have two flips going on one
+ *  under contract with them. I need responses because of the Seller
+ *  whenever I tell them we have an offer coming over and I have written it
+ *  up the way you asked and you have any right to change anything on it.
+ *  That's not the way you want it and let me know thank you so much..."
+ *  /\bunder contract\b/i fired on HER OTHER DEALS with her office's own
+ *  investors, not on 1005 2nd St — classification came back "rejection",
+ *  determineNewStatus returned "Dead", and the pending auto-reply was
+ *  discarded as deal_dead_auto_dismiss. The deal was live: she had sent a
+ *  contract THAT MORNING and the operator was mid-negotiation on it.
+ *
+ *  Every GONE_DEAL_PATTERNS phrase has this same failure mode — agents
+ *  mention OTHER deals constantly ("I sold that one but I have another",
+ *  "I've got three pending right now"). A message that also contains an
+ *  explicit ask or question directed at US is, by definition, re-engageable:
+ *  route it to manual review (classification "unknown", a decision tier)
+ *  instead of silently auto-closing to Dead. */
+const LIVE_ASK_PATTERNS = [
+  /\blet\s+me\s+know\b/i, // "...let me know thank you so much" (Pamela, verbatim)
+  /\bsign\s+it\b/i, // "sign it and send it back"
+  /\bcan\s+you\s+sign\b/i,
+  /\bsend\s+it\s+over\b/i, // "send it over when it's ready"
+  /\bsend\s+me\b/i, // "send me the contract" / "send me your offer"
+  /\bare\s+you\s+still\b/i, // "are you still interested"
+  /\b(?:can|could|would)\s+you\b/i, // any direct request of us
+  /\bplease\s+\w+/i, // "please advise" / "please call" — a request, not a decline (compliance's own "please don't bother me" is ABSOLUTE and never reaches this check — see the compliance loop)
+  /\bwaiting\s+on\s+you\b/i,
+  /\bwhat\s+did\s+you\b/i, // "what did you decide"
+  /\bi\s+have\s+written\s+it\s+up\b/i, // Pamela: she wrote OUR offer up and is waiting on us
+  /\?/, // a bare question mark is a question directed at us
+];
+
+function hasLiveAsk(text: string): boolean {
+  return LIVE_ASK_PATTERNS.some((pat) => pat.test(text));
+}
 
 /** CASH-PIVOT — the terms lane's most valuable reply shape: the seller
  *  declines FINANCING but invites a CASH conversation ("wants to sell
@@ -498,6 +566,11 @@ const COUNTER_LANGUAGE_PATTERNS = [
 export function classifyReply(body: string): {
   classification: ReplyClassification;
   matchedPattern: string | null;
+  /** True only when a GONE_DEAL_PATTERNS match was overridden by a live ask
+   *  in the same message (see LIVE_ASK_PATTERNS above) — the classification
+   *  came back "unknown" instead of "rejection" specifically for that
+   *  reason, so triageSellerReply can write an operator-actionable reason. */
+  goneDealOverride?: boolean;
 } {
   const trimmed = (body ?? "").trim();
   if (!trimmed) return { classification: "unknown", matchedPattern: null };
@@ -522,8 +595,27 @@ export function classifyReply(body: string): {
     }
   }
 
-  for (const pat of REJECTION_PATTERNS) {
+  // COMPLIANCE — absolute. TCPA opt-outs are never a judgment call: no
+  // live-ask override, no exception. "Please don't bother me anymore"
+  // contains both a "please" and an offer-in-hand clause and is STILL an
+  // opt-out (1212 W Chambers, 2026-09-05).
+  for (const pat of COMPLIANCE_PATTERNS) {
     if (pat.test(trimmed)) return { classification: "rejection", matchedPattern: pat.source };
+  }
+
+  // GONE-DEAL — "sold" / "under contract" / "escrow" usually means there is
+  // nothing left to re-engage ON THIS PROPERTY. But a gone-deal phrase
+  // riding alongside an explicit ask or question directed at US (1005 2nd
+  // St, Pamela Calamusa, 2026-09-09 — see the LIVE_ASK_PATTERNS comment
+  // above) means the thread in front of us is still alive: route it to
+  // manual review instead of auto-closing it to Dead.
+  for (const pat of GONE_DEAL_PATTERNS) {
+    if (pat.test(trimmed)) {
+      if (hasLiveAsk(trimmed)) {
+        return { classification: "unknown", matchedPattern: pat.source, goneDealOverride: true };
+      }
+      return { classification: "rejection", matchedPattern: pat.source };
+    }
   }
 
   // Agent redirect right after hard rejection: "I'm not the agent, contact
@@ -776,7 +868,7 @@ export function triageSellerReply(
   currentStatus: string | null = null,
   opts: { sentOfferUsd?: number | null; street?: string | null } = {},
 ): SellerReplyTriage {
-  const { classification, matchedPattern } = classifyReply(body);
+  const { classification, matchedPattern, goneDealOverride } = classifyReply(body);
   const queueStatus = determineNewStatus(classification, currentStatus);
   const snippet = (body ?? "").trim().slice(0, 160);
 
@@ -966,6 +1058,27 @@ export function triageSellerReply(
         suggestedReply: null,
       };
     default:
+      // GONE_DEAL_PATTERNS + a live ask (1005 2nd St / Pamela Calamusa,
+      // 2026-09-09): a gone-deal phrase matched but the message ALSO asks
+      // us something, so it did not auto-close — it needs a human's eyes,
+      // flagged HIGH since a real live deal may be sitting behind it.
+      if (goneDealOverride) {
+        return {
+          classification,
+          tier: "tier_1_decision",
+          needsDecision: true,
+          decisionKind: "review",
+          priority: "HIGH",
+          queueStatus,
+          reasoning:
+            `Gone-deal phrase matched (/${matchedPattern}/) but the message also contains a ` +
+            `live ask/question directed at us — held for manual review instead of auto-closing ` +
+            `to Dead (could be a different property, e.g. "under contract with them" describing ` +
+            `the agent's OTHER deal). Reply: "${snippet}"`,
+          matchedPattern,
+          suggestedReply: null,
+        };
+      }
       return {
         classification,
         tier: "tier_1_decision",
