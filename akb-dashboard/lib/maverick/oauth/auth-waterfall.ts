@@ -12,6 +12,7 @@ import { constantTimeEqual } from "./crypto";
 import type { KvClient } from "./kv";
 import { loadAccessToken } from "./tokens";
 import type { AuthResult } from "./types";
+import { sessionSecret, verifySessionValue } from "@/lib/auth/session-cookie";
 
 export interface AuthEnv {
   cronSecret: string | null;
@@ -152,10 +153,29 @@ function reasonToDescription(reason: AuthFailureReason): string {
 
 /**
  * Same-origin dashboard session check. Returns true when the request
- * carries an `akb-auth=authenticated` cookie — the session marker set
- * by /api/auth after password entry. The cookie is httpOnly + secure
- * (production) + sameSite=strict, so browsers only send it on
- * same-origin requests; third-party sites can't trigger this path.
+ * carries a valid `akb-auth` cookie — the session marker set by /api/auth
+ * after password entry. The cookie is httpOnly + secure (production) +
+ * sameSite=lax, so browsers only send it on same-origin requests and
+ * top-level navigations; third-party sites can't trigger this path via
+ * a cross-site POST.
+ *
+ * UPDATED (security hardening, this change): this used to check the
+ * cookie's VALUE against the literal string "authenticated" — a constant
+ * that never changed between logins or between visitors. Anyone who knew
+ * that one name/value pair could set it by hand in devtools and be fully
+ * authenticated without ever knowing the password; the password was
+ * decorative against that guess. It now delegates to
+ * lib/auth/session-cookie's verifySessionValue, which checks an HMAC
+ * signature over an embedded expiry, keyed on a secret derived from
+ * DASHBOARD_PASSWORD (or DASHBOARD_SESSION_SECRET, see that file). There
+ * is no fixed value that authenticates; a cookie is only good if this
+ * server minted it and it hasn't expired. When no secret is configured
+ * this fails closed (returns false), same as today's "not configured"
+ * shape.
+ *
+ * This function's signature is unchanged and it stays synchronous —
+ * verifying an HMAC is pure CPU, no I/O, and 79 call sites depend on
+ * calling this without awaiting it.
  *
  * This is a SEPARATE auth surface from the OAuth waterfall above.
  * The waterfall handles external callers (claude.ai sessions, Vercel
@@ -178,7 +198,9 @@ export function hasDashboardSession(cookieHeader: string | null): boolean {
     if (eq === -1) continue;
     const k = pair.slice(0, eq).trim();
     const v = pair.slice(eq + 1).trim();
-    if (k === "akb-auth" && v === "authenticated") return true;
+    if (k === "akb-auth") {
+      return verifySessionValue(v, Date.now(), sessionSecret()).ok;
+    }
   }
   return false;
 }
