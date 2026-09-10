@@ -31,7 +31,7 @@ import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { verifyListingByUrl } from "@/lib/crawler/sources/firecrawl";
 import { isPriceableMarket } from "@/lib/markets/actionable";
 import { listSeededZips } from "@/lib/buyer-median-store";
-import { listPriceableArvZips } from "@/lib/zip-arv-seed-store";
+import { listPriceableArvZips, listSelfPricingArvZips } from "@/lib/zip-arv-seed-store";
 import { isOutreachFresh, DEFAULT_FRESHNESS_HOURS } from "@/lib/outreach-freshness";
 import { judgeSpread, isSpreadWatchRecord } from "@/lib/contract-lifecycle/spread-watch";
 import { judgeSubjectPrint } from "@/lib/pricing/subject-history";
@@ -115,6 +115,7 @@ async function handleGet(req: Request) {
   const REPLY_BEARING = new Set(["Negotiating", "Response Received", "Counter Received", "Offer Accepted"]);
   let active: Listing[];
   let seededZips: Set<string>;
+  let selfPricingZips: Set<string>;
   try {
     let all: Listing[];
     // 2026-07-10 autopsy fix (the 43-stale cohort): this route filtered
@@ -125,7 +126,18 @@ async function handleGet(req: Request) {
     // legacy set.
     let arvZips: Set<string>;
     let medianZips: Set<string>;
-    [all, arvZips, medianZips] = await Promise.all([getListings(), listPriceableArvZips(), listSeededZips()]);
+    // selfPricingZips is the THIRD argument isPriceableMarket needs to let a
+    // seeded ZIP lift a non-disclosure hold. Without it every Texas record
+    // returns hold_non_disclosure, so intake creates San Antonio listings,
+    // they go stale at 48h, and this pass can never touch them again — the
+    // exact failure lib/markets/actionable.ts:90 warns about. lib/crawler/
+    // intake-filter.ts:291 passes all three; this call site passed two.
+    [all, arvZips, medianZips, selfPricingZips] = await Promise.all([
+      getListings(),
+      listPriceableArvZips(),
+      listSeededZips(),
+      listSelfPricingArvZips(),
+    ]);
     seededZips = new Set<string>([...arvZips, ...medianZips]);
     // Third cohort (2026-07-09): untouched records whose Live_Status was
     // never stamped (6/30 Indy class) are invisible to isH2Eligible until
@@ -167,7 +179,7 @@ async function handleGet(req: Request) {
     // why a $60K cut on a record UNDER CONTRACT went invisible for 17 days.
     // Protecting a live spread is worth a credit in any market on the map.
     if (!isSpreadWatchRecord(l)) {
-      const market = isPriceableMarket({ state: l.state, city: l.city, zip: l.zip }, seededZips);
+      const market = isPriceableMarket({ state: l.state, city: l.city, zip: l.zip }, seededZips, selfPricingZips);
       if (!market.actionable) {
         skippedNonActionable.push({ recordId: l.id, reason: market.reason ?? "non_priceable" });
         return false;

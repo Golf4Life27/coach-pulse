@@ -268,3 +268,72 @@ describe("classifyReply — negation awareness (real reply corpus 2026-07-26)", 
     ).toBe("offer_format");
   });
 });
+
+// ── 1005 2nd St, Pamela Calamusa (recbHNKmFSiGXrfus), 2026-09-09T20:57:43Z:
+// THIRD instance of the "false-positive auto-kill" class (see the 2026-08-30
+// 8883 Sussex comment and the 2026-07-26 negation-awareness comment in
+// reply-triage.ts). /\bunder contract\b/i matched her describing TWO FLIPS
+// with her own office's investors — a DIFFERENT deal — while she was
+// mid-negotiation on 1005 2nd St ("I have written it up the way you asked
+// ... let me know"). classifyReply returned "rejection", determineNewStatus
+// returned "Dead", and the pending reply was discarded as
+// deal_dead_auto_dismiss. The deal was live: she had sent a contract that
+// morning and the operator was mid-negotiation on it that day.
+describe("1005 2nd St — gone-deal-language-about-a-DIFFERENT-property false-positive auto-kill (2026-09-09)", () => {
+  const PAMELA =
+    "I am not trying to be rude, but this is why I only deal with the investors out of my office. " +
+    "I already have two flips going on one under contract with them. I need responses because of " +
+    "the Seller whenever I tell them we have an offer coming over and I have written it up the way " +
+    "you asked and you have any right to change anything on it. That's not the way you want it and " +
+    "let me know thank you so much. I'm fixing to go show a home and I will be tied up for the next " +
+    "couple of hours.";
+
+  it("does NOT classify as rejection, and determineNewStatus does NOT return Dead", () => {
+    const r = classifyReply(PAMELA);
+    expect(r.classification).not.toBe("rejection");
+    expect(determineNewStatus(r.classification, "Negotiating")).not.toBe("Dead");
+  });
+
+  it("routes to a decision tier, not tier_0_auto_close, with an operator-actionable reason", () => {
+    const t = triageSellerReply(PAMELA, "Negotiating");
+    expect(t.tier).not.toBe("tier_0_auto_close");
+    expect(t.needsDecision).toBe(true);
+    expect(t.reasoning).toMatch(/live ask|question/i);
+  });
+
+  it("her 21:33 follow-up ('not trying to be difficult...') also does not classify as rejection", () => {
+    const followUp =
+      "OK, thank you I'm not trying to be difficult, but I have sellers that kinda in this market " +
+      "pinch on my ears all day long thank you so much";
+    expect(classifyReply(followUp).classification).not.toBe("rejection");
+  });
+
+  it("a bare gone-deal with no ask still dies (the fix must not weaken real gone-deals)", () => {
+    expect(classifyReply("Sold last week.").classification).toBe("rejection");
+    expect(determineNewStatus("rejection", "Texted")).toBe("Dead");
+  });
+
+  it("'under contract' about OUR OWN property with no ask still dies", () => {
+    expect(classifyReply("That one is under contract now.").classification).toBe("rejection");
+  });
+
+  it("compliance opt-outs are ABSOLUTE — no live-ask override, even with 'please' and an ask", () => {
+    expect(classifyReply("Please stop texting me, do not contact me again").classification).toBe(
+      "rejection",
+    );
+    // Contains BOTH "please" and an offer-in-hand ask-shaped clause and is
+    // STILL an opt-out (1212 W Chambers, 2026-09-05) — TCPA is not a
+    // judgment call.
+    expect(
+      classifyReply("We have an offer right now. Over asking, please don't bother me anymore")
+        .classification,
+    ).toBe("rejection");
+  });
+
+  it("a realistic third-party mention (inbound inventory) must not die", () => {
+    expect(
+      classifyReply("I sold that one already but I have another on 5th Ave, want me to send it?")
+        .classification,
+    ).not.toBe("rejection");
+  });
+});

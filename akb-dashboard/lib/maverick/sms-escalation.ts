@@ -33,6 +33,8 @@
 import { audit } from "@/lib/audit-log";
 import { sendMessageWithId, type QuoSendResult } from "@/lib/quo";
 import type { KvClient } from "./oauth/kv";
+import { TIER_VISUAL } from "./severity";
+import { normalizeForGsm7 } from "@/lib/sms/gsm7";
 import type { PrioritySignal } from "./severity";
 import { inferPrioritySignals } from "./severity";
 import type { StructuredBriefing, SourceHealth } from "./briefing";
@@ -105,6 +107,12 @@ export function readStage4Env(): Stage4Env {
  * to the same KV entry. Falls back to a content hash when id is
  * absent. Pure.
  */
+const SMS_MAX_LEN = 300;
+/** A card link is only worth carrying if the message can still say WHY it is
+ *  being sent. Below this many characters of title the alert becomes a bare
+ *  link, which reads like phishing on a phone — drop the link instead. */
+const MIN_TITLE_CHARS = 40;
+
 export function deriveSignalKey(signal: PrioritySignal): string {
   if (signal.id) return signal.id.replace(/[^a-zA-Z0-9_:.-]/g, "_").slice(0, 80);
   const parts = [signal.tier, signal.agent ?? "_", signal.title].join("|");
@@ -126,14 +134,71 @@ export function signalFingerprint(signal: PrioritySignal): string {
  * Concise SMS body. Aims under 160 chars but accepts multi-segment
  * when the content warrants. Pure.
  */
-export function formatStage4Message(signal: PrioritySignal): string {
-  const lines: string[] = ["🐕 Maverick — TIER 3", signal.title];
-  if (signal.reason) {
-    lines.push(signal.reason.slice(0, 120));
-  }
-  if (signal.agent) {
-    lines.push(`@${signal.agent.toUpperCase()}`);
-  }
+/** Trim to `max` characters at a WORD boundary. The blind `.slice(0, 120)`
+ *  this replaces is what produced "the cron-misfire / skipped-production-deplo"
+ *  on the operator's phone (2026-09-09) - a sentence cut mid-word carries less
+ *  information than no sentence at all. */
+function trimAtWord(text: string, max: number): string {
+  if (max <= 3) return "";
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max - 3);
+  const lastSpace = cut.lastIndexOf(" ");
+  return `${(lastSpace > max * 0.5 ? cut.slice(0, lastSpace) : cut).trimEnd()}...`;
+}
+
+/** Compose the operator SMS for a critical signal.
+ *
+ *  THREE DEFECTS FIXED HERE (2026-09-09, from a screenshot of the operator's
+ *  own inbox):
+ *  1. The header carried a dog emoji AND an em-dash. Either one alone forces
+ *     the whole message out of GSM-7 into UCS-2, which HALVES the per-segment
+ *     budget from 160 characters to 70 - so every alert truncated roughly
+ *     twice as early as it should have, and billed double. See lib/sms/gsm7.
+ *  2. "TIER 3" was hardcoded: a lie for any other tier, and meaningless to a
+ *     human either way. TIER_VISUAL already carries the operator-facing words
+ *     ("Critical", "Priority", "Needs eyes") - use those.
+ *  3. The reason was cut at a fixed 120 characters with no regard for what
+ *     else was in the message or where a word ended.
+ *
+ *  The whole body is normalized and budgeted so it bills as GSM-7.
+ *
+ *  `cardUrl` (Layer 2 of the coordinator) is the Decision Card link, and it
+ *  is budgeted FIRST — ahead of the title and the reason. A trimmed sentence
+ *  still informs; a trimmed URL is garbage that costs him a laptop trip, which
+ *  is the exact round trip this channel exists to delete. If the URL somehow
+ *  cannot fit whole, it is DROPPED rather than truncated. Callers must pass a
+ *  URL built by cardUrl() in lib/maverick/decision-card — base64url tokens and
+ *  https:// are entirely within the GSM-7 basic set, so the link never forces
+ *  the message into UCS-2. */
+export function formatStage4Message(
+  signal: PrioritySignal,
+  cardUrl?: string | null,
+): string {
+  const label = (TIER_VISUAL[signal.tier]?.label ?? "Priority").toUpperCase();
+  const head = `Maverick / ${label}`;
+  const agent = signal.agent ? `@${signal.agent.toUpperCase()}` : null;
+
+  // Budget in priority order: header, agent and the card link are fixed, the
+  // title gets what is left, and the reason gets whatever the title did not
+  // use. A long title must be trimmed too — the earlier version budgeted only
+  // the reason and a 295-char title alone blew past the segment cap.
+  const url = cardUrl ? normalizeForGsm7(cardUrl.trim()) : "";
+  const headOverhead = head.length + 1 + (agent ? agent.length + 1 : 0);
+  // Only keep the link if it fits WHOLE and still leaves room to say something.
+  const urlOverhead =
+    url && headOverhead + url.length + 1 + MIN_TITLE_CHARS <= SMS_MAX_LEN
+      ? url.length + 1
+      : 0;
+  const overhead = headOverhead + urlOverhead;
+
+  const title = trimAtWord(normalizeForGsm7(signal.title ?? ""), SMS_MAX_LEN - overhead);
+  const room = SMS_MAX_LEN - overhead - title.length - 1; // -1 for the reason's newline
+  const reason = signal.reason ? trimAtWord(normalizeForGsm7(signal.reason), room) : "";
+
+  const lines: string[] = [head, title];
+  if (reason) lines.push(reason);
+  if (agent) lines.push(agent);
+  if (urlOverhead > 0) lines.push(url);
   return lines.join("\n");
 }
 

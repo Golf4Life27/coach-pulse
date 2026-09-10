@@ -1,5 +1,12 @@
-import { describe, it, expect } from "vitest";
-import { buildReplyAlertBody, alertAction, alertRecommendation } from "./reply-alert";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+// ── Mock for sendBuyerReplyAlert's I/O (Quo send + audit) ──────────────────
+const sendMessage = vi.fn(async (..._a: unknown[]) => ({ id: "MSGtest", status: "queued" as const }));
+vi.mock("@/lib/quo", () => ({ sendMessage: (...a: unknown[]) => sendMessage(...a) }));
+vi.mock("@/lib/audit-log", () => ({ audit: vi.fn(async () => {}) }));
+
+import { buildReplyAlertBody, alertAction, alertRecommendation, sendBuyerReplyAlert } from "./reply-alert";
+import { estimateSmsSegments, findNonGsm7Chars } from "./sms/gsm7";
 
 describe("buildReplyAlertBody — tiered, decision-first (operator 2026-06-10)", () => {
   it("tier 1 counter: leads with DECISION NEEDED, short address, action, recommendation with real numbers, link", () => {
@@ -122,7 +129,7 @@ describe("alertAction covers EVERY classification triage can produce", () => {
     expect(alertAction("appointment")).toBe("Agent proposed a showing/call time");
     expect(alertAction("offer_format")).toBe("Agent wants the offer in writing");
     expect(alertAction("seller_costs")).toBe("Agent asked who pays what");
-    expect(alertAction("disclosure_step")).toBe("Compliance disclosure — needs you personally");
+    expect(alertAction("disclosure_step")).toBe("Compliance disclosure - needs you personally");
   });
 
   it("reserves 'intent unclear' for the ONLY case that is genuinely unclear", () => {
@@ -137,5 +144,61 @@ describe("alertAction covers EVERY classification triage can produce", () => {
     for (const c of named) {
       expect(alertAction(c)).not.toMatch(/intent unclear/);
     }
+  });
+});
+
+// GSM-7 SEGMENT COST (2026-09-09, Spine rec6C9KnSL89PP4y5): sendBuyerReplyAlert
+// had no test at all, and its composed body carried the one smart character
+// the outbound-templates GSM-7 sweep missed (an em-dash between the address
+// and the buyer's name — it never runs through a pure builder the sweep's
+// guard suite could reach). Pin the plain-hyphen text AND the GSM-7 encoding
+// so a future smart character regresses loudly.
+describe("sendBuyerReplyAlert — buyer body composition stays GSM-7 clean", () => {
+  const ORIGINAL_ENV = process.env;
+  beforeEach(() => {
+    sendMessage.mockClear();
+    process.env = { ...ORIGINAL_ENV, ALERT_PHONE: "+13125550100", ALERT_FROM: "+16302505865" };
+  });
+  afterEach(() => {
+    process.env = ORIGINAL_ENV;
+  });
+
+  it("composes a plain-hyphen body and sends it GSM-7 encoded", async () => {
+    await sendBuyerReplyAlert({
+      recordId: "recBUYER1",
+      address: "123 Main St, Detroit, MI",
+      buyerName: "Marcus",
+      amountUsd: 42_000,
+      dealUrl: "https://coach-pulse-ten.vercel.app/dispo/recBUYER1",
+    });
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    const body = sendMessage.mock.calls[0]?.[1] as string;
+    expect(body).toBe("ACT NOW (buyer): 123 Main St - Marcus $42,000. https://coach-pulse-ten.vercel.app/dispo/recBUYER1");
+    expect(estimateSmsSegments(body).encoding).toBe("gsm7");
+  });
+});
+
+describe("scope line — GSM-7 safety (untested path that shipped a U+2192, 2026-09-09)", () => {
+  const withScope = () =>
+    buildReplyAlertBody({
+      recordId: "recbHNKmFSiGXrfus",
+      address: "1005 2nd St, Birmingham, AL 35214",
+      tier: "tier_1_decision",
+      classification: "counter",
+      outreachOfferPrice: 74500,
+      underwrittenMao: 80000,
+      scope: { tier: "heavy", scopeRehab: 146300, storedRehab: 22937, ceiling: 51708 },
+    });
+
+  it("renders the scope line with an ASCII arrow", () => {
+    const { body } = withScope();
+    expect(body).toContain("-> ceiling $51,708");
+    expect(body).not.toContain("\u2192");
+  });
+
+  it("bills as GSM-7 — the whole point of the fix", () => {
+    const { body } = withScope();
+    expect(findNonGsm7Chars(body)).toEqual([]);
+    expect(estimateSmsSegments(body).encoding).toBe("gsm7");
   });
 });

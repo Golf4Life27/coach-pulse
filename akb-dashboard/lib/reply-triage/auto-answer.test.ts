@@ -5,12 +5,17 @@ import {
   composeOfferFormat,
   AUTO_ANSWERABLE,
 } from "./auto-answer";
+import { IDENTITY_QUESTION_STANDING_ANSWER } from "@/lib/standing-answers";
 
 const base = { inboundBody: "Who pays the back taxes?", live: true };
 
 describe("the closed set — adding to it is a doctrine change", () => {
-  it("answers exactly two classifications", () => {
-    expect([...AUTO_ANSWERABLE].sort()).toEqual(["offer_format", "seller_costs"]);
+  it("answers exactly three classifications", () => {
+    expect([...AUTO_ANSWERABLE].sort()).toEqual(["identity_question", "offer_format", "seller_costs"]);
+  });
+
+  it("identity_question is in the set (operator ruling 2026-09-09)", () => {
+    expect(AUTO_ANSWERABLE.has("identity_question")).toBe(true);
   });
 
   it("REFUSES disclosure_step — the machine never acknowledges a legal disclosure", () => {
@@ -127,7 +132,30 @@ describe("seller_costs — a policy answer, and it names no money", () => {
   it("reads cleanly with no street on the record", () => {
     const body = composeSellerCosts({ street: null });
     expect(body).not.toMatch(/ on ,/);
-    expect(body.startsWith("Good question — those all come out of the seller's proceeds at closing,")).toBe(true);
+    expect(body.startsWith("Good question - those all come out of the seller's proceeds at closing,")).toBe(true);
+  });
+});
+
+describe("identity_question — the operator-approved standing answer (ruling 2026-09-09)", () => {
+  it("sends the standing answer verbatim, no sticky number required", () => {
+    const d = decideAutoAnswer({
+      classification: "identity_question",
+      inboundBody: "Are you a wholesaler?",
+      stickyOfferUsd: null,
+      live: true,
+    });
+    expect(d.send).toBe(true);
+    expect(d.body).toBe(IDENTITY_QUESTION_STANDING_ANSWER);
+  });
+
+  it("the amount veto still applies — a number makes it a counter, not an identity question", () => {
+    const d = decideAutoAnswer({
+      classification: "identity_question",
+      inboundBody: "are you a wholesaler? we'd need 55k",
+      live: true,
+    });
+    expect(d.send).toBe(false);
+    expect(d.refusal).toBe("amount_in_reply");
   });
 });
 

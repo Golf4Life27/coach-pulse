@@ -1,7 +1,7 @@
 // M8 / Gate 3 — opt-out detection + number-level suppression tests.
 
 import { describe, it, expect, vi } from "vitest";
-import { detectOptOut, applyOptOut, inboundStampAdvances, type OptOutRecord, type ApplyOptOutDeps } from "./opt-out";
+import { detectOptOut, applyOptOut, inboundStampAdvances, type OptOutRecord, type ApplyOptOutDeps, suppressionTargetsForPhone } from "./opt-out";
 
 describe("detectOptOut", () => {
   it("catches the operator's explicit set + carrier keywords", () => {
@@ -107,5 +107,49 @@ describe("natural-language revocations (2026-09-05, 1212 W Chambers)", () => {
   });
   it("a benign 'bother' does not trip it", () => {
     expect(detectOptOut("sorry to bother you, is the offer still good?").optOut).toBe(false);
+  });
+});
+
+describe("suppressionTargetsForPhone — the Danielle Dale miss (2026-09-09)", () => {
+  const toE164 = (p: string) => {
+    const d = p.replace(/\D/g, "");
+    return d.length === 11 && d.startsWith("1") ? `+${d}` : `+1${d}`;
+  };
+
+  // Her two listings. 416 Colburn was in the thread and got suppressed; 3359 N
+  // Detroit had a BLANK status, so the actionable-only map never saw it and the
+  // send lane attempted her number on every run for six weeks.
+  const listings = [
+    { id: "colburn", agentPhone: "4193228620", outreachStatus: "Manual Review" },
+    { id: "detroit", agentPhone: "(419) 322-8620", outreachStatus: "" },
+    { id: "dead", agentPhone: "419-322-8620", outreachStatus: "Dead" },
+    { id: "other", agentPhone: "3137023671", outreachStatus: "Texted" },
+    { id: "nophone", agentPhone: null, outreachStatus: "Review" },
+  ];
+
+  it("reaches the never-contacted sibling that the actionable map missed", () => {
+    const ids = suppressionTargetsForPhone(listings, "+14193228620", toE164).map((l) => l.id);
+    expect(ids).toContain("detroit");
+  });
+
+  it("suppresses EVERY status on the number, not just the engaged ones", () => {
+    const ids = suppressionTargetsForPhone(listings, "+14193228620", toE164).map((l) => l.id).sort();
+    expect(ids).toEqual(["colburn", "dead", "detroit"]);
+  });
+
+  it("matches across formatting differences in the stored phone", () => {
+    // Same number stored three ways across the three records above.
+    expect(suppressionTargetsForPhone(listings, "+14193228620", toE164)).toHaveLength(3);
+  });
+
+  it("never touches a different agent's number", () => {
+    const ids = suppressionTargetsForPhone(listings, "+13137023671", toE164).map((l) => l.id);
+    expect(ids).toEqual(["other"]);
+  });
+
+  it("ignores records with no phone, and an empty target", () => {
+    expect(suppressionTargetsForPhone(listings, "+14193228620", toE164).map((l) => l.id)).not.toContain("nophone");
+    expect(suppressionTargetsForPhone(listings, "", toE164)).toEqual([]);
+    expect(suppressionTargetsForPhone([], "+14193228620", toE164)).toEqual([]);
   });
 });

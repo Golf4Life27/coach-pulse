@@ -340,9 +340,9 @@ export function buildH2Message(
   if (opts?.soft) {
     const locClause = cityName ? `${street} in ${cityName}` : street;
     return (
-      `Hi ${name}, Alex with AKB Solutions — interested in ${locClause} if the ` +
+      `Hi ${name}, Alex with AKB Solutions - interested in ${locClause} if the ` +
       `numbers work. Cash, as-is, quick close. Depending on condition I'd ` +
-      `likely land somewhere around ${offer} — if that's in the ballpark for ` +
+      `likely land somewhere around ${offer} - if that's in the ballpark for ` +
       `your seller, happy to firm it up after a closer look.` +
       `\n\n${agentInventoryAsk()}`
     );

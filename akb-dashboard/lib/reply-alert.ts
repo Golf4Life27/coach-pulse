@@ -92,7 +92,7 @@ export function alertAction(classification: ReplyClassification): string {
     case "offer_format": return "Agent wants the offer in writing";
     case "appointment": return "Agent proposed a showing/call time";
     case "seller_costs": return "Agent asked who pays what";
-    case "disclosure_step": return "Compliance disclosure — needs you personally";
+    case "disclosure_step": return "Compliance disclosure - needs you personally";
     // The silent classes (2026-09-05) never reach an alert — scan-comms
     // `continue`s before the proposal — but the label must exist so a future
     // path that does page carries the truth, not "intent unclear".
@@ -144,7 +144,7 @@ export function buildReplyAlertBody(input: ReplyAlertInput): { body: string; pri
   const s = input.scope;
   const scopeLine =
     s && s.ceiling != null && s.scopeRehab != null
-      ? ` Agent scope ~${s.tier}: rehab ${usd(s.scopeRehab)}${s.storedRehab != null ? ` (filed ${usd(s.storedRehab)})` : ""} → ceiling ${usd(s.ceiling)}.`
+      ? ` Agent scope ~${s.tier}: rehab ${usd(s.scopeRehab)}${s.storedRehab != null ? ` (filed ${usd(s.storedRehab)})` : ""} -> ceiling ${usd(s.ceiling)}.`
       : "";
   return {
     body: `DECISION NEEDED: ${addr}. ${alertAction(input.classification)}. Recommend: ${rec.text}.${scopeLine} ${link}`,
@@ -255,7 +255,7 @@ export async function sendBuyerReplyAlert(input: {
 }): Promise<ReplyAlertResult> {
   const addr = shortAddress(input.address);
   const amountPart = input.amountUsd != null ? usd(input.amountUsd) : "wants contract";
-  const body = `ACT NOW (buyer): ${addr} — ${input.buyerName} ${amountPart}. ${input.dealUrl}`;
+  const body = `ACT NOW (buyer): ${addr} - ${input.buyerName} ${amountPart}. ${input.dealUrl}`;
   return sendAlertSms({
     recordId: input.recordId,
     tier: "tier_2_urgent",

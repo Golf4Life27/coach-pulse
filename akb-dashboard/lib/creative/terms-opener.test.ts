@@ -30,7 +30,7 @@ describe("renderTermsOpener", () => {
     expect(msg).toContain(
       "Assuming the numbers hold, I can offer the full $95,000 asking price seller-financed. $9,500 at closing, then $350/month until the full amount is paid.",
     );
-    expect(msg).toContain("Hi Erica —");
+    expect(msg).toContain("Hi Erica -");
   });
 
   it("names OUR number instead when the price was value-capped", () => {

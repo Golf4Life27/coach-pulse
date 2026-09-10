@@ -23,6 +23,13 @@
 //                       NUMBERS UNCHANGED." Deliverable, but ONLY off the
 //                       delivery-stamped sticky number (INVARIANTS §3: the
 //                       seller-facing number never drifts). No sticky → HOLD.
+//   IN  identity_question (operator ruling 2026-09-09) — "are you a
+//                       wholesaler? / are you going to assign the contract?"
+//                       now has an operator-approved STANDING answer
+//                       (lib/standing-answers.ts, sent verbatim, never
+//                       composed). No sticky-number dependency — unlike
+//                       offer_format this never quotes a price at all, so it
+//                       has no "no sticky" HOLD path.
 //
 //   OUT disclosure_step — the triage says it outright: "the machine NEVER
 //                       acknowledges legal disclosures for the operator;
@@ -40,16 +47,22 @@
 
 import type { ReplyClassification } from "@/lib/reply-triage";
 import { detectL3DollarAmounts } from "@/lib/outreach/l3-amount-detector";
+import { IDENTITY_QUESTION_STANDING_ANSWER } from "@/lib/standing-answers";
 
 /** Master kill switch. Default OFF — an auto-answer lane must be lit
  *  deliberately, never by shipping. Mirrors H2_OUTREACH_LIVE's posture. */
 export const AUTO_ANSWER_LIVE = process.env.REPLY_AUTO_ANSWER_LIVE === "true";
 
 /** The only classifications this lane will ever answer. Deliberately a
- *  closed set: adding to it is a doctrine change, not a config change. */
+ *  closed set: adding to it is a doctrine change, not a config change.
+ *  "identity_question" added 2026-09-09 — the operator approved a standing
+ *  answer (lib/standing-answers.ts) for "are you a wholesaler? / are you
+ *  going to assign the contract?", the exact same kind of ruling that put
+ *  seller_costs and offer_format in this set originally. */
 export const AUTO_ANSWERABLE: ReadonlySet<ReplyClassification> = new Set<ReplyClassification>([
   "seller_costs",
   "offer_format",
+  "identity_question",
 ]);
 
 export type AutoAnswerRefusal =
@@ -96,10 +109,10 @@ export function composeSellerCosts(opts: { street?: string | null }): string {
   const street = (opts.street ?? "").trim();
   const at = street ? ` on ${street}` : "";
   return (
-    `Good question — those all come out of the seller's proceeds at closing${at}, ` +
+    `Good question - those all come out of the seller's proceeds at closing${at}, ` +
     `not on top of my offer, so the number I gave you is what I pay. ` +
     `Liens, back taxes and any unpaid bills get settled by the title company out of the ` +
-    `sale, and they'll verify what's actually owed. Nothing out of pocket for the seller. – Alex`
+    `sale, and they'll verify what's actually owed. Nothing out of pocket for the seller. - Alex`
   );
 }
 
@@ -111,9 +124,9 @@ export function composeOfferFormat(opts: { stickyOfferUsd: number; street?: stri
   const at = street ? ` for ${street}` : "";
   const amount = `$${Math.round(opts.stickyOfferUsd).toLocaleString("en-US")}`;
   return (
-    `Absolutely — I'll send it over in writing. To confirm, it's ${amount} cash${at}, ` +
+    `Absolutely - I'll send it over in writing. To confirm, it's ${amount} cash${at}, ` +
     `as-is with no repairs or cleanout, no financing contingency, and we close on your ` +
-    `timeline. What's the best email to send it to? – Alex`
+    `timeline. What's the best email to send it to? - Alex`
   );
 }
 
@@ -170,6 +183,10 @@ export function decideAutoAnswer(input: AutoAnswerInput): AutoAnswerDecision {
       };
     }
     body = composeOfferFormat({ stickyOfferUsd: sticky, street: input.street });
+  } else if (input.classification === "identity_question") {
+    // Fixed operator text, sent verbatim — never composed, never a sticky-
+    // number dependency (this answer names no price at all).
+    body = IDENTITY_QUESTION_STANDING_ANSWER;
   } else {
     body = composeSellerCosts({ street: input.street });
   }

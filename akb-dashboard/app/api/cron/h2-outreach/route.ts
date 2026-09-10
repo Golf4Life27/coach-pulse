@@ -1407,6 +1407,18 @@ async function handle(req: Request): Promise<Response> {
     } catch (err) {
       row.error = err instanceof Error ? err.message : String(err);
       summary.errors++;
+      // This was the ONLY summary.errors++ site in the file that wrote no
+      // audit row and no console line, which is why two permanently-failing
+      // records stalled the lane for weeks while Pulse reported a generic
+      // "send lane firing blanks" with nothing to diagnose from (2026-09-09).
+      await audit({
+        agent: "crier",
+        event: "h2_outreach_send_threw",
+        status: "confirmed_failure",
+        recordId: row.record_id,
+        inputSummary: { address: row.address ?? null, agent_phone: row.agent_phone ?? null, route: row.route, dry_run: dryRun },
+        error: row.error.slice(0, 300),
+      }).catch(() => {});
       if (!dryRun && !laneTripped && isQuoCreditsExhausted(err)) {
         laneTripped = true;
         await tripSendLaneBreaker("h2_outreach", err);

@@ -1,7 +1,38 @@
+// Operator action dispatch — mark dead, hold, clear, sign a contract, etc.
+//
+// SECURITY: this endpoint had NO AUTHENTICATION until 2026-09-10. Anyone who
+// knew (or guessed) the URL could POST here and mark deals dead, sign
+// contracts, or flag a buyer blast as sent — every write in HANDLERS below,
+// unauthenticated, on the open internet. It mattered because this route
+// moves money (sign_contract, send_buyer_blast) and kills deals (mark_dead,
+// walk_away). Found while wiring the Decision Card channel (Layer 2), which
+// needed to call these SAME handlers from a token-authorized route and had
+// to ask what guarded this one. Answer: nothing. Fixed by requiring the same
+// dashboard-session-or-auth-waterfall gate every other write route in this
+// app already uses (see app/api/cron/contract-watch/route.ts).
+//
+// HANDLERS + ActionBody are exported so the Decision Card redeem route
+// (app/api/maverick/act/route.ts) can execute the exact same handler bodies
+// instead of re-implementing them — one implementation of "what mark_dead
+// does to Airtable", not two that can drift apart. They stay inline in this
+// file (rather than a separate lib module) because lib/orchestrator/
+// gate-integrity.test.ts source-scans app/api/**/route.ts for exactly this
+// pattern (updateDealRecord + a Contract-Signed/EMD write, gated by the
+// Pre-EMD import) to prove there's no ungated side door to an EMD/contract
+// advance — moving the write out of this file would blind that guard.
+
 import { updateListingRecord, updateDealRecord, getListing, getDeals } from "@/lib/airtable";
 import { ALL_DD_ITEMS } from "@/lib/actionQueue";
 import { runPreEmdGateForDeal } from "@/lib/orchestrator/pre-emd-gate-live";
 import { emdAdvanceDecision } from "@/lib/orchestrator/pre-emd-gate";
+import { NextResponse } from "next/server";
+import {
+  authenticate,
+  hasDashboardSession,
+  readAuthEnv,
+  readAuthHeaders,
+} from "@/lib/maverick/oauth/auth-waterfall";
+import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -9,7 +40,7 @@ export const maxDuration = 30;
 /** Thrown when the INV-023 Pre-EMD gate refuses a contract-advance action.
  *  Carries the advance decision so the POST handler returns 423 + the blocked
  *  checks (instead of a generic 500). */
-class EmdGateBlockedError extends Error {
+export class EmdGateBlockedError extends Error {
   constructor(public decision: ReturnType<typeof emdAdvanceDecision>) {
     super("pre_emd_gate_blocked");
     this.name = "EmdGateBlockedError";
@@ -34,7 +65,7 @@ const FIELD = {
   dealActionHoldUntil: "fldDmZjkunw6iZujf",
 } as const;
 
-interface ActionBody {
+export interface ActionBody {
   recordId: string;
   table?: "listings" | "deals";
   until?: string;
@@ -44,7 +75,7 @@ interface ActionBody {
 
 type Handler = (body: ActionBody) => Promise<void>;
 
-const HANDLERS: Record<string, Handler> = {
+export const HANDLERS: Record<string, Handler> = {
   // Listing-side actions
   async mark_dead({ recordId }) {
     await updateListingRecord(recordId, {
@@ -139,6 +170,27 @@ export async function POST(
   { params }: { params: Promise<{ type: string }> },
 ) {
   const { type } = await params;
+
+  // ── Auth: dashboard session (same-origin browser) OR the standard
+  // OAuth/cron/dev-bearer waterfall. Same shape as contract-watch and
+  // maverick/priorities — writes are never open on this dashboard. The
+  // authRequired escape hatch matches those routes: an environment with no
+  // KV and no secrets configured (bare local dev/CI) has nothing to check
+  // credentials against, so it stays open rather than locking developers
+  // out — production always has KV configured, so this never applies there.
+  const cookieHeader = req.headers.get("cookie");
+  if (!hasDashboardSession(cookieHeader)) {
+    const env = readAuthEnv();
+    const headers = readAuthHeaders(req);
+    const authRequired = kvConfigured() || env.cronSecret !== null || env.bearerDevToken !== null;
+    if (authRequired) {
+      const auth = await authenticate(headers, env, kvProd);
+      if (!auth.ok) {
+        return NextResponse.json({ error: "unauthorized", reason: auth.reason }, { status: 401 });
+      }
+    }
+  }
+
   const handler = HANDLERS[type];
   if (!handler) {
     return Response.json({ error: `Unknown action: ${type}` }, { status: 404 });

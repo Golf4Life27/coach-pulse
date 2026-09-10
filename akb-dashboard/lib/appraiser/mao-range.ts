@@ -39,6 +39,7 @@
 // different assumptions.
 
 import { computeDualTrack, type DualTrackResult } from "./buyer-intelligence";
+import { NON_DISCLOSURE_STATES } from "@/lib/markets/state-disclosure";
 // Single fee-constant source of truth (Spine rec6e6hYLuOpaLANf,
 // reconciled 2026-06-04). Both this module and the pre-contract math
 // gate read from the same definition so the BroCard pricing layer and
@@ -66,11 +67,39 @@ const SOFT_CEILING_FRACTION_OF_LIST = 0.75;
  */
 export function classifyArvConfidenceByCount(
   compCountUsed: number | null | undefined,
+  /** Subject state. In a NON-DISCLOSURE state the count is meaningless and
+   *  confidence is capped at LOW — see the provenance note below. Omitted =
+   *  prior count-only behaviour, for callers with no state in hand. */
+  state?: string | null,
 ): ArvConfidenceLabel {
-  if (compCountUsed == null || !Number.isFinite(compCountUsed) || compCountUsed < 0) return "LOW";
-  if (compCountUsed >= 5) return "HIGH";
-  if (compCountUsed >= 3) return "MED";
-  return "LOW";
+  const byCount: ArvConfidenceLabel =
+    compCountUsed == null || !Number.isFinite(compCountUsed) || compCountUsed < 0
+      ? "LOW"
+      : compCountUsed >= 5
+        ? "HIGH"
+        : compCountUsed >= 3
+          ? "MED"
+          : "LOW";
+
+  // PROVENANCE CAP (2026-09-10). Counting comps measures how MANY prices we
+  // have, never whether any of them is real. In a non-disclosure state the
+  // sale price is not public record, so a vendor cannot be reading one — it
+  // is modelling the number or reporting a recorded LIEN. Two live examples,
+  // both San Antonio TX, both caught by the operator opening Zillow:
+  //   216 Saint Charles — ATTOM $384,370; Zillow values it at $156,700.
+  //   136 Gorman        — ATTOM $334,057; actually bought at $125,000 and
+  //                       now pending $499,000 after a gut + 819sf addition.
+  //                       $334,057 is the shape of the construction loan.
+  // 513 Lamar was stamped HIGH off fifteen such comps. lib/markets/
+  // state-disclosure.ts already says of these states: "Openers HOLD here
+  // (ARV source unprovable)" — this makes the confidence label agree with it.
+  //
+  // A STATISTICAL filter cannot substitute for this. Screening the same set
+  // at 2x its own median leaves BOTH fabrications standing, because five
+  // fabricated highs are what set the median. A statistic computed from
+  // poisoned data cannot detect the poison; only provenance can.
+  if (state && NON_DISCLOSURE_STATES.has(state.trim().toUpperCase())) return "LOW";
+  return byCount;
 }
 
 /** Whether the Phase 4A.1 result should route to Manual Review. */

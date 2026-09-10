@@ -1,6 +1,6 @@
 // @agent: maverick — auth waterfall tests.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   authenticate,
   buildWwwAuthenticate,
@@ -10,6 +10,7 @@ import {
 } from "./auth-waterfall";
 import { issueTokenPair } from "./tokens";
 import { makeMemoryKv, type KvClient } from "./kv";
+import { mintSessionValue, sessionSecret } from "@/lib/auth/session-cookie";
 
 function envOver(over: Partial<AuthEnv> = {}): AuthEnv {
   return {
@@ -188,30 +189,56 @@ describe("authenticate — waterfall ordering", () => {
 });
 
 describe("hasDashboardSession — same-origin cookie check", () => {
+  // DELIBERATE BEHAVIOUR CHANGE (session-cookie hardening): this suite used
+  // to assert that the literal cookie `akb-auth=authenticated` authenticated
+  // — that was the exact constant-value bypass being closed (see
+  // lib/auth/session-cookie.ts). The cases below now assert the opposite:
+  // the constant is rejected, and only a properly signed, unexpired value
+  // (minted via lib/auth/session-cookie) authenticates. This is a tightened
+  // expectation, not a loosened one.
+
+  const ORIGINAL_PASSWORD = process.env.DASHBOARD_PASSWORD;
+
+  beforeEach(() => {
+    process.env.DASHBOARD_PASSWORD = "test-dashboard-password";
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_PASSWORD === undefined) {
+      delete process.env.DASHBOARD_PASSWORD;
+    } else {
+      process.env.DASHBOARD_PASSWORD = ORIGINAL_PASSWORD;
+    }
+  });
+
   it("returns false on null cookie header", () => {
     expect(hasDashboardSession(null)).toBe(false);
   });
-  it("returns true when the session marker is the only cookie", () => {
-    expect(hasDashboardSession("akb-auth=authenticated")).toBe(true);
-  });
-  it("returns true when the session marker is one of multiple cookies", () => {
+
+  it("rejects the legacy constant value — it no longer authenticates anything", () => {
+    expect(hasDashboardSession("akb-auth=authenticated")).toBe(false);
     expect(
       hasDashboardSession("other=xyz; akb-auth=authenticated; foo=bar"),
-    ).toBe(true);
-  });
-  it("returns true when there are extra spaces around the separator", () => {
-    expect(
-      hasDashboardSession("  other=xyz ;   akb-auth=authenticated  "),
-    ).toBe(true);
-  });
-  it("rejects partial-value matches (no substring-attack risk)", () => {
-    expect(
-      hasDashboardSession("akb-auth=authenticated-suffix"),
-    ).toBe(false);
-    expect(
-      hasDashboardSession("not-akb-auth=authenticated"),
     ).toBe(false);
   });
+
+  it("returns true for a properly minted, unexpired session value", () => {
+    const secret = sessionSecret();
+    if (!secret) throw new Error("expected a secret from DASHBOARD_PASSWORD");
+    const value = mintSessionValue(Date.now() + 60_000, secret);
+    expect(hasDashboardSession(`akb-auth=${value}`)).toBe(true);
+    expect(
+      hasDashboardSession(`other=xyz; akb-auth=${value}; foo=bar`),
+    ).toBe(true);
+  });
+
+  it("returns false for an expired minted value", () => {
+    const secret = sessionSecret();
+    if (!secret) throw new Error("expected a secret from DASHBOARD_PASSWORD");
+    const value = mintSessionValue(Date.now() - 1000, secret);
+    expect(hasDashboardSession(`akb-auth=${value}`)).toBe(false);
+  });
+
   it("rejects wrong value", () => {
     expect(hasDashboardSession("akb-auth=guest")).toBe(false);
   });

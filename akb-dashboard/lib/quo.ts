@@ -1,3 +1,5 @@
+import { normalizeForGsm7 } from "@/lib/sms/gsm7";
+
 const QUO_API_KEY = process.env.QUO_API_KEY!;
 const QUO_PHONE_ID = process.env.QUO_PHONE_ID || "PNLosBI6fh";
 
@@ -139,6 +141,14 @@ export async function sendMessageWithId(
   if (!QUO_API_KEY) {
     throw new Error("QUO_API_KEY not set");
   }
+  // GSM-7 NORMALIZATION (2026-09-09) — the single choke point every outbound
+  // SMS passes through (sendMessage, sendGuarded, and every direct
+  // sendMessageWithId caller all bottom out here). A stray em-dash or curly
+  // quote forces the WHOLE message out of the 7-bit GSM-7 alphabet into
+  // UCS-2, which roughly halves the per-segment character budget and can
+  // double the billed segment count (see lib/sms/gsm7.ts). Normalization
+  // only — never changes wording.
+  const normalizedContent = normalizeForGsm7(content);
   // CHANNEL SEPARATION (operator 2026-06-10): the default outreach line
   // (QUO_PHONE_ID) talks ONLY to agents. Operator-facing sends (Tier 1/2
   // alerts, Pulse escalation) pass opts.from = ALERT_FROM, the dedicated
@@ -153,7 +163,7 @@ export async function sendMessageWithId(
     body: JSON.stringify({
       from: opts.from ?? QUO_PHONE_ID,
       to: [to],
-      content,
+      content: normalizedContent,
     }),
   });
 
