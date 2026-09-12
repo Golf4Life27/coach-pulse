@@ -22,6 +22,8 @@
 import { sendMessage } from "@/lib/quo";
 import { audit } from "@/lib/audit-log";
 import type { AlertTier, ReplyClassification } from "@/lib/reply-triage";
+import type { CardOption } from "@/lib/maverick/decision-card";
+import { pageOperatorWithCard } from "@/lib/maverick/operator-page";
 
 const DASHBOARD_BASE_URL =
   process.env.DASHBOARD_BASE_URL ??
@@ -129,12 +131,29 @@ export function alertRecommendation(input: ReplyAlertInput): { text: string; pri
   return { text: "operator review", priceGap: false };
 }
 
-/** Pure: compose the alert SMS. NEVER includes the inbound text. */
-export function buildReplyAlertBody(input: ReplyAlertInput): { body: string; priceGap: boolean } {
+/** The password-gated dashboard link. Kept as the FALLBACK only: it is a
+ *  laptop trip, which is the round trip the Decision Card channel exists to
+ *  delete (see cardOptionsForReply below). */
+export function pipelineLink(recordId: string): string {
+  return `${DASHBOARD_BASE_URL}/pipeline/${encodeURIComponent(recordId)}`;
+}
+
+/** Pure: compose the alert SMS. NEVER includes the inbound text.
+ *
+ *  `link` is the trailing link: omitted (undefined) it defaults to the
+ *  password-gated pipeline link, which is what this alert carried for its
+ *  whole life; `null` composes the body with NO link at all (that is the
+ *  "headline" the Decision Card page sends, with the card URL appended by
+ *  the pager); an explicit string substitutes that link instead — which is
+ *  how the card URL replaces the laptop trip. */
+export function buildReplyAlertBody(
+  input: ReplyAlertInput,
+  link: string | null = pipelineLink(input.recordId),
+): { body: string; priceGap: boolean } {
   const addr = shortAddress(input.address);
-  const link = `${DASHBOARD_BASE_URL}/pipeline/${encodeURIComponent(input.recordId)}`;
   if (input.tier === "tier_2_urgent") {
-    return { body: `ACT NOW: ${addr}. ${alertAction(input.classification)}. ${link}`, priceGap: false };
+    const head = `ACT NOW: ${addr}. ${alertAction(input.classification)}.`;
+    return { body: link ? `${head} ${link}` : head, priceGap: false };
   }
   const rec = alertRecommendation(input);
   // SCOPE LINE (2175 W 106th, 2026-08-08): when the inbound named a
@@ -146,10 +165,157 @@ export function buildReplyAlertBody(input: ReplyAlertInput): { body: string; pri
     s && s.ceiling != null && s.scopeRehab != null
       ? ` Agent scope ~${s.tier}: rehab ${usd(s.scopeRehab)}${s.storedRehab != null ? ` (filed ${usd(s.storedRehab)})` : ""} -> ceiling ${usd(s.ceiling)}.`
       : "";
+  const head = `DECISION NEEDED: ${addr}. ${alertAction(input.classification)}. Recommend: ${rec.text}.${scopeLine}`;
   return {
-    body: `DECISION NEEDED: ${addr}. ${alertAction(input.classification)}. Recommend: ${rec.text}.${scopeLine} ${link}`,
+    body: link ? `${head} ${link}` : head,
     priceGap: rec.priceGap,
   };
+}
+
+// ── DECISION CARD OPTIONS (Build 1, 2026-09-12) ──────────────────────────
+//
+// The alert used to end at a password-gated pipeline link: Alex reads "Agent
+// countered" on his phone, and then has to find a laptop, log in, find the
+// record and click. That round trip is why a live negotiation sits for days.
+// These are the three taps that delete it — Maverick pre-declares them, the
+// card stores them, one tap executes (app/api/maverick/act).
+//
+// WHY THE NOTE PREFIX IS LITERAL AND LOAD-BEARING: an append_note tap does not
+// itself send anything (no allowlisted card action does — see
+// ALLOWED_CARD_ACTION_TYPES). It writes the operator's RULING into
+// Verification_Notes, and the hourly triage routine is being taught to treat a
+// note carrying exactly `OPERATOR RULING via card <YYYY-MM-DD>:` as the
+// operator's explicit word — the Tier C authorization that a machine-derived
+// number can never self-grant. Change the prefix and the ruling stops counting.
+const RULING_PREFIX = "OPERATOR RULING via card";
+
+/** UTC day arithmetic on a YYYY-MM-DD (or full ISO) date string. Pure.
+ *  UTC deliberately: the `hold` handler validates `until` as YYYY-MM-DD and a
+ *  local-time slip would silently hold for one day less than promised. */
+function addDaysUtc(iso: string, days: number): string {
+  const base = new Date(`${iso.slice(0, 10)}T00:00:00.000Z`);
+  const t = base.getTime();
+  if (!Number.isFinite(t)) return iso.slice(0, 10);
+  return new Date(t + days * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** Pure: the three pre-declared taps for a reply alert, keyed on the triage
+ *  classification. Always EXACTLY three — a primary move, a 48-hour pause, and
+ *  walk away — because the card renders at most three and an operator staring
+ *  at a phone should not have to read a menu. Every action type is inside the
+ *  card allowlist (append_note / hold / mark_dead); nothing here can move money
+ *  or send a text on its own. */
+export function cardOptionsForReply(input: ReplyAlertInput, todayIso: string): CardOption[] {
+  const date = todayIso.slice(0, 10);
+  const recordId = input.recordId;
+  const table = "listings" as const;
+
+  const pause: CardOption = {
+    key: "pause",
+    label: "Pause 48h",
+    style: "secondary",
+    action: { type: "hold", recordId, table, until: addDaysUtc(date, 2) },
+    confirmation: "Held 48 hours. Nothing goes out until then.",
+  };
+  const walk: CardOption = {
+    key: "walk",
+    label: "Walk away",
+    style: "danger",
+    action: { type: "mark_dead", recordId, table },
+    confirmation: "Marked dead. Nothing more goes to this agent.",
+  };
+
+  if (input.classification === "acceptance") {
+    return [
+      {
+        key: "proceed",
+        label: "Proceed: draft contract",
+        style: "primary",
+        action: {
+          type: "append_note",
+          recordId,
+          table,
+          note: `${RULING_PREFIX} ${date}: PROCEED - draft the contract at the accepted terms. Tier C cleared by operator tap.`,
+        },
+        confirmation: "Ruling recorded. Maverick drafts the contract at the accepted terms.",
+      },
+      pause,
+      walk,
+    ];
+  }
+
+  if (input.classification === "counter") {
+    // NEVER fabricates a number: when the sticky opener is missing from the
+    // record the ruling points at "the sticky opener on record" instead of
+    // inventing one — same discipline as alertRecommendation's price gap.
+    const opener = input.outreachOfferPrice;
+    const known = typeof opener === "number" && Number.isFinite(opener) && opener > 0;
+    return [
+      {
+        key: "hold_price",
+        label: known ? `Hold at ${usd(opener as number)}` : "Hold sticky opener",
+        style: "primary",
+        action: {
+          type: "append_note",
+          recordId,
+          table,
+          note: known
+            ? `${RULING_PREFIX} ${date}: HOLD at ${usd(opener as number)} - reply that we are firm at ${usd(opener as number)}. Tier C cleared by operator tap.`
+            : `${RULING_PREFIX} ${date}: HOLD at the sticky opener on record - reply that we are firm at the number already sent, no new number. Tier C cleared by operator tap.`,
+        },
+        confirmation: known
+          ? `Ruling recorded. Maverick replies firm at ${usd(opener as number)}.`
+          : "Ruling recorded. Maverick replies firm at the opener already on record.",
+      },
+      pause,
+      walk,
+    ];
+  }
+
+  return [
+    {
+      key: "advance",
+      label: "Advance",
+      style: "primary",
+      action: {
+        type: "append_note",
+        recordId,
+        table,
+        note: `${RULING_PREFIX} ${date}: ADVANCE - Maverick proceeds to the next step (written offer, showing, or answer) within doctrine, no new number without comp-level verification.`,
+      },
+      confirmation: "Ruling recorded. Maverick advances within doctrine, no new number.",
+    },
+    pause,
+    walk,
+  ];
+}
+
+/** Pure: the card's evidence lines. The full address (the SMS only carries the
+ *  short form), what Maverick recommends, the numbers when the record has them,
+ *  and the scope re-price when the inbound named a condition. Never the inbound
+ *  text — the standing rule holds on the card too. */
+function cardContextForReply(input: ReplyAlertInput): string[] {
+  const lines: string[] = [];
+  if (input.address) lines.push(input.address);
+  lines.push(`Recommend: ${alertRecommendation(input).text}.`);
+  const opener = input.outreachOfferPrice;
+  const mao = input.underwrittenMao;
+  if (typeof opener === "number" && opener > 0) {
+    lines.push(
+      typeof mao === "number" && mao > 0
+        ? `Sticky opener ${usd(opener)}; underwritten MAO ${usd(mao)}.`
+        : `Sticky opener ${usd(opener)}; no underwritten MAO on the record.`,
+    );
+  } else if (typeof mao === "number" && mao > 0) {
+    lines.push(`Underwritten MAO ${usd(mao)}; no sticky opener on the record.`);
+  }
+  const s = input.scope;
+  if (s && s.ceiling != null && s.scopeRehab != null) {
+    lines.push(
+      `Agent scope ~${s.tier}: rehab ${usd(s.scopeRehab)}${s.storedRehab != null ? ` (filed ${usd(s.storedRehab)})` : ""} -> ceiling ${usd(s.ceiling)}.`,
+    );
+  }
+  return lines;
 }
 
 /** Shared skeleton: ALERT_PHONE/ALERT_FROM checks, the Quo send, and the
@@ -164,21 +330,22 @@ export function buildReplyAlertBody(input: ReplyAlertInput): { body: string; pri
  *  +16302505865), NEVER from the agent-facing outreach line. When
  *  ALERT_FROM is unset the alert REFUSES (audited) rather than fall back
  *  to the outreach line — the hard rule beats delivery. Never throws. */
-async function sendAlertSms(opts: {
-  recordId: string;
-  tier: AlertTier;
-  classification: string;
-  body: string;
-  priceGap: boolean;
-}): Promise<ReplyAlertResult> {
+/** The two channel preconditions, with their audits. Returns a refusal
+ *  ReplyAlertResult when the alert must not send, or null when it may.
+ *  Shared by the raw-SMS path and the Decision Card path so the
+ *  observability of a missing env var is identical either way. */
+async function guardAlertChannel(
+  recordId: string,
+  tier: AlertTier,
+): Promise<ReplyAlertResult | null> {
   const to = (process.env.ALERT_PHONE ?? "").trim();
   if (!to) {
     await audit({
       agent: "crier",
       event: "reply_alert_skipped",
       status: "uncertain",
-      recordId: opts.recordId,
-      inputSummary: { reason: "ALERT_PHONE not set", tier: opts.tier },
+      recordId,
+      inputSummary: { reason: "ALERT_PHONE not set", tier },
       outputSummary: { sent: false },
     });
     return { sent: false, reason: "alert_phone_not_set", priceGap: false };
@@ -189,12 +356,26 @@ async function sendAlertSms(opts: {
       agent: "crier",
       event: "reply_alert_skipped",
       status: "uncertain",
-      recordId: opts.recordId,
-      inputSummary: { reason: "ALERT_FROM not set — refusing to send from the agent-facing outreach line (channel separation)", tier: opts.tier },
+      recordId,
+      inputSummary: { reason: "ALERT_FROM not set — refusing to send from the agent-facing outreach line (channel separation)", tier },
       outputSummary: { sent: false },
     });
     return { sent: false, reason: "alert_from_not_set", priceGap: false };
   }
+  return null;
+}
+
+async function sendAlertSms(opts: {
+  recordId: string;
+  tier: AlertTier;
+  classification: string;
+  body: string;
+  priceGap: boolean;
+}): Promise<ReplyAlertResult> {
+  const refusal = await guardAlertChannel(opts.recordId, opts.tier);
+  if (refusal) return refusal;
+  const to = (process.env.ALERT_PHONE ?? "").trim();
+  const from = (process.env.ALERT_FROM ?? "").trim();
   try {
     await sendMessage(to, opts.body, { from });
     await audit({
@@ -228,12 +409,48 @@ async function sendAlertSms(opts: {
   }
 }
 
+/**
+ * Tier 1/2 reply alert — now a DECISION CARD page, not a dead-end text.
+ *
+ * The body is the same decision-first sentence it always was (never the inbound
+ * text), minus the password-gated pipeline link: pageOperatorWithCard mints a
+ * card carrying the three pre-declared taps and appends ITS url instead. When
+ * KV is unavailable the card cannot exist, and the pipeline link rides along as
+ * the fallback — the alert always goes out, it just costs a laptop trip again.
+ *
+ * ReplyAlertResult keeps its shape (sent / reason / priceGap): scan-comms and
+ * the admin smoke route read it, and priceGap still comes from
+ * buildReplyAlertBody, which is still the only thing that decides whether the
+ * recommendation had real numbers behind it.
+ */
 export async function sendReplyAlert(input: ReplyAlertInput): Promise<ReplyAlertResult> {
   if (input.tier === "tier_0_auto_close") {
     return { sent: false, reason: "tier_0_no_alert", priceGap: false };
   }
-  const { body, priceGap } = buildReplyAlertBody(input);
-  return sendAlertSms({ recordId: input.recordId, tier: input.tier, classification: input.classification, body, priceGap });
+
+  // Same preconditions, same audits as the raw-SMS path — the pager would also
+  // refuse on ALERT_FROM, but reply_alert_skipped is the row the operator's
+  // observability already watches, so it keeps firing from here.
+  const refusal = await guardAlertChannel(input.recordId, input.tier);
+  if (refusal) return refusal;
+
+  // priceGap is decided by the body builder, exactly as before.
+  const { priceGap } = buildReplyAlertBody(input);
+  // The headline is the alert body with NO link; the card URL becomes the link.
+  const headline = buildReplyAlertBody(input, null).body;
+  const todayIso = new Date().toISOString().slice(0, 10);
+
+  const paged = await pageOperatorWithCard({
+    title: `${input.tier === "tier_2_urgent" ? "ACT NOW" : "DECISION NEEDED"}: ${shortAddress(input.address)}. ${alertAction(input.classification)}.`,
+    context: cardContextForReply(input),
+    options: cardOptionsForReply(input, todayIso),
+    ttlHours: 48,
+    sms: { headline },
+    audit: { agent: "crier", event: "reply_alert_sent", recordId: input.recordId },
+    fallbackLink: pipelineLink(input.recordId),
+  });
+
+  return { sent: paged.sent, reason: paged.reason, priceGap };
 }
 
 /** DISPO BUYER INTEREST alert (2026-09-07) — the buyer-reply twin of
