@@ -589,6 +589,10 @@ export default function DealWorkspace() {
               <a href={buildRealtorUrl(listing.address, listing.city, listing.state ?? "", listing.zip)} target="_blank" rel="noopener noreferrer" className="text-[10px] bg-[#30363d] hover:bg-[#3d444d] text-gray-300 px-2 py-1.5 rounded">Realtor.com</a>
               <a href="https://investorbase.com" target="_blank" rel="noopener noreferrer" className="text-[10px] bg-[#30363d] hover:bg-[#3d444d] text-gray-300 px-2 py-1.5 rounded">InvestorBase</a>
               <a href="https://facebook.com" target="_blank" rel="noopener noreferrer" className="text-[10px] bg-[#30363d] hover:bg-[#3d444d] text-gray-300 px-2 py-1.5 rounded">Facebook</a>
+              {/* Dispo package — the printable one-pager + channel-ready copy
+                  blocks for the buyer hunt, composed from the buyer-safe
+                  projection only (app/api/dispo/package/[recordId]). */}
+              <Link href={`/pipeline/${listing.id}/package`} className="text-[10px] bg-emerald-800 hover:bg-emerald-700 text-white px-2 py-1.5 rounded">Dispo package</Link>
             </div>
             <div className="border-t border-[#30363d] pt-2">
               <label className="text-[10px] text-gray-500">BBC Buyer Ceiling</label>

@@ -17,6 +17,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { formatCurrency } from "@/lib/utils";
+import { DISPO_DISCLOSURE } from "@/lib/dispo/disclosure";
 
 interface PublicDealView {
   recordId: string;
@@ -224,6 +225,15 @@ function DealBody({
         </div>
 
         <IntakeForm deal={deal} />
+
+        {/* Legal disclosure. AKB is assigning a contract it holds an equitable
+            interest in — it is not the owner and not a broker. This paragraph
+            is the same fixed text as the blast email and the dispo package
+            (lib/dispo/disclosure.ts) and must stay on this page as long as the
+            page shows a price. */}
+        <p className="mt-6 border-t border-neutral-100 pt-4 text-[11px] leading-relaxed text-neutral-400">
+          {DISPO_DISCLOSURE}
+        </p>
       </div>
     </div>
   );
@@ -235,6 +245,10 @@ function IntakeForm({ deal }: { deal: PublicDealView }) {
   const [phone, setPhone] = useState("");
   const [maxPrice, setMaxPrice] = useState("");
   const [message, setMessage] = useState("");
+  // Honeypot. A real buyer never sees or fills this; scripted form-stuffers
+  // fill every input they find. A non-empty value makes /api/buyers/intake
+  // answer 200 and write nothing.
+  const [website, setWebsite] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -253,7 +267,8 @@ function IntakeForm({ deal }: { deal: PublicDealView }) {
           phone: phone || undefined,
           targetZips: deal.zip || undefined,
           maxPrice: maxPrice ? Number(maxPrice) : undefined,
-          notes: `Deal page: ${deal.address}${message ? ` — ${message}` : ""}`,
+          notes: `Deal page: ${deal.address}${message ? ` - ${message}` : ""}`,
+          website,
         }),
       });
       if (!res.ok) {
@@ -319,6 +334,17 @@ function IntakeForm({ deal }: { deal: PublicDealView }) {
         onChange={(e) => setMessage(e.target.value)}
         rows={3}
         className="w-full rounded-lg border border-neutral-300 px-3 py-3 text-base text-neutral-900 placeholder-neutral-400 focus:border-emerald-500 focus:outline-none"
+      />
+      {/* Honeypot — hidden from humans, irresistible to bots. */}
+      <input
+        type="text"
+        name="website"
+        value={website}
+        onChange={(e) => setWebsite(e.target.value)}
+        autoComplete="off"
+        tabIndex={-1}
+        aria-hidden="true"
+        style={{ position: "absolute", left: "-9999px", width: 1, height: 1, opacity: 0 }}
       />
       {error && <p className="text-sm text-red-600">{error}</p>}
       <button

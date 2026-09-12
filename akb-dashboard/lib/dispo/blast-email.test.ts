@@ -5,6 +5,7 @@ import {
   photoUrlsJson,
   selectBlastRecipients,
 } from "./blast-email";
+import { DISPO_DISCLOSURE } from "./disclosure";
 import type { ShortlistBuyer, ShortlistResult } from "./buyer-shortlist";
 
 const base = {
@@ -41,6 +42,17 @@ describe("composeDispoBlastEmail", () => {
     expect(e.body).toContain("10-day inspection window");
     expect(e.body).not.toContain("bed");
     expect(e.subject).toBe("Off-market: 815 Russell Ave — $67,750");
+  });
+
+  it("ends with the legal disclosure — assignment of contract, not the owner, not a broker", () => {
+    const e = composeDispoBlastEmail(base);
+    expect(e.body).toContain(DISPO_DISCLOSURE);
+    expect(e.body.trimEnd().endsWith(DISPO_DISCLOSURE)).toBe(true);
+    // Present even when every optional fact is missing.
+    const bare = composeDispoBlastEmail({
+      ...base, buyerName: null, beds: null, baths: null, sqft: null, optionDeadline: null, city: null, state: null, zip: null,
+    });
+    expect(bare.body).toContain(DISPO_DISCLOSURE);
   });
 
   it("never mentions contract, ARV, rehab, fee, or spread", () => {

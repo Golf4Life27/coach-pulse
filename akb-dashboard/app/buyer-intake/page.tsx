@@ -20,6 +20,9 @@ export default function BuyerIntakePage() {
   const [buyerType, setBuyerType] = useState("unknown");
   const [volumePerYear, setVolumePerYear] = useState("");
   const [notes, setNotes] = useState("");
+  // Honeypot. Invisible to humans, filled by scripted form-stuffers; a
+  // non-empty value makes /api/buyers/intake answer 200 and write nothing.
+  const [website, setWebsite] = useState("");
 
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
@@ -52,6 +55,7 @@ export default function BuyerIntakePage() {
           buyerType,
           volumePerYear: volumePerYear ? Number(volumePerYear) : undefined,
           notes: notes.trim() || undefined,
+          website,
         }),
       });
       if (!res.ok) {
@@ -156,6 +160,18 @@ export default function BuyerIntakePage() {
         <Field label="Anything else?">
           <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} className={`${inputCls} resize-y`} />
         </Field>
+
+        {/* Honeypot — hidden from humans, irresistible to bots. */}
+        <input
+          type="text"
+          name="website"
+          value={website}
+          onChange={(e) => setWebsite(e.target.value)}
+          autoComplete="off"
+          tabIndex={-1}
+          aria-hidden="true"
+          style={{ position: "absolute", left: "-9999px", width: 1, height: 1, opacity: 0 }}
+        />
 
         {error && (
           <div className="bg-red-500/10 border border-red-500/40 rounded px-3 py-2 text-xs text-red-300">{error}</div>
