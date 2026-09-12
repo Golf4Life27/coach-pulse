@@ -26,6 +26,7 @@ describe("findPendingSignatures", () => {
     const [env, ...rest] = findPendingSignatures(LAMAR, NOW);
     expect(rest).toEqual([]);
     expect(env.label).toBe("Contract for 513 Lamar");
+    expect(env.platform).toBe("docusign");
     expect(env.firstSeenIso).toBe("2026-09-06T05:14:53.000Z");
     expect(env.noticeCount).toBe(2);
     // ~2d22h. The resend must NOT reset the clock to zero.
@@ -102,6 +103,129 @@ describe("composeContractWatchSms", () => {
   it("truncates a pathological label instead of blowing the segment budget", () => {
     const sms = composeContractWatchSms({ ...env, label: "X".repeat(400) });
     expect(sms.length).toBeLessThanOrEqual(300);
+    expect(estimateSmsSegments(sms).encoding).toBe("gsm7");
+  });
+});
+
+// AUTHENTISIGN (2026-09-12). The Birmingham contract — 1005 2nd St, listing
+// agent Pamela Calamusa — was invisible for three days because this module
+// only knew DocuSign. Real Gmail traffic: one subject, three identical
+// notices. The FIRST one is the true age.
+const BIRMINGHAM: ContractWatchMessage[] = [
+  {
+    id: "b1",
+    from: "Authentisign <secure@authentisign.com>",
+    subject: "Your signature is requested: General/Financed Residential Contract - 12/24",
+    date: "2026-09-09T09:37:00Z",
+  },
+  {
+    id: "b2",
+    from: "secure@authentisign.com",
+    subject: "Your signature is requested: General/Financed Residential Contract - 12/24",
+    date: "2026-09-10T13:39:00Z",
+  },
+  {
+    id: "b3",
+    from: "secure@authentisign.com",
+    subject: "Your signature is requested: General/Financed Residential Contract - 12/24",
+    date: "2026-09-10T15:35:00Z",
+  },
+];
+
+const NOW_BHAM = new Date("2026-09-12T13:20:00Z");
+
+describe("findPendingSignatures — Authentisign", () => {
+  it("catches the Birmingham contract and ages it from the FIRST of three identical notices", () => {
+    const [env, ...rest] = findPendingSignatures(BIRMINGHAM, NOW_BHAM);
+    expect(rest).toEqual([]);
+    expect(env.platform).toBe("authentisign");
+    expect(env.label).toBe("General/Financed Residential Contract - 12/24");
+    expect(env.firstSeenIso).toBe("2026-09-09T09:37:00.000Z");
+    expect(env.noticeCount).toBe(3);
+    // 09-09 09:37Z → 09-12 13:20Z is 3d3h43m. Resends must not reset the clock.
+    expect(env.ageHours).toBe(75);
+  });
+
+  it('drops it once "Signing complete:" lands, in order or out of order', () => {
+    const done = {
+      id: "b4",
+      from: "secure@authentisign.com",
+      subject: "Signing complete: General/Financed Residential Contract - 12/24",
+      date: "2026-09-11T18:00:00Z",
+    };
+    expect(findPendingSignatures([...BIRMINGHAM, done], NOW_BHAM)).toEqual([]);
+    expect(findPendingSignatures([done, ...BIRMINGHAM], NOW_BHAM)).toEqual([]);
+    // and even when the completion notice predates every request notice
+    expect(
+      findPendingSignatures([{ ...done, id: "b5", date: "2026-09-01T00:00:00Z" }, ...BIRMINGHAM], NOW_BHAM),
+    ).toEqual([]);
+  });
+
+  it("ignores a lookalike sender domain", () => {
+    const spoof: ContractWatchMessage[] = [
+      {
+        id: "s3",
+        from: "secure@authentisign.com.evil.com",
+        subject: "Your signature is requested: Contract for Nowhere",
+        date: "2026-09-09T00:00:00Z",
+      },
+    ];
+    expect(findPendingSignatures(spoof, NOW_BHAM)).toEqual([]);
+  });
+
+  it("still handles DocuSign unchanged alongside the new patterns", () => {
+    const [env] = findPendingSignatures(LAMAR, NOW);
+    expect(env.platform).toBe("docusign");
+    expect(env.label).toBe("Contract for 513 Lamar");
+    expect(env.ageHours).toBe(70);
+    expect(env.noticeCount).toBe(2);
+  });
+
+  it("sorts a mixed DocuSign + Authentisign backlog oldest-waiting first", () => {
+    const mixed: ContractWatchMessage[] = [
+      {
+        id: "x1",
+        from: "secure@authentisign.com",
+        subject: "Your signature is requested: Newer Authentisign Deal",
+        date: "2026-09-11T00:00:00Z",
+      },
+      ...BIRMINGHAM,
+      { id: "x2", from: "dse@docusign.net", subject: "Complete with Docusign: Middle Docusign Deal", date: "2026-09-10T00:00:00Z" },
+      { id: "x3", from: "dse@docusign.net", subject: "Complete with Docusign: Oldest Docusign Deal", date: "2026-09-02T00:00:00Z" },
+    ];
+    expect(findPendingSignatures(mixed, NOW_BHAM).map((e) => [e.label, e.platform])).toEqual([
+      ["Oldest Docusign Deal", "docusign"],
+      ["General/Financed Residential Contract - 12/24", "authentisign"],
+      ["Middle Docusign Deal", "docusign"],
+      ["Newer Authentisign Deal", "authentisign"],
+    ]);
+  });
+});
+
+describe("composeContractWatchSms — platform", () => {
+  it("names Authentisign so the operator knows which app to open", () => {
+    const env = findPendingSignatures(BIRMINGHAM, NOW_BHAM)[0];
+    const sms = composeContractWatchSms(env);
+    expect(sms).toContain("SIGN (Authentisign):");
+    expect(sms).toContain("General/Financed Residential Contract - 12/24");
+    expect(sms).toContain("3d");
+    expect(sms).toContain("3 notices");
+    expect(findNonGsm7Chars(sms)).toEqual([]);
+  });
+
+  it("names DocuSign for a DocuSign envelope", () => {
+    const sms = composeContractWatchSms(findPendingSignatures(LAMAR, NOW)[0]);
+    expect(sms).toContain("SIGN (DocuSign):");
+  });
+
+  it("keeps a long Authentisign label inside 300 ASCII chars", () => {
+    const env = findPendingSignatures(BIRMINGHAM, NOW_BHAM)[0];
+    const sms = composeContractWatchSms({
+      ...env,
+      label: `General/Financed Residential Contract - 12/24 - 1005 2nd St N Birmingham AL 35203 ${"Addendum ".repeat(40)}`,
+    });
+    expect(sms.length).toBeLessThanOrEqual(300);
+    expect(findNonGsm7Chars(sms)).toEqual([]);
     expect(estimateSmsSegments(sms).encoding).toBe("gsm7");
   });
 });
