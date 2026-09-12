@@ -315,6 +315,10 @@
     {
       "path": "/api/cron/contract-watch",
       "schedule": "20 13 * * *"
+    },
+    {
+      "path": "/api/cron/accepted-silence",
+      "schedule": "0 15 * * *"
     }
   ]
 }
