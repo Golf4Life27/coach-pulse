@@ -138,7 +138,7 @@ export function signalFingerprint(signal: PrioritySignal): string {
  *  this replaces is what produced "the cron-misfire / skipped-production-deplo"
  *  on the operator's phone (2026-09-09) - a sentence cut mid-word carries less
  *  information than no sentence at all. */
-function trimAtWord(text: string, max: number): string {
+export function trimAtWord(text: string, max: number): string {
   if (max <= 3) return "";
   if (text.length <= max) return text;
   const cut = text.slice(0, max - 3);
