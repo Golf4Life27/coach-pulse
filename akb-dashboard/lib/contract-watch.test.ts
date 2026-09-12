@@ -49,6 +49,29 @@ describe("findPendingSignatures", () => {
     expect(findPendingSignatures(outOfOrder, NOW)).toEqual([]);
   });
 
+  it("drops an envelope the sender VOIDED — the real 9/11 Lamar sequence", () => {
+    // Bryan voided "Contract for 513 Lamar" at 04:08Z and sent "Revised Sales
+    // Contract for 513 Lamar" at 04:18Z. Only the revised one is still owed.
+    const now = new Date("2026-09-12T13:20:00Z");
+    const msgs: ContractWatchMessage[] = [
+      ...LAMAR,
+      { id: "m3", from: "dse@docusign.net", subject: "Complete with Docusign: Contract for 513 Lamar", date: "2026-09-10T03:13:58Z" },
+      { id: "m4", from: "dse@docusign.net", subject: "Voided: Complete with Docusign: Contract for 513 Lamar", date: "2026-09-11T04:08:14Z" },
+      { id: "m5", from: "dse@docusign.net", subject: "Complete with Docusign: Revised Sales Contract for 513 Lamar", date: "2026-09-11T04:18:04Z" },
+    ];
+    const pending = findPendingSignatures(msgs, now);
+    expect(pending.map((e) => e.label)).toEqual(["Revised Sales Contract for 513 Lamar"]);
+    expect(pending[0].ageHours).toBe(33);
+  });
+
+  it("drops a voided envelope even when the void notice arrives before the request", () => {
+    const msgs: ContractWatchMessage[] = [
+      { id: "v1", from: "dse@docusign.net", subject: "Voided: Contract for 513 Lamar", date: "2026-09-11T04:08:14Z" },
+      ...LAMAR,
+    ];
+    expect(findPendingSignatures(msgs, NOW)).toEqual([]);
+  });
+
   it("ignores mail that is not actually from docusign", () => {
     const spoof: ContractWatchMessage[] = [
       { id: "s1", from: "noreply@docusign.net.evil.com", subject: "Complete with Docusign: Contract for Nowhere", date: "2026-09-06T00:00:00Z" },

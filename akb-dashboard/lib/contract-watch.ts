@@ -71,8 +71,17 @@ const AUTHENTISIGN_AWAITING_RE = /^\s*your\s+signature\s+is\s+requested:\s*(.+?)
 // "Signing complete: 1665 Ford St- Updated Offer Package"
 const AUTHENTISIGN_COMPLETED_RE = /^\s*signing\s+complete:\s*(.+?)\s*$/i;
 
+// "Voided: Complete with Docusign: Contract for 513 Lamar" — the sender
+// killed the envelope (Bryan Ryder voided the original Lamar envelope on
+// 2026-09-11 04:08Z and issued a revised one ten minutes later). A voided
+// envelope will never complete, so without this it nags forever: the old
+// Lamar envelope paged "waiting on YOUR signature 4d" a day after it was dead.
+const DOCUSIGN_VOIDED_RE = /^\s*voided:\s*(?:complete\s+with\s+docusign:\s*)?(.+?)\s*$/i;
+
 const AWAITING_RES = [DOCUSIGN_AWAITING_RE, AUTHENTISIGN_AWAITING_RE];
-const COMPLETED_RES = [DOCUSIGN_COMPLETED_RE, AUTHENTISIGN_COMPLETED_RE];
+// Voided closes an envelope exactly like completed does — either way there is
+// nothing left for the operator to sign.
+const COMPLETED_RES = [DOCUSIGN_COMPLETED_RE, DOCUSIGN_VOIDED_RE, AUTHENTISIGN_COMPLETED_RE];
 
 /** Which platform a sender address belongs to, or null for anything else.
  *  Domain is matched on the part after the LAST "@" so
