@@ -10,6 +10,7 @@
 // Pure. No I/O.
 
 import type { ShortlistResult } from "@/lib/dispo/buyer-shortlist";
+import { DISPO_DISCLOSURE } from "@/lib/dispo/disclosure";
 
 export interface BlastEmailInput {
   buyerName: string | null;
@@ -79,6 +80,12 @@ export function composeDispoBlastEmail(input: BlastEmailInput): BlastEmail {
     `— Alex`,
     `AKB Solutions`,
     `(815) 556-9965`,
+    ``,
+    // Legal disclosure, last paragraph, every time. AKB is assigning a
+    // contract it holds an equitable interest in — not selling a property it
+    // owns, and not brokering one. A blast that states a price without stating
+    // that is the one sentence away from unlicensed brokerage.
+    DISPO_DISCLOSURE,
   ];
   return {
     subject: `Off-market: ${input.address}${input.city ? `, ${input.city}` : ""} — ${formatUsd(input.assignmentPrice)}`,

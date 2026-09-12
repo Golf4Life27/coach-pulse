@@ -48,13 +48,18 @@ function parsePhotos(raw: string | null | undefined): string[] {
 }
 
 /**
- * Pure. Returns the buyer-safe view of a listing, or null when the deal is
- * not (or no longer) opted into public visibility — the ONLY gate the public
- * route needs to check before a 404.
+ * Pure. The ALLOWLIST ITSELF, with no gate: the buyer-safe fields and nothing
+ * else. Callers that have already earned the right to see a deal before it is
+ * opted into public visibility use this — today that is the authenticated
+ * operator package route (app/api/dispo/package/[recordId]), which has to
+ * produce copy BEFORE Dispo_Public is flipped. It is still the projection, so
+ * an operator-facing surface built on it cannot leak a private field into copy
+ * that gets pasted into a Facebook group.
+ *
+ * Anything unauthenticated must use publicDealView (below) instead — the gate
+ * is what makes the anonymous path safe, and it is one line away on purpose.
  */
-export function publicDealView(listing: Listing): PublicDealView | null {
-  if (listing.dispoPublic !== true) return null;
-
+export function publicDealProjection(listing: Listing): PublicDealView {
   return {
     recordId: listing.id,
     address: listing.address,
@@ -72,4 +77,14 @@ export function publicDealView(listing: Listing): PublicDealView | null {
     photos: parsePhotos(listing.dealPhotoUrls),
     headline: `Off-market: ${listing.address}`,
   };
+}
+
+/**
+ * Pure. Returns the buyer-safe view of a listing, or null when the deal is
+ * not (or no longer) opted into public visibility — the ONLY gate the public
+ * route needs to check before a 404.
+ */
+export function publicDealView(listing: Listing): PublicDealView | null {
+  if (listing.dispoPublic !== true) return null;
+  return publicDealProjection(listing);
 }
