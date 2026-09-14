@@ -319,6 +319,10 @@
     {
       "path": "/api/cron/accepted-silence",
       "schedule": "0 15 * * *"
+    },
+    {
+      "path": "/api/cron/stale-deal-triage?apply=1&limit=60",
+      "schedule": "30 14 * * *"
     }
   ]
 }
