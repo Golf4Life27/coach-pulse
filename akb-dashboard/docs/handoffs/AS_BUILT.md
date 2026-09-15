@@ -77,6 +77,17 @@
   return `GateRunResult`, no stage write), `/api/orchestrator/advance-stage` (run gate
   **and** write `Pipeline_Stage`), `/api/orchestrator/gate-status/[recordId]`,
   `/api/orchestrator/pre-emd-evaluate`.
+- **`/api/maverick-alert`** - operator-facing sibling of `/api/jarvis-send`:
+  CRON_SECRET-gated, sends a short plain-text alert FROM the Maverick line
+  (`ALERT_FROM`) TO the operator's cell via `sendOperatorAlert`
+  (`lib/maverick/operator-alert.ts`). Built so a routine session (hourly
+  triage, Engine Driver) can page the operator through GitHub Actions
+  (`.github/workflows/maverick-alert.yml`) instead of the claude.ai Quo
+  connector, whose credential dies after ~4h (5 alerts lost 2026-09-14).
+  Composes GSM-7-safe, dedupes and daily-caps via KV, respects the Chicago
+  send window unless `urgent: true`. Refuses (200, `sent:false`) rather than
+  erroring on policy holds; only `alert_from_not_set` (500) and a Quo throw
+  (502) are non-2xx. `[verified — app/api/maverick-alert/route.ts]`
 - **NEW this session — the dry-run trace harness** (see §6).
 
 ---

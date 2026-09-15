@@ -1,0 +1,104 @@
+# Maverick alert (controlled) - operator-facing sibling of jarvis-send.
+#
+# WHY. The claude.ai Quo connector's key dies every few hours; the app's own
+# Quo key (Vercel env) never has. On 2026-09-14 five alerts failed to reach
+# the operator's phone because a routine session's Quo credential had died.
+# Sending through POST /api/maverick-alert puts the page behind the same
+# CRON_SECRET auth waterfall jarvis-send uses and sends FROM the dedicated
+# Maverick line (ALERT_FROM), never the agent-facing outreach line. Same
+# CRON_SECRET pattern as jarvis-send.yml / h2-send.yml / maverick-actions.yml.
+#
+# The route replies 200 even when it refused to send for policy reasons
+# (outside the send window, a duplicate, the daily cap) - read `sent` and
+# `reason` in the response body, not just the job's exit code, for those.
+
+name: Maverick alert (controlled)
+
+on:
+  workflow_dispatch:
+    inputs:
+      message:
+        description: "Alert body, verbatim (plain text, composed GSM-7-safe server-side)."
+        required: true
+        type: string
+      key:
+        description: "Explicit dedupe key. Defaults to a hash of the composed body."
+        required: false
+        default: ""
+        type: string
+      source:
+        description: "Who is paging (e.g. hourly_triage, engine_driver)."
+        required: false
+        default: "session"
+        type: string
+      record_id:
+        description: "Listings_V1 record id (rec...) the alert is about, if any."
+        required: false
+        default: ""
+        type: string
+      urgent:
+        description: "Bypass the Chicago send window (a signed contract at 10pm still pages)."
+        required: false
+        default: false
+        type: boolean
+      base_url:
+        description: "Production base URL (override only for staging tests)."
+        required: false
+        default: "https://coach-pulse-ten.vercel.app"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      MESSAGE: ${{ inputs.message }}
+      KEY: ${{ inputs.key }}
+      SOURCE: ${{ inputs.source }}
+      RECORD_ID: ${{ inputs.record_id }}
+      URGENT: ${{ inputs.urgent }}
+      BASE_URL: ${{ inputs.base_url }}
+    steps:
+      - name: Refuse to run when CRON_SECRET is missing
+        run: |
+          if [ -z "${{ secrets.CRON_SECRET }}" ]; then
+            echo "::error::CRON_SECRET is not configured as a GitHub Actions secret."
+            exit 1
+          fi
+          echo "CRON_SECRET present; proceeding."
+
+      - name: POST /api/maverick-alert
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          PAYLOAD=$(jq -cn \
+            --arg message "$MESSAGE" \
+            --arg key "$KEY" \
+            --arg source "$SOURCE" \
+            --arg recordId "$RECORD_ID" \
+            --argjson urgent "$URGENT" \
+            '{message:$message, key:$key, source:$source, recordId:$recordId, urgent:$urgent}
+              | with_entries(select(.key == "urgent" or .value != ""))')
+          echo "len=${#MESSAGE} source=${SOURCE} urgent=${URGENT}"
+          HTTP_CODE=$(printf '%s' "${PAYLOAD}" | curl -sS -o /tmp/ma.json -w "%{http_code}" \
+            --max-time 120 \
+            -X POST \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "x-vercel-cron: 1" \
+            -H "Content-Type: application/json" \
+            --data-binary @- \
+            "${BASE_URL}/api/maverick-alert")
+          echo "HTTP ${HTTP_CODE}"
+          echo "--- response body ---"
+          jq . /tmp/ma.json 2>/dev/null || cat /tmp/ma.json
+          SENT=$(jq -r '.sent // false' /tmp/ma.json 2>/dev/null || echo "false")
+          REASON=$(jq -r '.reason // "none"' /tmp/ma.json 2>/dev/null || echo "unknown")
+          echo "::notice::sent=${SENT} reason=${REASON}"
+          if [ "${HTTP_CODE}" -ge 400 ]; then
+            echo "::error::maverick-alert returned HTTP ${HTTP_CODE}"
+            exit 1
+          fi

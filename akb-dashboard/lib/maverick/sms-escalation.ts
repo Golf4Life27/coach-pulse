@@ -510,7 +510,7 @@ async function safeAudit(
   }
 }
 
-function simpleHash(s: string): string {
+export function simpleHash(s: string): string {
   // djb2-ish; non-cryptographic, just needs collision resistance for
   // the small set of signal keys we'll ever generate.
   let h = 5381;
