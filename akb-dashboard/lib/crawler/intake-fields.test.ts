@@ -100,3 +100,20 @@ describe("buildIntakeListingFields — Renovated_Language persists from intake v
     expect(String(f["Verification_Notes"])).toContain("RENOVATED_LANGUAGE at intake:");
   });
 });
+
+// The 4126 E 142nd St miss (2026-09-15): the discovery sweep qualified on
+// distress LANGUAGE, but the H2 front gate judged listing-language distress
+// from Distress_Score (a formula of DOM + price drops), so a fresh listing
+// with no price cut read as "clean" and was skipped forever. This test pins
+// the intake write so Distress_Language carries the page's own signal.
+describe("buildIntakeListingFields — Distress_Language persists the page's distress signal", () => {
+  it("opts.distressLanguage true → Distress_Language: true", () => {
+    const f = buildIntakeListingFields(candidate(), { ...OPTS, distressLanguage: true });
+    expect(f["Distress_Language"]).toBe(true);
+  });
+
+  it("OMITS Distress_Language when false or absent (never written false)", () => {
+    expect("Distress_Language" in buildIntakeListingFields(candidate(), OPTS)).toBe(false);
+    expect("Distress_Language" in buildIntakeListingFields(candidate(), { ...OPTS, distressLanguage: false })).toBe(false);
+  });
+});

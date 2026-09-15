@@ -304,6 +304,7 @@ async function handleGet(req: Request) {
           opener: null,
           renovatedLanguage: false,
           matchedRenovationKeywords: [],
+          distressLanguage: q.distress.includes("distress_language"),
         });
         // Provenance on the record itself, so a texted number can be traced
         // to its source without the audit ring.
