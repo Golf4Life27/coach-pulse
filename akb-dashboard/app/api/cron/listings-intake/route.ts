@@ -172,6 +172,7 @@ async function createIntakeListing(
   opener: { amount: number | null; basis: string; reseed: boolean } | null = null,
   renovated: { detected: boolean; keywords: string[] } | null = null,
   openerDerivationJson: string | null = null,
+  distressLanguage: boolean = false,
 ): Promise<string> {
   if (!AIRTABLE_PAT) throw new Error("AIRTABLE_PAT not set");
   const url = `https://api.airtable.com/v0/${BASE_ID}/${LISTINGS_TABLE}`;
@@ -193,6 +194,7 @@ async function createIntakeListing(
     renovatedLanguage: renovated?.detected ?? false,
     matchedRenovationKeywords: renovated?.keywords ?? [],
     openerDerivationJson,
+    distressLanguage,
   });
   const res = await fetch(url, {
     method: "POST",
@@ -1116,6 +1118,7 @@ async function handleGet(req: Request) {
     underwrittenMao: number | null;
     underwrittenMaoTrack: BuyerTrack | null;
     renovated: { detected: boolean; keywords: string[] };
+    distressLanguage: boolean;
   }> = [];
   const bumpBlocked = (reason: AutoPromoteBlockReason | "auto_promote_disabled" | "auto_promote_dry_run" | "renovated_language") => {
     summary.auto_promote.reasons_blocked[reason] = (summary.auto_promote.reasons_blocked[reason] ?? 0) + 1;
@@ -1302,6 +1305,12 @@ async function handleGet(req: Request) {
         underwrittenMao,
         underwrittenMaoTrack,
         renovated: { detected: fc.hasRenovatedLanguage, keywords: fc.matchedKeywords },
+        // Live listing-language distress signal (2026-09-15, the 4126 E
+        // 142nd St miss) — the same Firecrawl verify read that already
+        // decides accept/review, persisted so the H2 front gate's
+        // listingLanguageDistress sees it from the record's first minute
+        // instead of only the Distress_Score/Bucket proxy.
+        distressLanguage: fc.hasConditionSignal || (fc.matchedDistressKeywords?.length ?? 0) > 0,
       });
     }
   }
@@ -1328,7 +1337,7 @@ async function handleGet(req: Request) {
   // Airtable writes / intra-run dup races). ──
   const anchorCacheIntake = new Map<string, number>();
   if (!dryRun) {
-    for (const { candidate: c, zip, promote, firecrawlUrl, portfolioDetected, matchedPortfolioKeywords, underwrittenMao, underwrittenMaoTrack, renovated } of toWrite) {
+    for (const { candidate: c, zip, promote, firecrawlUrl, portfolioDetected, matchedPortfolioKeywords, underwrittenMao, underwrittenMaoTrack, renovated, distressLanguage } of toWrite) {
       try {
         // Opener-write (gated): price the new record off the renovated-comp
         // ZIP seed (source-swap). New intake records carry no stored ARV, so
@@ -1357,7 +1366,7 @@ async function handleGet(req: Request) {
           // the answer, so the number can be recomputed cold from the record.
           openerDerivationJson = serializeDerivation(priced.derivation);
         }
-        await createIntakeListing(c, promote, firecrawlUrl, portfolioDetected, matchedPortfolioKeywords, underwrittenMao, underwrittenMaoTrack, opener, renovated, openerDerivationJson);
+        await createIntakeListing(c, promote, firecrawlUrl, portfolioDetected, matchedPortfolioKeywords, underwrittenMao, underwrittenMaoTrack, opener, renovated, openerDerivationJson, distressLanguage);
         summary.written++;
       } catch (err) {
         summary.per_zip_errors.push({

@@ -14,6 +14,10 @@
 // distressBucket stands in for listing-language distress, parsed redFlags for
 // the vision read. DOM is exact (lib/attom/cumulative-dom).
 //
+// 2026-09-15 (4126 E 142nd St miss): Distress_Language is now the live
+// listing-language signal (set at intake/sweep from the Firecrawl verify);
+// the score/bucket proxy below only stands in for records that predate it.
+//
 // Labeled as a proxy everywhere it surfaces so it is never mistaken for live.
 // Pure. No I/O.
 
@@ -21,6 +25,7 @@ import type { Listing } from "@/lib/types";
 
 /** Listing-LANGUAGE distress proxy: the intake distress score / bucket. */
 export function listingLanguageDistress(l: Listing): boolean {
+  if (l.distressLanguage === true) return true;
   if (typeof l.distressScore === "number" && l.distressScore > 0) return true;
   const b = (l.distressBucket ?? "").toLowerCase();
   return b.includes("distress") || b.includes("motivated") || b.includes("high");

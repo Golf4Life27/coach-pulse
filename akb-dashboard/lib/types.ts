@@ -27,6 +27,11 @@ export interface Listing {
    *  enforced in isH2Eligible/bumpVerdict AND the send choke point
    *  (lib/outreach/send-gate) so every lane inherits the veto. */
   renovatedLanguage?: boolean | null;
+  /** Live listing-language distress signal (2026-09-15, the 4126 E 142nd St
+   *  miss): set by intake/discovery-sweep from the Firecrawl verify match on
+   *  distress language. Read by lowball-signals.listingLanguageDistress
+   *  ahead of the Distress_Score/Bucket proxy. */
+  distressLanguage?: boolean | null;
   bedrooms: number | null;
   bathrooms: number | null;
   buildingSqFt: number | null;

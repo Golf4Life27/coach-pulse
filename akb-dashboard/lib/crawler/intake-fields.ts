@@ -38,6 +38,14 @@ export interface IntakeFieldsOpts {
    *  reverify pass (20179 Russell St: created 21:21Z, texted 21:30Z). */
   renovatedLanguage?: boolean;
   matchedRenovationKeywords?: string[];
+  /** Distress language detected on the subject page (2026-09-15, the 4126 E
+   *  142nd St miss) — set by discovery-sweep's screenCandidate or the intake
+   *  Firecrawl verify (hasConditionSignal / matchedDistressKeywords).
+   *  Persisted to Distress_Language so the H2 front gate's
+   *  listingLanguageDistress reads the live signal instead of only the
+   *  Distress_Score/Bucket proxy, which a fresh listing with no price drop
+   *  never trips. */
+  distressLanguage?: boolean;
 }
 
 const posNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v) && v > 0;
@@ -97,6 +105,9 @@ export function buildIntakeListingFields(c: IntakeCandidate, opts: IntakeFieldsO
     fields["Renovated_Language"] = true;
     fields["Verification_Notes"] =
       `${fields["Verification_Notes"] ?? ""}\n[${iso}] RENOVATED_LANGUAGE at intake: ${(opts.matchedRenovationKeywords ?? []).slice(0, 6).join(", ")} — opener-class sends veto at the gate; conversational replies stay allowed.`;
+  }
+  if (opts.distressLanguage) {
+    fields["Distress_Language"] = true;
   }
   if (posNum(opts.underwrittenMao)) {
     fields["Underwritten_MAO"] = opts.underwrittenMao;

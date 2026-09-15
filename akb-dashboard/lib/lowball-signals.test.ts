@@ -20,6 +20,14 @@ function listing(over: Partial<Listing>): Listing {
 }
 
 describe("listingLanguageDistress (shared proxy)", () => {
+  it("is true when Distress_Language is set, even with no score (the 4126 E 142nd St miss)", () => {
+    expect(listingLanguageDistress(listing({ distressLanguage: true, distressScore: 0 }))).toBe(true);
+    expect(listingLanguageDistress(listing({ distressLanguage: true, distressScore: null }))).toBe(true);
+  });
+  it("falls back to the score/bucket proxy when Distress_Language is absent", () => {
+    expect(listingLanguageDistress(listing({ distressLanguage: undefined, distressScore: 3 }))).toBe(true);
+    expect(listingLanguageDistress(listing({ distressLanguage: null, distressScore: 0 }))).toBe(false);
+  });
   it("is true on a positive distress score", () => {
     expect(listingLanguageDistress(listing({ distressScore: 3 }))).toBe(true);
   });

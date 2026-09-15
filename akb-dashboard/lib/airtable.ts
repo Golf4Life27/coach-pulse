@@ -61,6 +61,12 @@ const LISTING_FIELD_REGISTRY: ReadonlyArray<ListingFieldRegistryEntry> = [
   // Renovated-listing veto (operator 2026-07-25) — set by freshness-reverify
   // from the Firecrawl page read; enforced by outreachReadyReason + bump lane.
   { prop: "renovatedLanguage", fieldId: "fldnNSji9OLcDPRu9", name: "Renovated_Language" },
+  // Live listing-language distress signal (the 4126 E 142nd St miss,
+  // 2026-09-15) — set by intake/discovery-sweep from the Firecrawl verify;
+  // read by lowball-signals.listingLanguageDistress ahead of the
+  // Distress_Score/Bucket proxy so a fresh listing with no price drop still
+  // reaches the H2 front gate.
+  { prop: "distressLanguage", fieldId: "fldDOtNUeLnQr0xgk", name: "Distress_Language" },
   { prop: "bedrooms", fieldId: "fld5GBaHtwvLY3sq8", name: "Bedrooms" },
   { prop: "bathrooms", fieldId: "fldvZ8hU1aREVg3Gs", name: "Bathrooms" },
   { prop: "buildingSqFt", fieldId: "fld5bKGJLlN7GmiE9", name: "Building_SqFt" },
