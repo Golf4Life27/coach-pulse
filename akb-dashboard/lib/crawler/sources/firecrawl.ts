@@ -28,6 +28,12 @@ import { extractAgentContact, type AgentContact } from "@/lib/crawler/agent-cont
 const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY;
 const FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v2/search";
 const FIRECRAWL_SCRAPE_URL = "https://api.firecrawl.dev/v2/scrape";
+/** Hard bound on ONE scrape call. Nothing bounded a single Firecrawl fetch
+ *  before (2026-09-15: the sweep died at the 300s lambda ceiling with zero
+ *  bytes returned after the rawHtml format made Zillow scrapes slower), so a
+ *  hung portal page could eat the whole run and every audit row with it. A
+ *  timed-out scrape is a skipped URL, never a dead run. */
+const SCRAPE_TIMEOUT_MS = 45_000;
 const FIRECRAWL_CREDIT_URL = "https://api.firecrawl.dev/v2/team/credit-usage";
 const SEARCH_LIMIT = 5;
 
@@ -555,6 +561,7 @@ export async function verifyListing(
           headers: { Authorization: `Bearer ${FIRECRAWL_API_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({ url: pick.url, formats: [{ type: "markdown" }] }),
           cache: "no-store",
+          signal: AbortSignal.timeout(SCRAPE_TIMEOUT_MS),
         }),
     });
     if (scrapeRes.status !== 200 && !scrapeRes.ok) return httpFail(scrapeRes, "scrape", searchCredits);
@@ -617,6 +624,7 @@ export async function verifyListingByUrl(
           // agent phone that markdown strips (Zillow's embedded JSON).
           body: JSON.stringify({ url: knownUrl, formats: [{ type: "markdown" }, { type: "rawHtml" }] }),
           cache: "no-store",
+          signal: AbortSignal.timeout(SCRAPE_TIMEOUT_MS),
         }),
     });
     if (scrapeRes.status !== 200 && !scrapeRes.ok) {
