@@ -73,7 +73,9 @@ export interface OperatorAlertResult {
   body: string;
   /** The dedupe key used (explicit or derived). */
   key: string;
-  /** The resolved operator phone number. */
+  /** The operator phone number, MASKED to its last four digits. The full
+   *  number never leaves this module: the route echoes this result and the
+   *  workflow prints it into a job log on a public repository. */
   to: string;
   quoMessageId: string | null;
   quoStatus: string | null;
@@ -158,7 +160,8 @@ export async function sendOperatorAlert(
   const env = deps.env ?? (process.env as Record<string, string | undefined>);
   const now = deps.now ?? new Date();
   const send = deps.send ?? sendMessageWithId;
-  const to = resolveOperatorPhone(env);
+  const toFull = resolveOperatorPhone(env);
+  const to = maskPhone(toFull);
 
   const body = composeOperatorAlert(input.message ?? "");
   const key = deriveAlertKey(body, input.key);
@@ -178,7 +181,7 @@ export async function sendOperatorAlert(
         key,
         msg_len: (input.message ?? "").length,
         urgent: Boolean(input.urgent),
-        to: maskPhone(to),
+        to,
       },
       outputSummary: {
         sent: reason === null,
@@ -247,7 +250,7 @@ export async function sendOperatorAlert(
 
   // ── 6. Send.
   try {
-    const result = await send(to, body, { from });
+    const result = await send(toFull, body, { from });
     const isSuccess = result.status === "sent" || result.status === "delivered";
     await record(isSuccess ? "confirmed_success" : "uncertain", null, {
       quoMessageId: result.id,

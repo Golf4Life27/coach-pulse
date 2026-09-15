@@ -161,6 +161,7 @@ describe("sendOperatorAlert — fail-closed sequence", () => {
     expect(res.quoStatus).toBe("queued");
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0][0]).toBe("+16302172539");
+    expect(res.to).toBe("***2539");
     expect(send.mock.calls[0][2]).toEqual({ from: "PNMhSUQXFw" });
   });
 
