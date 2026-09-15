@@ -38,11 +38,13 @@ import {
 import { METRO_ZIPS } from "@/lib/crawler/metro-zips";
 import {
   parseAddressFromListingUrl,
-  isTextable,
+  pickAgentPhone,
   summarizeEnrichment,
   findMatchingListing,
   type EnrichOutcome,
 } from "@/lib/crawler/sweep-enrich";
+import type { AgentContact } from "@/lib/crawler/agent-contact-extract";
+import type { IntakeCandidate } from "@/lib/crawler/intake-filter";
 import { fetchListingsByZip } from "@/lib/crawler/sources/rentcast";
 import { buildIntakeListingFields } from "@/lib/crawler/intake-fields";
 import { withSpendLane } from "@/lib/spend/lane-context";
@@ -118,7 +120,7 @@ async function handleGet(req: Request) {
   }
 
   const perZip: Array<{ zip: string; urls: number; new_urls: number; examined: number; qualified: number }> = [];
-  const qualified: Array<{ url: string; zip: string; price: number | null; distress: string[] }> = [];
+  const qualified: Array<{ url: string; zip: string; price: number | null; distress: string[]; fc: { contact: AgentContact | null; sqft: number | null } }> = [];
   const screens: SweepScreen[] = [];
   let searchCredits = 0;
   let scrapeCredits = 0;
@@ -186,7 +188,13 @@ async function handleGet(req: Request) {
       examinedHere++;
       if (screen.accept) {
         qualifiedHere++;
-        qualified.push({ url: u, zip, price: candidate.price ?? null, distress: screen.distress });
+        qualified.push({
+          url: u,
+          zip,
+          price: candidate.price ?? null,
+          distress: screen.distress,
+          fc: { contact: fc.agentContact ?? null, sqft: fc.scrapedSqft ?? null },
+        });
       }
     }
 
@@ -238,19 +246,44 @@ async function handleGet(req: Request) {
           continue;
         }
 
-        const candidate = findMatchingListing(parsed.formatted, feedCandidates);
-        if (!candidate) {
-          // Address recorded so a repeat failure is diagnosable from the audit
-          // row alone — the first run only said "no match" and could not say
-          // what we asked for.
-          enrichOutcomes.push({ url: q.url, address: parsed.formatted, recordId: null, skipped: "no_rentcast_match" });
+        // TWO PHONE SOURCES, BOTH RECORDED (operator 2026-09-15): RentCast's
+        // feed match stays primary while the page-scraped number runs beside
+        // it; the audit row's phone_ab tally is the evidence for keeping or
+        // cancelling RentCast. When RentCast has nothing — key down, no feed
+        // match, no phone — the page is the fallback and the record is built
+        // from what the scrape already proved (address, price, sqft).
+        const matched = findMatchingListing(parsed.formatted, feedCandidates);
+        const scraped = q.fc.contact;
+        const ab = { rentcastPhone: matched?.agentPhone ?? null, scrapedPhone: scraped?.agentPhone ?? null };
+        const pick = pickAgentPhone(matched?.agentPhone, scraped);
+        if (!pick.phone) {
+          enrichOutcomes.push({
+            url: q.url,
+            address: parsed.formatted,
+            recordId: null,
+            skipped: !matched && pick.skipped === "no_agent_phone" ? "no_rentcast_match" : pick.skipped,
+            ...ab,
+          });
           continue;
         }
-
-        if (!isTextable(candidate.agentPhone)) {
-        enrichOutcomes.push({ url: q.url, address: parsed.formatted, recordId: null, skipped: "no_agent_phone" });
-        continue;
-      }
+        const candidate: IntakeCandidate = matched
+          ? { ...matched, agentPhone: pick.phone }
+          : {
+              sourceId: `firecrawl:${q.url}`,
+              address: parsed.formatted,
+              city: parsed.city,
+              state: parsed.state,
+              zip: parsed.zip,
+              propertyType: null,
+              beds: null,
+              listPrice: q.price,
+              listedDate: null,
+              agentName: scraped?.agentName ?? null,
+              agentPhone: pick.phone,
+              agentEmail: null,
+              brokerageName: null,
+              squareFootage: q.fc.sqft,
+            };
 
       // Born H2-ready: same field builder intake uses, so a swept lead and an
       // intake lead are the SAME THING downstream and no gate has to learn
@@ -269,6 +302,11 @@ async function handleGet(req: Request) {
           renovatedLanguage: false,
           matchedRenovationKeywords: [],
         });
+        // Provenance on the record itself, so a texted number can be traced
+        // to its source without the audit ring.
+        fields["Verification_Notes"] =
+          `${fields["Verification_Notes"] ?? ""}\n[${new Date().toISOString()}] AGENT_PHONE_SOURCE=${pick.source}` +
+          ` (rentcast=${ab.rentcastPhone ?? "none"}; page=${ab.scrapedPhone ?? "none"}${scraped?.source ? ` via ${scraped.source}` : ""}).`;
         // TABLE/BASE IDs (2026-08-07): this route was the ONLY file in the repo
         // reading AIRTABLE_LISTINGS_TABLE — every other writer hardcodes
         // tbldMjKBgPiq45Jjs. With that env var unset the URL resolved to
@@ -294,10 +332,10 @@ async function handleGet(req: Request) {
           // else. A system that knows the reason must not report confusion.
           writeErrors.push(`${res.status} ${raw.slice(0, 300)}`);
         }
-        enrichOutcomes.push({ url: q.url, address: parsed.formatted, recordId, skipped: recordId ? null : "record_write_failed" });
+        enrichOutcomes.push({ url: q.url, address: parsed.formatted, recordId, skipped: recordId ? null : "record_write_failed", phoneSource: pick.source, ...ab });
         } catch (err) {
           writeErrors.push(err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300));
-          enrichOutcomes.push({ url: q.url, address: parsed.formatted, recordId: null, skipped: "record_write_failed" });
+          enrichOutcomes.push({ url: q.url, address: parsed.formatted, recordId: null, skipped: "record_write_failed", phoneSource: pick.source, ...ab });
         }
       }
     }

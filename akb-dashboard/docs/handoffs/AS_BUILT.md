@@ -1014,3 +1014,49 @@ pure `summarizeBuildLedger`), `GET|POST /api/build-ledger`, dashboard tab `/buil
 
 New Listings_V1 fields: `Assignment_Price` fldfXqvaRkjCaTTF3, `Dispo_Blast_Fired_At` fld9mpSy76DJ3FLfY,
 `Deal_Photo_URLs` fldGWr6THoaLrBafp, `Dispo_Public` fldjGAK9f3tnCvpvU.
+
+## 8r. NEW 2026-09-15 — Agent phone off the listing page (RentCast A/B, operator ruling "keep both, verify, decide")
+
+**Why.** Phone discovery had ONE source (RentCast `listingAgent.phone`). With the
+key at 403 since 9/7, discovery qualified leads and wrote zero phones; openers
+went to 0/day. Operator 2026-09-12 kill test: Zillow prints the agent phone on
+the page (sometimes a brokerage office line). Operator 2026-09-15: build the
+page reader, keep RentCast running beside it for a couple of days, decide on
+the discrepancy.
+
+**What.**
+- `lib/crawler/agent-contact-extract.ts` (pure): `extractAgentContact(rawHtml, markdown)`
+  reads Zillow's escaped `attributionInfo` JSON (`agentName`, `agentPhoneNumber`,
+  `brokerPhoneNumber`) or any portal's visible "Listed by …" block. Sets
+  `officeLineSuspected` when the agent and broker numbers are the same digits.
+  `phonesAgree(a, b)` compares on 10 digits.
+- `verifyListingByUrl` (`lib/crawler/sources/firecrawl.ts`) now requests
+  `rawHtml` alongside `markdown` on the SAME scrape (Firecrawl v2: no extra
+  credit) and returns `agentContact`. The search-then-scrape verifier
+  (`verifyListing`, intake path) is unchanged.
+- `pickAgentPhone(rentcastPhone, scraped)` (`lib/crawler/sweep-enrich.ts`):
+  RentCast is primary while the A/B runs; the page is the fallback when
+  RentCast has nothing; a suspected office line is never a fallback
+  (`office_line_suspected` skip).
+- `/api/cron/discovery-sweep` (apply mode): both numbers are recorded on every
+  qualifier outcome; when RentCast has no match the record is built from what
+  the scrape proved (address from the URL, list price + sqft from the page,
+  agent name + phone from the extractor, `sourceId firecrawl:<url>`). Every
+  written record carries a `Verification_Notes` line
+  `AGENT_PHONE_SOURCE=rentcast|scraped (rentcast=…; page=… via zillow_json|listed_by_text)`.
+- Audit row `scout/discovery_sweep_live` → `enrichment.phone_ab`
+  `{agree, disagree, rentcast_only, scraped_only, neither}` and
+  `enrichment.by_phone_source`. **This is the decision evidence.**
+
+**How to read the A/B (the operator's decision, 9/17-ish).** Sum `phone_ab`
+across the sweep audit rows since this shipped. `disagree` high relative to
+`agree` = keep RentCast (the page number is not the agent's cell). `agree` +
+`scraped_only` dominant = cancel. `rentcast_only` counts while the key is 403
+will be 0, so the first honest comparison needs the RentCast card fixed OR is
+read as "page vs nothing" (what the funnel gets today either way).
+
+**Not built (ponytail ceiling).** No carrier/line-type lookup (every one is a
+subscription). Same-digits office-line heuristic only; Quo delivery failures
+are the next signal. Redfin/Realtor pages that show no number stay
+`no_agent_phone`. State license lookups (free, per-state) are the next
+fallback if `neither` dominates.

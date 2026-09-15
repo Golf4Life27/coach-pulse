@@ -197,14 +197,38 @@ export type EnrichSkipReason =
   | "url_unparseable"
   | "no_rentcast_match"
   | "no_agent_phone"
+  | "office_line_suspected"
   | "record_write_failed"
   | "enrich_budget_reached";
+
+export type PhoneSource = "rentcast" | "scraped";
 
 export interface EnrichOutcome {
   url: string;
   address: string | null;
   recordId: string | null;
   skipped: EnrichSkipReason | null;
+  /** Both sources, always recorded, so the RentCast-vs-page A/B can be read
+   *  off the audit row (operator 2026-09-15: keep both running, compare for
+   *  a couple of days, then decide). */
+  rentcastPhone?: string | null;
+  scrapedPhone?: string | null;
+  phoneSource?: PhoneSource | null;
+}
+
+/** Pure: which phone goes on the record. RentCast stays primary while the
+ *  A/B runs; the page is the fallback when RentCast has nothing (down, no
+ *  match, or no phone). A suspected office line is never a fallback. */
+export function pickAgentPhone(
+  rentcastPhone: string | null | undefined,
+  scraped: { agentPhone: string | null; officeLineSuspected: boolean } | null | undefined,
+): { phone: string | null; source: PhoneSource | null; skipped: "no_agent_phone" | "office_line_suspected" | null } {
+  if (isTextable(rentcastPhone)) return { phone: rentcastPhone as string, source: "rentcast", skipped: null };
+  if (scraped && isTextable(scraped.agentPhone)) {
+    if (scraped.officeLineSuspected) return { phone: null, source: null, skipped: "office_line_suspected" };
+    return { phone: scraped.agentPhone as string, source: "scraped", skipped: null };
+  }
+  return { phone: null, source: null, skipped: "no_agent_phone" };
 }
 
 /** Pure: roll enrichment outcomes into the run summary. Names WHY qualifiers
@@ -213,12 +237,31 @@ export function summarizeEnrichment(outcomes: EnrichOutcome[]): {
   attempted: number;
   written: number;
   by_skip: Record<string, number>;
+  by_phone_source: Record<string, number>;
+  /** RentCast vs page, per qualifier: agree / disagree when both had a
+   *  number, else which side had one. The "big discrepancy" the operator
+   *  will read before deciding whether RentCast stays. */
+  phone_ab: { agree: number; disagree: number; rentcast_only: number; scraped_only: number; neither: number };
 } {
   const by_skip: Record<string, number> = {};
+  const by_phone_source: Record<string, number> = {};
+  const phone_ab = { agree: 0, disagree: 0, rentcast_only: 0, scraped_only: 0, neither: 0 };
   let written = 0;
+  const d = (p: string | null | undefined) => {
+    const x = (p ?? "").replace(/\D/g, "");
+    return x.length === 11 && x.startsWith("1") ? x.slice(1) : x;
+  };
   for (const o of outcomes) {
     if (o.recordId) written++;
     else if (o.skipped) by_skip[o.skipped] = (by_skip[o.skipped] ?? 0) + 1;
+    if (o.phoneSource) by_phone_source[o.phoneSource] = (by_phone_source[o.phoneSource] ?? 0) + 1;
+    if (o.skipped === "url_unparseable" || o.skipped === "enrich_budget_reached") continue;
+    const r = d(o.rentcastPhone).length === 10;
+    const s = d(o.scrapedPhone).length === 10;
+    if (r && s) phone_ab[d(o.rentcastPhone) === d(o.scrapedPhone) ? "agree" : "disagree"]++;
+    else if (r) phone_ab.rentcast_only++;
+    else if (s) phone_ab.scraped_only++;
+    else phone_ab.neither++;
   }
-  return { attempted: outcomes.length, written, by_skip };
+  return { attempted: outcomes.length, written, by_skip, by_phone_source, phone_ab };
 }

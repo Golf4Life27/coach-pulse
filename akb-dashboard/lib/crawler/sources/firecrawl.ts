@@ -23,6 +23,7 @@
 
 import { evaluateListingContent, extractScrapedSqft, extractScrapedPrice, crossCheckSqft, INTAKE_DISTRESS_DOM_MARK } from "@/lib/crawler/intake-filter";
 import { scopeSubjectText, scopeStatusText } from "@/lib/crawler/sources/listing-text-scope";
+import { extractAgentContact, type AgentContact } from "@/lib/crawler/agent-contact-extract";
 
 const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY;
 const FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v2/search";
@@ -234,6 +235,11 @@ export interface FirecrawlVerifyResult {
   /** List price stated on the scraped page (2026-08-01 Sunbeam receipt) —
    *  the spread-watch's ground truth for engaged/under-contract records. */
   scrapedPrice?: number | null;
+  /** Listing agent contact read off the page itself (Zillow JSON or the
+   *  "Listed by" block) — the RentCast-free phone source. Only the KNOWN-URL
+   *  verifier (verifyListingByUrl) requests rawHtml and fills this; the
+   *  search-then-scrape verifier leaves it undefined. */
+  agentContact?: AgentContact;
   creditsUsed: number;
   /** true when Firecrawl returned 429 even after exhausting retries —
    *  distinct from a generic error (caller → firecrawl_rate_limited). */
@@ -607,7 +613,9 @@ export async function verifyListingByUrl(
         fetch(FIRECRAWL_SCRAPE_URL, {
           method: "POST",
           headers: { Authorization: `Bearer ${FIRECRAWL_API_KEY}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ url: knownUrl, formats: [{ type: "markdown" }] }),
+          // rawHtml is a free extra format on the same credit; it carries the
+          // agent phone that markdown strips (Zillow's embedded JSON).
+          body: JSON.stringify({ url: knownUrl, formats: [{ type: "markdown" }, { type: "rawHtml" }] }),
           cache: "no-store",
         }),
     });
@@ -616,11 +624,12 @@ export async function verifyListingByUrl(
       if (scrapeRes.status === 402) return { ...base, paymentRequired: true, error: "Firecrawl scrape 402 Payment Required" };
       return { ...base, error: `Firecrawl scrape ${scrapeRes.status}` };
     }
-    const body = (await scrapeRes.json()) as { data?: { markdown?: string }; creditsUsed?: number };
+    const body = (await scrapeRes.json()) as { data?: { markdown?: string; rawHtml?: string }; creditsUsed?: number };
     const credits = typeof body.creditsUsed === "number" ? body.creditsUsed : 0;
     const markdown = body.data?.markdown;
     if (!markdown) return { ...base, creditsUsed: credits, resolved: false };
-    return buildResolvedResult(markdown, knownUrl, formattedAddress, credits, opts.debug ?? false);
+    const result = buildResolvedResult(markdown, knownUrl, formattedAddress, credits, opts.debug ?? false);
+    return { ...result, agentContact: extractAgentContact(body.data?.rawHtml, markdown) };
   } catch (err) {
     return { ...base, error: err instanceof Error ? err.message : String(err) };
   }
