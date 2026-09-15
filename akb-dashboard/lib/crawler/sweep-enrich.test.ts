@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   parseAddressFromListingUrl,
   isTextable,
+  pickAgentPhone,
   summarizeEnrichment,
   addressesMatch,
   findMatchingListing,
@@ -68,7 +69,7 @@ describe("summarizeEnrichment", () => {
       { url: "c", address: "3 C St", recordId: null, skipped: "no_agent_phone" },
       { url: "d", address: "4 D St", recordId: null, skipped: "no_agent_phone" },
     ]);
-    expect(out).toEqual({
+    expect(out).toMatchObject({
       attempted: 4,
       written: 1,
       by_skip: { url_unparseable: 1, no_agent_phone: 2 },
@@ -128,5 +129,40 @@ describe("findMatchingListing", () => {
 
   it("returns null when the feed genuinely lacks it", () => {
     expect(findMatchingListing("5555 Missing Rd, Detroit, MI 48228", feed)).toBeNull();
+  });
+});
+
+describe("pickAgentPhone — RentCast primary, page fallback, office line never", () => {
+  it("prefers RentCast when it has a textable number", () => {
+    expect(pickAgentPhone("(313) 555-1234", { agentPhone: "313-555-9999", officeLineSuspected: false }))
+      .toEqual({ phone: "(313) 555-1234", source: "rentcast", skipped: null });
+  });
+  it("falls back to the page when RentCast has nothing", () => {
+    expect(pickAgentPhone(null, { agentPhone: "313-555-9999", officeLineSuspected: false }))
+      .toEqual({ phone: "313-555-9999", source: "scraped", skipped: null });
+  });
+  it("refuses a suspected office line", () => {
+    expect(pickAgentPhone(undefined, { agentPhone: "313-555-9999", officeLineSuspected: true }).skipped)
+      .toBe("office_line_suspected");
+  });
+  it("names no_agent_phone when neither side has one", () => {
+    expect(pickAgentPhone(null, null).skipped).toBe("no_agent_phone");
+    expect(pickAgentPhone("555-1234", { agentPhone: null, officeLineSuspected: false }).skipped).toBe("no_agent_phone");
+  });
+});
+
+describe("summarizeEnrichment — the RentCast vs page A/B tally", () => {
+  it("counts agree / disagree / one-sided / neither on digits", () => {
+    const s = summarizeEnrichment([
+      { url: "a", address: "x", recordId: "r1", skipped: null, rentcastPhone: "(313) 555-1234", scrapedPhone: "313-555-1234", phoneSource: "rentcast" },
+      { url: "b", address: "x", recordId: "r2", skipped: null, rentcastPhone: "313-555-1234", scrapedPhone: "313-555-0000", phoneSource: "rentcast" },
+      { url: "c", address: "x", recordId: "r3", skipped: null, rentcastPhone: null, scrapedPhone: "313-555-7777", phoneSource: "scraped" },
+      { url: "d", address: "x", recordId: null, skipped: "no_agent_phone", rentcastPhone: "313-555-1234", scrapedPhone: null },
+      { url: "e", address: "x", recordId: null, skipped: "no_rentcast_match", rentcastPhone: null, scrapedPhone: null },
+      { url: "f", address: null, recordId: null, skipped: "url_unparseable" },
+    ]);
+    expect(s.phone_ab).toEqual({ agree: 1, disagree: 1, rentcast_only: 1, scraped_only: 1, neither: 1 });
+    expect(s.by_phone_source).toEqual({ rentcast: 2, scraped: 1 });
+    expect(s.written).toBe(3);
   });
 });
