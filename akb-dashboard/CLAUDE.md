@@ -76,4 +76,29 @@ needs to be a rule established." Model spend is under the same cash constraint a
   green, merge under the standing default, verify the deploy, write the spine.
 - If a subagent's result fails review twice, the parent takes the task over — no loops.
 
+## Model tiers are ROLES, not names — operator ruling 2026-09-11 (Spine rec6ZNybHoPOZnJP2)
+
+Operator, verbatim: "Fable tier, or beyond when released, models do the thinking, analyzing,
+and planning, then delegate all executions that they can down to Opus level (or the next step
+below the top tier when new models come) to save me credits." Written by role so it survives
+every release — when a new top model ships, the roles shift down one step, the rule does not
+change.
+
+- **Session tier** (the top model available): doctrine and principle changes, diagnosis from the
+  evidence trail, any number that reaches a seller, contract-grade document reads, operator-facing
+  reports, spine writes, and reviewing what the tiers below produced. It writes the brief. It does
+  not do the work.
+- **Execution tier** (one step down): EVERY scheduled routine, every bounded build, every
+  sweep-and-report job, every verification pass. Routines are created `create_new_session_on_fire`
+  so each fire starts at zero context — the "light" hourly triage had silently grown to a 400K-token
+  persistent session on the top tier, re-reading all of it twelve times a day ($256 lifetime on one
+  routine). A persistent-session routine is the exception and needs a written reason.
+- **Mechanical tier** (two down): renames, fixture updates, log reads, backfills with a known shape.
+- Quality lives in the brief going down and the review coming back, not in the executor's tier.
+  Evidence on the day of the ruling: three execution-tier builds from a session-tier brief, two
+  needed zero rework, one needed three small fixes caught at review. A sloppy brief on the top model
+  is worse than a tight brief on the tier below.
+- Interactive sessions default to the execution tier. Escalate to the session tier for a decision,
+  not for a day.
+
 > Note: `AGENTS.md` (imported above) says **Hobby / daily-cron cap** — that is **STALE**. Production is Vercel **Pro** (sub-daily crons are live in `vercel.json`; see AS_BUILT §0). Don't architect around a daily-cron limit that no longer applies.
