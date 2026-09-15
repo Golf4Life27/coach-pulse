@@ -53,6 +53,7 @@ import {
 import { persistDecisionMath } from "@/lib/decision-persist";
 import { priceOpenerWithSeed } from "@/lib/opener-pricing";
 import { isListAnchorMode, priceOpenerListAnchor } from "@/lib/pricing/list-anchor-opener";
+import { getActiveIntakeZips } from "@/lib/zip-registry";
 import { anchorPctForZip, SOLD_FEEDBACK_KV_KEY, type SoldFeedbackReport } from "@/lib/sold-feedback";
 import { serializeDerivation } from "@/lib/pricing/opener-derivation";
 import { getZipArvSeed, seedSelfPricesNonDisclosure, type ZipArvSeed } from "@/lib/zip-arv-seed-store";
@@ -818,11 +819,24 @@ async function handle(req: Request): Promise<Response> {
   // buyer-median set (Detroit era) so neither store's drift can dark a
   // market. First live probe (7/09) caught listSeededZips() alone covering
   // only the 10 Detroit buyer-median ZIPs and darkening B'ham/Indy/ATL.
+  // LIST-ANCHOR FIRST TOUCH (operator ruling 2026-09-15, "cover them"): the
+  // soft opener is pct × list and needs no ARV seed, so a seed-based coverage
+  // set was gating first touch on a value basis first touch never uses.
+  // 4126 E 142nd St (Cleveland 44128, seed DONT_PRICE "too_few_comps") sat
+  // eligible all day and capped zip_not_covered; 12 of the 100 discovery ZIPs
+  // (all Ohio) were in that state. In list-anchor mode, every launch/active
+  // registry ZIP is first-touch covered. Post-reply value-anchored pricing
+  // keeps every existing HOLD, so a ZIP with no usable seed still cannot be
+  // priced past the opener. Read fails narrow (empty), never widens.
+  const registryFirstTouchZips: string[] = listAnchorModeActive
+    ? await getActiveIntakeZips().catch(() => [])
+    : [];
   const capCfg =
     rawCapCfg.coverageMode === "auto"
       ? resolveCoverage(rawCapCfg, [
           ...(await listPriceableArvZips()),
           ...(await listSeededZips()),
+          ...registryFirstTouchZips,
         ])
       : rawCapCfg;
   // ── Daily send governor (operator /goal 2026-07-22): with the multi-slot
