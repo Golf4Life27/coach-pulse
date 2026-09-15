@@ -60,8 +60,11 @@ const FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v2/search";
 const SEARCH_LIMIT = 20;
 /** Scrapes per RUN — the hard credit bound. Each is ~1 credit. */
 const MAX_SCRAPES_PER_RUN = 40;
-/** Leave the lambda room to write its audit row. */
-const WALL_CLOCK_BUDGET_MS = 240_000;
+/** Scrape-loop budget. Leaves the lambda (maxDuration 300s) room for the one
+ *  in-flight scrape (bounded at 45s in the verifier), enrichment writes and
+ *  the audit row. 240s was not enough once a scrape could run long: the
+ *  2026-09-15 run hit the 300s ceiling and returned nothing. */
+const WALL_CLOCK_BUDGET_MS = 180_000;
 /** RentCast lookups per run — the scarce-call bound. ONE per qualifier, and a
  *  qualifier has already cleared the buy box and every hard veto. At ~10/run
  *  and 8 runs/day this is bounded well under the daily plan share. */
