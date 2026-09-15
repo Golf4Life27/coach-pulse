@@ -93,8 +93,8 @@ jobs:
             --data-binary @- \
             "${BASE_URL}/api/maverick-alert")
           echo "HTTP ${HTTP_CODE}"
-          echo "--- response body ---"
-          jq . /tmp/ma.json 2>/dev/null || cat /tmp/ma.json
+          echo "--- response (body text omitted: this log is public) ---"
+          jq '{sent, reason, key, to, quoMessageId, quoStatus}' /tmp/ma.json 2>/dev/null || echo "(non-JSON response)"
           SENT=$(jq -r '.sent // false' /tmp/ma.json 2>/dev/null || echo "false")
           REASON=$(jq -r '.reason // "none"' /tmp/ma.json 2>/dev/null || echo "unknown")
           echo "::notice::sent=${SENT} reason=${REASON}"
