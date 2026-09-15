@@ -29,11 +29,14 @@ One deal, one metro, one operator-approved package, your own browser. The job is
 | State | What we know | Action |
 |---|---|---|
 | Texas | Property Code 5.086 requires disclosing to a potential buyer that AKB holds an equitable interest. Occupations Code 1101.0045: an unlicensed party may market its contract interest, not the property. | Lead with "Assignment of contract" in the first line. Disclosure line mandatory. Never phrase it as "house for sale". |
-| Alabama | Recent wholesaling disclosure legislation; specifics unverified in this skill. | Post only after the operator confirms the Alabama wording. Disclosure line mandatory regardless. |
+| Alabama | SB 228 (2023 Regular Session, eff. 2023-08-01; codified at Ala. Code Title 8, Ch. 42). Verified from the enrolled text 2026-09-15. Single-family residential only. A buyer holding an equitable interest may assign or offer to assign it for a fee ONLY if it discloses in writing: (1) to any potential subsequent purchaser or assignee, the nature of the buyer's equitable interest; (2) to the SELLER, the buyer's intent to market its equitable interest, BEFORE commencing any marketing; (3) to the seller, the effective date of any assignment at least three business days before it takes effect. Violation: Class C misdemeanor plus liability of three times the assignment fee. | Two gates before the first post: (a) the operator has sent the seller (via the listing agent) the written intent-to-market notice and it is stamped in the record's Verification_Notes as `AL_INTENT_TO_MARKET_SENT <date>`; (b) every post and first DM ends with the Alabama line below. At buyer-yes: the seller gets the assignment effective-date notice at least 3 business days before the assignment date; the operator sends it, the hunter never does. |
 | Illinois (AKB's home state) | Real Estate License Act: unlicensed wholesaling is capped at one deal per 12 months. | Do not market Illinois properties without the operator's explicit ruling. |
 | Ohio, Michigan, Tennessee, Georgia | No specific rule loaded here. | Disclosure line mandatory. Verify with the operator on first use in each state. |
 
-If the state is not Texas and the operator has not confirmed the wording for it, stop after group discovery and report the groups found. Do not post.
+**Alabama line (operator-confirmed 2026-09-15, use verbatim as the last line of every AL post and first DM):**
+`Assignment of contract. AKB Solutions LLC holds an equitable interest in this property under a purchase contract and is offering to assign that contract, not to sell the property. AKB is not the owner and not a licensed broker. Disclosure made under Alabama Code Title 8, Chapter 42. Verify all info.`
+
+If the state is not Texas or Alabama and the operator has not confirmed the wording for it, stop after group discovery and report the groups found. Do not post. In Alabama, stop the same way if the `AL_INTENT_TO_MARKET_SENT` stamp is missing from the record.
 
 ## Conduct (this is what keeps the account alive)
 
