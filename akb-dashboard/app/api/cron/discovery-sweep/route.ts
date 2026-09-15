@@ -371,7 +371,10 @@ async function handleGet(req: Request) {
     leg: { metro: leg.metro, zips: leg.zips, reason: leg.reason, age_days: leg.ageDays },
     summary,
     per_zip: perZip,
-    qualified,
+    // Contact stays OUT of the response: admin-get.yml prints this body into a
+    // public Actions log. The audit summary carries the counts; the record
+    // carries the number.
+    qualified: qualified.map(({ fc, ...q }) => ({ ...q, phone_source: fc.contact?.source ?? null })),
     errors,
     elapsed_ms: Date.now() - t0,
   });
