@@ -146,7 +146,9 @@ export async function probeListingPhotos(
 // (it's how the verify-listing pipeline reads renovation language).
 // Returns [] on any error so the caller can fall through.
 
-const FIRECRAWL_HTML_IMG_RE = /https:\/\/[^"'\s)]*?(?:ssl\.cdn-redfin|redfin|zillow|homescom)[^"'\s)]*?\.jpg/gi;
+// Exported so the extraction step (regex → filterPropertyPhotos) can be
+// exercised on a fixture HTML sample without a live Firecrawl call.
+export const FIRECRAWL_HTML_IMG_RE = /https:\/\/[^"'\s)]*?(?:ssl\.cdn-redfin|redfin|zillow|homescom)[^"'\s)]*?\.jpg/gi;
 
 /** Substrings that indicate a URL is portal chrome / UI asset / agent
  *  headshot / brand logo / static asset — NOT a subject-property photo.
@@ -245,6 +247,27 @@ function redfinResolutionRank(url: string): number {
   return 0;
 }
 
+/** Rank Zillow photo-resolution variant tags so we prefer larger when the
+ *  same photo is served at multiple sizes. Zillow CDN filenames end in
+ *  `-cc_ft_<width>.jpg` (width-tagged variants, larger width = larger
+ *  image) or `-p_e.jpg` (a small/legacy variant). Ranked so any numeric
+ *  width outranks p_e/unrecognized, and wider outranks narrower. Returns
+ *  0 for URLs with no Zillow variant tag (e.g. Redfin URLs — ranked by
+ *  redfinResolutionRank instead). */
+export function zillowResolutionRank(url: string): number {
+  const m = url.match(/-cc_ft_(\d+)(?:\.jpg|[?&#]|$)/i);
+  if (m) return 1000 + Number(m[1]);
+  if (/-p_e(?:\.jpg|[?&#]|$)/i.test(url)) return 1;
+  return 0;
+}
+
+/** Combined resolution rank across both CDNs — a URL only ever matches
+ *  one shape, so taking the max is safe and never weakens either CDN's
+ *  own ranking. */
+function photoResolutionRank(url: string): number {
+  return Math.max(redfinResolutionRank(url), zillowResolutionRank(url));
+}
+
 /** Pure: a resolution-invariant identity key for a Redfin photo URL, so
  *  variant dedup can collapse the SAME photo served at multiple sizes
  *  WITHOUT collapsing different photos (or a subject photo against a
@@ -259,6 +282,14 @@ function redfinResolutionRank(url: string): number {
  *  recognizable id_idx shape (no accidental dedup of unknown formats). */
 export function photoIdentityKey(url: string): string {
   const filename = url.split("/").pop() ?? url;
+  // Zillow CDN filenames are `<hex-hash>-<variant-tag>.jpg` (e.g.
+  // `8f1c2a9de1cb3a2f4e5d6c7b8a9f0e1d-cc_ft_1536.jpg`), where the hash
+  // prefix (before the first "-") is the SAME across every size variant
+  // of the same photo. Redfin filenames never take this shape (they're
+  // `<listingId>_<idx>.jpg`, digits + underscore, no leading hex hash
+  // before a hyphen), so checking this first can't misfire on Redfin.
+  const zillowHash = filename.match(/^([0-9a-f]{16,})-/i);
+  if (zillowHash) return zillowHash[1].toLowerCase();
   // Strip a leading `word.` resolution-descriptor prefix if present
   // (e.g. genIslnoResize.32118136_0.jpg → 32118136_0.jpg).
   const stripped = filename.replace(/^[a-z]+\./i, "");
@@ -363,7 +394,7 @@ export function filterPropertyPhotos(
     const existing = byIndex.get(key);
     if (!existing) {
       byIndex.set(key, url);
-    } else if (redfinResolutionRank(url) > redfinResolutionRank(existing)) {
+    } else if (photoResolutionRank(url) > photoResolutionRank(existing)) {
       byIndex.set(key, url);
       result.dropped_variant_dedup++;
     } else {
