@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isActionableMarket, isPriceableMarket } from "./actionable";
+import { isActionableMarket, isPriceableMarket, isFreshnessPriceableMarket } from "./actionable";
 
 describe("isActionableMarket", () => {
   it("San Antonio TX is actionable (price via ARV, can assign)", () => {
@@ -125,5 +125,72 @@ describe("isPriceableMarket — self-pricing ZIPs in a non-disclosure state", ()
     const v = isPriceableMarket(SA, new Set<string>(), seeded);
     expect(v.actionable).toBe(false);
     expect(v.reason).toBe("no_seeded_zip");
+  });
+});
+
+// ── Freshness lane / send lane coverage parity (2026-09-16) ────────────────
+// The 114-record verify_stale floor (crier/h2_supply_floor_below, 2026-09-14):
+// in list-anchor mode the send lane's ZIP coverage unions the registry's
+// launch/active ZIPs into first-touch coverage (app/api/cron/h2-outreach
+// resolveCoverage + lib/zip-registry getActiveIntakeZips), but the freshness
+// route gated re-verification on isPriceableMarket's seeded-ZIP + buy-box
+// test regardless of mode — a registry-covered, non-seeded ZIP could never
+// be re-verified Active, so it could never reach the Sendable queue.
+describe("isFreshnessPriceableMarket — list-anchor coverage parity", () => {
+  const seeded = new Set(["48227"]); // does NOT include the registry-only zip below
+  const registryZips = new Set(["44128"]); // Cleveland — registry-covered, unseeded
+
+  it("a registry ZIP with no seed is a freshness candidate in list-anchor mode", () => {
+    const v = isFreshnessPriceableMarket(
+      { state: "OH", city: "Cleveland", zip: "44128" },
+      seeded,
+      undefined,
+      { listAnchorModeActive: true, registryZips },
+    );
+    expect(v).toEqual({ actionable: true, reason: null });
+  });
+
+  it("the SAME record is NOT a candidate when list-anchor mode is off", () => {
+    const v = isFreshnessPriceableMarket(
+      { state: "OH", city: "Cleveland", zip: "44128" },
+      seeded,
+      undefined,
+      { listAnchorModeActive: false, registryZips },
+    );
+    expect(v.actionable).toBe(false);
+    // Falls back to the unmodified isPriceableMarket verdict.
+    expect(v).toEqual(isPriceableMarket({ state: "OH", city: "Cleveland", zip: "44128" }, seeded, undefined));
+  });
+
+  it("a ZIP that is neither seeded nor registry-covered stays a HOLD even in list-anchor mode", () => {
+    const v = isFreshnessPriceableMarket(
+      { state: "OH", city: "Columbus", zip: "43215" },
+      seeded,
+      undefined,
+      { listAnchorModeActive: true, registryZips },
+    );
+    expect(v.actionable).toBe(false);
+    expect(v.reason).toBe("no_seeded_zip");
+  });
+
+  it("list-anchor mode never rescues a hard-excluded state via registry coverage", () => {
+    const v = isFreshnessPriceableMarket(
+      { state: "IL", city: "Chicago", zip: "60620" },
+      seeded,
+      undefined,
+      { listAnchorModeActive: true, registryZips: new Set(["60620"]) },
+    );
+    expect(v.actionable).toBe(false);
+    expect(v.reason).toBe("wholesale_restricted_state");
+  });
+
+  it("an already-priceable (seeded) ZIP is unaffected by list-anchor mode", () => {
+    const v = isFreshnessPriceableMarket(
+      { state: "MI", city: "Detroit", zip: "48227" },
+      seeded,
+      undefined,
+      { listAnchorModeActive: true, registryZips: new Set<string>() },
+    );
+    expect(v).toEqual({ actionable: true, reason: null });
   });
 });

@@ -113,3 +113,46 @@ export function isPriceableMarket(
   if (!zip || !seededZips.has(zip)) return { actionable: false, reason: "no_seeded_zip" };
   return { actionable: true, reason: null };
 }
+
+/** Pure: is this market priceable for the FRESHNESS RE-VERIFY lane
+ *  specifically (2026-09-16, the 114-record verify_stale floor)?
+ *
+ *  isPriceableMarket's seeded-ZIP + opener-buy-box gate exists because the
+ *  VALUE-ANCHORED pricer (priceOpenerWithSeed) needs a comp seed to produce
+ *  a number. In LIST-ANCHOR mode (operator ruling 2026-08-30, two-stage
+ *  doctrine) the first-contact opener is pct x list — it needs no seed and
+ *  no buy-box — and the send lane's own eligibility (isH2Eligible /
+ *  outreachReadyReason) and ZIP coverage (app/api/cron/h2-outreach
+ *  resolveCoverage, unioning getActiveIntakeZips() — the ~230-ZIP registry —
+ *  into coverage in list-anchor mode) never require a seeded ZIP either.
+ *
+ *  The freshness route applied isPriceableMarket's seed/buy-box gate
+ *  regardless of mode, so a record in a registry-covered, non-seeded ZIP
+ *  was send-eligible and send-covered but could NEVER be re-verified Active
+ *  within the freshness window — it could never cross isOutreachFresh, so
+ *  it could never reach the Sendable queue. Evidence: crier/
+ *  h2_supply_floor_below, 2026-09-14, "Sendable queue depth 0 < floor 10 …
+ *  114 records eligible in every respect except the 48h Last_Verified
+ *  window", cohort pinned at 114 since.
+ *
+ *  Fix: in list-anchor mode, a registry-covered ZIP clears ONLY the
+ *  seed/buy-box reasons (`no_seeded_zip`, `opener_holds_market`) — every
+ *  hard exclusion (missing state, wholesale-restricted state, paused
+ *  market) still applies unchanged, and every other mode/ZIP falls back to
+ *  the unmodified isPriceableMarket verdict. This never loosens a SEND
+ *  gate — it only lets a record get RE-VERIFIED so it can reach the send
+ *  lane's own, untouched gates. */
+export function isFreshnessPriceableMarket(
+  input: MarketInput,
+  seededZips: ReadonlySet<string>,
+  selfPricingZips: ReadonlySet<string> | undefined,
+  opts: { listAnchorModeActive: boolean; registryZips: ReadonlySet<string> },
+): MarketVerdict {
+  const verdict = isPriceableMarket(input, seededZips, selfPricingZips);
+  if (verdict.actionable) return verdict;
+  if (verdict.reason !== "no_seeded_zip" && verdict.reason !== "opener_holds_market") return verdict;
+  if (!opts.listAnchorModeActive) return verdict;
+  const zip = (input.zip ?? "").trim();
+  if (zip && opts.registryZips.has(zip)) return { actionable: true, reason: null };
+  return verdict;
+}
