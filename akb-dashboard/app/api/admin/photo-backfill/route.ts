@@ -20,7 +20,7 @@
 
 import { NextResponse } from "next/server";
 import { getListing, updateListingRecord } from "@/lib/airtable";
-import { collectPhotos } from "@/lib/photo-sources";
+import { collectPhotos, publishablePhotos } from "@/lib/photo-sources";
 import { photoUrlsJson } from "@/lib/dispo/blast-email";
 import { audit } from "@/lib/audit-log";
 import {
@@ -89,15 +89,18 @@ export async function GET(req: Request) {
       maxTotal: 12,
     });
 
+    const publishable = publishablePhotos(photos);
+    const streetviewAvailable = photos.some((p) => p.source === "streetview");
+
     let applied = false;
     let skipped: string | null = null;
     if (applyRequested) {
-      if (photos.length === 0) {
+      if (publishable.length === 0) {
         skipped = "no_photos";
       } else if (alreadyPopulated && !force) {
         skipped = "already_populated";
       } else {
-        await updateListingRecord(recordId, { Deal_Photo_URLs: photoUrlsJson(photos) });
+        await updateListingRecord(recordId, { Deal_Photo_URLs: photoUrlsJson(publishable) });
         applied = true;
       }
     }
@@ -108,7 +111,7 @@ export async function GET(req: Request) {
       status: applied ? "confirmed_success" : "uncertain",
       recordId,
       inputSummary: { address: listing.address, verificationUrl: listing.verificationUrl, apply: applyRequested, force, alreadyPopulated },
-      outputSummary: { photo_count: photos.length, sources: Array.from(new Set(photos.map((p) => p.source))), applied, skipped },
+      outputSummary: { photo_count: publishable.length, sources: Array.from(new Set(publishable.map((p) => p.source))), applied, skipped, streetview_available: streetviewAvailable },
       ms: Date.now() - t0,
     });
 
@@ -117,9 +120,10 @@ export async function GET(req: Request) {
       recordId,
       address: listing.address,
       verificationUrl: listing.verificationUrl,
-      photo_count: photos.length,
-      sources: Array.from(new Set(photos.map((p) => p.source))),
-      photos: photos.map((p) => p.url),
+      photo_count: publishable.length,
+      sources: Array.from(new Set(publishable.map((p) => p.source))),
+      photos: publishable.map((p) => p.url),
+      streetview_available: streetviewAvailable,
       applied,
       skipped,
       ms: Date.now() - t0,

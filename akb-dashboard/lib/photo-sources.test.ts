@@ -19,6 +19,8 @@ import {
   zillowResolutionRank,
   FIRECRAWL_PHOTO_DENY_PATTERNS,
   FIRECRAWL_HTML_IMG_RE,
+  publishablePhotos,
+  type CollectedPhoto,
 } from "./photo-sources";
 
 const SUBJECT_PAGE = "https://www.redfin.com/TX/Dallas/924-Sunnyside-Ave-75211/home/32118136";
@@ -342,5 +344,70 @@ describe("filterPropertyPhotos — combined", () => {
     expect(out.dropped_chrome).toBe(5);
     expect(out.dropped_offcluster).toBe(4);
     expect(out.dropped_variant_dedup).toBe(1);
+  });
+});
+
+// ── publishablePhotos — security filter (2026-09-16) ─────────────────
+//
+// Google Street View Static URLs (streetViewUrl, above in this file's
+// subject module) embed GOOGLE_MAPS_API_KEY as &key=... . Street View
+// stays available to internal vision/rehab callers that use
+// collectPhotos directly, but must never be persisted to a record
+// field or returned from an HTTP route. publishablePhotos is the pure
+// filter that draws that line.
+
+describe("publishablePhotos", () => {
+  it("drops streetview entries", () => {
+    const photos: CollectedPhoto[] = [
+      { url: "https://example.com/a.jpg", source: "firecrawl" },
+      { url: "https://maps.googleapis.com/maps/api/streetview?location=x&key=SECRET", source: "streetview" },
+    ];
+    expect(publishablePhotos(photos)).toEqual([
+      { url: "https://example.com/a.jpg", source: "firecrawl" },
+    ]);
+  });
+
+  it("drops any URL containing key= regardless of source (belt and braces)", () => {
+    const photos: CollectedPhoto[] = [
+      { url: "https://example.com/b.jpg?key=SECRET", source: "listing" },
+      { url: "https://example.com/c.jpg", source: "rentcast" },
+    ];
+    expect(publishablePhotos(photos)).toEqual([
+      { url: "https://example.com/c.jpg", source: "rentcast" },
+    ]);
+  });
+
+  it("keeps firecrawl, rentcast, and listing entries untouched", () => {
+    const photos: CollectedPhoto[] = [
+      { url: "https://cdn.example.com/1.jpg", source: "rentcast" },
+      { url: "https://cdn.example.com/2.jpg", source: "firecrawl" },
+      { url: "https://cdn.example.com/3.jpg", source: "listing" },
+    ];
+    expect(publishablePhotos(photos)).toEqual(photos);
+  });
+
+  it("preserves the relative order of surviving photos", () => {
+    const photos: CollectedPhoto[] = [
+      { url: "https://cdn.example.com/1.jpg", source: "rentcast" },
+      { url: "https://maps.googleapis.com/maps/api/streetview?key=SECRET", source: "streetview" },
+      { url: "https://cdn.example.com/2.jpg", source: "firecrawl" },
+      { url: "https://cdn.example.com/3.jpg", source: "listing" },
+    ];
+    expect(publishablePhotos(photos).map((p) => p.url)).toEqual([
+      "https://cdn.example.com/1.jpg",
+      "https://cdn.example.com/2.jpg",
+      "https://cdn.example.com/3.jpg",
+    ]);
+  });
+
+  it("returns an empty array when every photo is streetview or key-bearing", () => {
+    const photos: CollectedPhoto[] = [
+      { url: "https://maps.googleapis.com/maps/api/streetview?key=SECRET", source: "streetview" },
+    ];
+    expect(publishablePhotos(photos)).toEqual([]);
+  });
+
+  it("handles an empty input array", () => {
+    expect(publishablePhotos([])).toEqual([]);
   });
 });
