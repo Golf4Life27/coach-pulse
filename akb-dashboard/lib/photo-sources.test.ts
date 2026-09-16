@@ -16,7 +16,9 @@ import {
   filterPropertyPhotos,
   extractRedfinListingId,
   photoIdentityKey,
+  zillowResolutionRank,
   FIRECRAWL_PHOTO_DENY_PATTERNS,
+  FIRECRAWL_HTML_IMG_RE,
 } from "./photo-sources";
 
 const SUBJECT_PAGE = "https://www.redfin.com/TX/Dallas/924-Sunnyside-Ave-75211/home/32118136";
@@ -229,6 +231,88 @@ describe("filterPropertyPhotos — resolution dedup", () => {
     const out = filterPropertyPhotos(urls, SUBJECT_PAGE);
     expect(out.kept.length).toBe(3);
     expect(out.dropped_variant_dedup).toBe(0);
+  });
+});
+
+describe("Zillow CDN photos (recbHNKmFSiGXrfus / 1005 2nd St backfill)", () => {
+  // Real Zillow CDN filenames are `<32-char-hex-hash>-<variant>.jpg` — no
+  // extractable Redfin listing id (no "/home/<digits>" and no digit run
+  // long enough to satisfy extractRedfinListingId), and Zillow serves the
+  // same photo at several widths (-cc_ft_1536/-cc_ft_960/.../-p_e).
+  const ZILLOW_PAGE =
+    "https://www.zillow.com/homedetails/1005-2nd-St-Birmingham-AL-35214/938319_zpid/";
+  const HASH = "8f1c2a9de1cb3a2f4e5d6c7b8a9f0e1d";
+  const zillowPhoto = (variant: string) => `https://photos.zillowstatic.com/fp/${HASH}-${variant}.jpg`;
+
+  it("extractRedfinListingId finds no id in a Zillow photo URL or page URL", () => {
+    expect(extractRedfinListingId(zillowPhoto("cc_ft_1536"))).toBeNull();
+    expect(extractRedfinListingId(ZILLOW_PAGE)).toBeNull();
+  });
+
+  it("photoIdentityKey collapses Zillow size variants to the same hash key", () => {
+    const key1536 = photoIdentityKey(zillowPhoto("cc_ft_1536"));
+    const key960 = photoIdentityKey(zillowPhoto("cc_ft_960"));
+    const keyPe = photoIdentityKey(zillowPhoto("p_e"));
+    expect(key1536).toBe(HASH);
+    expect(key1536).toBe(key960);
+    expect(key1536).toBe(keyPe);
+  });
+
+  it("photoIdentityKey does not collapse two DIFFERENT Zillow photos", () => {
+    const other = "9a0b1c2d3e4f5061728394a5b6c7d8e9";
+    expect(photoIdentityKey(zillowPhoto("cc_ft_1536"))).not.toBe(
+      photoIdentityKey(`https://photos.zillowstatic.com/fp/${other}-cc_ft_1536.jpg`),
+    );
+  });
+
+  it("zillowResolutionRank orders known size tags largest-first", () => {
+    const r1536 = zillowResolutionRank(zillowPhoto("cc_ft_1536"));
+    const r960 = zillowResolutionRank(zillowPhoto("cc_ft_960"));
+    const r768 = zillowResolutionRank(zillowPhoto("cc_ft_768"));
+    const r576 = zillowResolutionRank(zillowPhoto("cc_ft_576"));
+    const r384 = zillowResolutionRank(zillowPhoto("cc_ft_384"));
+    const rPe = zillowResolutionRank(zillowPhoto("p_e"));
+    expect(r1536).toBeGreaterThan(r960);
+    expect(r960).toBeGreaterThan(r768);
+    expect(r768).toBeGreaterThan(r576);
+    expect(r576).toBeGreaterThan(r384);
+    expect(r384).toBeGreaterThan(rPe);
+    expect(rPe).toBeGreaterThan(0);
+  });
+
+  it("FIRECRAWL_HTML_IMG_RE extracts Zillow CDN photo URLs from a listing-page HTML sample", () => {
+    const html = `
+      <div class="media-stream">
+        <img src="${zillowPhoto("cc_ft_1536")}" alt="Front exterior" />
+        <img src="${zillowPhoto("cc_ft_960")}" alt="Front exterior (small)" />
+        <img src="${zillowPhoto("p_e")}" alt="Front exterior (thumb)" />
+      </div>
+    `;
+    const matches = Array.from(new Set(html.match(FIRECRAWL_HTML_IMG_RE) ?? []));
+    expect(matches).toEqual([
+      zillowPhoto("cc_ft_1536"),
+      zillowPhoto("cc_ft_960"),
+      zillowPhoto("p_e"),
+    ]);
+  });
+
+  it("filterPropertyPhotos keeps Zillow photos (does not drop them for lacking a Redfin id) and dedupes to the largest variant", () => {
+    const urls = [zillowPhoto("cc_ft_1536"), zillowPhoto("cc_ft_960"), zillowPhoto("p_e")];
+    const out = filterPropertyPhotos(urls, ZILLOW_PAGE);
+    expect(out.dropped_chrome).toBe(0);
+    expect(out.dropped_offcluster).toBe(0);
+    expect(out.kept.length).toBe(1);
+    expect(out.kept[0]).toBe(zillowPhoto("cc_ft_1536"));
+    expect(out.dropped_variant_dedup).toBe(2);
+  });
+
+  it("filterPropertyPhotos keeps a Zillow photo alongside Redfin comps without cross-contamination", () => {
+    const urls = [zillowPhoto("cc_ft_1536"), compPhoto("99999999", 0), compPhoto("99999999", 1)];
+    const out = filterPropertyPhotos(urls, ZILLOW_PAGE);
+    expect(out.kept).toContain(zillowPhoto("cc_ft_1536"));
+    expect(out.kept).toContain(compPhoto("99999999", 0));
+    expect(out.kept).toContain(compPhoto("99999999", 1));
+    expect(out.dropped_offcluster).toBe(0);
   });
 });
 
