@@ -29,9 +29,11 @@ import {
 } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { verifyListingByUrl } from "@/lib/crawler/sources/firecrawl";
-import { isPriceableMarket } from "@/lib/markets/actionable";
+import { isFreshnessPriceableMarket } from "@/lib/markets/actionable";
 import { listSeededZips } from "@/lib/buyer-median-store";
 import { listPriceableArvZips, listSelfPricingArvZips } from "@/lib/zip-arv-seed-store";
+import { isListAnchorMode } from "@/lib/pricing/list-anchor-opener";
+import { getActiveIntakeZips } from "@/lib/zip-registry";
 import { isOutreachFresh, DEFAULT_FRESHNESS_HOURS } from "@/lib/outreach-freshness";
 import { judgeSpread, isSpreadWatchRecord } from "@/lib/contract-lifecycle/spread-watch";
 import { judgeSubjectPrint } from "@/lib/pricing/subject-history";
@@ -113,9 +115,17 @@ async function handleGet(req: Request) {
   // ≥60% of the slots whenever it needs them. Exhausted/replied/DNT Texted
   // records stay out — dead air stays cold.
   const REPLY_BEARING = new Set(["Negotiating", "Response Received", "Counter Received", "Offer Accepted"]);
+  // LIST-ANCHOR COVERAGE PARITY (2026-09-16): the send lane's own ZIP
+  // coverage in list-anchor mode unions the registry's launch/active ZIPs
+  // (getActiveIntakeZips, ~230 ZIPs) into first-touch coverage — see
+  // app/api/cron/h2-outreach resolveCoverage. Fetched only in list-anchor
+  // mode (an unconditional call would spend an Airtable read every pass for
+  // nothing outside it); read failure narrows to empty, never widens.
+  const listAnchorModeActive = isListAnchorMode();
   let active: Listing[];
   let seededZips: Set<string>;
   let selfPricingZips: Set<string>;
+  let registryFirstTouchZips: Set<string>;
   try {
     let all: Listing[];
     // 2026-07-10 autopsy fix (the 43-stale cohort): this route filtered
@@ -132,13 +142,16 @@ async function handleGet(req: Request) {
     // they go stale at 48h, and this pass can never touch them again — the
     // exact failure lib/markets/actionable.ts:90 warns about. lib/crawler/
     // intake-filter.ts:291 passes all three; this call site passed two.
-    [all, arvZips, medianZips, selfPricingZips] = await Promise.all([
+    let registryZipsRaw: string[];
+    [all, arvZips, medianZips, selfPricingZips, registryZipsRaw] = await Promise.all([
       getListings(),
       listPriceableArvZips(),
       listSeededZips(),
       listSelfPricingArvZips(),
+      listAnchorModeActive ? getActiveIntakeZips().catch(() => []) : Promise.resolve([]),
     ]);
     seededZips = new Set<string>([...arvZips, ...medianZips]);
+    registryFirstTouchZips = new Set<string>(registryZipsRaw.map((z) => z.trim()));
     // Third cohort (2026-07-09): untouched records whose Live_Status was
     // never stamped (6/30 Indy class) are invisible to isH2Eligible until
     // a verify pass writes Live_Status — which is exactly what THIS route
@@ -179,7 +192,12 @@ async function handleGet(req: Request) {
     // why a $60K cut on a record UNDER CONTRACT went invisible for 17 days.
     // Protecting a live spread is worth a credit in any market on the map.
     if (!isSpreadWatchRecord(l)) {
-      const market = isPriceableMarket({ state: l.state, city: l.city, zip: l.zip }, seededZips, selfPricingZips);
+      const market = isFreshnessPriceableMarket(
+        { state: l.state, city: l.city, zip: l.zip },
+        seededZips,
+        selfPricingZips,
+        { listAnchorModeActive, registryZips: registryFirstTouchZips },
+      );
       if (!market.actionable) {
         skippedNonActionable.push({ recordId: l.id, reason: market.reason ?? "non_priceable" });
         return false;
@@ -187,6 +205,20 @@ async function handleGet(req: Request) {
     }
     return !isOutreachFresh({ lastVerified: l.lastVerified, liveStatus: l.liveStatus }, now, maxAgeHours).fresh;
   });
+
+  // Diagnostic (2026-09-16, the 114-record verify_stale floor): this array
+  // was computed and thrown away — the only way to see WHY the pool never
+  // shrinks was reading source. Surface counts-by-reason + a sample so the
+  // next operator/agent can diagnose without another code read.
+  const skippedByReason: Record<string, number> = {};
+  for (const s of skippedNonActionable) {
+    skippedByReason[s.reason] = (skippedByReason[s.reason] ?? 0) + 1;
+  }
+  const skippedNonActionableSummary = {
+    total: skippedNonActionable.length,
+    by_reason: skippedByReason,
+    sample: skippedNonActionable.slice(0, 20),
+  };
 
   // Oldest-first (never-verified = oldest).
   candidates.sort((a, b) => {
@@ -210,6 +242,8 @@ async function handleGet(req: Request) {
       max_age_hours: maxAgeHours,
       scope: { zips: [...zipScope], state: stateScope || null, out_of_scope: outOfScope },
       seeded_zips: [...seededZips],
+      list_anchor_mode: listAnchorModeActive,
+      registry_zips_count: registryFirstTouchZips.size,
       active_total: active.length,
       due_total: candidates.length,
       bump_partition: {
@@ -218,7 +252,7 @@ async function handleGet(req: Request) {
         core_taken: partition.coreTaken,
         bump_taken: partition.bumpTaken,
       },
-      skipped_non_priceable: skippedNonActionable.length,
+      skipped_non_priceable: skippedNonActionableSummary,
       batch: batch.map((l) => ({ recordId: l.id, address: l.address, state: l.state, zip: l.zip, lastVerified: l.lastVerified ?? null, url: l.verificationUrl })),
       duration_ms: Date.now() - t0,
     });
@@ -435,6 +469,7 @@ async function handleGet(req: Request) {
         core_taken: partition.coreTaken,
         bump_taken: partition.bumpTaken,
       },
+      skipped_non_priceable: skippedNonActionableSummary,
     },
     results,
     duration_ms: Date.now() - t0,
