@@ -571,6 +571,26 @@ export async function probeRentCastPhotos(input: {
 }
 
 /**
+ * Filter a collectPhotos() result down to photos safe to persist to a
+ * record field or return from an HTTP route. Street View Static URLs
+ * embed GOOGLE_MAPS_API_KEY as a query param (&key=...) — that key must
+ * never leave the server. Street View stays available in-process for
+ * the internal vision/rehab callers that call collectPhotos directly;
+ * this filter is only for anything that gets written to a public field
+ * (e.g. Deal_Photo_URLs) or serialized into an API response.
+ *
+ * Drops:
+ *   - any photo with source === "streetview"
+ *   - belt-and-braces: any URL containing "key=", regardless of source,
+ *     in case a future source ever embeds a credential the same way.
+ *
+ * Pure. Preserves the relative order of the surviving photos.
+ */
+export function publishablePhotos(photos: CollectedPhoto[]): CollectedPhoto[] {
+  return photos.filter((p) => p.source !== "streetview" && !p.url.includes("key="));
+}
+
+/**
  * Returns combined photo array. Priority order:
  *   1. RentCast structured photos (paid, no scraping)
  *   2. Firecrawl scrape of listing URL (paid, already wired)

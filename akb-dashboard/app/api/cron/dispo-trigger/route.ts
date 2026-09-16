@@ -46,7 +46,7 @@ import {
 } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { sendEmail } from "@/lib/gmail";
-import { collectPhotos } from "@/lib/photo-sources";
+import { collectPhotos, publishablePhotos } from "@/lib/photo-sources";
 import { evaluateAssignmentSpread } from "@/lib/pricing/assignment-spread";
 import { buildBuyerShortlist } from "@/lib/dispo/buyer-shortlist";
 import {
@@ -203,8 +203,9 @@ export async function GET(req: Request) {
             verificationUrl: l.verificationUrl ?? null, fullAddress,
             address: l.address, city: l.city ?? null, state: l.state ?? null, zip: l.zip ?? null, maxTotal: 8,
           });
-          photoCount = photos.length;
-          if (photos.length > 0) publishFields.Deal_Photo_URLs = photoUrlsJson(photos);
+          const publishable = publishablePhotos(photos);
+          photoCount = publishable.length;
+          if (publishable.length > 0) publishFields.Deal_Photo_URLs = photoUrlsJson(publishable);
         } catch (err) {
           console.error(`[dispo-trigger] photo collection failed for ${recordId}:`, err);
         }
