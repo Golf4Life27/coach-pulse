@@ -10,7 +10,7 @@
 // off-market home. Every one of them is a house nobody can buy.
 
 import { describe, it, expect } from "vitest";
-import { detectInactiveMarkers, detectStillActive } from "./firecrawl";
+import { detectInactiveMarkers, detectStillActive, buildResolvedResult, classifyVerifiedListing } from "./firecrawl";
 
 // Status-region text as the portals actually render it for a home that is
 // no longer for sale. None of these contain the literal strings
@@ -42,21 +42,81 @@ describe("REPRO 8203 Brace — off-market pages are classified ACTIVE", () => {
     expect(detectStillActive("The home is no longer on the market")).toBe(false);
   });
 
-  // ── RESIDUAL GAPS — deliberately still failing-open, pinned here so they
-  // are visible rather than forgotten. Both need an operator ruling because
-  // closing them trades send VOLUME for send ACCURACY.
+  // ── REPRODUCTION — 2026-09-17 Dayton triple-sold incident (round 2) ────
+  // Three agents (4900 Genesee Ave, 3467 Zephyr Dr, 816 N Gettysburg Ave —
+  // the last one SIX WEEKS after it sold) were texted first-touch offers on
+  // houses freshness-reverify had just re-stamped Live_Status=Active. The
+  // real Redfin page for 816 N Gettysburg Ave (its Verification_URL) was
+  // fetched to confirm the actual shape: the subject's own status region is
+  // a BARE line — "SOLD AUG 16, 2026" then "Sold" — never a sentence naming
+  // "this home". The subject-named markers alone (round 1 of this fix)
+  // would NOT have caught this page. Fixed with line-anchored bare-status
+  // detection (detectBareStatusLines) instead: the ENTIRE trimmed line must
+  // read as just the status, so prose merely mentioning a sale ("since sold
+  // in August 2026") still cannot match, and a NEIGHBOR's identical bare
+  // line ("SOLD JUN 12, 2026" under "Recently sold homes") is kept out by
+  // scopeStatusText's comps stripping — not by the anchor itself.
 
-  // GAP 1: a bare "Sold" / "Off market" banner with no subject-scoped
-  // sentence. Bare "off market" and "sold on" were REMOVED on 2026-05-26
-  // because a full-page substring scan false-flagged live distress listings
-  // from nearby-homes boilerplate (3719 W Houston). scopeStatusText now
-  // strips comps + history, which is what made that exclusion stale — but
-  // COMPS_HEADERS does not yet match a section titled "Off-market homes
-  // nearby", so re-adding the bare phrases could reopen that regression.
-  // Fix = extend COMPS_HEADERS first, then re-add. Not done here.
-  it("GAP: a bare Sold banner is still not detected", () => {
-    expect(detectStillActive("Sold\nSold on 05/12/2026 for $61,000")).toBe(true);
+  // (a) The real Gettysburg shape, full pipeline (buildResolvedResult +
+  // classifyVerifiedListing — the same path the reverify pass and pre-send
+  // probe both call). Must reject firecrawl_inactive.
+  it("816 N Gettysburg Ave — real Redfin shape rejects firecrawl_inactive", () => {
+    const md = [
+      "# 816 N Gettysburg Ave, Dayton, OH 45417",
+      "SOLD AUG 16, 2026",
+      "Sold",
+      "since sold in August 2026",
+      "3 bed, 1 bath, 890 sqft",
+      "Recently sold homes",
+      "SOLD JUN 12, 2026",
+      "SOLD JUN 8, 2026",
+      "Sold",
+      "Pending",
+      "Sold",
+    ].join("\n");
+    const fc = buildResolvedResult(md, "https://www.redfin.com/OH/Dayton/816-N-Gettysburg-Ave-45417/home/75965067", "816 N Gettysburg Ave", 1, false);
+    expect(fc.resolved).toBe(true);
+    expect(fc.matchedInactiveMarkers).toEqual(expect.arrayContaining(["status-line: sold aug 16, 2026", "status-line: sold"]));
+    expect(fc.stillActive).toBe(false);
+    expect(classifyVerifiedListing(fc)).toEqual({ outcome: "reject", reason: "firecrawl_inactive" });
   });
+
+  // (b) Zillow-shape: a "Sold" chip line followed by a "Sold on MM/DD/YY"
+  // chip line — the other common portal rendering.
+  it("Zillow shape: 'Sold' then 'Sold on 08/29/26' chip lines are detected", () => {
+    const md = "# 1 Test St, City, ST 00000\nSold\nSold on 08/29/26\n3 bed 1 bath.";
+    expect(detectStillActive(md)).toBe(false);
+  });
+
+  // (c) NEGATIVE: an ACTIVE listing whose own status region has no bare
+  // status line, even though its Sale & Tax History has "Sold" table rows
+  // and its Recently-sold comps have bare "SOLD JUN 12, 2026" lines — both
+  // sections must be scoped away before the anchor ever sees them.
+  it("NEGATIVE: an active listing's history + comps 'Sold' lines don't leak into its own status", () => {
+    const md = [
+      "# 1 Test St, City, ST 00000",
+      "For sale — $199,000. 3 bed, 2 bath.",
+      "Active on market, 12 days.",
+      "## Sale & Tax History",
+      "| 3/04/2018 | Sold | $92,000 |",
+      "## Recently sold homes",
+      "SOLD JUN 12, 2026",
+      "SOLD JUN 8, 2026",
+    ].join("\n");
+    expect(detectStillActive(md)).toBe(true);
+  });
+
+  // (d) NEGATIVE: Redfin's own trademark boilerplate names "pending" inside
+  // a sentence — must not read as a bare status chip.
+  it("NEGATIVE: Redfin's USPTO trademark line does not contain a bare status", () => {
+    const md =
+      "Redfin and all Redfin variants are trademarks of Redfin Corporation, registered or pending in the USPTO.";
+    expect(detectStillActive(md)).toBe(true);
+  });
+
+  // ── RESIDUAL GAP — deliberately still failing-open, pinned here so it is
+  // visible rather than forgotten. Needs an operator ruling because closing
+  // it trades send VOLUME for send ACCURACY.
 
   // GAP 2: the structural defect. `stillActive` is the ABSENCE of a marker,
   // so empty / truncated / unresolved page text reads as ACTIVE. This is a
