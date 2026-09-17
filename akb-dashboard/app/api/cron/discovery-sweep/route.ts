@@ -35,7 +35,9 @@ import {
   type SweepCandidate,
   type SweepScreen,
 } from "@/lib/crawler/discovery-sweep";
-import { METRO_ZIPS } from "@/lib/crawler/metro-zips";
+import { buildCircuitRows } from "@/lib/crawler/metro-zips";
+import { isListAnchorMode } from "@/lib/pricing/list-anchor-opener";
+import { getActiveIntakeRows } from "@/lib/zip-registry";
 import {
   parseAddressFromListingUrl,
   pickAgentPhone,
@@ -96,15 +98,24 @@ async function handleGet(req: Request) {
   }
 
   // ── Pick the next stop on the circuit ──
+  // Circuit = the hardcoded METRO_ZIPS UNION the ZIP_Registry's launch/active
+  // ZIPs (2026-09-17, discovery circuit registry): the send lane already
+  // covers far more ZIPs than the crawler was visiting, so the registry ZIPs
+  // are houses the send lane could work today if discovery ever swept them.
+  // Registry read failure narrows to METRO_ZIPS only — never blocks the hunt.
+  const listAnchorModeActive = isListAnchorMode();
+  const registryRows = await getActiveIntakeRows().catch(() => []);
+  const circuitZips = buildCircuitRows(registryRows, { listAnchorModeActive });
+  const circuitLookup = new Map<string, { metro: string; state: string }>();
+  for (const r of circuitZips) circuitLookup.set(r.zip, { metro: r.metro, state: r.state });
+
   const rows: MetroCircuitRow[] = [];
-  for (const { metro, zips } of METRO_ZIPS) {
-    for (const zip of zips) {
-      let lastSweptAt: string | null = null;
-      if (kvConfigured()) {
-        lastSweptAt = await kvProd.get(sweepKey(zip)).catch(() => null);
-      }
-      rows.push({ metro, zip, lastSweptAt });
+  for (const { zip } of circuitZips) {
+    let lastSweptAt: string | null = null;
+    if (kvConfigured()) {
+      lastSweptAt = await kvProd.get(sweepKey(zip)).catch(() => null);
     }
+    rows.push({ metro: circuitLookup.get(zip)!.metro, zip, lastSweptAt });
   }
   const leg = selectNextLeg(rows, new Date(), zipCap);
   if (!leg) {
@@ -132,7 +143,7 @@ async function handleGet(req: Request) {
 
   for (const zip of leg.zips) {
     if (Date.now() - t0 > WALL_CLOCK_BUDGET_MS) break;
-    const city = METRO_ZIPS.find((m) => m.zips.includes(zip));
+    const city = circuitLookup.get(zip);
     let urls: string[] = [];
     try {
       const res = await fetch(FIRECRAWL_SEARCH_URL, {
