@@ -8,6 +8,7 @@ import {
   evaluateThreadTruth,
   parseKnownQuoIds,
   newestKnownInboundTs,
+  countUnrecordedOutbound,
   THREAD_TRUTH_SKEW_MS,
 } from "./thread-truth";
 
@@ -113,5 +114,33 @@ describe("evaluateThreadTruth — the Canfield case", () => {
     const v = evaluateThreadTruth({ thread, knownQuoIds: new Set(), newestKnownInboundMs: null, enforceUnseenInbound: true });
     expect(v.ok).toBe(false);
     expect(v.reason).toBe("unseen_inbound_in_thread");
+  });
+});
+
+describe("countUnrecordedOutbound", () => {
+  it("counts outgoing messages missing from the known-ids set only", () => {
+    const thread: QuoMessage[] = [
+      msg({ id: "AC08A9A32420364CB28FD69CE6D2DB20" }), // recorded
+      msg({ id: "ACMANUAL0000000000000000000000AA" }), // unrecorded operator send
+      msg({ id: "ACINBOUND00000000000000000000AB", direction: "incoming" }),
+      msg({ id: "ACMANUAL0000000000000000000000CC" }), // second unrecorded send
+    ];
+    const known = parseKnownQuoIds(CANFIELD_NOTES);
+    expect(countUnrecordedOutbound(thread, known)).toBe(2);
+  });
+
+  it("all recorded → zero", () => {
+    const known = parseKnownQuoIds(CANFIELD_NOTES);
+    const thread: QuoMessage[] = [msg({ id: "AC08A9A32420364CB28FD69CE6D2DB20" })];
+    expect(countUnrecordedOutbound(thread, known)).toBe(0);
+  });
+
+  it("empty thread → zero", () => {
+    expect(countUnrecordedOutbound([], new Set())).toBe(0);
+  });
+
+  it("id missing entirely is not counted (nothing to compare)", () => {
+    const thread: QuoMessage[] = [msg({ id: "" })];
+    expect(countUnrecordedOutbound(thread, new Set())).toBe(0);
   });
 });

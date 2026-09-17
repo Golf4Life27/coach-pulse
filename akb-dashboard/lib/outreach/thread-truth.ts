@@ -111,6 +111,23 @@ export function evaluateThreadTruth(opts: {
   return { ok: true, reason: null, evidence: null, checked: thread.length };
 }
 
+/** Pure: how many OUTGOING messages in a live thread carry an id the
+ *  record's notes have never seen — the same "unrecorded outbound" signal
+ *  rule (a) above refuses a send on, exposed here as a count for read-only
+ *  reporting (e.g. the thread-tail admin route) rather than a gate verdict. */
+export function countUnrecordedOutbound(
+  thread: readonly QuoMessage[],
+  knownQuoIds: ReadonlySet<string>,
+): number {
+  let count = 0;
+  for (const m of thread) {
+    if (m.direction !== "outgoing") continue;
+    const id = (m.id ?? "").toUpperCase();
+    if (id && !knownQuoIds.has(id)) count++;
+  }
+  return count;
+}
+
 function refuse(reason: ThreadTruthReason, m: QuoMessage, checked: number): ThreadTruthVerdict {
   return {
     ok: false,
