@@ -206,6 +206,28 @@ describe("evaluateIntakeCandidate — priceable-market gate (opt-in)", () => {
     expect(r.accept).toBe(false);
     expect(r.reasons).toContain("market_not_priceable");
   });
+
+  // Discovery circuit registry (2026-09-17): list-anchor coverage parity.
+  it("requirePriceable rejects TX San Antonio in a registry ZIP when list-anchor mode is OFF", () => {
+    const r = evaluateIntakeCandidate(cand(), NOW, {
+      seededZips: seeded,
+      requirePriceable: true,
+      registryZips: new Set(["78201"]),
+      listAnchorModeActive: false,
+    });
+    expect(r.accept).toBe(false);
+    expect(r.reasons).toContain("market_not_priceable");
+  });
+
+  it("requirePriceable accepts TX San Antonio when it is a registry ZIP AND list-anchor mode is ON", () => {
+    const r = evaluateIntakeCandidate(cand(), NOW, {
+      seededZips: seeded,
+      requirePriceable: true,
+      registryZips: new Set(["78201"]),
+      listAnchorModeActive: true,
+    });
+    expect(r.accept).toBe(true);
+  });
 });
 
 // ── Sqft cross-check (data armor, 2026-07-03 Tiger Flowers regression) ──

@@ -93,7 +93,7 @@
       "schedule": "25 * * * *"
     },
     {
-      "path": "/api/cron/discovery-sweep?apply=1&zips=8",
+      "path": "/api/cron/discovery-sweep?apply=1&zips=16",
       "schedule": "15 */2 * * *"
     },
     {

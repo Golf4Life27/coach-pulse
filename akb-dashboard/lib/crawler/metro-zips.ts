@@ -77,3 +77,56 @@ export const METRO_ZIPS: readonly MetroZips[] = [
 
 /** Every ZIP on the circuit, for coverage checks. */
 export const ALL_CIRCUIT_ZIPS: readonly string[] = METRO_ZIPS.flatMap((m) => m.zips);
+
+/** A stop on the circuit, resolved to one metro + one ZIP. */
+export interface CircuitZipRow {
+  metro: string;
+  zip: string;
+  state: string;
+}
+
+/** Minimal shape of a ZIP_Registry row this module needs — avoids an import
+ *  cycle with lib/zip-registry (which does Airtable I/O; this stays pure). */
+export interface RegistryZipInput {
+  zip: string;
+  state: string | null;
+  market: string | null;
+}
+
+/** Pure: the hardcoded 100-ZIP METRO_ZIPS circuit, UNIONed with the
+ *  ZIP_Registry's launch/active ZIPs (2026-09-17, discovery circuit
+ *  registry) — the send lane already covers far more ZIPs than the crawler
+ *  visits (H2_COVERED_ZIPS=auto, lib/outreach/send-cap.ts), so every
+ *  registry ZIP is a house the send lane could work today if discovery ever
+ *  found one there.
+ *
+ *  De-duped by ZIP (a registry row never overrides a METRO_ZIPS stop's
+ *  metro label). TX is excluded from the registry addition unless
+ *  list-anchor mode is active — same reason METRO_ZIPS itself excludes TX
+ *  (non-disclosure state, the value-anchored pricer returns null there); in
+ *  list-anchor mode the opener is pct x list and needs no pricer. A registry
+ *  row's metro label is its Market field, falling back to State when Market
+ *  is blank. */
+export function buildCircuitRows(
+  registryRows: ReadonlyArray<RegistryZipInput>,
+  opts: { listAnchorModeActive: boolean } = { listAnchorModeActive: false },
+): CircuitZipRow[] {
+  const seen = new Set<string>();
+  const rows: CircuitZipRow[] = [];
+  for (const { metro, state, zips } of METRO_ZIPS) {
+    for (const zip of zips) {
+      if (seen.has(zip)) continue;
+      seen.add(zip);
+      rows.push({ metro, zip, state });
+    }
+  }
+  for (const r of registryRows) {
+    const zip = (r.zip ?? "").trim();
+    if (!/^\d{5}$/.test(zip) || seen.has(zip)) continue;
+    const state = (r.state ?? "").trim().toUpperCase();
+    if (state === "TX" && !opts.listAnchorModeActive) continue;
+    seen.add(zip);
+    rows.push({ metro: (r.market ?? "").trim() || state || "Unknown", zip, state });
+  }
+  return rows;
+}

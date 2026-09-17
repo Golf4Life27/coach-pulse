@@ -41,7 +41,12 @@ export const DEFAULT_CIRCUIT_DAYS = 21;
 
 /** ZIPs swept in one leg. A leg is one metro's worth of work in one run;
  *  Firecrawl cost is ~2 credits per ZIP search, so this is bounded by run
- *  wall-clock, not by budget. */
+ *  wall-clock, not by budget.
+ *
+ *  vercel.json runs this route at 16 ZIPs/leg, 12 runs/day (every 2h): 16 x
+ *  ~4 credits (search + scrape) x 12 = ~770 credits/day, under the 800/hour
+ *  FIRECRAWL_HOURLY_CREDIT_CAP breaker and ~23k/month against the ~85k on
+ *  hand (2026-09-17). Comfortably inside DEFAULT_LEG_ZIP_CAP (25). */
 export const DEFAULT_LEG_ZIP_CAP = 25;
 
 export interface MetroCircuitRow {

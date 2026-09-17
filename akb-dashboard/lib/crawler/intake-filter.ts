@@ -25,7 +25,7 @@
 // offer). Volume up substantially — intentional. Price-reduction detection
 // is a SEPARATE downstream re-engagement trigger (INV-030), NOT intake.
 
-import { isPriceableMarket } from "@/lib/markets/actionable";
+import { isFreshnessPriceableMarket } from "@/lib/markets/actionable";
 
 export const EXCLUDED_STATES: ReadonlySet<string> = new Set([
   "IL", "MO", "SC", "NC", "OK", "ND",
@@ -147,6 +147,15 @@ export interface IntakePriceabilityOpts {
   /** ZIP → renovated $/sqft, from the ARV seed store. Enables the
    *  ask-above-renovated-value reject below. Absent → that check is skipped. */
   zipRenovatedPsf?: ReadonlyMap<string, number>;
+  /** List-anchor coverage parity (2026-09-17, discovery circuit registry):
+   *  in list-anchor mode a ZIP_Registry launch/active ZIP is priceable for
+   *  the opener even with no seed (see isFreshnessPriceableMarket) — so a
+   *  registry ZIP the discovery sweep just found is not rejected
+   *  market_not_priceable before it can ever reach the send lane that
+   *  already covers it. Both omitted → identical to the old isPriceableMarket
+   *  gate (backward compatible). */
+  listAnchorModeActive?: boolean;
+  registryZips?: ReadonlySet<string>;
 }
 
 /** A listing asking AT OR ABOVE its own fully-renovated value cannot be
@@ -287,11 +296,17 @@ export function evaluateIntakeCandidate(
     reasons.push("excluded_state");
   } else if (priceability.requirePriceable) {
     // Tighten to PRICEABLE markets only — don't scrape/verify a market we
-    // can't price (sourced arv_pct_max + a seeded ZIP buyer-median).
-    const verdict = isPriceableMarket(
+    // can't price (sourced arv_pct_max + a seeded ZIP buyer-median), except
+    // a ZIP_Registry launch/active ZIP in list-anchor mode, which the send
+    // lane already covers without a seed (isFreshnessPriceableMarket).
+    const verdict = isFreshnessPriceableMarket(
       { state: c.state, city: c.city, zip: c.zip },
       priceability.seededZips ?? new Set<string>(),
       priceability.selfPricingZips,
+      {
+        listAnchorModeActive: priceability.listAnchorModeActive ?? false,
+        registryZips: priceability.registryZips ?? new Set<string>(),
+      },
     );
     if (!verdict.actionable) reasons.push("market_not_priceable");
   }
