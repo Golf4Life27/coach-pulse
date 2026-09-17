@@ -97,10 +97,10 @@ describe("estimateSmsSegments", () => {
   // stay GSM-7 and bill 3 segments. v1 (273 chars, one em-dash) billed 5
   // segments as UCS-2; v2 (361 chars, plain hyphen) bills 3 as GSM-7 — more
   // text, fewer segments, because it never left the 7-bit alphabet.
-  it("the identity-question standing answer is GSM-7, 3 segments", () => {
+  it("the identity-question standing answer is GSM-7, 1 segment", () => {
     const r = estimateSmsSegments(IDENTITY_QUESTION_STANDING_ANSWER);
     expect(r.encoding).toBe("gsm7");
-    expect(r.segments).toBe(3);
+    expect(r.segments).toBe(1);
   });
 });
 

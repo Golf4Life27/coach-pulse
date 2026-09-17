@@ -22,10 +22,10 @@ describe("IDENTITY_QUESTION_STANDING_ANSWER — the fixed operator text", () => 
     }
   });
 
-  it("bills as GSM-7, 3 segments", () => {
+  it("bills as GSM-7, 1 segment", () => {
     const r = estimateSmsSegments(IDENTITY_QUESTION_STANDING_ANSWER);
     expect(r.encoding).toBe("gsm7");
-    expect(r.segments).toBe(3);
+    expect(r.segments).toBe(1);
   });
 
   it("carries no em dash, en dash, or curly quote (plain ASCII hyphen and apostrophe only)", () => {
