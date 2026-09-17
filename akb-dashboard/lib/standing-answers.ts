@@ -6,7 +6,8 @@
 // IDENTITY_QUESTION_STANDING_ANSWER — operator ruling 2026-09-09 (supersedes
 // the 2026-09-08 v1 draft, which carried an em-dash that pushed the message
 // out of GSM-7 and roughly doubled its billed SMS segments — see
-// lib/sms/gsm7.ts). Answers "are you a wholesaler?" / "are you going to
+// lib/sms/gsm7.ts). Wording is the operator's, ruled 2026-09-17 ("use it").
+// Answers "are you a wholesaler?" / "are you going to
 // assign the contract?" (lib/reply-triage.ts classification
 // "identity_question").
 //
@@ -31,4 +32,4 @@
 // hyphen and straight apostrophe only (GSM-7 safety; see lib/sms/gsm7.ts and
 // the regression test in lib/standing-answers.test.ts).
 export const IDENTITY_QUESTION_STANDING_ANSWER =
-  "Yes - I buy with cash and I do assign some contracts to my buyer partners. Either way you're dealing with me: proof of funds up front, earnest money at your title company, as-is with no repair requests, and I close on your seller's timeline. And since I'm unrepresented, there's no buyer-side split coming out of your commission. Happy to send the POF over now.";
+  "Yes, I buy with cash and sometimes bring in a partner at closing. The contract is assignable so I can do that. Either way the seller closes on the same terms.";

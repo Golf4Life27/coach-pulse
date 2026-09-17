@@ -73,11 +73,19 @@
       "schedule": "45 23 * * *"
     },
     {
-      "path": "/api/cron/bump-followup?dry_run=false&limit=10",
+      "path": "/api/cron/bump-followup?dry_run=false&limit=20",
+      "schedule": "15 14 * * *"
+    },
+    {
+      "path": "/api/cron/bump-followup?dry_run=false&limit=20",
       "schedule": "15 16 * * *"
     },
     {
-      "path": "/api/cron/bump-followup?dry_run=false&limit=10",
+      "path": "/api/cron/bump-followup?dry_run=false&limit=20",
+      "schedule": "15 18 * * *"
+    },
+    {
+      "path": "/api/cron/bump-followup?dry_run=false&limit=20",
       "schedule": "15 20 * * *"
     },
     {
