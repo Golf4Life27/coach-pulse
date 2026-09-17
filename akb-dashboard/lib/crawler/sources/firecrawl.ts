@@ -195,12 +195,23 @@ const PREFERRED_DOMAINS = ["redfin.com", "zillow.com", "realtor.com", "homes.com
 // 3719 W Houston, even though scopeStatusText now strips comps + history
 // anyway (that stripping is why the original exclusion is stale — it was
 // written for a FULL-PAGE scan that no longer exists).
+// SUBJECT-SCOPED ADDITIONS (2026-09-17, the Dayton triple-sold incident):
+// three agents were texted first-touch offers on houses that had already
+// SOLD (one six weeks earlier) — the freshness re-verify pass re-scraped
+// each known URL, found no marker in this list, and stamped Live_Status
+// Active. The gap: nothing here names an outright "sold" or "pending"
+// subject status at all, only "off market" / "removed" phrasings. Same
+// subject-naming pattern as the 8203 Brace St additions above — "this home"
+// / "this listing" — so a comps-sidebar "Sold on 3/2/2026" for a NEIGHBOR
+// still cannot match (and scopeStatusText strips that sidebar anyway).
 const INACTIVE_MARKERS = [
   "no longer available", "listing removed", "no longer on the market",
   "this home is not currently listed", "not currently listed for sale",
   "this property is off market", "this home is off market",
   "this home last sold for", "no longer listed",
   "delisted", "removed from market",
+  "this home is sold", "this home is pending",
+  "this listing is sold", "this listing is pending",
 ];
 
 export interface FirecrawlVerifyResult {
@@ -333,15 +344,78 @@ export function detectNewConstruction(
 export function detectInactiveMarkers(text: string | null | undefined): string[] {
   if (!text) return [];
   const lc = text.toLowerCase();
-  return INACTIVE_MARKERS.filter((m) => lc.includes(m));
+  const substringHits = INACTIVE_MARKERS.filter((m) => lc.includes(m));
+  return [...substringHits, ...detectBareStatusLines(text)];
+}
+
+/** Bare status-chip lines — the ENTIRE trimmed line reads as just the status
+ *  word, nothing else. Real portals render the SUBJECT's own closed-sale
+ *  status this way (Redfin's 816 N Gettysburg Ave page, 2026-09-17 incident:
+ *  a standalone "SOLD AUG 16, 2026" line, then a standalone "Sold" line —
+ *  neither is a substring of any named-subject phrase above). */
+const BARE_STATUS_WORDS = new Set(["sold", "pending", "contingent", "off market", "closed"]);
+
+/** A "Sold <date>" status-chip line — the other common rendering
+ *  ("Sold on 08/29/26", "SOLD AUG 16, 2026", "Sold on August 16, 2026").
+ *  Anchored full-line so it never matches a sentence merely mentioning a
+ *  sale date (e.g. "since sold in August 2026" does NOT start with "sold"). */
+const BARE_SOLD_DATE_LINE =
+  /^sold\s+(on\s+)?([a-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})$/i;
+
+/** Pure: strip a single line's leading/trailing markdown decoration
+ *  (heading/bullet/table/emphasis markers), lowercased + trimmed — the same
+ *  normalization listing-text-scope.ts applies to header lines, applied
+ *  here to STATUS lines instead. */
+function normalizeStatusLine(line: string): string {
+  return line
+    .replace(/^[\s>#*_•|-]+/, "")
+    .replace(/[*_#|]+\s*$/, "")
+    .trim()
+    .toLowerCase();
+}
+
+/** Pure: line-anchored bare portal status-chip detection (2026-09-17 fix,
+ *  the 816 N Gettysburg Ave incident — three agents were texted first-touch
+ *  offers on already-sold houses, one six weeks after close). The prior
+ *  INACTIVE_MARKERS list only named SUBJECT-explicit phrases ("this home is
+ *  sold") or multi-word removal phrasings — nothing caught the bare status
+ *  chip ("SOLD AUG 16, 2026" / "Sold") every major portal actually renders
+ *  for a closed subject, so `stillActive` defaulted true.
+ *
+ *  Line-anchored (the WHOLE trimmed line must be just the status), not a
+ *  substring scan — a neighbor's "SOLD JUN 12, 2026" comp line would still
+ *  match if scanned, so it is scopeStatusText's comps/history stripping
+ *  (applied by every caller before this runs) that keeps neighbors out of
+ *  the text in the first place, not this anchor. The anchor's own job is
+ *  narrower: refuse a sentence merely mentioning "sold" ("since sold in
+ *  August 2026", "Sold as-is, motivated seller") which is prose, not a
+ *  status chip standing alone on its own line. */
+export function detectBareStatusLines(text: string | null | undefined): string[] {
+  if (!text) return [];
+  const hits = new Set<string>();
+  for (const raw of text.split("\n")) {
+    const line = normalizeStatusLine(raw);
+    if (!line) continue;
+    if (BARE_STATUS_WORDS.has(line) || BARE_SOLD_DATE_LINE.test(line)) {
+      hits.add(`status-line: ${line}`);
+    }
+  }
+  return [...hits];
 }
 
 /** Pure: heuristic still-active check from portal text. Returns false only
  *  on a strong inactive marker. Default true (RentCast already said Active;
- *  this is a staleness double-check). */
+ *  this is a staleness double-check).
+ *
+ *  Scopes through scopeStatusText first (2026-09-17 fix) so this matches
+ *  what the real verify path (buildResolvedResult) actually checks — comps
+ *  + sale/tax history stripped, only the subject's own current status
+ *  region scanned. Without this, this helper (kept for pure-function
+ *  testing) was a raw full-page scan, which is exactly the scan class the
+ *  2026-05-26 regression fix warned against re-introducing. */
 export function detectStillActive(text: string | null | undefined): boolean {
   if (!text) return true; // no text → don't override RentCast's Active
-  return detectInactiveMarkers(text).length === 0;
+  return detectInactiveMarkers(scopeStatusText(text)).length === 0;
 }
 
 /** Pure: a context snippet around the FIRST case-insensitive occurrence of

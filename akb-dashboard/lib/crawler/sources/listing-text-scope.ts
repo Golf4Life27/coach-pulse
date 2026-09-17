@@ -34,6 +34,12 @@ const COMPS_HEADERS: readonly string[] = [
   "nearby recently sold",
   "comparable sales",
   "comparable homes",
+  // 2026-09-17: bare status-chip detection (firecrawl.ts detectBareStatusLines)
+  // made a stray neighbor "Off market" / "Sold" chip in an unstripped comps
+  // block a real false-reject risk, so these section titles now strip too.
+  "off-market homes",
+  "off market homes",
+  "sold homes",
 ];
 
 /** Section headers that begin the sale/tax/price history block. */

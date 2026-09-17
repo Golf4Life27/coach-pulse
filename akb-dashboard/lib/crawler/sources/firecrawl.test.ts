@@ -128,12 +128,25 @@ describe("detectStillActive", () => {
     expect(detectStillActive("Listing removed by the agent")).toBe(false);
     expect(detectStillActive("This property is no longer on the market")).toBe(false);
   });
-  it("does NOT false-flag boilerplate-prone phrases (2026-05-26 regression)", () => {
+  it("does NOT false-flag boilerplate-prone SENTENCES (2026-05-26 regression)", () => {
     // These appear in Zillow/Redfin nearby-homes, recently-sold, and
-    // pending-comps boilerplate on pages whose subject listing is active.
+    // pending-comps boilerplate on pages whose subject listing is active —
+    // none is a BARE status-chip line (extra words survive the line-anchor
+    // added 2026-09-17, see below), so none trips the new detector either.
     expect(detectStillActive("Sale pending — accepting backups")).toBe(true);
-    expect(detectStillActive("Off market")).toBe(true);
     expect(detectStillActive("This home sold on 4/1/2026")).toBe(true);
+  });
+  it("DOES flag a bare status-chip line with no other words (2026-09-17 fix)", () => {
+    // "Off market" alone on its own line, with no surrounding sentence or
+    // comps header, IS the subject's own status chip — the 816 N Gettysburg
+    // Ave incident shape (a bare "Sold" line for the subject). Before
+    // 2026-09-17 this defaulted Active; it is now the exact case the line
+    // anchor exists to catch. A neighbor's identical bare line only stays
+    // safe because it lives inside a header-bound comps section that
+    // scopeStatusText strips first — see the next test.
+    expect(detectStillActive("Off market")).toBe(false);
+    expect(detectStillActive("Sold")).toBe(false);
+    expect(detectStillActive("Pending")).toBe(false);
   });
   it("stays active on a real listing page that contains comp boilerplate", () => {
     // Active subject listing whose page also lists nearby homes that are
