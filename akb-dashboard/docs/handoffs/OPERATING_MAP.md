@@ -44,3 +44,16 @@ Everything else is Code's job. If a message asks Alex to run a command, paste a 
 - Routines: `MAVERICK <n> - <what it does> (<when, Central>)`.
 - Sessions: `MAVERICK HQ - talk here` for the one Alex uses; `MAVERICK <n> - <routine name> (routine runs here, do not type here)` for routine sessions.
 - Retired anything: prefix `OFF - ` and leave it disabled; delete once a week from HQ.
+
+## 6. Model tiers (operator ruling 2026-09-17)
+
+Premium model for intelligence; lower models for execution under its direction; premium credits are spent on judgment only.
+
+| Layer | Model | Job |
+|---|---|---|
+| MAVERICK HQ | Fable (premium) | Thinking, decisions, design, review, operator conversation |
+| MAVERICK 1 and 2 routines | Opus | Executing the sweeps and drives from HQ-written prompts |
+| Build subagents | Sonnet | Writing code to a spec HQ wrote; HQ reviews and merges |
+| Production app calls | per `lib/maverick/voice-registry.ts` | Cheapest model per agent that passes; Pulse flags drift |
+
+HQ never runs a loop, sweep, or build that a lower model can execute from a written spec. Changing a routine's model is an operator call, by name.
