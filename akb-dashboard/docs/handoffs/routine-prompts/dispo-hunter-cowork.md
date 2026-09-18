@@ -1,14 +1,20 @@
-# MAVERICK 4 - Dispo hunter (Cowork scheduled task, runs on the operator's Mac)
+# MAVERICK 4 - Dispo hunter (Cowork scheduled task, runs on the operator's computer)
 
-Why this one lives in Cowork and not in the cloud: Facebook group posting has to come from the operator's own logged-in browser, at a human pace, or the account gets restricted. The cloud routines have no browser session. So this is a Cowork **scheduled task** on the operator's computer (Cowork sidebar, Scheduled tasks, New), daily, at an hour the Mac is normally awake with Chrome open. Created once by the operator; after that it runs without him.
+Why this one lives in Cowork and not in the cloud: Facebook group posting has to come from the operator's own logged-in browser, at a human pace, or the account gets restricted. The cloud routines have no browser session. So this is a Cowork **scheduled task** on the operator's computer (Claude Desktop, Code tab, Routines, New routine, choose **Local**), daily, at an hour that computer is normally on, awake, and signed in with Chrome open. Mac or Windows both work (Claude Desktop 1.1.5368 or newer). Created once by the operator; after that it runs without him.
 
-Suggested schedule: daily at 10:00am Central. Name it exactly `MAVERICK 4 - Dispo hunter (daily, this Mac)`.
+Create it on ONE computer only. Two machines with this task means two runs a day, double the posts, and the group caps in the skill are per run, not per day across machines.
+
+A local task only fires while Claude Desktop is open and the computer is awake. If the computer sleeps through the scheduled hour, Desktop runs one catch-up when it wakes, which is why the prompt below refuses to post outside 8am-6pm Central. Turn on **Keep computer awake** in Desktop settings if the machine tends to idle-sleep.
+
+Suggested schedule: daily at 10:00am Central. Name it exactly `MAVERICK 4 - Dispo hunter (daily, this computer)`.
 
 Prompt (paste verbatim):
 
 ---
 
 DISPO HUNTER, scheduled run. You are Maverick Prime's buyer-side worker for AKB Solutions. Load and follow the skill at .claude/skills/dispo-hunter/SKILL.md in the coach-pulse repo (Golf4Life27/coach-pulse) exactly; every hard rule, state rule, conduct cap and stop condition in it applies to this run. This scheduled task IS the operator's standing "run dispo hunter" for every deal that qualifies below; you do not need a fresh go per run.
+
+STEP 0 - CLOCK. Check the current local time. If it is before 8:00am or after 6:00pm Central, this is a catch-up run after the computer was asleep: do not post, do not join groups, do not reply. Write one spine line saying the run was skipped for time and stop.
 
 STEP 1 - LOAD. Call mcp__Maverick__maverick_load_state, then mcp__Maverick__maverick_recall with query "Dispo hunter" and since = seven days ago (a prior date) to find the prior runs, the groups already posted to, and any Facebook warning on record. A Facebook warning in the last 7 days means: do not post anything today; report and stop.
 
@@ -22,4 +28,6 @@ STEP 5 - REPORT. Plain language, scoreboard first: deals worked, posts today, le
 
 ---
 
-Operator checklist for the first run: Chrome logged into Facebook and the dashboard on this Mac; the Mac awake at the scheduled hour; Cowork has Chrome access and the Maverick, Airtable and GitHub connectors. If Cowork asks to approve a tool on the first run, approve it once; later runs inherit it.
+Operator checklist for the first run: Claude Desktop installed and signed in on this computer; Chrome logged into Facebook and the dashboard; the computer on and awake at the scheduled hour; Cowork has Chrome access (Settings, Cowork, browser) and the Maverick, Airtable and GitHub connectors. Click **Run now** once right after creating it and answer every permission prompt with "always allow"; later runs inherit those approvals and never stall.
+
+On a work computer: the machine has to allow installing Claude Desktop and the Chrome extension, and the work network has to allow facebook.com. If IT locks either of those down, put the task on the home computer instead.
