@@ -47,6 +47,31 @@ export function underwriteFresh(
   return now.getTime() - t <= maxAgeDays * 86_400_000;
 }
 
+/** Selection order (2026-09-18, the Harrison St / Ocala class): a live
+ *  counter is the hottest money on the board — it has a number attached and
+ *  a clock running — so it must be underwritten before a plain Negotiating
+ *  or Response Received record even when the latter is more recently
+ *  active. Offer Accepted sits last: the price fight is over, underwriting
+ *  there is a contract-prep formality, not a negotiation input. */
+const STATUS_ORDER: Record<string, number> = {
+  "Counter Received": 0,
+  Negotiating: 1,
+  "Response Received": 2,
+  "Offer Accepted": 3,
+};
+
+/** Freshest of the timestamps the Listing type actually carries for "when
+ *  did this deal last move" — lastInboundAt (their reply), lastOutboundAt
+ *  (our reply), and replyClassifiedAt (the triage stamp on the latest
+ *  inbound, which can lead lastInboundAt when a backfill or reclassify
+ *  touches it). No single field is authoritative; the record's WORK is. */
+function engagedAt(l: Pick<Listing, "lastInboundAt" | "lastOutboundAt" | "replyClassifiedAt">): number {
+  const candidates = [l.lastInboundAt, l.lastOutboundAt, l.replyClassifiedAt]
+    .map((t) => (t ? Date.parse(t) : NaN))
+    .filter((t) => Number.isFinite(t));
+  return candidates.length ? Math.max(...candidates) : 0;
+}
+
 export interface EngagedTarget {
   id: string;
   address: string | null;
@@ -85,10 +110,13 @@ export function inNeedsDataBackoff(
   return lastActivity <= computed;
 }
 
-/** Pure: the engaged, Auto-Proceed, stale-underwrite cohort — newest activity
- *  first so a bounded run does the hottest deals. Records in NEEDS_DATA retry
- *  backoff are excluded so one unresolvable address can't starve the queue.
- *  Returns full listings so the route can pass them straight to compute. */
+/** Pure: the engaged, Auto-Proceed, stale-underwrite cohort — ordered
+ *  Counter Received > Negotiating > Response Received > Offer Accepted
+ *  (STATUS_ORDER above), and within a status, most recently engaged first
+ *  (engagedAt above) — so a bounded run does the hottest deals. Records in
+ *  NEEDS_DATA retry backoff are excluded so one unresolvable address can't
+ *  starve the queue. Returns full listings so the route can pass them
+ *  straight to compute. */
 export function selectEngagedUnderwriteTargets(
   listings: Listing[],
   now: Date = new Date(),
@@ -103,8 +131,9 @@ export function selectEngagedUnderwriteTargets(
         !inNeedsDataBackoff(l, now),
     )
     .sort((a, b) => {
-      const at = a.lastInboundAt ?? a.lastOutboundAt ?? null;
-      const bt = b.lastInboundAt ?? b.lastOutboundAt ?? null;
-      return (bt ? new Date(bt).getTime() : 0) - (at ? new Date(at).getTime() : 0);
+      const sa = STATUS_ORDER[a.outreachStatus ?? ""] ?? 99;
+      const sb = STATUS_ORDER[b.outreachStatus ?? ""] ?? 99;
+      if (sa !== sb) return sa - sb;
+      return engagedAt(b) - engagedAt(a);
     });
 }

@@ -16,7 +16,7 @@
 //
 // Sourced numbers only — a dollar figure renders only when its field is set.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { showToast } from "@/components/Toast";
 import type { RankedLiveDeal } from "@/lib/live-deals";
@@ -55,6 +55,16 @@ export default function LiveDealsStrip() {
   const [editing, setEditing] = useState<string | null>(null); // deal id
   const [editText, setEditText] = useState("");
   const [busy, setBusy] = useState<string | null>(null); // deal id in flight
+  const sendBtnRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+
+  // MAVERICK SAYS (2026-09-18): tapping a recommended option loads its
+  // message into the SAME editable draft box every queued/held draft
+  // already uses, then focuses the SAME Send button — no new send path.
+  const pickOption = useCallback((dealId: string, message: string) => {
+    setEditing(dealId);
+    setEditText(message);
+    setTimeout(() => sendBtnRefs.current[dealId]?.focus(), 0);
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -197,97 +207,212 @@ export default function LiveDealsStrip() {
                 </div>
               </Link>
 
-              {/* RECOMMENDED REPLY — queued draft (Send/Edit/Dismiss) or
-                  guardrail HOLD (reason + open-deal). Thumb-sized taps. */}
-              {d.draft && (
+              {/* MAVERICK SAYS + RECOMMENDED REPLY — a counter-decision
+                  recommendation (2026-09-18), a queued draft (Send/Edit/
+                  Dismiss), and/or a guardrail HOLD (reason + open-deal).
+                  Thumb-sized taps. */}
+              {(d.draft || d.counterDecision) && (
                 <div className="border-t border-[#21262d] px-4 py-3 space-y-2">
-                  {d.draft.state === "queued" && d.draft.text ? (
-                    <>
-                      <div className="flex items-center gap-2 text-[10px] text-gray-500">
-                        <span className="font-bold text-emerald-400 uppercase tracking-wide">Reply ready</span>
-                        <span>{d.draft.channel === "email" ? "✉️ email" : "💬 text"} · {d.draft.classification.replace(/_/g, " ")}</span>
+                  {/* MAVERICK SAYS — facts + a bounded menu of ready-to-edit
+                      reply options (lib/counter-decision). Tapping an option
+                      loads its message into the SAME editable box and Send
+                      button below — never a second send path. */}
+                  {d.counterDecision && (
+                    <div className="rounded-lg border border-fuchsia-500/30 bg-fuchsia-950/20 p-3 space-y-2">
+                      <span className="block text-fuchsia-300 text-[9px] font-bold uppercase tracking-wide">Maverick says</span>
+                      <div className="text-sm font-semibold text-gray-100">{d.counterDecision.headline}</div>
+                      {d.counterDecision.facts.length > 0 && (
+                        <ul className="space-y-0.5">
+                          {d.counterDecision.facts.map((fact, idx) => (
+                            <li key={idx} className="text-[11px] text-gray-400 leading-snug">
+                              {fact}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        {d.counterDecision.options.map((o) => (
+                          <button
+                            key={o.key}
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => pickOption(d.id, o.message)}
+                            className="min-h-[36px] px-3 rounded-lg border border-fuchsia-500/40 bg-fuchsia-950/30 text-fuchsia-200 text-xs font-semibold hover:bg-fuchsia-900/40 disabled:opacity-50 transition-colors"
+                          >
+                            {o.label}
+                          </button>
+                        ))}
                       </div>
-                      {/* The inbound this reply answers — operator 2026-07-14: show
-                          the message we're replying to so context is on the card,
-                          no need to open the full deal room. */}
-                      {d.draft.inboundExcerpt && (
-                        <blockquote className="border-l-2 border-sky-500/40 bg-sky-950/20 pl-3 pr-2 py-1.5 rounded-r text-[12px] text-sky-200/90 italic">
-                          <span className="not-italic text-sky-400/70 text-[9px] font-bold uppercase tracking-wide mr-1">They said</span>
-                          “{d.draft.inboundExcerpt}”
-                        </blockquote>
-                      )}
-                      {isEditing ? (
-                        <textarea
-                          value={editText}
-                          onChange={(e) => setEditText(e.target.value)}
-                          rows={4}
-                          className="w-full rounded-lg border border-[#30363d] bg-[#161b22] p-3 text-sm text-gray-200 focus:border-emerald-500 focus:outline-none"
-                        />
-                      ) : (
-                        <div className="border-l-2 border-emerald-500/50 bg-emerald-950/25 rounded-r px-3 py-2 text-sm text-gray-100 whitespace-pre-wrap leading-relaxed">
-                          <span className="block text-emerald-400/80 text-[9px] font-bold uppercase tracking-wide mb-0.5">Your reply</span>
-                          {d.draft.text}
+                    </div>
+                  )}
+
+                  {(() => {
+                    // A HELD draft with a Maverick recommendation is never
+                    // left at a dead-end "Open deal to reply" — the operator
+                    // has facts and options right here, so the editable box
+                    // + Send render immediately, pre-loaded with the
+                    // recommendation's lead option (never the "stall"
+                    // question) until the operator types or taps a
+                    // different option. This is what closes the HELD gap on
+                    // the card itself: app/api/proposals/route.ts now
+                    // accepts a hold_review proposal's Send when the
+                    // operator supplies a non-empty edited body (the
+                    // operator-override dispatch path).
+                    const isHeldWithRecommendation = Boolean(d.draft) && d.draft?.state !== "queued" && d.counterDecision != null;
+                    const defaultHeldMessage =
+                      d.counterDecision?.options.find((o) => o.key !== "stall")?.message ??
+                      d.counterDecision?.options[0]?.message ??
+                      "";
+                    const showEditableBox =
+                      Boolean(d.draft) && ((d.draft!.state === "queued" && Boolean(d.draft!.text)) || isEditing || isHeldWithRecommendation);
+                    const boxValue = isEditing ? editText : isHeldWithRecommendation ? defaultHeldMessage : (d.draft?.text ?? "");
+
+                    if (showEditableBox && d.draft) {
+                      return (
+                        <>
+                          {!isEditing && !isHeldWithRecommendation && (
+                            <div className="flex items-center gap-2 text-[10px] text-gray-500">
+                              <span className="font-bold text-emerald-400 uppercase tracking-wide">Reply ready</span>
+                              <span>{d.draft.channel === "email" ? "✉️ email" : "💬 text"} · {d.draft.classification.replace(/_/g, " ")}</span>
+                            </div>
+                          )}
+                          {isHeldWithRecommendation && (
+                            <div className="flex items-center gap-2 text-[10px] text-amber-300">
+                              <span className="font-bold uppercase tracking-wide">Held — pick an option or write your own</span>
+                            </div>
+                          )}
+                          {/* The inbound this reply answers — operator 2026-07-14: show
+                              the message we're replying to so context is on the card,
+                              no need to open the full deal room. */}
+                          {d.draft.inboundExcerpt && (
+                            <blockquote className="border-l-2 border-sky-500/40 bg-sky-950/20 pl-3 pr-2 py-1.5 rounded-r text-[12px] text-sky-200/90 italic">
+                              <span className="not-italic text-sky-400/70 text-[9px] font-bold uppercase tracking-wide mr-1">They said</span>
+                              “{d.draft.inboundExcerpt}”
+                            </blockquote>
+                          )}
+                          <textarea
+                            value={boxValue}
+                            onChange={(e) => {
+                              if (editing !== d.id) setEditing(d.id);
+                              setEditText(e.target.value);
+                            }}
+                            rows={4}
+                            className="w-full rounded-lg border border-[#30363d] bg-[#161b22] p-3 text-sm text-gray-200 focus:border-emerald-500 focus:outline-none"
+                          />
+                          <div className="flex items-center gap-2">
+                            <button
+                              ref={(el) => {
+                                sendBtnRefs.current[d.id] = el;
+                              }}
+                              type="button"
+                              disabled={isBusy || !d.draft.proposalId}
+                              onClick={() => draftAction(d, "send", isHeldWithRecommendation ? boxValue : isEditing ? editText : undefined)}
+                              title={!d.draft.proposalId ? "No proposal on record for this deal — open it to send" : undefined}
+                              className="flex-1 min-h-[44px] rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm font-bold transition-colors"
+                            >
+                              {isBusy ? "Sending…" : "Send"}
+                            </button>
+                            {!isHeldWithRecommendation && (
+                              <button
+                                type="button"
+                                disabled={isBusy}
+                                onClick={() => {
+                                  if (isEditing) setEditing(null);
+                                  else {
+                                    setEditing(d.id);
+                                    setEditText(d.draft?.text ?? "");
+                                  }
+                                }}
+                                className="min-h-[44px] px-4 rounded-lg border border-[#30363d] text-gray-300 text-sm hover:bg-[#161b22] transition-colors"
+                              >
+                                {isEditing ? "Cancel" : "Edit"}
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              disabled={isBusy || !d.draft.proposalId}
+                              onClick={() => draftAction(d, "dismiss")}
+                              className="min-h-[44px] px-3 rounded-lg border border-[#30363d] text-gray-500 text-sm hover:bg-[#161b22] hover:text-red-400 transition-colors disabled:opacity-50"
+                              title="Dismiss this draft (kills the proposal; nothing sends)"
+                            >
+                              ✕
+                            </button>
+                            {isHeldWithRecommendation && (
+                              <Link
+                                href={d.href}
+                                className="min-h-[44px] px-3 rounded-lg border border-[#30363d] text-gray-300 text-sm hover:bg-[#161b22] transition-colors flex items-center"
+                                title="Open the full deal room"
+                              >
+                                Open
+                              </Link>
+                            )}
+                          </div>
+                        </>
+                      );
+                    }
+
+                    // A HELD draft with NO Maverick recommendation — the
+                    // machine has nothing concrete to propose, so this stays
+                    // the collapsed "your judgment" summary + open-deal link.
+                    if (d.draft) {
+                      return (
+                        <div className="rounded-lg border border-amber-500/40 bg-amber-950/30 p-3 space-y-2">
+                          {d.draft.inboundExcerpt && (
+                            <div className="text-xs text-gray-300">
+                              <span className="text-amber-400 font-bold text-[10px] uppercase tracking-wide mr-2">They said</span>
+                              &ldquo;{d.draft.inboundExcerpt}&rdquo;
+                            </div>
+                          )}
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="font-bold text-amber-400 uppercase tracking-wide text-[10px]">Held — your judgment</span>
+                            <span className="text-amber-200/80">
+                              {(d.draft.holdReason ?? "needs your judgment").replace(/_/g, " ")}
+                            </span>
+                          </div>
+                          <Link
+                            href={d.href}
+                            className="block w-full min-h-[44px] rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-sm font-bold transition-colors text-center leading-[44px]"
+                          >
+                            Open deal to reply
+                          </Link>
                         </div>
-                      )}
+                      );
+                    }
+
+                    return null;
+                  })()}
+
+                  {/* No proposal exists on this deal at all (counter-decision
+                      only, e.g. a raw status flip with no drafted reply yet) —
+                      still let the operator pick and edit a message, but
+                      sending needs the deal room since there is no proposal
+                      to dispatch here. */}
+                  {!d.draft && d.counterDecision && isEditing && (
+                    <div className="space-y-2">
+                      <textarea
+                        value={editText}
+                        onChange={(e) => setEditText(e.target.value)}
+                        rows={4}
+                        className="w-full rounded-lg border border-[#30363d] bg-[#161b22] p-3 text-sm text-gray-200 focus:border-emerald-500 focus:outline-none"
+                      />
                       <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          disabled={isBusy}
-                          onClick={() => draftAction(d, "send", isEditing ? editText : undefined)}
-                          className="flex-1 min-h-[44px] rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm font-bold transition-colors"
-                        >
-                          {isBusy ? "Sending…" : isEditing ? "Send edited" : "Send"}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={isBusy}
-                          onClick={() => {
-                            if (isEditing) setEditing(null);
-                            else {
-                              setEditing(d.id);
-                              setEditText(d.draft?.text ?? "");
-                            }
+                        <Link
+                          href={d.href}
+                          ref={(el) => {
+                            sendBtnRefs.current[d.id] = el as unknown as HTMLButtonElement | null;
                           }}
+                          className="flex-1 min-h-[44px] rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold transition-colors text-center leading-[44px]"
+                        >
+                          Open deal to send
+                        </Link>
+                        <button
+                          type="button"
+                          onClick={() => setEditing(null)}
                           className="min-h-[44px] px-4 rounded-lg border border-[#30363d] text-gray-300 text-sm hover:bg-[#161b22] transition-colors"
                         >
-                          {isEditing ? "Cancel" : "Edit"}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={isBusy}
-                          onClick={() => draftAction(d, "dismiss")}
-                          className="min-h-[44px] px-3 rounded-lg border border-[#30363d] text-gray-500 text-sm hover:bg-[#161b22] hover:text-red-400 transition-colors"
-                          title="Dismiss this draft (kills the proposal; nothing sends)"
-                        >
-                          ✕
+                          Cancel
                         </button>
                       </div>
-                    </>
-                  ) : (
-                    // A HELD draft is the machine refusing to auto-answer —
-                    // the heaviest decision on the board. It renders with the
-                    // same weight as a reply card, never as a footnote
-                    // (operator 2026-07-20: the $27k Mayfield counter was a
-                    // one-line whisper under a courtesy "Thanks!" card).
-                    <div className="rounded-lg border border-amber-500/40 bg-amber-950/30 p-3 space-y-2">
-                      {d.draft.inboundExcerpt && (
-                        <div className="text-xs text-gray-300">
-                          <span className="text-amber-400 font-bold text-[10px] uppercase tracking-wide mr-2">They said</span>
-                          &ldquo;{d.draft.inboundExcerpt}&rdquo;
-                        </div>
-                      )}
-                      <div className="flex items-center gap-2 text-xs">
-                        <span className="font-bold text-amber-400 uppercase tracking-wide text-[10px]">Held — your judgment</span>
-                        <span className="text-amber-200/80">
-                          {(d.draft.holdReason ?? "needs your judgment").replace(/_/g, " ")}
-                        </span>
-                      </div>
-                      <Link
-                        href={d.href}
-                        className="block w-full min-h-[44px] rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-sm font-bold transition-colors text-center leading-[44px]"
-                      >
-                        Open deal to reply
-                      </Link>
                     </div>
                   )}
                 </div>

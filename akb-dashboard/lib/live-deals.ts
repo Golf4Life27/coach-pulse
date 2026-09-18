@@ -15,6 +15,7 @@
 // Sourced numbers only: a dollar figure renders only when its field is set.
 
 import { NEGOTIATION_STATUSES } from "@/lib/maverick/heartbeat";
+import type { CounterDecision } from "@/lib/counter-decision";
 
 /** Canonical status list for the route's filterByFormula. */
 export const NEGOTIATION_STATUS_LIST: readonly string[] = [...NEGOTIATION_STATUSES];
@@ -35,6 +36,10 @@ export interface LiveDealRow {
   /** RECOMMENDED REPLIES: current draft + meta (Draft_Reply_Text/Meta). */
   draftReplyText: string | null;
   draftReplyMeta: string | null;
+  /** COUNTER DECISION CARD (2026-09-18): a bounded, fact-based recommendation
+   *  for a live counter — see lib/counter-decision. Null when the row isn't
+   *  a counter, or when the route couldn't compute one. */
+  counterDecision?: CounterDecision | null;
 }
 
 /** A queued/held recommended reply attached to a deal card. */
@@ -74,6 +79,8 @@ export interface RankedLiveDeal {
   /** RECOMMENDED REPLIES: a queued draft (one-tap approve/edit/send) or a
    *  guardrail HOLD (reason surfaced). Null when nothing is pending. */
   draft: DealDraft | null;
+  /** COUNTER DECISION CARD (2026-09-18): see lib/counter-decision. */
+  counterDecision: CounterDecision | null;
 }
 
 const SOURCE_VERSION_V2 = "v2_post_2026-05-26";
@@ -202,6 +209,7 @@ export function rankLiveDeals(rows: LiveDealRow[]): RankedLiveDeal[] {
         legacy: (r.sourceVersion ?? "") !== SOURCE_VERSION_V2,
         href: `/pipeline/${r.id}`,
         draft,
+        counterDecision: r.counterDecision ?? null,
       };
     });
 

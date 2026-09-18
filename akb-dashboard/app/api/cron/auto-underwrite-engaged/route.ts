@@ -10,10 +10,9 @@
 //
 // GATES: Execution_Path = Auto Proceed (past the intake math gate — never
 // raw intake), freshness dedupe (skip records priced <14d ago), NEEDS_DATA
-// retry backoff (a failed attempt doesn't starve the queue), and a paid-call
-// 24h HARD CEILING (RentCast + ATTOM — protects the vendor caps; per-shape
-// runaway is enforced downstream by the paid-call loop-breaker). Bounded
-// per run.
+// retry backoff (a failed attempt doesn't starve the queue), and an
+// ENGAGED-LANE ATTOM 24h ceiling (per-shape runaway is enforced downstream
+// by the paid-call loop-breaker). Bounded per run.
 //
 // BUDGET-GATE FIX (2026-07-13 decision-math build): this run was originally
 // gated on resolveSeedBudget — the $25/day FRONTIER-SEEDING throttle — which
@@ -21,10 +20,20 @@
 // lane never processed a single target (14:25Z run: 200 OK, zero sub-calls;
 // Mayfield/716 8th/Bennett all blank). Engaged deals are the MONEY lane —
 // the reply justified the spend (2026-06-10 ruling) — and an engaged
-// underwrite is not a seed. The gate is now a hard 24h paid-call ceiling
-// (RENTCAST_24H_HARD_CEILING, default 150 — counts RentCast + ATTOM since
-// the 2026-07-20 promotion moved comp billing to ATTOM) + the per-run
-// limit: worst case ~20 calls/run, 2 scheduled runs/day.
+// underwrite is not a seed. The gate became a hard 24h SHARED paid-call
+// ceiling (RentCast + ATTOM together, from lib/rentcast/spend-ceiling).
+//
+// STARVATION FIX (2026-09-18, the Harrison St / Ocala class): the shared
+// ceiling counted the DISCOVERY-SWEEP lane's ~340 RentCast calls/day against
+// this lane's budget, so the whole run skipped every single day — two live
+// counters landed with zero ARV/rehab because this cron never even started.
+// The gate is now an ENGAGED-LANE-ONLY ceiling on ATTOM calls in the last
+// 24h (counts.attom — comp billing moved to ATTOM 2026-07-20, and ATTOM is
+// what this lane actually spends on per-target). RentCast's own 24h/day
+// caps (lib/rentcast/spend-ceiling) still apply to any RentCast call this
+// lane makes via the choke point — this is an ADDITIONAL, narrower guard
+// scoped to the money lane's own spend, not a shared budget another lane
+// can exhaust. rentcast_24h is still read and reported for visibility.
 //
 // EVERY TARGET NOW PERSISTS A DECISION: on underwrite success the decision
 // math lands (Buyer_Ceiling / Deal_Spread / verdict); on ARV failure the
@@ -48,7 +57,6 @@ import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { countCallsBySource24h } from "@/lib/spend/derive";
 import { selectEngagedUnderwriteTargets } from "@/lib/appraiser/engaged-underwrite-select";
 import { autoRunOnEngaged, originFromRequest } from "@/lib/appraiser/auto-run-on-engaged";
-import { RENTCAST_DAILY_CAP } from "@/lib/rentcast/spend-ceiling";
 import { persistDecisionMath } from "@/lib/decision-persist";
 import type { Listing } from "@/lib/types";
 
@@ -66,21 +74,17 @@ const MAX_LIMIT = 10;
 // ceiling math for every target beats full math for one.
 const PER_TARGET_BUDGET_MS = 60_000;
 
-/** Hard 24h paid-call ceiling for this lane to run (protects the vendor
- *  caps without starving the money lane on the seed budget). Since the
- *  ATTOM promotion (2026-07-20) comp pulls bill ATTOM, not RentCast, so
- *  the guard counts BOTH sources — otherwise the lane's only whole-run
- *  spend bound would never see its own comp calls. Env name kept for
- *  the already-deployed Vercel setting.
- *
- *  ONE TRUTH (2026-07-31): the value now comes from
- *  lib/rentcast/spend-ceiling.RENTCAST_DAILY_CAP — the same constant the
- *  global choke point enforces — instead of a second local reader of the
- *  same env with its own default. This lane keeps its OWN check because it
- *  counts RentCast + ATTOM together (the choke point sees RentCast only),
- *  so it remains the stricter guard on a mixed-source run. */
-export function paidCalls24hHardCeiling(): number {
-  return RENTCAST_DAILY_CAP;
+/** ENGAGED-LANE ATTOM 24h ceiling (2026-09-18 starvation fix). Counts ONLY
+ *  this lane's own ATTOM comp calls in the last 24h — never the shared
+ *  RentCast+ATTOM meter another lane (discovery-sweep: ~340 RentCast
+ *  calls/day) can fill up on its own. Default 60 — comfortably above the
+ *  worst-case per-run spend (limit × ~5 ATTOM calls) across every scheduled
+ *  slot in a day, while still catching a genuine per-shape runaway (the
+ *  paid-call loop-breaker is the other, per-record guard on that). Env:
+ *  ENGAGED_LANE_ATTOM_24H_CAP. */
+export function engagedLaneAttom24hCap(): number {
+  const raw = Number(process.env.ENGAGED_LANE_ATTOM_24H_CAP);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 60;
 }
 
 export async function GET(req: Request) {
@@ -137,12 +141,15 @@ export async function GET(req: Request) {
     });
   }
 
-  // Hard 24h paid-call ceiling (RentCast + ATTOM) — the engaged lane's
-  // only whole-run guard (see BUDGET-GATE FIX header). Fail-open on an
-  // unreadable meter: this lane is bounded (limit × ~5 calls) and the
-  // loop-breaker guards per-shape runaway on BOTH vendors, so a
-  // monitoring outage must not stall live deals.
-  const ceiling = paidCalls24hHardCeiling();
+  // ENGAGED-LANE ATTOM 24h ceiling — this lane's OWN whole-run guard (see
+  // the 2026-09-18 STARVATION FIX header note). Gates on attom24h alone, not
+  // the shared paid_24h total another lane's RentCast spend can fill up on
+  // its own. rentcast_24h is still read and reported for operator
+  // visibility, never as a gating input. Fail-open on an unreadable meter:
+  // this lane is bounded (limit × ~5 calls) and the loop-breaker guards
+  // per-shape runaway on both vendors, so a monitoring outage must not
+  // stall live deals.
+  const ceiling = engagedLaneAttom24hCap();
   let rentcast24h: number | null = null;
   let attom24h: number | null = null;
   let paid24h: number | null = null;
@@ -153,22 +160,23 @@ export async function GET(req: Request) {
     attom24h = counts.attom;
     paid24h = counts.rentcast + counts.attom;
   } catch {
+    attom24h = null;
     paid24h = null;
   }
-  if (paid24h != null && paid24h >= ceiling) {
+  if (attom24h != null && attom24h >= ceiling) {
     await audit({
       agent: "appraiser",
       event: "auto_underwrite_engaged_budget_skip",
       status: "confirmed_success",
       inputSummary: { engaged_stale_total: targets.length, rentcast_24h: rentcast24h, attom_24h: attom24h, paid_24h: paid24h, ceiling },
-      outputSummary: { skipped: true, reason: "paid_calls_24h_hard_ceiling" },
+      outputSummary: { skipped: true, reason: "engaged_lane_attom_24h_cap" },
       decision: "skip_budget",
     });
     return NextResponse.json({
       ok: true,
       mode: "apply",
       skipped: true,
-      reason: "paid_calls_24h_hard_ceiling",
+      reason: "engaged_lane_attom_24h_cap",
       rentcast_24h: rentcast24h,
       attom_24h: attom24h,
       paid_24h: paid24h,

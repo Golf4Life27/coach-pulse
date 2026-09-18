@@ -70,6 +70,47 @@ export function parseSendSmsPayload(actionPayload: string | null | undefined): S
   }
 }
 
+export interface HoldReviewSmsPayload {
+  recordId: string | null;
+  to: string;
+  /** The machine's own draft body — empty for a genuine HOLD (that emptiness
+   *  IS what made it hold_review instead of send_sms). The caller decides
+   *  whether an operator-supplied editedBody is enough to promote this to a
+   *  real send; this parser only recognizes the SHAPE. */
+  draftBody: string;
+  holdReason: string | null;
+  inboundBody: string | null;
+  classification: string | null;
+}
+
+/** Pure: parse a Suggested_Action_Payload and accept ONLY an explicit
+ *  hold_review action shaped like the SMS lane (2026-09-18, the operator-
+ *  override fix) — a phone `to`, no `subject` key. The email lane's own
+ *  hold_review (lib/inbound/reply-draft-trigger.buildReplyPayload) always
+ *  carries a `subject`, so that shape is rejected here on purpose: this
+ *  parser is SMS-only, and the email lane's hold_review is left untouched
+ *  (see app/api/proposals/route.ts for why). Anything else → null. */
+export function parseHoldReviewSmsPayload(actionPayload: string | null | undefined): HoldReviewSmsPayload | null {
+  if (!actionPayload) return null;
+  try {
+    const p = JSON.parse(actionPayload) as Record<string, unknown>;
+    if (p.action !== "hold_review") return null;
+    if (typeof p.subject === "string") return null; // the email lane's shape
+    const to = typeof p.to === "string" ? p.to.trim() : "";
+    if (!to || to.includes("@")) return null;
+    return {
+      recordId: typeof p.recordId === "string" ? p.recordId : null,
+      to,
+      draftBody: typeof p.draftBody === "string" ? p.draftBody.trim() : "",
+      holdReason: typeof p.holdReason === "string" ? p.holdReason : null,
+      inboundBody: typeof p.inboundBody === "string" ? p.inboundBody : null,
+      classification: typeof p.classification === "string" ? p.classification : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export interface SendEmailPayload {
   recordId: string | null;
   to: string;

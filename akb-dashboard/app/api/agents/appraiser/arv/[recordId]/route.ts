@@ -87,9 +87,16 @@ async function handleGet(
     return NextResponse.json({ error: "cron_disabled" }, { status: 503 });
   }
 
-  if (!process.env.RENTCAST_API_KEY) {
+  // 2026-09-18 (the "operator is cancelling RentCast" bug): comps route to
+  // ATTOM first and county deeds ahead of that (lib/comps/sold-comps.ts) —
+  // RentCast is the LAST-RESORT leg only. Refusing the whole ARV run because
+  // RentCast alone is unconfigured starved every deal whenever the operator
+  // pulled that key, even though ATTOM could carry the run on its own. Only
+  // refuse when NEITHER comp source is configured — there is then no way to
+  // get a comp at all.
+  if (!process.env.ATTOM_API_KEY && !process.env.RENTCAST_API_KEY) {
     return NextResponse.json(
-      { error: "rentcast_not_configured" },
+      { error: "comps_not_configured" },
       { status: 503 },
     );
   }

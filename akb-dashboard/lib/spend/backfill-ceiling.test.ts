@@ -16,9 +16,9 @@
 
 import { describe, it, expect, afterEach } from "vitest";
 import { backfillPaid24hCeiling } from "@/app/api/admin/appraiser-backfill/route";
-import { paidCalls24hHardCeiling } from "@/app/api/cron/auto-underwrite-engaged/route";
+import { engagedLaneAttom24hCap } from "@/app/api/cron/auto-underwrite-engaged/route";
 
-const ENV_KEYS = ["BACKFILL_PAID_24H_CEILING", "RENTCAST_24H_HARD_CEILING"] as const;
+const ENV_KEYS = ["BACKFILL_PAID_24H_CEILING", "RENTCAST_24H_HARD_CEILING", "ENGAGED_LANE_ATTOM_24H_CAP"] as const;
 const saved = new Map<string, string | undefined>();
 
 afterEach(() => {
@@ -60,19 +60,28 @@ describe("backfillPaid24hCeiling", () => {
     },
   );
 
-  // THE LOAD-BEARING INVARIANT. The sweep must hit its ceiling and stop
-  // while the engaged (live-deal) lane still has headroom on the same
-  // shared 24h paid-call counter.
-  it("yields before the engaged live-deal lane on the shared counter", () => {
+  // DECOUPLING (2026-09-18 starvation fix, the Harrison St / Ocala class):
+  // this ceiling used to share auto-underwrite-engaged's 24h RentCast+ATTOM
+  // counter on purpose ("yield first, live-deal lane keeps its budget") —
+  // but a SHARED counter is exactly what let the discovery-sweep lane's
+  // ~340 RentCast calls/day starve the money lane every single day. The
+  // engaged lane's gate is now engagedLaneAttom24hCap() — its OWN ATTOM-only
+  // 24h count, immune to every other lane's spend (RENTCAST_24H_HARD_CEILING
+  // no longer touches it at all). This function is retired-as-a-gate history
+  // (see its own docstring); it no longer needs to out-rank anything.
+  it("is independent of the engaged lane's ATTOM cap — tuning RENTCAST_24H_HARD_CEILING no longer moves it", () => {
     setEnv("BACKFILL_PAID_24H_CEILING", undefined);
-    setEnv("RENTCAST_24H_HARD_CEILING", undefined);
-    expect(backfillPaid24hCeiling()).toBeLessThan(paidCalls24hHardCeiling());
+    setEnv("RENTCAST_24H_HARD_CEILING", "5"); // would have starved the old shared-counter gate
+    setEnv("ENGAGED_LANE_ATTOM_24H_CAP", undefined);
+    expect(engagedLaneAttom24hCap()).toBe(60); // untouched by the RentCast-only env
+    expect(backfillPaid24hCeiling()).toBe(60);
   });
 
-  it("keeps yielding first even when both ceilings are tuned via env", () => {
-    setEnv("BACKFILL_PAID_24H_CEILING", "60");
-    setEnv("RENTCAST_24H_HARD_CEILING", "150");
-    expect(backfillPaid24hCeiling()).toBeLessThan(paidCalls24hHardCeiling());
+  it("engagedLaneAttom24hCap defaults to 60 and honors its own env", () => {
+    setEnv("ENGAGED_LANE_ATTOM_24H_CAP", undefined);
+    expect(engagedLaneAttom24hCap()).toBe(60);
+    setEnv("ENGAGED_LANE_ATTOM_24H_CAP", "25");
+    expect(engagedLaneAttom24hCap()).toBe(25);
   });
 
   // Guards the actual cost bound: at the */30 cadence (48 runs/day) with

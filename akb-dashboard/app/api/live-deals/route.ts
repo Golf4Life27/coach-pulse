@@ -11,6 +11,7 @@
 import { NextResponse } from "next/server";
 import { NEGOTIATION_STATUS_LIST, rankLiveDeals, needsYouCount, type LiveDealRow } from "@/lib/live-deals";
 import { resolveDisplayOffer } from "@/lib/deal-numbers";
+import { decideCounter, type CounterDecision } from "@/lib/counter-decision";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -33,6 +34,17 @@ const FIELDS = [
   "Source_Version",
   "Draft_Reply_Text",
   "Draft_Reply_Meta",
+  // COUNTER DECISION CARD (2026-09-18) — the facts decideCounter needs so a
+  // Counter Received row (or a freshly classified counter) gets a concrete
+  // recommendation instead of a dead-end "your judgment" hold.
+  "Latest_Counter_Usd",
+  "Buyer_Ceiling",
+  "Your_MAO_V21",
+  "Decision_Verdict",
+  "Real_ARV_Median",
+  "ARV_Confidence",
+  "Est_Rehab_Mid",
+  "Agent_Name",
 ];
 
 interface RawRecord {
@@ -73,30 +85,82 @@ async function fetchNegotiations(): Promise<RawRecord[]> {
   return out;
 }
 
+/** The Draft_Reply_Meta mirror's classification, read defensively — a
+ *  malformed/absent mirror is simply "no classification", never a throw. */
+function draftClassificationOf(metaRaw: string | null): string | null {
+  if (!metaRaw) return null;
+  try {
+    const meta = JSON.parse(metaRaw) as { classification?: unknown };
+    return typeof meta.classification === "string" ? meta.classification : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function GET() {
   try {
     const records = await fetchNegotiations();
-    const rows: LiveDealRow[] = records.map((r) => ({
-      id: r.id,
-      address: str(r.fields["Address"]),
-      status: str(r.fields["Outreach_Status"]),
-      // Doctrine-safe offer resolution (P1.1): contract → value-anchored
-      // rough opener → legacy outreach. Never MAO_V1 (List×0.65). The card
-      // resolves from fields only (no notes fetch); the deal room adds the
-      // delivery-stamp authority on top.
-      contractPrice: resolveDisplayOffer({
-        contractOfferPrice: num(r.fields["Contract_Offer_Price"]),
-        roughOpenerAmount: num(r.fields["Rough_Opener_Amount"]),
-        outreachOfferPrice: num(r.fields["Outreach_Offer_Price"]),
-      }).amount,
-      listPrice: num(r.fields["List_Price"]),
-      ceiling: num(r.fields["Underwritten_MAO"]) ?? num(r.fields["Underwritten_Property_MAO"]),
-      lastInboundAt: str(r.fields["Last_Inbound_At"]),
-      lastOutboundAt: str(r.fields["Last_Outbound_At"]),
-      sourceVersion: str(r.fields["Source_Version"]),
-      draftReplyText: str(r.fields["Draft_Reply_Text"]),
-      draftReplyMeta: str(r.fields["Draft_Reply_Meta"]),
-    }));
+    const rows: LiveDealRow[] = records.map((r) => {
+      const status = str(r.fields["Outreach_Status"]);
+      const listUsd = num(r.fields["List_Price"]);
+      const stickyUsd = num(r.fields["Outreach_Offer_Price"]);
+      const ceilingUsd = num(r.fields["Buyer_Ceiling"]) ?? num(r.fields["Your_MAO_V21"]);
+      const counterUsd = num(r.fields["Latest_Counter_Usd"]);
+      const verdict = str(r.fields["Decision_Verdict"]);
+      const arvUsd = num(r.fields["Real_ARV_Median"]);
+      const arvConfidence = str(r.fields["ARV_Confidence"]);
+      const rehabUsd = num(r.fields["Est_Rehab_Mid"]);
+      const agentName = str(r.fields["Agent_Name"]);
+      const agentFirstName = agentName ? agentName.trim().split(/\s+/)[0] || null : null;
+      const draftReplyMeta = str(r.fields["Draft_Reply_Meta"]);
+
+      // COUNTER DECISION CARD (2026-09-18, "I am doing all the thinking
+      // again"): attach a bounded, fact-based recommendation for any row
+      // that IS a live counter — either its status is Counter Received, or
+      // the most recent classified inbound was a counter. Best-effort: a
+      // failure here must never break the live-deals feed.
+      let counterDecision: CounterDecision | null = null;
+      if (status === "Counter Received" || draftClassificationOf(draftReplyMeta) === "counter") {
+        try {
+          counterDecision = decideCounter({
+            counterUsd,
+            stickyUsd,
+            ceilingUsd,
+            verdict,
+            arvUsd,
+            arvConfidence,
+            rehabUsd,
+            listUsd,
+            agentFirstName,
+          });
+        } catch (err) {
+          console.error("[live-deals] counter-decision failed:", err);
+        }
+      }
+
+      return {
+        id: r.id,
+        address: str(r.fields["Address"]),
+        status,
+        // Doctrine-safe offer resolution (P1.1): contract → value-anchored
+        // rough opener → legacy outreach. Never MAO_V1 (List×0.65). The card
+        // resolves from fields only (no notes fetch); the deal room adds the
+        // delivery-stamp authority on top.
+        contractPrice: resolveDisplayOffer({
+          contractOfferPrice: num(r.fields["Contract_Offer_Price"]),
+          roughOpenerAmount: num(r.fields["Rough_Opener_Amount"]),
+          outreachOfferPrice: stickyUsd,
+        }).amount,
+        listPrice: listUsd,
+        ceiling: num(r.fields["Underwritten_MAO"]) ?? num(r.fields["Underwritten_Property_MAO"]),
+        lastInboundAt: str(r.fields["Last_Inbound_At"]),
+        lastOutboundAt: str(r.fields["Last_Outbound_At"]),
+        sourceVersion: str(r.fields["Source_Version"]),
+        draftReplyText: str(r.fields["Draft_Reply_Text"]),
+        draftReplyMeta,
+        counterDecision,
+      };
+    });
     const deals = rankLiveDeals(rows);
     return NextResponse.json({
       generated_at: new Date().toISOString(),

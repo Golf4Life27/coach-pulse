@@ -74,7 +74,10 @@ export interface DDVolleyState {
 
 // ── DD question bank (guardrail-safe templates) ─────────────────────────────
 
-const CONDITION: DDSlot = {
+// Exported (2026-09-18, counter-decision card) so lib/counter-decision.ts can
+// reuse this exact question text as the "ask about condition" stall option —
+// one authored template, never a second copy that can drift.
+export const CONDITION: DDSlot = {
   slot: "condition",
   question:
     "To firm up the offer, how would you describe the condition — anything major like the roof, foundation, HVAC, or plumbing I should factor in?",

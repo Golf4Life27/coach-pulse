@@ -20,6 +20,7 @@ vi.mock("@/lib/audit-log", () => ({ audit: vi.fn(async () => {}) }));
 
 import {
   parseSendSmsPayload,
+  parseHoldReviewSmsPayload,
   approveSendStaticSkip,
   approveSendClaimKey,
   APPROVE_SEND_MAX_BODY,
@@ -50,6 +51,41 @@ describe("parseSendSmsPayload — only an explicit send_sms with phone + draft d
     expect(parseSendSmsPayload("not json")).toBeNull();
     expect(parseSendSmsPayload(null)).toBeNull();
     expect(parseSendSmsPayload("")).toBeNull();
+  });
+});
+
+const HOLD_SMS_PAYLOAD = JSON.stringify({
+  recordId: "recHOLD00000000001",
+  action: "hold_review",
+  to: "+13218909374",
+  draftBody: "",
+  holdReason: "draft_number_not_sticky ($65,000 ≠ stamped $49,500)",
+  inboundBody: "We'd take $65,000 for it.",
+  classification: "counter",
+});
+
+describe("parseHoldReviewSmsPayload — the operator-override shape (2026-09-18)", () => {
+  it("parses an SMS-lane hold_review payload", () => {
+    const p = parseHoldReviewSmsPayload(HOLD_SMS_PAYLOAD);
+    expect(p?.to).toBe("+13218909374");
+    expect(p?.recordId).toBe("recHOLD00000000001");
+    expect(p?.holdReason).toContain("draft_number_not_sticky");
+    expect(p?.draftBody).toBe("");
+  });
+
+  it("refuses a non-hold action, a missing/email-shaped `to`, garbage, and the email lane's shape", () => {
+    expect(parseHoldReviewSmsPayload(JSON.stringify({ action: "send_sms", to: "+1555" }))).toBeNull();
+    expect(parseHoldReviewSmsPayload(JSON.stringify({ action: "hold_review" }))).toBeNull();
+    expect(parseHoldReviewSmsPayload(JSON.stringify({ action: "hold_review", to: "agent@example.com" }))).toBeNull();
+    // The email lane's hold_review always carries a subject — SMS-only parser rejects it.
+    expect(
+      parseHoldReviewSmsPayload(
+        JSON.stringify({ action: "hold_review", to: "agent@example.com", subject: "Re: 123 Main St" }),
+      ),
+    ).toBeNull();
+    expect(parseHoldReviewSmsPayload("not json")).toBeNull();
+    expect(parseHoldReviewSmsPayload(null)).toBeNull();
+    expect(parseHoldReviewSmsPayload("")).toBeNull();
   });
 });
 
