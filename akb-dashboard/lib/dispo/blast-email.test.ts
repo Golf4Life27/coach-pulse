@@ -6,6 +6,7 @@ import {
   selectBlastRecipients,
 } from "./blast-email";
 import { DISPO_DISCLOSURE } from "./disclosure";
+import { findBannedCopy } from "./copy-guard";
 import type { ShortlistBuyer, ShortlistResult } from "./buyer-shortlist";
 
 const base = {
@@ -25,7 +26,7 @@ const base = {
 describe("composeDispoBlastEmail", () => {
   it("shows one number, the facts, the deadline and the deal link", () => {
     const e = composeDispoBlastEmail(base);
-    expect(e.subject).toBe("Off-market: 815 Russell Ave, Akron — $67,750");
+    expect(e.subject).toBe("Contract assignment: 815 Russell Ave, Akron - $67,750");
     expect(e.body).toContain("Hi Jordan,");
     expect(e.body).toContain("Assignment price: $67,750");
     expect(e.body).toContain("3 bed / 1 bath, 1,248 sq ft");
@@ -41,13 +42,14 @@ describe("composeDispoBlastEmail", () => {
     expect(e.body).toContain("Hi there,");
     expect(e.body).toContain("10-day inspection window");
     expect(e.body).not.toContain("bed");
-    expect(e.subject).toBe("Off-market: 815 Russell Ave — $67,750");
+    expect(e.subject).toBe("Contract assignment: 815 Russell Ave - $67,750");
   });
 
   it("ends with the legal disclosure — assignment of contract, not the owner, not a broker", () => {
     const e = composeDispoBlastEmail(base);
     expect(e.body).toContain(DISPO_DISCLOSURE);
     expect(e.body.trimEnd().endsWith(DISPO_DISCLOSURE)).toBe(true);
+    expect(e.body.trim().split("\n").filter((l) => l.length > 0).at(-1)).toBe(DISPO_DISCLOSURE);
     // Present even when every optional fact is missing.
     const bare = composeDispoBlastEmail({
       ...base, buyerName: null, beds: null, baths: null, sqft: null, optionDeadline: null, city: null, state: null, zip: null,
@@ -55,11 +57,29 @@ describe("composeDispoBlastEmail", () => {
     expect(bare.body).toContain(DISPO_DISCLOSURE);
   });
 
-  it("never mentions contract, ARV, rehab, fee, or spread", () => {
+  it("never mentions contract price, ARV, rehab, fee, or spread", () => {
     const e = composeDispoBlastEmail(base);
     for (const word of ["contract price", "ARV", "rehab", "fee", "spread", "seller", "agent"]) {
       expect(e.body.toLowerCase()).not.toContain(word.toLowerCase());
     }
+  });
+
+  it("never says off-market or any other banned buyer phrase in subject or body", () => {
+    const e = composeDispoBlastEmail(base);
+    expect(findBannedCopy(e.subject)).toEqual([]);
+    expect(findBannedCopy(e.body)).toEqual([]);
+  });
+
+  it('says "Photos and details" only when hasPhotos is true', () => {
+    const withPhotos = composeDispoBlastEmail({ ...base, hasPhotos: true });
+    expect(withPhotos.body).toContain(`Photos and details: ${base.dealUrl}`);
+
+    const withoutPhotos = composeDispoBlastEmail({ ...base, hasPhotos: false });
+    expect(withoutPhotos.body).toContain(`Details: ${base.dealUrl}`);
+    expect(withoutPhotos.body.toLowerCase()).not.toContain("photos");
+
+    const defaulted = composeDispoBlastEmail(base);
+    expect(defaulted.body).toContain(`Details: ${base.dealUrl}`);
   });
 });
 

@@ -22,6 +22,7 @@ import {
   SMS_MAX_CHARS,
   type DispoPackage,
 } from "./package";
+import { findBannedCopy } from "./copy-guard";
 import type { PublicDealView } from "./public-deal";
 import { estimateSmsSegments, findNonGsm7Chars } from "@/lib/sms/gsm7";
 
@@ -32,7 +33,6 @@ const OPTS = { baseUrl: "https://coach-pulse-ten.vercel.app", nowIso: NOW };
 function fullView(over: Partial<PublicDealView> = {}): PublicDealView {
   return {
     recordId: "recDEAL0000000001",
-    address: "513 Lamar St",
     city: "San Antonio",
     state: "TX",
     zip: "78210",
@@ -45,7 +45,7 @@ function fullView(over: Partial<PublicDealView> = {}): PublicDealView {
     optionDeadline: "2026-09-20",
     closeDate: "2026-09-29",
     photos: ["https://cdn.example.com/a.jpg", "https://cdn.example.com/b.jpg"],
-    headline: "Off-market: 513 Lamar St",
+    headline: "Contract assignment: San Antonio, TX 78210",
     ...over,
   };
 }
@@ -54,7 +54,6 @@ function fullView(over: Partial<PublicDealView> = {}): PublicDealView {
 function bareView(): PublicDealView {
   return {
     recordId: "recDEAL0000000002",
-    address: "1005 2nd St",
     city: "Birmingham",
     state: "AL",
     zip: "35204",
@@ -67,8 +66,15 @@ function bareView(): PublicDealView {
     optionDeadline: null,
     closeDate: null,
     photos: [],
-    headline: "Off-market: 1005 2nd St",
+    headline: "Contract assignment: Birmingham, AL 35204",
   };
+}
+
+/** An MLS-sourced deal — same shape as fullView, named to make explicit that
+ *  the composer must never distinguish MLS-sourced from any other deal in
+ *  its buyer-facing copy (operator ruling, Spine recydfR9ZsDNSe0Lr). */
+function mlsView(over: Partial<PublicDealView> = {}): PublicDealView {
+  return fullView(over);
 }
 
 function allStrings(pkg: DispoPackage): string[] {
@@ -208,7 +214,7 @@ describe("composeDispoPackage — missing fields render as absent, never as 'nul
 
 describe("composeDispoPackage — channel limits", () => {
   it("keeps the SMS template inside 300 GSM-7 characters", () => {
-    for (const view of [fullView(), bareView(), fullView({ address: "12345 Northwest Boulevard Extension Apartment 4B", city: "Fredericksburg" })]) {
+    for (const view of [fullView(), bareView(), fullView({ city: "Fredericksburg-on-the-Extension-Boulevard" })]) {
       const { sms } = composeDispoPackage(view, OPTS).posts;
       expect(sms.length).toBeLessThanOrEqual(SMS_MAX_CHARS);
       expect(findNonGsm7Chars(sms)).toEqual([]);
@@ -225,15 +231,35 @@ describe("composeDispoPackage — channel limits", () => {
     expect(pkg.posts.marketplaceTitle).toBe("Contract assignment: San Antonio, TX - 3bd/2ba - $132,500");
   });
 
-  it("keeps the STREET address out of every public block and on the one-pager only", () => {
+  it("keeps the STREET address out of every public block, and on the one-pager only when the operator supplies it", () => {
     // A full address in a public group lets a buyer go around us to the
     // listing agent, and the copy promises the address for proof of funds.
-    const pkg = composeDispoPackage(fullView(), OPTS);
-    for (const block of [pkg.posts.facebookGroup, pkg.posts.marketplaceTitle, pkg.posts.marketplaceDescription, pkg.posts.dmReply, pkg.posts.sms]) {
+    // The street never comes from the view (it has no address field) — it
+    // is only ever the operator-authenticated print sheet's own opt-in.
+    const withStreet = composeDispoPackage(fullView(), { ...OPTS, onePagerAddress: "513 Lamar St" });
+    for (const block of [
+      withStreet.posts.facebookGroup,
+      withStreet.posts.marketplaceTitle,
+      withStreet.posts.marketplaceDescription,
+      withStreet.posts.dmReply,
+      withStreet.posts.sms,
+    ]) {
       expect(block).not.toContain("513 Lamar");
       expect(block.toLowerCase()).not.toContain("off-market");
     }
-    expect(pkg.onePager.title).toContain("513 Lamar St");
+    expect(withStreet.onePager.title).toBe("Contract assignment: 513 Lamar St, San Antonio, TX 78210");
+
+    // Listing.address is often already the full "street, city, ST zip" line;
+    // the title must not print the city twice.
+    const withFullLine = composeDispoPackage(fullView(), {
+      ...OPTS,
+      onePagerAddress: "513 Lamar St, San Antonio, TX 78210",
+    });
+    expect(withFullLine.onePager.title).toBe("Contract assignment: 513 Lamar St, San Antonio, TX 78210");
+
+    const withoutStreet = composeDispoPackage(fullView(), OPTS);
+    const serialized = JSON.stringify(withoutStreet);
+    expect(serialized).not.toContain("513 Lamar");
   });
 
   it("writes a Facebook group post of 6-10 short lines with no more than 3 hashtags and no emoji", () => {
@@ -260,5 +286,41 @@ describe("composeDispoPackage — channel limits", () => {
       "https://cdn.example.com/a.jpg",
       "https://cdn.example.com/b.jpg",
     ]);
+  });
+
+  it('says "Details and photos" only when there are photos, and never says "photos" otherwise', () => {
+    const withPhotos = composeDispoPackage(fullView(), OPTS);
+    expect(withPhotos.posts.facebookGroup).toContain(`Details and photos: ${withPhotos.dealUrl}`);
+    expect(withPhotos.posts.dmReply).toContain(`Photos and details: ${withPhotos.dealUrl}`);
+    expect(withPhotos.posts.sms).toContain(`Photos: ${withPhotos.dealUrl}`);
+
+    const noPhotos = composeDispoPackage(bareView(), OPTS);
+    for (const s of [...postBlocks(noPhotos), noPhotos.onePager.body.join("\n"), noPhotos.onePager.title]) {
+      expect(s.toLowerCase()).not.toContain("photos");
+    }
+    expect(noPhotos.posts.facebookGroup).toContain(`Details: ${noPhotos.dealUrl}`);
+    expect(noPhotos.posts.dmReply).toContain(`Details: ${noPhotos.dealUrl}`);
+    expect(noPhotos.posts.sms).toContain(`Details: ${noPhotos.dealUrl}`);
+  });
+});
+
+describe("composeDispoPackage — every post still ends with the disclosure after guarding", () => {
+  it("ends every post with DISPO_DISCLOSURE_SHORT and the one-pager body with DISPO_DISCLOSURE", () => {
+    for (const view of [fullView(), bareView(), mlsView()]) {
+      const pkg = composeDispoPackage(view, OPTS);
+      for (const post of postBlocks(pkg)) {
+        expect(post.endsWith(DISPO_DISCLOSURE_SHORT)).toBe(true);
+      }
+      expect(pkg.onePager.body[pkg.onePager.body.length - 1]).toBe(DISPO_DISCLOSURE);
+    }
+  });
+});
+
+describe("composeDispoPackage — MLS-sourced deals get identical, clean copy", () => {
+  it("produces no banned phrase in any string for an MLS-sourced fixture", () => {
+    const pkg = composeDispoPackage(mlsView(), OPTS);
+    for (const s of allStrings(pkg)) {
+      expect(findBannedCopy(s)).toEqual([]);
+    }
   });
 });

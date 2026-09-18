@@ -15,6 +15,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import DispoCopyBlock from "@/components/DispoCopyBlock";
+import { formatDateOnly } from "@/lib/dispo/dates";
 
 interface DispoPackageResponse {
   ok: true;
@@ -51,13 +52,6 @@ const PRINT_CSS = `
   @page { margin: 0.6in; }
 }
 `;
-
-function formatDate(iso: string | null): string {
-  if (!iso) return "not recorded";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-}
 
 export default function DispoPackagePage() {
   const params = useParams<{ id: string }>();
@@ -123,7 +117,7 @@ function PackageBody({ pkg }: { pkg: DispoPackageResponse }) {
           <div>
             <h1 className="text-lg font-bold text-white">{pkg.onePager.title}</h1>
             <p className="text-xs text-gray-500 mt-1">
-              Contract executed: {formatDate(pkg.contractExecutedAt)}
+              Contract executed: {formatDateOnly(pkg.contractExecutedAt)}
             </p>
             <a
               href={pkg.dealUrl}

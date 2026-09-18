@@ -46,7 +46,7 @@ If the state is not Texas or Alabama and the operator has not confirmed the word
 - Read each group's rules first. If the rules forbid deal posts, promotional posts, or require admin approval you do not have, skip the group and log why.
 - Reply to a comment once. If they want more, send the DM reply from the package once. Then stop; the deal page and the operator take it from there.
 - The moment Facebook shows a warning, a captcha, "you're temporarily blocked", "this post goes against our standards", or asks for identity verification: stop everything, close nothing, report immediately with a screenshot. Do not retry, do not switch accounts, do not create a new group.
-- No emoji walls, no more than 3 hashtags, no ALL CAPS beyond "OFF-MARKET".
+- No emoji walls, no more than 3 hashtags, no ALL CAPS anywhere, and never the words "off-market" or "off market" (operator ruling 2026-09-18: most of these houses are on the MLS; the package copy is the only copy).
 
 ## Group discovery (per metro)
 

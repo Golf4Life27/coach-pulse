@@ -9,7 +9,7 @@
 // list.
 
 import { describe, it, expect } from "vitest";
-import { publicDealView } from "./public-deal";
+import { publicDealView, publicDealSummary } from "./public-deal";
 import type { Listing } from "@/lib/types";
 
 function listing(over: Partial<Listing> = {}): Listing {
@@ -78,7 +78,6 @@ describe("publicDealView", () => {
     expect(view).not.toBeNull();
     expect(view).toEqual({
       recordId: "recDEAL0000000001",
-      address: "123 Example St",
       city: "Memphis",
       state: "TN",
       zip: "38116",
@@ -91,8 +90,9 @@ describe("publicDealView", () => {
       optionDeadline: "2026-09-15",
       closeDate: "2026-10-01",
       photos: ["https://cdn.example.com/a.jpg", "https://cdn.example.com/b.jpg"],
-      headline: "Off-market: 123 Example St",
+      headline: "Contract assignment: Memphis, TN 38116",
     });
+    expect(view).not.toHaveProperty("address");
   });
 
   describe("photo parsing — dealPhotoUrls degrades to [] rather than throwing", () => {
@@ -147,7 +147,7 @@ describe("publicDealView", () => {
       }),
     );
     const serialized = JSON.stringify(view).toLowerCase();
-    for (const forbidden of ["contract", "arv", "rehab", "agent", "notes", "listprice"]) {
+    for (const forbidden of ["arv", "rehab", "agent", "notes", "listprice"]) {
       expect(serialized).not.toContain(forbidden);
     }
     // Belt-and-suspenders: the specific leaked values must not appear either.
@@ -155,5 +155,41 @@ describe("publicDealView", () => {
     expect(serialized).not.toContain("desperate");
     expect(serialized).not.toContain("150000");
     expect(serialized).not.toContain("140000");
+  });
+
+  it("never has a street address, and headline/JSON never say off-market", () => {
+    const view = publicDealView(listing({ dispoPublic: true }));
+    expect(view).not.toBeNull();
+    expect(view).not.toHaveProperty("address");
+    const serialized = JSON.stringify(view);
+    expect(serialized).not.toContain("123 Example St");
+    expect(serialized.toLowerCase()).not.toContain("off-market");
+    expect(serialized.toLowerCase()).not.toContain("off market");
+  });
+});
+
+describe("publicDealSummary", () => {
+  it("carries no banned phrase and no street address", () => {
+    const view = publicDealView(
+      listing({
+        dispoPublic: true,
+        assignmentPrice: 175_000,
+        propertyType: "Single Family",
+      }),
+    );
+    expect(view).not.toBeNull();
+    const summary = publicDealSummary(view!);
+    expect(summary.toLowerCase()).not.toContain("off-market");
+    expect(summary.toLowerCase()).not.toContain("off market");
+    expect(summary).not.toContain("123 Example St");
+    expect(summary).toContain("Under contract, cash, as-is.");
+    expect(summary).toContain("Assignment price $175,000");
+  });
+
+  it("omits the price sentence when assignmentPrice is absent", () => {
+    const view = publicDealView(listing({ dispoPublic: true, assignmentPrice: undefined }));
+    expect(view).not.toBeNull();
+    const summary = publicDealSummary(view!);
+    expect(summary).not.toContain("Assignment price");
   });
 });

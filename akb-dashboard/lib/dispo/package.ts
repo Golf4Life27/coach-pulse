@@ -24,6 +24,7 @@
 // operator pastes by hand.
 
 import { dealPageUrl, formatUsd } from "@/lib/dispo/blast-email";
+import { guardBuyerCopy } from "@/lib/dispo/copy-guard";
 import { DISPO_DISCLOSURE, DISPO_DISCLOSURE_SHORT } from "@/lib/dispo/disclosure";
 import type { PublicDealView } from "@/lib/dispo/public-deal";
 import { normalizeForGsm7 } from "@/lib/sms/gsm7";
@@ -117,12 +118,6 @@ function factSentence(view: PublicDealView): string | null {
   return bits.length > 0 ? bits.join(", ") : null;
 }
 
-function addressLineOf(view: PublicDealView): string {
-  const regionLine = nonEmpty([view.state, view.zip]).join(" ");
-  const line = nonEmpty([view.address, view.city, regionLine]).join(", ");
-  return line.length > 0 ? line : "Investment property";
-}
-
 /** City, state and ZIP only. This is what the PUBLIC copy (group post,
  *  Marketplace, SMS, DM) carries. The street address is on the one-pager and
  *  the deal page, which sit behind the intake form. Two reasons, both learned
@@ -143,16 +138,24 @@ function areaLineOf(view: PublicDealView): string {
  */
 export function composeDispoPackage(
   view: PublicDealView,
-  opts: { baseUrl: string; nowIso: string },
+  opts: { baseUrl: string; nowIso: string; onePagerAddress?: string | null },
 ): DispoPackage {
   const dealUrl = dealPageUrl(opts.baseUrl, view.recordId);
-  const addressLine = addressLineOf(view);
   const areaLine = areaLineOf(view);
   // "Contract assignment", not "off-market": some of these houses are on the
   // MLS with a listing agent, and Texas (Occupations Code 1101.0045) lets an
   // unlicensed party market its contract interest, not the property. The
-  // headline says exactly what is for sale.
-  const headline = `Contract assignment: ${addressLine}`;
+  // headline says exactly what is for sale. The STREET address only ever
+  // appears on the one-pager, and only when the caller (an authenticated
+  // operator route) passes it in explicitly — the view itself carries no
+  // address field.
+  // Listing.address is sometimes the full "street, city, ST zip" line already;
+  // do not print the city twice when it is.
+  const street = (opts.onePagerAddress ?? "").trim();
+  const streetCarriesArea = view.city.length > 0 && street.toLowerCase().includes(view.city.toLowerCase());
+  const headline = street
+    ? `Contract assignment: ${streetCarriesArea ? street : `${street}, ${areaLine}`}`
+    : `Contract assignment: ${areaLine}`;
   const publicHeadline = `Contract assignment: ${areaLine}`;
   const facts = factSentence(view);
   const priceLine = view.assignmentPrice != null ? `Price: ${formatUsd(view.assignmentPrice)}` : null;
@@ -160,7 +163,8 @@ export function composeDispoPackage(
   const inspectionLabel = isPast(view.optionDeadline, opts.nowIso) ? null : prettyDate(view.optionDeadline);
   const inspectionLine = inspectionLabel ? `Inspection period ends ${inspectionLabel}.` : null;
   const termsLine = closeLabel ? `Cash or hard money, as-is, close by ${closeLabel}.` : "Cash or hard money, as-is.";
-  const linkLine = `Details and photos: ${dealUrl}`;
+  const hasPhotos = view.photos.length > 0;
+  const linkLine = hasPhotos ? `Details and photos: ${dealUrl}` : `Details: ${dealUrl}`;
 
   // ── One-pager: the printable sheet. Ends with the FULL disclosure. ──
   const onePagerFacts: DispoPackageFact[] = [];
@@ -178,8 +182,10 @@ export function composeDispoPackage(
   if (inspectionLabel) onePagerFacts.push({ label: "Inspection Ends", value: inspectionLabel });
 
   // The title already carries the address line; the body is the paragraph flow
-  // under it, so it does not repeat it.
-  const onePagerBody = nonEmpty([
+  // under it, so it does not repeat it. Guarded as one joined string (each
+  // line is itself a single line with no embedded "\n") and split back
+  // apart so callers still get an array of paragraphs.
+  const onePagerBodyRaw = nonEmpty([
     facts,
     priceLine,
     termsLine,
@@ -187,10 +193,13 @@ export function composeDispoPackage(
     linkLine,
     CALL_TO_ACTION_POF,
     DISPO_DISCLOSURE,
-  ]).map(plain);
+  ])
+    .map(plain)
+    .join("\n");
+  const onePagerBody = guardBuyerCopy(onePagerBodyRaw, "package.onePager.body", view.recordId).split("\n");
 
   // ── Facebook group post: 6-10 short lines, two hashtags, no emoji. ──
-  const facebookGroup = plain(
+  const facebookGroupRaw = plain(
     nonEmpty([
       publicHeadline,
       facts,
@@ -199,10 +208,11 @@ export function composeDispoPackage(
       inspectionLine,
       linkLine,
       CALL_TO_ACTION_POF,
-      "#offmarket #cashbuyers",
+      "#cashbuyers #wholesale",
       DISPO_DISCLOSURE_SHORT,
     ]).join("\n"),
   );
+  const facebookGroup = guardBuyerCopy(facebookGroupRaw, "package.facebookGroup", view.recordId);
 
   // ── Marketplace listing. ──
   const titleParts = nonEmpty([
@@ -210,36 +220,39 @@ export function composeDispoPackage(
     view.beds != null && view.baths != null ? `${view.beds}bd/${view.baths}ba` : null,
     view.assignmentPrice != null ? formatUsd(view.assignmentPrice) : null,
   ]);
-  const marketplaceTitle = clip(plain(`Contract assignment: ${titleParts.join(" - ")}`), MARKETPLACE_TITLE_MAX);
+  const marketplaceTitleRaw = plain(`Contract assignment: ${titleParts.join(" - ")}`);
+  const marketplaceTitle = clip(
+    guardBuyerCopy(marketplaceTitleRaw, "package.marketplaceTitle", view.recordId),
+    MARKETPLACE_TITLE_MAX,
+  );
 
+  const marketplaceDescriptionRaw = plain(
+    nonEmpty([
+      publicHeadline,
+      facts,
+      priceLine,
+      termsLine,
+      inspectionLine,
+      linkLine,
+      CALL_TO_ACTION_POF,
+      DISPO_DISCLOSURE_SHORT,
+    ]).join("\n"),
+  );
   const marketplaceDescription = clip(
-    plain(
-      nonEmpty([
-        publicHeadline,
-        facts,
-        priceLine,
-        termsLine,
-        inspectionLine,
-        linkLine,
-        CALL_TO_ACTION_POF,
-        DISPO_DISCLOSURE_SHORT,
-      ]).join("\n"),
-    ),
+    guardBuyerCopy(marketplaceDescriptionRaw, "package.marketplaceDescription", view.recordId),
     MARKETPLACE_DESCRIPTION_MAX,
   );
 
   // ── DM reply to a comment of "interested". ──
-  const dmReply = clip(
-    plain(
-      [
-        "Thanks for reaching out.",
-        `Photos and details: ${dealUrl}`,
-        CALL_TO_ACTION_POF,
-        DISPO_DISCLOSURE_SHORT,
-      ].join(" "),
-    ),
-    DM_REPLY_MAX,
+  const dmReplyRaw = plain(
+    [
+      "Thanks for reaching out.",
+      hasPhotos ? `Photos and details: ${dealUrl}` : `Details: ${dealUrl}`,
+      CALL_TO_ACTION_POF,
+      DISPO_DISCLOSURE_SHORT,
+    ].join(" "),
   );
+  const dmReply = clip(guardBuyerCopy(dmReplyRaw, "package.dmReply", view.recordId), DM_REPLY_MAX);
 
   // ── SMS template. 300 characters is the hard cap, and the link, the ask and
   // the disclosure are the parts that must survive it — a text that got
@@ -250,7 +263,7 @@ export function composeDispoPackage(
     { priority: 2, text: `Contract assignment: ${areaLine}.` },
     { priority: 4, text: facts ? `${facts}.` : "" },
     { priority: 3, text: priceLine ? `${priceLine}.` : "" },
-    { priority: 0, text: `Photos: ${dealUrl}` },
+    { priority: 0, text: hasPhotos ? `Photos: ${dealUrl}` : `Details: ${dealUrl}` },
     { priority: 1, text: "POF gets the address details and lockbox." },
   ];
   const keep = smsParts.map(() => false);
@@ -263,13 +276,16 @@ export function composeDispoPackage(
     keep[idx] = true;
     if (renderSms(keep).length > SMS_MAX_CHARS) keep[idx] = false;
   }
-  const sms = clip(plain(renderSms(keep)), SMS_MAX_CHARS);
+  const smsRaw = plain(renderSms(keep));
+  const sms = clip(guardBuyerCopy(smsRaw, "package.sms", view.recordId), SMS_MAX_CHARS);
+
+  const onePagerTitle = guardBuyerCopy(plain(headline), "package.onePager.title", view.recordId);
 
   return {
     dealUrl,
     disclosure: DISPO_DISCLOSURE,
     onePager: {
-      title: plain(headline),
+      title: onePagerTitle,
       facts: onePagerFacts,
       body: onePagerBody,
     },

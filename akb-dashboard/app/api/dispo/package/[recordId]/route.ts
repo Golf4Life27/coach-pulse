@@ -81,6 +81,10 @@ export async function GET(
   const pkg = composeDispoPackage(view, {
     baseUrl: resolveBaseUrl() ?? FALLBACK_BASE_URL,
     nowIso,
+    // Operator-authenticated print sheet: the street address is safe on the
+    // one-pager title only (see lib/dispo/package.ts) — it never reaches
+    // any of the public post blocks.
+    onePagerAddress: listing.address,
   });
 
   await audit({

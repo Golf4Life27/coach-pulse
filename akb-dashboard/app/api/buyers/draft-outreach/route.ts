@@ -4,6 +4,7 @@ import { getBuyerV2 } from "@/lib/buyers-v2";
 import { buildJarvisSystemPrompt } from "@/lib/jarvis-system-prompt";
 import { synthesize } from "@/lib/maverick/synthesizer";
 import { VOICE_REGISTRY } from "@/lib/maverick/voice-registry";
+import { guardBuyerCopy } from "@/lib/dispo/copy-guard";
 import type { BuyerDraft } from "@/types/jarvis";
 
 export const runtime = "nodejs";
@@ -26,11 +27,11 @@ interface DraftOutput {
 
 function fallbackEmail(buyerName: string, address: string, assignmentPrice: number): DraftOutput {
   return {
-    subject: `Off-market deal — ${address}`,
+    subject: `Contract assignment - ${address}`,
     body:
 `Hi ${buyerName.split(" ")[0] || "there"},
 
-Quick off-market opportunity at ${address}. Assignment price ${formatUsd(assignmentPrice)}, cash close, 10-day inspection.
+Quick assignment opportunity at ${address}. Assignment price ${formatUsd(assignmentPrice)}, cash close, as-is, 10-day inspection.
 
 Want photos and the inspection window? Reply yes and I'll get you the package.
 
@@ -42,7 +43,7 @@ AKB Solutions
 
 function fallbackSms(buyerName: string, address: string, assignmentPrice: number): DraftOutput {
   return {
-    body: `Hey ${buyerName.split(" ")[0] || "there"} — off-market at ${address}, ${formatUsd(assignmentPrice)} assignment, cash close, 10-day inspection. Interested? — Alex / AKB`,
+    body: `Hey ${buyerName.split(" ")[0] || "there"} - ${address} under contract, ${formatUsd(assignmentPrice)} assignment, cash close, as-is, 10-day inspection. Interested? - Alex / AKB`,
   };
 }
 
@@ -136,14 +137,21 @@ Output ONLY a JSON object, no prose:
         : fallbackSms(buyer.name, listing.address, assignmentPrice);
     }
 
+    // Guard both the LLM draft and the fallback — a model can echo "off
+    // market" language just as easily as a template can.
+    const guardedSubject = draft.subject
+      ? guardBuyerCopy(draft.subject, "draft_outreach.subject", recordId)
+      : draft.subject;
+    const guardedBody = guardBuyerCopy(draft.body, "draft_outreach.body", recordId);
+
     drafts.push({
       buyerId: buyer.id,
       buyerName: buyer.name,
       buyerEmail: buyer.email,
       buyerPhone: buyer.phonePrimary,
       channel,
-      subject: channel === "email" ? draft.subject : undefined,
-      body: draft.body,
+      subject: channel === "email" ? guardedSubject : undefined,
+      body: guardedBody,
     });
   }
 

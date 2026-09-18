@@ -15,10 +15,11 @@
 // populated on the record.
 
 import type { Listing } from "@/lib/types";
+import { formatUsd } from "@/lib/dispo/blast-email";
+import { guardBuyerCopy } from "@/lib/dispo/copy-guard";
 
 export interface PublicDealView {
   recordId: string;
-  address: string;
   city: string;
   state: string;
   zip: string;
@@ -60,9 +61,14 @@ function parsePhotos(raw: string | null | undefined): string[] {
  * is what makes the anonymous path safe, and it is one line away on purpose.
  */
 export function publicDealProjection(listing: Listing): PublicDealView {
+  const areaLine =
+    [listing.city, [listing.state, listing.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ") ||
+    "Investment property";
+  const propertyType = listing.propertyType
+    ? guardBuyerCopy(listing.propertyType, "public_deal.propertyType", listing.id)
+    : null;
   return {
     recordId: listing.id,
-    address: listing.address,
     city: listing.city,
     state: listing.state ?? "",
     zip: listing.zip,
@@ -70,13 +76,35 @@ export function publicDealProjection(listing: Listing): PublicDealView {
     baths: listing.bathrooms,
     sqft: listing.buildingSqFt,
     yearBuilt: listing.yearBuilt,
-    propertyType: listing.propertyType ?? null,
+    propertyType,
     assignmentPrice: listing.assignmentPrice ?? null,
     optionDeadline: listing.optionDeadline ?? null,
     closeDate: listing.closeDate ?? null,
     photos: parsePhotos(listing.dealPhotoUrls),
-    headline: `Off-market: ${listing.address}`,
+    headline: guardBuyerCopy(`Contract assignment: ${areaLine}`, "public_deal.headline", listing.id),
   };
+}
+
+/**
+ * Pure. One sentence for a link preview (Open Graph / Twitter card) — built
+ * ONLY from the buyer-safe view, never the raw Listing. No market status
+ * (see the headline comment above) and never the list price: the one money
+ * figure that can appear is the assignment price.
+ */
+export function publicDealSummary(view: PublicDealView): string {
+  const bits: string[] = [];
+  if (view.beds != null && view.baths != null) bits.push(`${view.beds} bed / ${view.baths} bath`);
+  else if (view.beds != null) bits.push(`${view.beds} bed`);
+  else if (view.baths != null) bits.push(`${view.baths} bath`);
+  if (view.sqft != null && view.sqft > 0) bits.push(`${Math.round(view.sqft).toLocaleString("en-US")} sq ft`);
+  if (view.yearBuilt != null && view.yearBuilt > 0) bits.push(`built ${view.yearBuilt}`);
+  if (view.propertyType) bits.push(view.propertyType.trim());
+
+  const sentences = [bits.length > 0 ? `${bits.join(", ")}.` : null, "Under contract, cash, as-is."];
+  if (view.assignmentPrice != null) sentences.push(`Assignment price ${formatUsd(view.assignmentPrice)}.`);
+
+  const summary = sentences.filter((s): s is string => s != null).join(" ");
+  return guardBuyerCopy(summary, "public_deal.summary", view.recordId);
 }
 
 /**
