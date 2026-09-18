@@ -14,7 +14,7 @@ Everything else is a routine or a background session that Alex never opens. Rout
 |---|---|---|---|
 | MAVERICK 1 - Hourly seller-reply triage | every hour 8am-7pm | Reads new seller and agent replies, sends Tier B replies through the gated workflow, queues Tier C decisions | One text per hour at most, only when a decision is waiting: "Maverick / NEEDS YOU: ..." |
 | MAVERICK 2 - Engine drive | 7:30am, 1:30pm, 7:30pm | Full pass over the pipeline: leads in, openers out, replies, accepted deals, dispo, findings for the build | A text only for deals or blockers that need him; otherwise nothing |
-| MAVERICK 4 - Dispo hunter (Cowork scheduled task on the Mac) | daily 10am | Posts every executed contract's package to Facebook buyer groups from the operator's own browser, captures raised hands into Buyers | A text only for Tier C (a buyer names a number or a date) |
+| MAVERICK 4 - Dispo hunter (Cowork scheduled task on one of his computers) | daily 10am | Posts every executed contract's package to Facebook buyer groups from the operator's own browser, captures raised hands into Buyers | A text only for Tier C (a buyer names a number or a date) |
 | MAVERICK 5 - Weekly buyers list | Sunday 7am | Mines deed evidence into the Buyers table, leads with coverage gaps for metros under contract | One email |
 | OFF - Nightly pipeline audit | (off) | Was a fresh-session routine with no connector tools, so it never actually ran | nothing |
 | Whitetail CMA, TikTok content pack, TikTok ops | daily | Other businesses, untouched by this map | Their own emails |
@@ -23,7 +23,7 @@ Anything whose name starts with **OFF** or **DISABLED** is history and does not 
 
 MAVERICK 1 and 2 fire into their own persistent sessions (titled "MAVERICK 1 - ... (routine runs here, do not type here)" and "MAVERICK 2 - ..."). Alex does not type in those. If one dies or fills up, HQ recreates it and re-binds the routine; nothing changes for Alex.
 
-Routine prompts live in `akb-dashboard/docs/handoffs/routine-prompts/` and are the source of truth for what each routine is told to do. MAVERICK 4 is the one routine that runs on the operator's Mac (Cowork, Scheduled tasks) because Facebook posting must come from his logged-in browser; its prompt is `routine-prompts/dispo-hunter-cowork.md`. The email half of dispo (blast to the Buyers table on contract execution) is app code behind `DISPO_BLAST_LIVE`, an operator flag in Vercel.
+Routine prompts live in `akb-dashboard/docs/handoffs/routine-prompts/` and are the source of truth for what each routine is told to do. MAVERICK 4 is the one routine that runs on one of the operator's own computers, Mac or Windows (Claude Desktop, Routines, Local) because Facebook posting must come from his logged-in browser; its prompt is `routine-prompts/dispo-hunter-cowork.md`. The email half of dispo (blast to the Buyers table on contract execution) is app code behind `DISPO_BLAST_LIVE`, an operator flag in Vercel.
 
 ## 3. What only Alex does
 
