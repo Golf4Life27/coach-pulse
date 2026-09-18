@@ -15,7 +15,7 @@ function buyer(over: Partial<BuyerRecord> = {}): BuyerRecord {
     lastPurchaseDate: null, lastPurchasePrice: null, lastPurchaseAddress: null,
     linkedDealCount: null, buyerVolumeTier: null, source: null, status: null,
     warmthScore: null, emailSentAt: null, emailOpenedAt: null,
-    formCompletedAt: null, lastEngagementAt: null, notes: null,
+    formCompletedAt: null, lastEngagementAt: null, notes: null, buyerStatus: null,
     minDealSpread: 40_000,
     minAssignmentFeeTarget: null, maxRehab: null, preferredCondition: null,
     pofOnFile: true, pofExpiryDate: null,

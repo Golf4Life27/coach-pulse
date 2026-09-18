@@ -454,7 +454,7 @@ export interface DDStatus {
 // ── Phase 2: buyers ─────────────────────────────────────────────────────────
 
 export type BuyerType = "flipper" | "landlord" | "wholesaler" | "owner-occupant" | "unknown";
-export type BuyerStatus = "Cold" | "Warmed" | "Form Completed" | "Active Match" | "Closed Deal" | "Dead";
+export type BuyerStatus = "Cold" | "Warmed" | "Form Completed" | "Active Match" | "Closed Deal" | "Dead" | "Opted_Out";
 export type BuyerVolumeTier = "A" | "B" | "C";
 export type BuyerSource = "InvestorBase" | "Networking" | "Inbound Form" | "Referral";
 
@@ -485,6 +485,10 @@ export interface BuyerRecord {
   formCompletedAt: string | null;
   lastEngagementAt: string | null;
   notes: string | null;
+  // Buyer_Status (Active/Warm/Inactive/Do Not Contact) — a DIFFERENT column
+  // from Status/BuyerStatus above; free text on the physical table, so kept
+  // as a plain string rather than cast to a union.
+  buyerStatus: string | null;
   // Pricing-keystone fields (adjudication recXJrM7EYK3pEFmF). Min_Deal_Spread
   // is the Tier-C autonomous margin source — a DOLLAR spread, sourced from
   // the buyer's own stated criteria via the dispo write-back path, never

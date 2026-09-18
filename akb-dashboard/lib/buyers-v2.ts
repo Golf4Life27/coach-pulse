@@ -16,17 +16,35 @@ const BASE_ID = process.env.AIRTABLE_BASE_ID || "appp8inLAGTg4qpEZ";
 const BUYERS_TABLE = "tbl4Rr07vq0mTftZB";
 
 // Phase 2 field names. typecast=true on writes allows Airtable to create
-// columns/select-option values on the fly when they don't yet exist.
+// columns/select-option values on the fly when they don't yet exist —
+// EXCEPT for a name Airtable doesn't recognize at all, which is a 422, and
+// except for a select field, which Airtable will NOT invent new options for
+// even with typecast (see normalizePropertyTypeChoices below).
+//
+// FIELD-NAME MISMATCH FIX (2026-09-18, this bug hunt): the keys below were
+// verified against the physical Buyers table (tbl4Rr07vq0mTftZB) tonight.
+// Several had drifted from a schema that never existed on the table, which
+// made every read come back null and every write a 422. The KEYS are the
+// stable API other modules import — only the string VALUES (the actual
+// Airtable field names) changed:
+//   Name -> "buyer_name", Email -> "buyer_email", Phone_Primary ->
+//   "buyer_phone", Entity -> "Company_Name", Markets -> "Preferred_Cities",
+//   Target_ZIPs -> "Preferred_Zip_Codes", Property_Type_Preference ->
+//   "Preferred_Property_Types", Notes -> "Buyer_Notes" (Buyer_Notes was
+//   already its own correct key pointing at the same physical field — both
+//   keys intentionally alias the same column now). See
+//   lib/buyers-v2-fields.test.ts for the parity test against the physical
+//   schema.
 export const BUYER_V2_FIELDS = {
-  Name: "Name",
-  Entity: "Entity",
-  Email: "Email",
-  Phone_Primary: "Phone_Primary",
+  Name: "buyer_name",
+  Entity: "Company_Name",
+  Email: "buyer_email",
+  Phone_Primary: "buyer_phone",
   Phone_Secondary: "Phone_Secondary",
   Buyer_Type: "Buyer_Type",
-  Property_Type_Preference: "Property_Type_Preference",
-  Markets: "Markets",
-  Target_ZIPs: "Target_ZIPs",
+  Property_Type_Preference: "Preferred_Property_Types",
+  Markets: "Preferred_Cities",
+  Target_ZIPs: "Preferred_Zip_Codes",
   Min_Price: "Min_Price",
   Max_Price: "Max_Price",
   Min_Beds: "Min_Beds",
@@ -53,7 +71,16 @@ export const BUYER_V2_FIELDS = {
   Email_Opened_At: "Email_Opened_At",
   Form_Completed_At: "Form_Completed_At",
   Last_Engagement_At: "Last_Engagement_At",
-  Notes: "Notes",
+  // Notes was pointed at a field name ("Notes") that does not exist on the
+  // physical table — the actual long-text notes column is Buyer_Notes,
+  // which already had its own (correct) key below. Both keys now alias the
+  // SAME physical field on purpose; callers keep using whichever key reads
+  // better at the call site.
+  Notes: "Buyer_Notes",
+  // Buyer_Status (Active/Warm/Inactive/Do Not Contact) is a DIFFERENT column
+  // from Status (Cold/Warmed/.../Opted_Out) above — the physical table has
+  // both. box-drip.ts and dispo-buyer-replies check/write both.
+  Buyer_Status: "Buyer_Status",
   // Dispo buyer-reply ingestion (2026-09-07, lib/dispo/buyer-reply.ts +
   // app/api/cron/dispo-buyer-replies). dispo-trigger stamps the two blast
   // fields the moment a send succeeds — the Gmail thread id is the durable
@@ -95,8 +122,52 @@ function asNumber(v: unknown): number | null {
 }
 function asStringArray(v: unknown): string[] | null {
   if (Array.isArray(v)) return v.filter((x) => typeof x === "string");
-  if (typeof v === "string" && v.trim()) return [v];
+  // A multipleSelects field comes back as an array; a multilineText field
+  // (Preferred_Cities is free text like "Memphis, Millington, DeSoto County
+  // MS") comes back as one string — split it on commas/newlines so callers
+  // get the same string[] shape either way.
+  if (typeof v === "string" && v.trim()) {
+    const parts = v
+      .split(/[,\n]+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    return parts.length > 0 ? parts : null;
+  }
   return null;
+}
+
+/** Preferred_Property_Types choice list, exactly as configured on the
+ *  physical Buyers table (verified 2026-09-18). Airtable's typecast=true
+ *  does NOT invent new options for a select field the way it invents new
+ *  columns — an unrecognized value here is a 422, not a soft accept. */
+export const PREFERRED_PROPERTY_TYPE_CHOICES = [
+  "Single Family",
+  "Single Family Residential",
+  "Duplex",
+  "Triplex",
+  "Quadplex",
+  "Townhouse",
+  "Condo",
+  "SFR",
+  "Land / Teardown",
+] as const;
+
+/** Filters `values` down to the choices Airtable will actually accept for
+ *  Preferred_Property_Types (case-insensitive match, canonical spelling in
+ *  the result). Anything that doesn't match a choice comes back in
+ *  `dropped` instead of blowing up the whole write — callers fold `dropped`
+ *  into Notes so the information isn't silently lost. */
+export function normalizePropertyTypeChoices(
+  values: string[] | null | undefined,
+): { kept: string[]; dropped: string[] } {
+  const kept: string[] = [];
+  const dropped: string[] = [];
+  for (const v of values ?? []) {
+    const match = PREFERRED_PROPERTY_TYPE_CHOICES.find((c) => c.toLowerCase() === v.trim().toLowerCase());
+    if (match) kept.push(match);
+    else dropped.push(v);
+  }
+  return { kept, dropped };
 }
 
 function mapRecord(record: { id: string; fields: Record<string, unknown> }): BuyerRecord {
@@ -136,6 +207,7 @@ function mapRecord(record: { id: string; fields: Record<string, unknown> }): Buy
     formCompletedAt: asString(f[BUYER_V2_FIELDS.Form_Completed_At]),
     lastEngagementAt: asString(f[BUYER_V2_FIELDS.Last_Engagement_At]),
     notes: asString(f[BUYER_V2_FIELDS.Notes]),
+    buyerStatus: asString(f[BUYER_V2_FIELDS.Buyer_Status]),
     dispoBlastThreadId: asString(f[BUYER_V2_FIELDS.Dispo_Blast_Thread_Id]),
     dispoBlastListingId: asString(f[BUYER_V2_FIELDS.Dispo_Blast_Listing_Id]),
     lastResponseAt: asString(f[BUYER_V2_FIELDS.Last_Response_At]),

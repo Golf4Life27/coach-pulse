@@ -27,7 +27,9 @@ describe("investorBaseCsvToImportRows — the dispo-list accumulation parse", ()
     expect(rows[0].email).toBeNull();
     expect(rows[0].phone).toBe("8312398658");
     expect(rows[0].fields["Buyer_Type"]).toBe("landlord");
-    expect(rows[0].fields["Markets"]).toEqual(["Detroit"]);
+    // Preferred_Cities is TEXT on the physical table, not a linked/array
+    // field — the parser must join, not hand back an array.
+    expect(rows[0].fields["Preferred_Cities"]).toBe("Detroit");
     expect(rows[0].fields["Buyer_Volume_Tier"]).toBe("B"); // 22 linked deals
     expect(rows[0].fields["Source"]).toBe("InvestorBase");
   });
@@ -62,8 +64,20 @@ describe("investorBaseCsvToImportRows — the dispo-list accumulation parse", ()
       row({ "Entity Name": "Peach Capital Llc", "Buyer Type": "landlord", "Property Type": "Single Family Residence", "Wireless 1": "4045551234", City: "Atlanta", State: "GA", "Most Recent Sale Price": "133000" }),
     ].join("\n");
     const { rows } = investorBaseCsvToImportRows(csv);
-    expect(rows[0].fields["Markets"]).toEqual(["Atlanta"]);
-    expect(rows[0].fields["Property_Type_Preference"]).toEqual(["Single Family"]);
+    expect(rows[0].fields["Preferred_Cities"]).toBe("Atlanta");
+    expect(rows[0].fields["Preferred_Property_Types"]).toEqual(["Single Family"]);
+  });
+
+  it("drops a property type not on the Preferred_Property_Types choice list into a Notes note instead of failing", () => {
+    // normalizePropertyType maps "duplex" input to "Multi Family", which is
+    // not one of the physical table's choices — must not 422 the write.
+    const csv = [
+      HEADER,
+      row({ "Entity Name": "Multi Unit Llc", "Buyer Type": "landlord", "Property Type": "Duplex", "Wireless 1": "3135550000", City: "Detroit", State: "MI" }),
+    ].join("\n");
+    const { rows } = investorBaseCsvToImportRows(csv);
+    expect(rows[0].fields["Preferred_Property_Types"]).toBeNull();
+    expect(rows[0].droppedPropertyTypesNote).toBe("InvestorBase property type not on file: Multi Family");
   });
 
   it("reports raw count independent of skips/dedup", () => {

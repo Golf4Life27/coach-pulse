@@ -21,10 +21,16 @@ export const DRIP_GAP_DAYS = [0, 3, 7] as const;
 
 const DAY_MS = 86_400_000;
 
-/** Statuses that mean "never contact again" — compared case-insensitively
- *  against whatever string the mapper yields, since Status is free text on
- *  the physical table despite the narrower BuyerStatus type. */
-const DO_NOT_CONTACT: ReadonlySet<string> = new Set(["opted_out", "do not contact", "inactive"]);
+/** V2 Status values that mean "never contact again" — compared
+ *  case-insensitively against whatever string the mapper yields, since
+ *  Status is free text on the physical table despite the narrower
+ *  BuyerStatus type. */
+const STATUS_DO_NOT_CONTACT: ReadonlySet<string> = new Set(["opted_out", "dead"]);
+
+/** Buyer_Status values that mean the same thing, from the OTHER status
+ *  column on the physical table (Active/Warm/Inactive/Do Not Contact) —
+ *  a buyer can be excluded via either column. Compared case-insensitively. */
+const BUYER_STATUS_DO_NOT_CONTACT: ReadonlySet<string> = new Set(["inactive", "do not contact"]);
 
 function hasUsableEmail(email: string | null): boolean {
   return !!email && email.includes("@");
@@ -34,8 +40,10 @@ function hasNoBox(maxPrice: number | null): boolean {
   return maxPrice == null || maxPrice === 0;
 }
 
-function isDoNotContact(status: string | null): boolean {
-  return !!status && DO_NOT_CONTACT.has(status.trim().toLowerCase());
+function isDoNotContact(buyer: BuyerRecord): boolean {
+  const status = (buyer.status ?? "").trim().toLowerCase();
+  const buyerStatus = (buyer.buyerStatus ?? "").trim().toLowerCase();
+  return STATUS_DO_NOT_CONTACT.has(status) || BUYER_STATUS_DO_NOT_CONTACT.has(buyerStatus);
 }
 
 /** Whether `buyer` is due for its next drip step right now, and which step
@@ -44,7 +52,7 @@ function nextStepFor(buyer: BuyerRecord, nowMs: number): 1 | 2 | 3 | null {
   if (!hasUsableEmail(buyer.email)) return null;
   if (!hasNoBox(buyer.maxPrice)) return null;
   if (buyer.formCompletedAt) return null;
-  if (isDoNotContact(buyer.status)) return null;
+  if (isDoNotContact(buyer)) return null;
 
   const step = buyer.boxDripStep ?? 0;
   if (step >= DRIP_STEPS) return null;

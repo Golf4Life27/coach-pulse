@@ -19,7 +19,7 @@ function buyer(over: Partial<BuyerRecord> = {}): BuyerRecord {
     lastPurchaseDate: null, lastPurchasePrice: null, lastPurchaseAddress: null,
     linkedDealCount: null, buyerVolumeTier: null, source: null, status: "Cold",
     warmthScore: null, emailSentAt: null, emailOpenedAt: null,
-    formCompletedAt: null, lastEngagementAt: null, notes: null,
+    formCompletedAt: null, lastEngagementAt: null, notes: null, buyerStatus: null,
     minDealSpread: null, minAssignmentFeeTarget: null, maxRehab: null, preferredCondition: null,
     pofOnFile: false, pofExpiryDate: null,
     preferredStates: null, strategyType: null,
@@ -56,12 +56,20 @@ describe("selectDripCandidates — eligibility", () => {
     expect(r).toHaveLength(0);
   });
 
-  it.each(["Opted_Out", "opted_out", "Do Not Contact", "DO NOT CONTACT", "Inactive", "inactive"])(
-    "excludes status %s",
+  it.each(["Opted_Out", "opted_out", "Dead", "dead"])(
+    "excludes V2 status %s",
     (status) => {
       // Status is free text on the physical table despite the narrower
       // BuyerStatus type the mapper casts through — see box-drip.ts.
       const r = selectDripCandidates([buyer({ status: status as BuyerRecord["status"] })], NOW, 20);
+      expect(r).toHaveLength(0);
+    },
+  );
+
+  it.each(["Inactive", "inactive", "Do Not Contact", "DO NOT CONTACT"])(
+    "excludes Buyer_Status %s (the OTHER status column)",
+    (buyerStatus) => {
+      const r = selectDripCandidates([buyer({ buyerStatus })], NOW, 20);
       expect(r).toHaveLength(0);
     },
   );
