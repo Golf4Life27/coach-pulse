@@ -1,6 +1,6 @@
 import { getListing, getListings, updateListingRecord } from "@/lib/airtable";
 import { filterLiveReplyProposals } from "@/lib/draft-dismissal";
-import { parseSendEmailPayload, parseSendSmsPayload, sendApprovedReply } from "@/lib/approve-send";
+import { parseSendEmailPayload, parseSendSmsPayload, parseHoldReviewSmsPayload, sendApprovedReply } from "@/lib/approve-send";
 import { parseFrontierRetirePayload } from "@/lib/crawler/frontier-governor";
 import { retireZip } from "@/lib/zip-registry";
 import { audit } from "@/lib/audit-log";
@@ -321,8 +321,97 @@ export async function PATCH(req: Request) {
 
       const payload = parseSendSmsPayload(f.Suggested_Action_Payload as string);
       if (!payload) {
+        // ── OPERATOR OVERRIDE OF A HELD SMS DRAFT (2026-09-18, the counter-
+        // decision card fix) ── a hold_review proposal has no dollar figure
+        // of its own (that emptiness is WHY the guardrails held it) — but
+        // the operator picking a Maverick option (or writing the reply by
+        // hand) and hitting Send is an explicit Tier C decision: a human
+        // read the facts and chose the number. Same Pending-only check
+        // (already enforced above), same quiet-hours/claim/send-gate rails
+        // (sendApprovedReply, unchanged), same notes write-back — the ONLY
+        // difference from a normal send_sms dispatch is the stamped
+        // `operatorOverrideHold` receipt and its own audit event, so this
+        // path is never confused with the machine's own auto-send.
+        //
+        // Email's hold_review is NOT given the same override here — its
+        // dispatch (sendEmail) has no quiet-hours/claim rails to mirror and
+        // adding a second, unmirrored bypass for it was judged not worth
+        // the risk in this pass. Left as-is; a symmetrical fix would add
+        // parseHoldReviewEmailPayload + the same override block.
+        const holdPayload = parseHoldReviewSmsPayload(f.Suggested_Action_Payload as string);
+        const overrideBody = (editedBody ?? "").trim();
+        if (holdPayload && overrideBody) {
+          const recordId = (f.Record_ID as string) || holdPayload.recordId || "";
+          const listing = recordId ? await getListing(recordId) : null;
+
+          const result = await sendApprovedReply({
+            proposalId: proposalRecId,
+            recordId: recordId || proposalId,
+            toE164: holdPayload.to,
+            body: overrideBody,
+            state: listing?.state ?? null,
+            doNotText: listing?.doNotText === true,
+            address: listing?.address ?? null,
+          });
+
+          if (!result.sent) {
+            // Leave the proposal PENDING — same retry contract as a normal
+            // send_sms skip.
+            return Response.json({ success: false, skipReason: result.reason }, { status: 409 });
+          }
+
+          const iso = new Date().toISOString();
+          await patchProposal(tableId, proposalRecId, {
+            Status: "Approved",
+            Reviewed_At: iso,
+            Suggested_Action_Payload: JSON.stringify({
+              ...JSON.parse((f.Suggested_Action_Payload as string) ?? "{}"),
+              sentBody: overrideBody,
+              quoMessageId: result.quoMessageId,
+              sentAt: iso,
+              operatorOverrideHold: true,
+            }),
+          });
+
+          if (recordId && listing) {
+            try {
+              const line = `[operator override — held reply sent ${iso}] ${overrideBody} [quo ${result.quoMessageId ?? "?"}]`;
+              await updateListingRecord(recordId, {
+                Last_Outbound_At: iso,
+                Verification_Notes: listing.notes ? `${listing.notes}\n\n${line}` : line,
+              });
+            } catch (err) {
+              console.error("[proposals] hold-override listing write-back failed:", err);
+            }
+            await mirrorDraftState(recordId, [proposalId, proposalRecId, f.Proposal_ID as string], "sent", iso);
+          }
+
+          await audit({
+            agent: "scribe",
+            event: "proposal_hold_overridden_by_operator",
+            status: "confirmed_success",
+            recordId: recordId || undefined,
+            inputSummary: { proposalId, recordId: recordId || null, holdReason: holdPayload.holdReason },
+            outputSummary: { sent: true, quoMessageId: result.quoMessageId },
+            decision: "operator_override_hold_sms_sent",
+          });
+
+          return Response.json({
+            success: true,
+            action,
+            sent: true,
+            quoMessageId: result.quoMessageId,
+            operatorOverrideHold: true,
+          });
+        }
+
         return Response.json(
-          { success: false, skipReason: "not_dispatchable: payload is not a send_sms or send_email action" },
+          {
+            success: false,
+            skipReason: holdPayload
+              ? "held: pick a Maverick option or write the reply first"
+              : "not_dispatchable: payload is not a send_sms or send_email action",
+          },
           { status: 422 }
         );
       }

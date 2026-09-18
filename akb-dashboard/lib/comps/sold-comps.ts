@@ -108,5 +108,24 @@ export async function getSoldComps(
       error: String(err).slice(0, 200),
     });
   }
-  return getSaleComparables(input, recordId, widen);
+  // LAST RESORT (2026-09-18 fix): both county deeds and ATTOM already
+  // failed above. A missing RENTCAST_API_KEY here used to THROW — killing
+  // the entire ARV run with a 502 the moment the operator pulled the
+  // RentCast key, even though ATTOM (or a fixed key) could carry every
+  // OTHER call. A degraded last-resort leg is a logged, audited SKIP —
+  // empty comps, never a thrown failure the caller has to survive.
+  try {
+    return await getSaleComparables(input, recordId, widen);
+  } catch (err) {
+    await audit({
+      agent: "appraiser",
+      event: "rentcast_comp_pull",
+      status: "confirmed_failure",
+      recordId,
+      inputSummary: { address: input.address, city: input.city, state: input.state },
+      outputSummary: { fallback: "none — last resort exhausted", comps: 0 },
+      error: String(err).slice(0, 200),
+    });
+    return [];
+  }
 }

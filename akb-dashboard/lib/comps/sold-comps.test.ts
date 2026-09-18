@@ -152,6 +152,18 @@ describe("getSoldComps — non-registry markets (ATTOM primary)", () => {
     expect(fail.error).toContain("not geocodable");
   });
 
+  it("2026-09-18: RentCast unconfigured on the last-resort leg is a logged skip, never a thrown failure that kills the ARV run", async () => {
+    mockAttom.mockRejectedValue(new Error("ATTOM sale/snapshot 401: entitlement"));
+    mockRentCast.mockRejectedValue(new Error("RENTCAST_API_KEY not set"));
+    const out = await getSoldComps(ATLANTA, "recQ");
+    expect(out).toEqual([]); // honest empty comps, not a thrown error
+    const events = mockAudit.mock.calls.map(([e]) => `${e.event}:${e.status}`);
+    expect(events).toContain("rentcast_comp_pull:confirmed_failure");
+    const skip = mockAudit.mock.calls.find(([e]) => e.event === "rentcast_comp_pull")![0];
+    expect(skip.error).toContain("RENTCAST_API_KEY not set");
+    expect(skip.outputSummary).toMatchObject({ comps: 0 });
+  });
+
   it("widen maps onto the ATTOM pull: maxRadius → radiusMiles, daysOld → sinceIsoDate", async () => {
     mockAttom.mockResolvedValue([]);
     const before = new Date(Date.now() - 365 * 86_400_000).toISOString().slice(0, 10);

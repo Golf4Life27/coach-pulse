@@ -70,7 +70,7 @@ describe("selectEngagedUnderwriteTargets", () => {
     expect(selectEngagedUnderwriteTargets([deal({ arvValidatedAt: "2026-06-01T00:00:00Z" })], NOW)).toHaveLength(1);
   });
 
-  it("newest activity first (bounded runs do the hottest deals)", () => {
+  it("newest activity first WITHIN a status (bounded runs do the hottest deals)", () => {
     const targets = selectEngagedUnderwriteTargets(
       [
         deal({ id: "recOLD", lastInboundAt: "2026-07-01T00:00:00Z" }),
@@ -79,6 +79,60 @@ describe("selectEngagedUnderwriteTargets", () => {
       NOW,
     );
     expect(targets.map((t) => t.id)).toEqual(["recNEW", "recOLD"]);
+  });
+});
+
+describe("selection order (2026-09-18, Harrison St / Ocala class)", () => {
+  it("Counter Received outranks Negotiating even when Negotiating is more recently active", () => {
+    const targets = selectEngagedUnderwriteTargets(
+      [
+        deal({ id: "recNEGOTIATING", outreachStatus: "Negotiating", lastInboundAt: "2026-07-13T01:00:00Z" }),
+        deal({ id: "recCOUNTER", outreachStatus: "Counter Received", lastInboundAt: "2026-07-10T00:00:00Z" }),
+      ],
+      NOW,
+    );
+    expect(targets.map((t) => t.id)).toEqual(["recCOUNTER", "recNEGOTIATING"]);
+  });
+
+  it("full status order: Counter Received > Negotiating > Response Received > Offer Accepted", () => {
+    const targets = selectEngagedUnderwriteTargets(
+      [
+        deal({ id: "recACCEPTED", outreachStatus: "Offer Accepted", lastInboundAt: "2026-07-13T01:50:00Z" }),
+        deal({ id: "recRESPONSE", outreachStatus: "Response Received", lastInboundAt: "2026-07-13T01:40:00Z" }),
+        deal({ id: "recNEGOTIATING", outreachStatus: "Negotiating", lastInboundAt: "2026-07-13T01:30:00Z" }),
+        deal({ id: "recCOUNTER", outreachStatus: "Counter Received", lastInboundAt: "2026-07-13T01:00:00Z" }),
+      ],
+      NOW,
+    );
+    expect(targets.map((t) => t.id)).toEqual(["recCOUNTER", "recNEGOTIATING", "recRESPONSE", "recACCEPTED"]);
+  });
+
+  it("within a status, most recently engaged first — freshest of lastInboundAt/lastOutboundAt/replyClassifiedAt", () => {
+    const targets = selectEngagedUnderwriteTargets(
+      [
+        deal({
+          id: "recOUTBOUND_FRESH",
+          outreachStatus: "Counter Received",
+          lastInboundAt: "2026-07-10T00:00:00Z",
+          lastOutboundAt: "2026-07-12T23:00:00Z",
+        }),
+        deal({
+          id: "recCLASSIFIED_FRESH",
+          outreachStatus: "Counter Received",
+          lastInboundAt: "2026-07-05T00:00:00Z",
+          lastOutboundAt: null,
+          replyClassifiedAt: "2026-07-13T00:30:00Z",
+        }),
+        deal({
+          id: "recSTALE",
+          outreachStatus: "Counter Received",
+          lastInboundAt: "2026-07-01T00:00:00Z",
+          lastOutboundAt: null,
+        }),
+      ],
+      NOW,
+    );
+    expect(targets.map((t) => t.id)).toEqual(["recCLASSIFIED_FRESH", "recOUTBOUND_FRESH", "recSTALE"]);
   });
 });
 

@@ -33,6 +33,8 @@ import {
 } from "@/lib/inbound/reply-draft-trigger";
 import { audit } from "@/lib/audit-log";
 import { persistDecisionMath } from "@/lib/decision-persist";
+import { autoRunOnEngaged, originFromRequest } from "@/lib/appraiser/auto-run-on-engaged";
+import { underwriteFresh } from "@/lib/appraiser/engaged-underwrite-select";
 import type { Listing } from "@/lib/types";
 import {
   authenticate,
@@ -46,6 +48,15 @@ export const maxDuration = 120;
 
 const DEFAULT_LIMIT = 40;
 const DEFAULT_HOURS_BACK = 24;
+// ENGAGED AUTO-UNDERWRITE FROM QUO-SYNC (2026-09-18, the Harrison St / Ocala
+// class): scan-replies only kicks the appraiser on a STATUS-FLIP transition
+// into an engaged stage; a record already engaged that gets a fresh
+// counter/interest classified HERE (no status change to trigger on) never
+// got ARV/rehab any other way except the once-daily engaged cron — which the
+// same-day fix in auto-underwrite-engaged/route.ts unstarves, but a sweep
+// still beats waiting for the next slot. Capped hard so this sync's own
+// lambda budget (120s, shared across up to `limit` records) can't blow out.
+const ENGAGED_AUTO_UNDERWRITE_CAP = 2;
 // Use the existing population window the brief detector uses (long enough
 // to catch every responder that's still in an Active/Texted/Emailed state).
 const POPULATION_RECENT_DAYS = 365;
@@ -120,6 +131,11 @@ async function handle(req: Request) {
   let draftsHeld = 0;
   // Decision-math refreshes fired by classified counters this run.
   const decisionRefreshed: Array<{ recordId: string; verdict: string; counter: number | null }> = [];
+  // Engaged auto-underwrite kicks fired this run (cap: ENGAGED_AUTO_UNDERWRITE_CAP).
+  let engagedAutoUnderwriteCount = 0;
+  const origin = originFromRequest(req);
+  // 15s reserve for the closing summary/audit writes after the loop.
+  const deadlineAtMs = t0 + maxDuration * 1000 - 15_000;
 
   for (const l of cohort) {
     const phone = normalizePhone((l as { agentPhone?: string | null }).agentPhone);
@@ -271,6 +287,35 @@ async function handle(req: Request) {
               console.error("[quo_sync] decision refresh failed:", err);
             }
           }
+          // ENGAGED AUTO-UNDERWRITE (2026-09-18, the Harrison St / Ocala
+          // class): a counter/interest classified HERE — no status flip for
+          // scan-replies to catch — never used to reach the appraiser at
+          // all if the once-daily engaged cron hadn't gotten to it yet. Only
+          // fires when the record has no fresh (<14d, trusted-epoch) ARV;
+          // capped at ENGAGED_AUTO_UNDERWRITE_CAP per invocation so this sync
+          // can never blow its lambda budget. Best-effort: a failure here
+          // must never break the inbound capture already written above.
+          if (
+            (draft.classification === "counter" || draft.classification === "interest") &&
+            engagedAutoUnderwriteCount < ENGAGED_AUTO_UNDERWRITE_CAP &&
+            !underwriteFresh(l, new Date())
+          ) {
+            engagedAutoUnderwriteCount++;
+            try {
+              const r = await autoRunOnEngaged({ recordId: l.id, origin, deadlineAtMs });
+              await audit({
+                agent: "appraiser",
+                event: "engaged_auto_underwrite_from_quo_sync",
+                status: r.arvOk ? "confirmed_success" : "confirmed_failure",
+                recordId: l.id,
+                inputSummary: { address: l.address, classification: draft.classification },
+                outputSummary: { arv_ok: r.arvOk, rehab: r.rehab, buyer_intel: r.buyerIntel, reprice: r.reprice },
+                decision: "auto_underwrite",
+              });
+            } catch (err) {
+              console.error("[quo_sync] engaged auto-underwrite failed:", String(err).slice(0, 200));
+            }
+          }
         }
       } catch (err) {
         console.error("[quo_sync] reply draft failed:", err);
@@ -317,6 +362,7 @@ async function handle(req: Request) {
     total_escalations: totalEscalations,
     reply_drafts_queued: draftsQueued,
     decision_refreshed: decisionRefreshed.length,
+    engaged_auto_underwrite_triggered: engagedAutoUnderwriteCount,
     reply_drafts_held: draftsHeld,
     errors: outcomes.filter((r) => r.error).length,
     duration_ms: Date.now() - t0,
