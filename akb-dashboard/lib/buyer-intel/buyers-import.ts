@@ -26,6 +26,7 @@ import {
   inferMarketsFromCity,
   inferVolumeTier,
   normalizePhone,
+  normalizePropertyTypeChoices,
 } from "@/lib/buyers-v2";
 
 // InvestorBase-flavored column → Buyers field-name normalization. Several
@@ -102,6 +103,10 @@ export interface BuyerImportRow {
   /** Normalized 10-digit phone, or null. */
   phone: string | null;
   fields: Record<string, unknown>;
+  /** InvestorBase property-type text that didn't match a
+   *  Preferred_Property_Types choice (e.g. "Multi Family", "Land") — folded
+   *  into Notes by resolveAndUpsertBuyers instead of failing the write. */
+  droppedPropertyTypesNote: string | null;
 }
 
 export interface BuyerImportResult {
@@ -170,6 +175,18 @@ export function investorBaseCsvToImportRows(csvText: string): {
     }
 
     const linkedDealCount = parseNumber(norm.Linked_Deal_Count ?? "");
+    // Preferred_Property_Types is a multipleSelects field with a fixed
+    // choice list — Airtable 422s on anything outside it even with
+    // typecast=true. normalizePropertyType's broader labels ("Multi
+    // Family", "Mixed", "Land") don't all match a choice; keep what does
+    // and fold the rest into a Notes line instead of failing the row.
+    const rawPropertyTypes = norm.Property_Type_Preference ? normalizePropertyType(norm.Property_Type_Preference) : null;
+    const propertyTypes = normalizePropertyTypeChoices(rawPropertyTypes);
+    const droppedPropertyTypesNote =
+      propertyTypes.dropped.length > 0
+        ? `InvestorBase property type not on file: ${propertyTypes.dropped.join(", ")}`
+        : null;
+
     const fields: Record<string, unknown> = {
       [BUYER_V2_FIELDS.Name]: fullName || email || phone,
       [BUYER_V2_FIELDS.Entity]: entity,
@@ -177,10 +194,10 @@ export function investorBaseCsvToImportRows(csvText: string): {
       [BUYER_V2_FIELDS.Phone_Primary]: norm.Phone_Primary || null,
       [BUYER_V2_FIELDS.Phone_Secondary]: norm.Phone_Secondary || null,
       [BUYER_V2_FIELDS.Buyer_Type]: norm.Buyer_Type ? normalizeBuyerType(norm.Buyer_Type) : "unknown",
-      [BUYER_V2_FIELDS.Property_Type_Preference]: norm.Property_Type_Preference
-        ? normalizePropertyType(norm.Property_Type_Preference)
-        : null,
-      [BUYER_V2_FIELDS.Markets]: inferMarketsFromCity(city, state),
+      [BUYER_V2_FIELDS.Property_Type_Preference]: propertyTypes.kept.length > 0 ? propertyTypes.kept : null,
+      // Preferred_Cities is TEXT on the physical table, not a linked/array
+      // field — an array here is a 422.
+      [BUYER_V2_FIELDS.Markets]: inferMarketsFromCity(city, state).join(", "),
       [BUYER_V2_FIELDS.Last_Purchase_Date]: norm.Last_Purchase_Date || null,
       [BUYER_V2_FIELDS.Last_Purchase_Price]: parseNumber(norm.Last_Purchase_Price ?? ""),
       [BUYER_V2_FIELDS.Last_Purchase_Address]: norm.Last_Purchase_Address || null,
@@ -193,7 +210,7 @@ export function investorBaseCsvToImportRows(csvText: string): {
 
     const identity = email ?? phone ?? `${entity ?? ""}|${fullName}`.toLowerCase();
     if (byIdentity.has(identity)) skipped++; // collapsed in-file dupe
-    byIdentity.set(identity, { email, phone, fields });
+    byIdentity.set(identity, { email, phone, fields, droppedPropertyTypesNote });
   }
 
   return { rows: [...byIdentity.values()], rawCount: rawRows.length, skipped };
@@ -217,9 +234,16 @@ export async function resolveAndUpsertBuyers(rows: BuyerImportRow[]): Promise<{ 
             // Update — never clobber Source/Status/warmth on an existing buyer.
             const { [BUYER_V2_FIELDS.Source]: _src, ...updateFields } = row.fields;
             void _src;
+            if (row.droppedPropertyTypesNote) {
+              const existingNotes = existing.notes ?? "";
+              const sep = existingNotes.trim().length > 0 ? "\n" : "";
+              updateFields[BUYER_V2_FIELDS.Notes] = `${existingNotes}${sep}${row.droppedPropertyTypesNote}`;
+            }
             return { id: existing.id, fields: updateFields };
           }
-          return { fields: { ...row.fields, [BUYER_V2_FIELDS.Status]: "Cold" } };
+          const createFields: Record<string, unknown> = { ...row.fields, [BUYER_V2_FIELDS.Status]: "Cold" };
+          if (row.droppedPropertyTypesNote) createFields[BUYER_V2_FIELDS.Notes] = row.droppedPropertyTypesNote;
+          return { fields: createFields };
         } catch (err) {
           errors.push({ row: i + j, reason: err instanceof Error ? err.message : String(err) });
           return null;

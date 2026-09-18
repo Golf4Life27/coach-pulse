@@ -16,7 +16,14 @@
 //      close the form to real buyers. Both of those are deliberate.
 
 import { NextResponse } from "next/server";
-import { findBuyerByEmail, getBuyerV2, createBuyerV2, updateBuyerV2, BUYER_V2_FIELDS } from "@/lib/buyers-v2";
+import {
+  findBuyerByEmail,
+  getBuyerV2,
+  createBuyerV2,
+  updateBuyerV2,
+  BUYER_V2_FIELDS,
+  normalizePropertyTypeChoices,
+} from "@/lib/buyers-v2";
 import { sendEmail, type GmailSendResult } from "@/lib/gmail";
 import { audit } from "@/lib/audit-log";
 import {
@@ -124,24 +131,39 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "rate_limited" }, { status: 429 });
   }
 
+  // Preferred_Property_Types is a multipleSelects field with a fixed choice
+  // list — Airtable 422s on a value outside it even with typecast=true (that
+  // only invents new COLUMNS, never new select options). A buyer typing
+  // something off-list (e.g. free text from an older form version) must not
+  // fail the whole intake — keep what matches, fold the rest into Notes.
+  const propertyTypes = normalizePropertyTypeChoices(input.propertyTypePreference);
+  const droppedTypesNote =
+    propertyTypes.dropped.length > 0
+      ? `Requested property type(s) not on file: ${propertyTypes.dropped.join(", ")}`
+      : null;
+  const notes = [input.notes, droppedTypesNote].filter((s): s is string => !!s).join(" | ") || null;
+
   const fields: Record<string, unknown> = {
     [BUYER_V2_FIELDS.Name]: input.name,
     [BUYER_V2_FIELDS.Email]: input.email,
     [BUYER_V2_FIELDS.Entity]: input.entity,
     [BUYER_V2_FIELDS.Phone_Primary]: input.phone,
-    [BUYER_V2_FIELDS.Markets]: input.markets,
+    // Preferred_Cities is single-line/multiline TEXT on the physical table,
+    // not a linked/array field — an array here is a 422. Same reasoning for
+    // Target_ZIPs, which intake-validate.ts already hands us as a string.
+    [BUYER_V2_FIELDS.Markets]: input.markets && input.markets.length > 0 ? input.markets.join(", ") : null,
     [BUYER_V2_FIELDS.Target_ZIPs]: input.targetZips,
     [BUYER_V2_FIELDS.Min_Price]: input.minPrice,
     [BUYER_V2_FIELDS.Max_Price]: input.maxPrice,
     [BUYER_V2_FIELDS.Min_Beds]: input.minBeds,
-    [BUYER_V2_FIELDS.Property_Type_Preference]: input.propertyTypePreference,
+    [BUYER_V2_FIELDS.Property_Type_Preference]: propertyTypes.kept.length > 0 ? propertyTypes.kept : null,
     [BUYER_V2_FIELDS.Buyer_Type]: input.buyerType ?? "unknown",
     [BUYER_V2_FIELDS.Linked_Deal_Count]: input.volumePerYear,
     [BUYER_V2_FIELDS.Source]: "Inbound Form",
     [BUYER_V2_FIELDS.Status]: "Form Completed",
     [BUYER_V2_FIELDS.Form_Completed_At]: nowIso,
     [BUYER_V2_FIELDS.Last_Engagement_At]: nowIso,
-    [BUYER_V2_FIELDS.Notes]: input.notes,
+    [BUYER_V2_FIELDS.Notes]: notes,
   };
 
   let buyerId: string;

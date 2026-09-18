@@ -365,6 +365,11 @@ export async function GET(req: Request) {
         };
         if (optedOut) {
           fields[BUYER_V2_FIELDS.Status] = "Opted_Out";
+          // Buyer_Status is the OTHER status column on the physical table
+          // (Active/Warm/Inactive/Do Not Contact) — box-drip.ts and
+          // matchPricingBuyer both check it, so an opt-out has to land on
+          // both columns or a later sweep can still contact this buyer.
+          fields[BUYER_V2_FIELDS.Buyer_Status] = "Do Not Contact";
           // Stops the drip even if Status is later edited back.
           fields[BUYER_V2_FIELDS.Box_Drip_Step] = 3;
         }
