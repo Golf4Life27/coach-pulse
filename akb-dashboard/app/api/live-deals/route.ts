@@ -126,6 +126,7 @@ export async function GET() {
             counterUsd,
             stickyUsd,
             ceilingUsd,
+            maoUsd: num(r.fields["Your_MAO_V21"]),
             verdict,
             arvUsd,
             arvConfidence,
