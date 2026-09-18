@@ -12,6 +12,7 @@ import { NextResponse } from "next/server";
 import { NEGOTIATION_STATUS_LIST, rankLiveDeals, needsYouCount, type LiveDealRow } from "@/lib/live-deals";
 import { resolveDisplayOffer } from "@/lib/deal-numbers";
 import { decideCounter, type CounterDecision } from "@/lib/counter-decision";
+import { SPREAD_TARGET_USD } from "@/lib/decision-math";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -105,6 +106,15 @@ export async function GET() {
       const listUsd = num(r.fields["List_Price"]);
       const stickyUsd = num(r.fields["Outreach_Offer_Price"]);
       const ceilingUsd = num(r.fields["Buyer_Ceiling"]) ?? num(r.fields["Your_MAO_V21"]);
+      // Our own max offer. Your_MAO_V21 is stamped by the reprice step, which
+      // the engaged lane skips on a first underwrite (265 Harrison, 2026-09-18:
+      // Buyer_Ceiling $41,032 stamped, Your_MAO_V21 empty, so the thin-fee
+      // counter never fired). Decision math defines it as the buyer ceiling
+      // minus the target fee, so derive the same number when the stamp is
+      // missing; when the ceiling itself is the MAO fallback, mao == ceiling.
+      const buyerCeilingUsd = num(r.fields["Buyer_Ceiling"]);
+      const maoUsd =
+        num(r.fields["Your_MAO_V21"]) ?? (buyerCeilingUsd != null ? buyerCeilingUsd - SPREAD_TARGET_USD : null);
       const counterUsd = num(r.fields["Latest_Counter_Usd"]);
       const verdict = str(r.fields["Decision_Verdict"]);
       const arvUsd = num(r.fields["Real_ARV_Median"]);
@@ -126,7 +136,7 @@ export async function GET() {
             counterUsd,
             stickyUsd,
             ceilingUsd,
-            maoUsd: num(r.fields["Your_MAO_V21"]),
+            maoUsd,
             verdict,
             arvUsd,
             arvConfidence,
