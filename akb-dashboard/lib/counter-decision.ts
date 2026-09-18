@@ -41,6 +41,10 @@ export interface CounterDecisionInputs {
   stickyUsd: number | null;
   /** Doctrine ceiling (Buyer_Ceiling / Your_MAO_V21), already net of fee. */
   ceilingUsd: number | null;
+  /** Our own max offer (Your_MAO_V21 — ceiling minus the target fee). Used
+   *  only to catch the "PASS but their counter is still under the buyer
+   *  ceiling" thin-fee case; never a source of a fresh price on its own. */
+  maoUsd?: number | null;
   /** Decision_Verdict. */
   verdict: string | null;
   arvUsd: number | null;
@@ -147,11 +151,12 @@ function stallOption(i: CounterDecisionInputs): CounterOption {
 
 // ── shared facts ──────────────────────────────────────────────────────
 
-function factLines(i: CounterDecisionInputs, ceilingUsd: number): string[] {
+function factLines(i: CounterDecisionInputs, ceilingUsd: number, extra: string[] = []): string[] {
   const facts: string[] = [];
   if (i.arvUsd != null) facts.push(`ARV: ${usd(i.arvUsd)}${i.arvConfidence ? ` (${i.arvConfidence})` : ""}`);
   if (i.rehabUsd != null) facts.push(`Rehab estimate: ${usd(i.rehabUsd)}`);
   facts.push(`Ceiling (max a buyer can pay): ${usd(ceilingUsd)}`);
+  if (i.maoUsd != null) facts.push(`Our max offer (MAO): ${usd(i.maoUsd)}`);
   if (i.stickyUsd != null) facts.push(`Our current offer on record: ${usd(i.stickyUsd)}`);
   if (i.counterUsd != null) {
     const diff = i.counterUsd - ceilingUsd;
@@ -161,6 +166,7 @@ function factLines(i: CounterDecisionInputs, ceilingUsd: number): string[] {
         : `Their counter ${usd(i.counterUsd)} is within the ceiling`,
     );
   }
+  facts.push(...extra);
   return facts;
 }
 
@@ -192,7 +198,7 @@ function buildNoCounter(i: CounterDecisionInputs): CounterDecision {
   };
 }
 
-function buildAccept(i: CounterDecisionInputs, ceilingUsd: number, counterUsd: number): CounterDecision {
+function buildAccept(i: CounterDecisionInputs, ceilingUsd: number, counterUsd: number, extraFacts: string[] = []): CounterDecision {
   const options: CounterOption[] = [];
   const acceptMsg = guarded(
     `${greet(i.agentFirstName)}${usd(counterUsd)} works - send over the contract and let's get it signed.`,
@@ -218,9 +224,62 @@ function buildAccept(i: CounterDecisionInputs, ceilingUsd: number, counterUsd: n
   return {
     stance: "accept",
     headline: `Accept at ${usd(counterUsd)}: it clears the ceiling`,
-    facts: factLines(i, ceilingUsd),
+    facts: factLines(i, ceilingUsd, extraFacts),
     options,
     reason: `counter ${usd(counterUsd)} is at or under the ${usd(ceilingUsd)} ceiling`,
+  };
+}
+
+// PASS but the counter is still at or under the buyer ceiling ("thin fee"):
+// the underwrite PASSed only because the counter sits above our MAO (the
+// ceiling minus the $10k target fee), not because the deal is unaffordable.
+// Never let that masquerade as "walk" (265 Harrison St, 2026-09-18 —
+// counter $35,000 clears the $41,032 ceiling with $6,032 left for us, and
+// the old code walked anyway). If the counter is still above our own MAO,
+// counter AT the MAO instead; the MAO is a real number already on the
+// record, never a fresh guess.
+function buildThinFeeCounter(i: CounterDecisionInputs, ceilingUsd: number, counterUsd: number, maoUsd: number): CounterDecision {
+  const proposed = roundDown250(maoUsd);
+  const fee = ceilingUsd - counterUsd;
+  const options: CounterOption[] = [];
+
+  const counterMsg = guarded(
+    `${greet(i.agentFirstName)}I can do ${usd(proposed)} - cash, as-is, closing on your timeline.`,
+    proposed,
+    ceilingUsd,
+    i.agentFirstName,
+  );
+  options.push({ key: "counter", label: `Counter at ${usd(proposed)}`, message: counterMsg, amountUsd: proposed });
+
+  const acceptMsg = guarded(
+    `${greet(i.agentFirstName)}${usd(counterUsd)} works - send over the contract and let's get it signed.`,
+    counterUsd,
+    ceilingUsd,
+    i.agentFirstName,
+  );
+  options.push({
+    key: "accept",
+    label: `Accept at ${usd(counterUsd)} (thin: ${usd(fee)} fee)`,
+    message: acceptMsg,
+    amountUsd: counterUsd,
+  });
+
+  options.push(stallOption(i));
+
+  const walkMsg = guarded(
+    `${greet(i.agentFirstName)}that number doesn't work on our end, but if anything changes on price or terms we'd love another look.`,
+    null,
+    ceilingUsd,
+    i.agentFirstName,
+  );
+  options.push({ key: "walk", label: "Walk away politely", message: walkMsg, amountUsd: null });
+
+  return {
+    stance: "counter",
+    headline: `Counter at ${usd(proposed)}: their ${usd(counterUsd)} clears the buyer ceiling but leaves only ${usd(fee)} for us`,
+    facts: factLines(i, ceilingUsd),
+    options,
+    reason: `counter ${usd(counterUsd)} is within the ${usd(ceilingUsd)} ceiling but above our ${usd(maoUsd)} MAO`,
   };
 }
 
@@ -296,10 +355,14 @@ function buildWalk(i: CounterDecisionInputs, ceilingUsd: number): CounterDecisio
   const namesArv = i.arvUsd != null && i.counterUsd != null && i.counterUsd >= i.arvUsd;
   const headline = namesArv
     ? `Walk: their ${usd(i.counterUsd as number)} is at or above the ${usd(i.arvUsd as number)} after-repair value`
-    : "Walk: their number is at or above the after-repair value";
+    : i.counterUsd != null
+      ? `Walk: their ${usd(i.counterUsd)} is above the ${usd(ceilingUsd)} ceiling and the math says PASS`
+      : "Walk: the underwrite says PASS";
   const reason = namesArv
     ? `counter ${usd(i.counterUsd as number)} is at or above ARV ${usd(i.arvUsd as number)}`
-    : "decision verdict is PASS";
+    : i.counterUsd != null
+      ? `counter ${usd(i.counterUsd)} exceeds the ${usd(ceilingUsd)} ceiling and the underwrite verdict is PASS`
+      : "decision verdict is PASS";
 
   return {
     stance: "walk",
@@ -329,14 +392,32 @@ export function decideCounter(i: CounterDecisionInputs): CounterDecision {
   }
   const counterUsd = i.counterUsd;
 
-  // WALK — never pay at or above ARV, whatever the ceiling math says; this
-  // outranks the ceiling/sticky comparisons below.
-  if ((i.arvUsd != null && counterUsd >= i.arvUsd) || i.verdict === "PASS") {
+  // WALK — never pay at or above ARV, and never let a genuinely-over-ceiling
+  // PASS through; this outranks the ceiling/sticky comparisons below. A PASS
+  // whose counter is still at or under the ceiling is NOT a walk (265
+  // Harrison St, 2026-09-18: PASS came from missing the $10k target fee by
+  // $3,968, not from the counter being unaffordable — $35,000 counter was
+  // comfortably under the $41,032 ceiling).
+  const overArv = i.arvUsd != null && counterUsd >= i.arvUsd;
+  const passOverCeiling = i.verdict === "PASS" && counterUsd > ceilingUsd;
+  if (overArv || passOverCeiling) {
     return buildWalk(i, ceilingUsd);
   }
 
+  // THIN FEE — PASS, but their counter is still under the ceiling. If it's
+  // also above our own MAO, counter at the MAO (a real number already on
+  // the record) instead of accepting a fee below doctrine target.
+  if (i.verdict === "PASS" && counterUsd <= ceilingUsd && i.maoUsd != null && counterUsd > i.maoUsd) {
+    return buildThinFeeCounter(i, ceilingUsd, counterUsd, i.maoUsd);
+  }
+
   if (counterUsd <= ceilingUsd) {
-    return buildAccept(i, ceilingUsd, counterUsd);
+    // Reaching here with verdict PASS means the thin-fee branch above didn't
+    // fire (no MAO on record, or the counter is already at/under our MAO) —
+    // surface the contradiction so the operator can see the PASS on a deal
+    // that otherwise accepts cleanly.
+    const extraFacts = i.verdict === "PASS" ? ["Underwrite verdict: PASS"] : [];
+    return buildAccept(i, ceilingUsd, counterUsd, extraFacts);
   }
   if (ceilingUsd > (i.stickyUsd ?? -Infinity)) {
     return buildCounter(i, ceilingUsd, counterUsd);

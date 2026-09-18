@@ -196,7 +196,71 @@ describe("walk stance", () => {
   it("PASS verdict with no ARV present still walks", () => {
     const d = decideCounter(inputs({ counterUsd: 40_000, stickyUsd: 20_000, ceilingUsd: 15_000, verdict: "PASS", arvUsd: null }));
     expect(d.stance).toBe("walk");
-    expect(d.headline).toBe("Walk: their number is at or above the after-repair value");
+    expect(d.headline).toBe("Walk: their $40,000 is above the $15,000 ceiling and the math says PASS");
+  });
+});
+
+// ── PASS with counter inside the ceiling (265 Harrison St, 2026-09-18) ───
+// Real record: counter $35,000, ceiling (Buyer_Ceiling) $41,032, MAO
+// (Your_MAO_V21 = ceiling - $10k target fee) $31,032. Verdict PASS came from
+// "price $35,000 > MAO $31,032" — a thin-fee miss, not an unaffordable
+// counter. The old code walked on any PASS; this must not.
+
+describe("PASS with counter inside the ceiling", () => {
+  const harrison = {
+    counterUsd: 35_000,
+    stickyUsd: 28_000,
+    ceilingUsd: 41_032,
+    verdict: "PASS",
+    arvUsd: 138_401,
+    arvConfidence: "MED",
+    rehabUsd: 54_395,
+    listUsd: 45_000,
+  };
+
+  it("counter above our MAO -> counter at the MAO, headline names both numbers and the thin fee", () => {
+    const d = decideCounter(inputs({ ...harrison, maoUsd: 31_032 }));
+    expect(d.stance).toBe("counter");
+    expect(d.headline).toContain("31,000");
+    expect(d.headline).toContain("35,000");
+    expect(d.headline).toContain("6,032");
+    expect(d.headline.toLowerCase()).not.toContain("after-repair");
+    expect(d.options.map((o) => o.key)).toEqual(["counter", "accept", "stall", "walk"]);
+    const counter = d.options.find((o) => o.key === "counter")!;
+    expect(counter.amountUsd).toBe(31_000);
+    const accept = d.options.find((o) => o.key === "accept")!;
+    expect(accept.amountUsd).toBe(35_000);
+  });
+
+  it("no MAO on record -> falls through to accept (counter is under ceiling), PASS surfaced in facts", () => {
+    const d = decideCounter(inputs({ ...harrison, maoUsd: null }));
+    expect(d.stance).toBe("accept");
+    expect(d.facts).toContain("Underwrite verdict: PASS");
+  });
+
+  it("PASS with counter genuinely above the ceiling still walks, naming the ceiling", () => {
+    const d = decideCounter(
+      inputs({ counterUsd: 50_000, stickyUsd: 28_000, ceilingUsd: 41_032, verdict: "PASS", arvUsd: 138_401 }),
+    );
+    expect(d.stance).toBe("walk");
+    expect(d.headline).toBe("Walk: their $50,000 is above the $41,032 ceiling and the math says PASS");
+  });
+
+  it("724 Dennison still walks/holds with ARV named (counter >= ARV outranks the PASS thin-fee branch)", () => {
+    const d = decideCounter(
+      inputs({
+        counterUsd: 65_000,
+        stickyUsd: 49_500,
+        ceilingUsd: 4_800,
+        verdict: "PASS",
+        arvUsd: 45_500,
+        arvConfidence: "HIGH",
+        rehabUsd: 25_700,
+        maoUsd: -5_200,
+      }),
+    );
+    expect(["walk", "hold"]).toContain(d.stance);
+    expect(d.headline).toContain("45,500");
   });
 });
 
