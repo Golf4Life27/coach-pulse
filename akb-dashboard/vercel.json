@@ -331,6 +331,10 @@
     {
       "path": "/api/cron/stale-deal-triage?apply=1&limit=60",
       "schedule": "30 14 * * *"
+    },
+    {
+      "path": "/api/cron/buyer-box-drip?limit=20",
+      "schedule": "30 15 * * *"
     }
   ]
 }

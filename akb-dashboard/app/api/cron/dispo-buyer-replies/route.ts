@@ -44,13 +44,20 @@
 
 import { NextResponse } from "next/server";
 import { getListing, updateListingRecord } from "@/lib/airtable";
-import { listBuyersWithDispoBlastThread, updateBuyerV2, BUYER_V2_FIELDS } from "@/lib/buyers-v2";
+import {
+  listBuyersWithDispoBlastThread,
+  listBuyersWithBoxDripThread,
+  updateBuyerV2,
+  BUYER_V2_FIELDS,
+} from "@/lib/buyers-v2";
+import type { BuyerRecord } from "@/types/jarvis";
 import { getThreadById } from "@/lib/gmail";
 import { extractCitedGmailIds } from "@/lib/inbound/gmail-capture";
 import { extractEmailAddress } from "@/lib/inbound/match";
 import {
   classifyBuyerReply,
   isDispoBlastSubject,
+  isOptOutReply,
   formatListingReplyNoteBlock,
   formatBuyerInterestLine,
   formatBuyerNoteLine,
@@ -261,10 +268,124 @@ export async function GET(req: Request) {
     }
   }
 
+  // ── Buy-box drip STOP handling (2026-09-18) ──────────────────────────
+  // Separate population, separate thread key (Box_Drip_Thread_Id), no
+  // listing to write into — the drip is buyer-only. Same idempotency
+  // discipline (extractCitedGmailIds), dedupe source is the BUYER's own
+  // Notes field instead of a listing's Verification_Notes. Never sends,
+  // never alerts. Kept fully separate from the blast loop above so that
+  // path's behavior is untouched.
+  let dripBuyers: BuyerRecord[];
+  try {
+    dripBuyers = await listBuyersWithBoxDripThread();
+  } catch (err) {
+    console.error("[dispo-buyer-replies] drip buyers fetch failed:", err instanceof Error ? err.message : String(err));
+    dripBuyers = [];
+  }
+  if (onlyBuyerId) dripBuyers = dripBuyers.filter((b) => b.id === onlyBuyerId);
+  dripBuyers = dripBuyers.slice(0, limit);
+
+  let totalDripReplies = 0;
+  let totalOptOuts = 0;
+
+  for (const buyer of dripBuyers) {
+    const threadId = buyer.boxDripThreadId;
+    const buyerEmail = buyer.email;
+    const out: BuyerOutcome = {
+      buyerId: buyer.id,
+      buyerEmail,
+      listingId: null,
+      threadId,
+      newReplies: 0,
+      classifications: [],
+      alertSent: false,
+      outcome: "error",
+    };
+    outcomes.push(out);
+
+    if (!threadId || !buyerEmail) {
+      out.outcome = "skipped_missing_link";
+      continue;
+    }
+
+    try {
+      const messages = await getThreadById(threadId);
+      const wantEmail = extractEmailAddress(buyerEmail);
+      const cited = extractCitedGmailIds(buyer.notes);
+
+      const newMessages = messages
+        .filter((m) => extractEmailAddress(m.from) === wantEmail)
+        .filter((m) => !cited.has(m.id))
+        .sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
+
+      if (newMessages.length === 0) {
+        out.outcome = "no_new_replies";
+        continue;
+      }
+
+      const nowIso = new Date().toISOString();
+      const noteLines: string[] = [];
+      let optedOut = false;
+
+      for (const m of newMessages) {
+        const stop = isOptOutReply(m.body);
+        out.classifications.push(stop ? "opt_out" : "reply");
+
+        if (stop) {
+          optedOut = true;
+          noteLines.push(`[${nowIso.slice(0, 10)}] Opted out via drip reply`);
+        } else {
+          noteLines.push(`[drip reply ${m.id}] ${m.body.trim().slice(0, 500)}`);
+        }
+        // Dedupe marker — extractCitedGmailIds only recognizes this exact
+        // form (lib/inbound/gmail-capture.ts), so every processed message
+        // (opt-out or not) gets one, or the next sweep re-ingests it.
+        noteLines.push(`[Gmail inbound msg ${m.id} thread=${m.threadId} ts=${m.date} src=box_drip_reply ingested_at=${nowIso}]`);
+
+        await audit({
+          agent: "scout",
+          event: stop ? "buyer_drip_opt_out" : "buyer_drip_reply",
+          status: "confirmed_success",
+          recordId: buyer.id,
+          externalId: m.id,
+          inputSummary: { buyerId: buyer.id, threadId },
+          decision: stop ? "opted_out" : "logged",
+        });
+      }
+
+      out.newReplies = newMessages.length;
+      totalDripReplies += newMessages.length;
+      if (optedOut) totalOptOuts++;
+
+      if (!dryRun) {
+        const existingNotes = buyer.notes ?? "";
+        const sep = existingNotes.trim().length > 0 ? "\n" : "";
+        const fields: Record<string, unknown> = {
+          [BUYER_V2_FIELDS.Notes]: `${existingNotes}${sep}${noteLines.join("\n")}`,
+        };
+        if (optedOut) {
+          fields[BUYER_V2_FIELDS.Status] = "Opted_Out";
+          // Stops the drip even if Status is later edited back.
+          fields[BUYER_V2_FIELDS.Box_Drip_Step] = 3;
+        }
+        await updateBuyerV2(buyer.id, fields);
+      }
+
+      out.outcome = "ingested";
+    } catch (err) {
+      out.outcome = "error";
+      out.detail = err instanceof Error ? err.message : String(err);
+      console.error(`[dispo-buyer-replies] drip ${buyer.id}:`, err);
+    }
+  }
+
   const summary = {
     buyers_polled: buyers.length,
     replies_ingested: totalIngested,
     alerts_sent: totalAlerts,
+    drip_buyers_polled: dripBuyers.length,
+    drip_replies_ingested: totalDripReplies,
+    drip_opt_outs: totalOptOuts,
     errors: outcomes.filter((o) => o.outcome === "error").length,
     duration_ms: Date.now() - t0,
   };

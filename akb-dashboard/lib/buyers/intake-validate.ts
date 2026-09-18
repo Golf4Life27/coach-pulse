@@ -25,6 +25,8 @@ export const INTAKE_CAPS = {
   buyerType: 60,
   arrayItems: 20,
   arrayItemChars: 60,
+  // Airtable record id length ("recXXXXXXXXXXXXXX" is 17 chars) plus slack.
+  buyerId: 24,
 } as const;
 
 export interface IntakeValue {
@@ -41,6 +43,9 @@ export interface IntakeValue {
   buyerType: string | null;
   volumePerYear: number | null;
   notes: string | null;
+  /** Box-drip deep link (?b=<buyerId>) — when present and it resolves to a
+   *  real buyer, the route UPDATEs that record instead of dedup-by-email. */
+  buyerId: string | null;
 }
 
 export type IntakeValidation = { ok: true; value: IntakeValue } | { ok: false; error: string };
@@ -135,6 +140,8 @@ export function validateIntakeBody(body: unknown): IntakeValidation {
   if (!notes.ok) return notes;
   const buyerType = optionalString(b.buyerType, "buyerType", INTAKE_CAPS.buyerType);
   if (!buyerType.ok) return buyerType;
+  const buyerId = optionalString(b.buyerId, "buyerId", INTAKE_CAPS.buyerId);
+  if (!buyerId.ok) return buyerId;
 
   const markets = optionalStringArray(b.markets, "markets");
   if (!markets.ok) return markets;
@@ -166,6 +173,7 @@ export function validateIntakeBody(body: unknown): IntakeValidation {
       buyerType: buyerType.value,
       volumePerYear: volumePerYear.value,
       notes: notes.value,
+      buyerId: buyerId.value,
     },
   };
 }

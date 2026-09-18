@@ -11,9 +11,22 @@
 //
 // The items are ConveyorItem-shaped so they merge into the SAME ranked feed the
 // Act Now page and Maverick dock already render — no parallel surface.
+//
+// BUYER-COVERAGE GATE (operator ruling 2026-09-18, Spine recnmCDflZ43MEsDp):
+// "we sign contracts before we have buyers." For each back-half row this also
+// ranks the rolodex (same buildBuyerShortlist dispo-trigger uses) and, when
+// the deal has no funded buyer in its area, prepends a HOLD card ahead of the
+// lifecycle item so it can't be missed. Buyers are loaded ONCE for the whole
+// batch. Fail-open: a buyers-read failure logs and falls back to the
+// lifecycle items alone — this feed must never go dark over it.
 
 import { NextResponse } from "next/server";
 import { contractLifecycleItems, isBackHalfStage, type ContractDealRow } from "@/lib/contract-lifecycle/model";
+import { getBuyers } from "@/lib/airtable";
+import { buildBuyerShortlist } from "@/lib/dispo/buyer-shortlist";
+import { assessBuyerCoverage, buyerCoverageItem } from "@/lib/dispo/buyer-coverage";
+import type { Buyer } from "@/lib/types";
+import type { ConveyorItem } from "@/lib/conveyor/model";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -24,6 +37,9 @@ const LISTINGS_TABLE = "tbldMjKBgPiq45Jjs";
 
 const FIELDS = [
   "Address",
+  "City",
+  "State",
+  "Zip",
   "Pipeline_Stage",
   "Outreach_Status",
   "Contract_Offer_Price",
@@ -77,6 +93,42 @@ async function fetchBackHalf(): Promise<RawRecord[]> {
   return out;
 }
 
+/** Buyer-coverage HOLD cards for the back-half rows, ranked once against a
+ *  single buyers load. Fail-open: any throw (Airtable down, etc.) logs a
+ *  short slice and returns no coverage items — the lifecycle feed still
+ *  ships. */
+async function buildCoverageItems(
+  records: RawRecord[],
+  rows: ContractDealRow[],
+  nowIso: string,
+): Promise<ConveyorItem[]> {
+  let buyers: Buyer[];
+  try {
+    buyers = await getBuyers();
+  } catch (err) {
+    console.error("[contract-lifecycle] buyers fetch failed (coverage gate skipped):", String(err).slice(0, 200));
+    return [];
+  }
+
+  const byId = new Map(records.map((r) => [r.id, r] as const));
+  const out: ConveyorItem[] = [];
+  for (const row of rows) {
+    if (!isBackHalfStage(row.pipelineStage)) continue;
+    const raw = byId.get(row.recordId);
+    const city = raw ? str(raw.fields["City"]) : null;
+    const state = raw ? str(raw.fields["State"]) : null;
+    const zip = raw ? str(raw.fields["Zip"]) : null;
+    const shortlist = buildBuyerShortlist({
+      subject: { recordId: row.recordId, address: row.address ?? "", zip, state, city, price: row.contractPrice },
+      buyers,
+    });
+    const coverage = assessBuyerCoverage(shortlist);
+    const item = buyerCoverageItem({ recordId: row.recordId, address: row.address, city, state, coverage, nowIso });
+    if (item) out.push(item);
+  }
+  return out;
+}
+
 export async function GET() {
   try {
     const records = await fetchBackHalf();
@@ -102,7 +154,9 @@ export async function GET() {
         closeDate: str(r.fields["Close_Date"]),
       };
     });
-    const items = contractLifecycleItems(rows, nowIso);
+    const lifecycleItems = contractLifecycleItems(rows, nowIso);
+    const coverageItems = await buildCoverageItems(records, rows, nowIso);
+    const items = [...coverageItems, ...lifecycleItems];
     return NextResponse.json({ generated_at: nowIso, total: items.length, items });
   } catch (err) {
     console.error("[contract-lifecycle] error:", err);

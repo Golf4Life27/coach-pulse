@@ -22,6 +22,7 @@ function buyer(over: Partial<BuyerRecord> = {}): BuyerRecord {
     preferredStates: "MI", strategyType: null,
     dispoBlastThreadId: null, dispoBlastListingId: null,
     lastResponseAt: null, buyerNotes: null,
+    boxDripStep: null, boxDripLastAt: null, boxDripThreadId: null,
     ...over,
   };
 }

@@ -503,6 +503,10 @@ export interface BuyerRecord {
   dispoBlastListingId: string | null;
   lastResponseAt: string | null;
   buyerNotes: string | null;
+  // Buy-box drip (2026-09-18). See BUYER_V2_FIELDS in lib/buyers-v2.ts.
+  boxDripStep: number | null;
+  boxDripLastAt: string | null;
+  boxDripThreadId: string | null;
 }
 
 export interface BuyerMatch {

@@ -128,6 +128,41 @@ export function classifyBuyerReply(
   return { classification: "buyer_question", amountUsd, reason: "no clear signal — default to question, never silent" };
 }
 
+// ── Opt-out detection (2026-09-18, the buy-box drip's STOP handling) ─────
+// The drip's own copy promises "Reply STOP or remove and I will take you
+// off the list" — this is the read side of that promise. Deliberately
+// narrow: a SHORT reply containing one of a fixed set of opt-out phrases.
+// The length cap means a long reply that happens to contain the word
+// "stop" ("I'll take it, send the contract — don't stop now") reads as a
+// real reply, not an opt-out; a buyer who actually wants off writes a short
+// one. Word-boundaried so "unsubscribed from the other list a while back,
+// mind sending anyway" is not mistaken either (would fail the length cap
+// regardless, but the boundaries hold even if that cap changes later).
+
+const OPT_OUT_MAX_CHARS = 200;
+
+const OPT_OUT_PATTERNS: RegExp[] = [
+  /\bstop\b/i,
+  /\bremove\b/i,
+  /\bunsubscribe\b/i,
+  /\bopt[\s-]?out\b/i,
+  /\btake me off\b/i,
+  /\bno more emails\b/i,
+  /\bnot interested in receiving\b/i,
+];
+
+/** Pure. True for a short reply that reads as "take me off the list" — the
+ *  STOP/remove/unsubscribe family the drip's own copy promises to honor.
+ *  Deliberately simple: length-gated so a normal reply that happens to use
+ *  one of these words in passing ("I'll take it, send the contract") never
+ *  reads as an opt-out. */
+export function isOptOutReply(text: string): boolean {
+  const normalized = (text ?? "").trim();
+  if (!normalized) return false;
+  if (normalized.length > OPT_OUT_MAX_CHARS) return false;
+  return OPT_OUT_PATTERNS.some((re) => re.test(normalized));
+}
+
 /** Pure: does this Gmail subject look like a reply to a dispo blast? Guards
  *  against a stale/reused thread id ever being read as a buyer reply when
  *  the thread has drifted onto something else. Mirrors composeDispoBlastEmail

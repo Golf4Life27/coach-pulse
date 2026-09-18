@@ -1,6 +1,6 @@
 # Operating map (one page)
 
-Updated 2026-09-17. This is the whole picture of who runs what. If it is not on this page, Alex does not need to remember it.
+Updated 2026-09-18. This is the whole picture of who runs what. If it is not on this page, Alex does not need to remember it.
 
 ## 1. Where Alex talks
 
@@ -15,7 +15,8 @@ Everything else is a routine or a background session that Alex never opens. Rout
 | MAVERICK 1 - Hourly seller-reply triage | every hour 8am-7pm | Reads new seller and agent replies, sends Tier B replies through the gated workflow, queues Tier C decisions | One text per hour at most, only when a decision is waiting: "Maverick / NEEDS YOU: ..." |
 | MAVERICK 2 - Engine drive | 7:30am, 1:30pm, 7:30pm | Full pass over the pipeline: leads in, openers out, replies, accepted deals, dispo, findings for the build | A text only for deals or blockers that need him; otherwise nothing |
 | MAVERICK 4 - Dispo hunter (Cowork scheduled task on one of his computers) | daily 10am | Posts every executed contract's package to Facebook buyer groups from the operator's own browser, captures raised hands into Buyers | A text only for Tier C (a buyer names a number or a date) |
-| MAVERICK 5 - Weekly buyers list | Sunday 7am | Mines deed evidence into the Buyers table, leads with coverage gaps for metros under contract | One email |
+| MAVERICK 5 - Daily buyers build | daily 7am | Grows the Buyers table from free sources (our own deed/comp evidence, public web searches per metro, inbound threads), 25 rows a day max; posts a coverage card when a metro under contract has under 10 emailable or under 3 funded buyers | A card on the home screen when coverage is short; one email on Sundays |
+| Buy-box drip (app cron, 10:30am) | daily | Emails every buyer who has no price box yet: three touches over ten days pointing at the intake form, then stops | Nothing; new boxes show up on the Buyers tab |
 | OFF - Nightly pipeline audit | (off) | Was a fresh-session routine with no connector tools, so it never actually ran | nothing |
 | Whitetail CMA, TikTok content pack, TikTok ops | daily | Other businesses, untouched by this map | Their own emails |
 
@@ -29,7 +30,7 @@ Routine prompts live in `akb-dashboard/docs/handoffs/routine-prompts/` and are t
 
 - Signs contracts and addenda, and moves money (EMD).
 - Says "go" on any new number, counter, acceptance, or revived deal (Tier C).
-- Sends buyer emails and buyer texts drafted for him (buyer contact is operator-sent).
+- Sends buyer texts drafted for him (buyer texting is operator-sent). Buyer email is automated: the contract blast and the buy-box drip send on their own; he only answers a buyer who names a number or a date.
 - One-time account chores nothing else can do: rotate keys, flip the repo private, cancel a vendor.
 
 Everything else is Code's job. If a message asks Alex to run a command, paste a secret, or check a console, the message is wrong.

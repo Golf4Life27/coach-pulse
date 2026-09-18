@@ -69,6 +69,16 @@ export const BUYER_V2_FIELDS = {
   Dispo_Blast_Listing_Id: "Dispo_Blast_Listing_Id",
   Last_Response_At: "Last_Response_At",
   Buyer_Notes: "Buyer_Notes",
+  // Buy-box drip (2026-09-18, lib/buyers/box-drip.ts + app/api/cron/
+  // buyer-box-drip). Both fields created on the physical Buyers table
+  // 2026-09-18 — Box_Drip_Step is a number (0-3), Box_Drip_Last_At an ISO
+  // dateTime.
+  Box_Drip_Step: "Box_Drip_Step",
+  Box_Drip_Last_At: "Box_Drip_Last_At",
+  // Reply-ingestion key for the drip (2026-09-18, app/api/cron/
+  // dispo-buyer-replies), same role Dispo_Blast_Thread_Id plays for blast
+  // replies — the box-drip cron stamps this on a successful send.
+  Box_Drip_Thread_Id: "Box_Drip_Thread_Id",
 } as const;
 
 function asString(v: unknown): string | null {
@@ -130,6 +140,9 @@ function mapRecord(record: { id: string; fields: Record<string, unknown> }): Buy
     dispoBlastListingId: asString(f[BUYER_V2_FIELDS.Dispo_Blast_Listing_Id]),
     lastResponseAt: asString(f[BUYER_V2_FIELDS.Last_Response_At]),
     buyerNotes: asString(f[BUYER_V2_FIELDS.Buyer_Notes]),
+    boxDripStep: asNumber(f[BUYER_V2_FIELDS.Box_Drip_Step]),
+    boxDripLastAt: asString(f[BUYER_V2_FIELDS.Box_Drip_Last_At]),
+    boxDripThreadId: asString(f[BUYER_V2_FIELDS.Box_Drip_Thread_Id]),
   };
 }
 
@@ -186,6 +199,15 @@ export async function getBuyerV2(id: string): Promise<BuyerRecord | null> {
  *  only buyers who were actually blasted, ever. */
 export async function listBuyersWithDispoBlastThread(): Promise<BuyerRecord[]> {
   const formula = `{${BUYER_V2_FIELDS.Dispo_Blast_Thread_Id}}!=''`;
+  return listBuyersV2({ filterByFormula: formula });
+}
+
+/** Buyers with a box-drip thread on record — the population the reply cron
+ *  (app/api/cron/dispo-buyer-replies) polls for STOP/reply on the drip,
+ *  same shape as listBuyersWithDispoBlastThread above. Small by
+ *  construction: only buyers a drip email was actually sent to. */
+export async function listBuyersWithBoxDripThread(): Promise<BuyerRecord[]> {
+  const formula = `{${BUYER_V2_FIELDS.Box_Drip_Thread_Id}}!=''`;
   return listBuyersV2({ filterByFormula: formula });
 }
 
