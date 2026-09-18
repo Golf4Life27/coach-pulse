@@ -10,6 +10,7 @@
 // Pure. No I/O.
 
 import type { ShortlistResult } from "@/lib/dispo/buyer-shortlist";
+import { guardBuyerCopy } from "@/lib/dispo/copy-guard";
 import { DISPO_DISCLOSURE } from "@/lib/dispo/disclosure";
 
 export interface BlastEmailInput {
@@ -25,6 +26,9 @@ export interface BlastEmailInput {
   /** YYYY-MM-DD or ISO; rendered as a plain date. */
   optionDeadline: string | null;
   dealUrl: string;
+  /** True when the deal page already has at least one photo. Changes only
+   *  the wording of the link line — never a claim about market status. */
+  hasPhotos?: boolean;
 }
 
 export interface BlastEmail {
@@ -64,16 +68,20 @@ export function composeDispoBlastEmail(input: BlastEmailInput): BlastEmail {
   const factLine = facts.length > 0 ? facts.join(", ") : null;
   const deadline = prettyDate(input.optionDeadline);
 
+  const linkLine = input.hasPhotos
+    ? `Photos and details: ${input.dealUrl}`
+    : `Details: ${input.dealUrl}`;
+
   const lines = [
     `Hi ${firstName(input.buyerName)},`,
     ``,
-    `We just put ${input.address}${cityLine ? ` (${cityLine.trim()})` : ""} under contract and it's available off-market.`,
+    `We just put ${input.address}${cityLine ? ` (${cityLine.trim()})` : ""} under contract. Cash, as-is.`,
     ``,
     `Assignment price: ${formatUsd(input.assignmentPrice)}`,
     ...(factLine ? [factLine] : []),
     `Cash close, ${deadline ? `inspection window through ${deadline}` : "10-day inspection window"}.`,
     ``,
-    `Photos and details: ${input.dealUrl}`,
+    linkLine,
     ``,
     `Reply to this email or text me at (815) 556-9965 if you want to walk it. First buyer with proof of funds gets it.`,
     ``,
@@ -87,10 +95,12 @@ export function composeDispoBlastEmail(input: BlastEmailInput): BlastEmail {
     // that is the one sentence away from unlicensed brokerage.
     DISPO_DISCLOSURE,
   ];
-  return {
-    subject: `Off-market: ${input.address}${input.city ? `, ${input.city}` : ""} — ${formatUsd(input.assignmentPrice)}`,
-    body: lines.join("\n"),
-  };
+  const subject = guardBuyerCopy(
+    `Contract assignment: ${input.address}${input.city ? ", " + input.city : ""} - ${formatUsd(input.assignmentPrice)}`,
+    "blast_email.subject",
+  );
+  const body = guardBuyerCopy(lines.join("\n"), "blast_email.body");
+  return { subject, body };
 }
 
 export interface BlastRecipient {

@@ -131,9 +131,13 @@ export function classifyBuyerReply(
 /** Pure: does this Gmail subject look like a reply to a dispo blast? Guards
  *  against a stale/reused thread id ever being read as a buyer reply when
  *  the thread has drifted onto something else. Mirrors composeDispoBlastEmail
- *  (lib/dispo/blast-email.ts), whose subject always starts "Off-market:". */
+ *  (lib/dispo/blast-email.ts), whose subject now starts "Contract
+ *  assignment:" (operator ruling, Spine recydfR9ZsDNSe0Lr — buyer copy never
+ *  says "off-market"). The legacy "Off-market:" prefix is still accepted so
+ *  replies on threads started before that change keep matching. */
 export function isDispoBlastSubject(subject: string | null | undefined): boolean {
-  return /^off-market:/i.test(normalizeSubject(subject));
+  const normalized = normalizeSubject(subject);
+  return /^off-market:/i.test(normalized) || /^contract assignment:/i.test(normalized);
 }
 
 // ── Note formatting (pure — the cron does the I/O) ──────────────────────

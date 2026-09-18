@@ -79,6 +79,19 @@ function contractPriceOf(l: Listing): number | null {
   return num(L.contractOfferPrice) ?? num(L.contractPrice);
 }
 
+/** Does the record already carry at least one deal photo? `Deal_Photo_URLs`
+ *  is a JSON array string written by an upstream step and may be null,
+ *  empty, or malformed — never trust it, always degrade to false. */
+function hasExistingPhotos(raw: string | null | undefined): boolean {
+  if (!raw) return false;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.some((p) => typeof p === "string" && p.length > 0);
+  } catch {
+    return false;
+  }
+}
+
 interface RecordOutcome {
   recordId: string;
   address: string;
@@ -171,13 +184,14 @@ export async function GET(req: Request) {
       const recipients = selectBlastRecipients(shortlist, MAX_RECIPIENTS());
       out.recipients = recipients.map((r) => ({ buyerId: r.buyerId, name: r.name, email: r.email }));
       const link = dealPageUrl(BASE_URL(), recordId);
-      const emailFor = (name: string | null) =>
+      const existingPhotos = hasExistingPhotos(l.dealPhotoUrls);
+      const emailFor = (name: string | null, hasPhotos: boolean) =>
         composeDispoBlastEmail({
           buyerName: name, address: l.address, city: l.city ?? null, state: l.state ?? null, zip: l.zip ?? null,
           beds: l.bedrooms ?? null, baths: l.bathrooms ?? null, sqft: l.buildingSqFt ?? null,
-          assignmentPrice: price, optionDeadline: l.optionDeadline ?? null, dealUrl: link,
+          assignmentPrice: price, optionDeadline: l.optionDeadline ?? null, dealUrl: link, hasPhotos,
         });
-      out.preview = emailFor(recipients[0]?.name ?? null);
+      out.preview = emailFor(recipients[0]?.name ?? null, existingPhotos);
 
       if (dryRun) {
         out.outcome = "dry_run";
@@ -217,13 +231,15 @@ export async function GET(req: Request) {
         console.error(`[dispo-trigger] publish write failed for ${recordId}:`, err);
       }
 
-      // ── Send.
+      // ── Send. hasPhotos reflects whichever is true by now: photos already
+      // on the record, or ones just collected and published above.
+      const hasPhotosForSend = existingPhotos || photoCount > 0;
       const noteLines: string[] = [];
       let sent = 0;
       for (const r of recipients) {
         const rec = out.recipients!.find((x) => x.buyerId === r.buyerId)!;
         try {
-          const email = emailFor(r.name);
+          const email = emailFor(r.name, hasPhotosForSend);
           const res = await sendEmail({ to: r.email, subject: email.subject, body: email.body });
           if (!res.success) throw new Error(res.error ?? "Gmail send failed");
           rec.sent = true;

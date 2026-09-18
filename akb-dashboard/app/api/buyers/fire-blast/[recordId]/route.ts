@@ -6,6 +6,7 @@ import { sendMessage } from "@/lib/quo";
 import { sendEmail } from "@/lib/gmail";
 import type { BuyerBlastResult, BuyerDraft } from "@/types/jarvis";
 import { evaluateAssignmentSpread } from "@/lib/pricing/assignment-spread";
+import { guardBuyerCopy } from "@/lib/dispo/copy-guard";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -91,16 +92,19 @@ export async function POST(
         const phone = d.buyerPhone ?? buyer.phonePrimary;
         if (!phone) throw new Error("No phone");
         if (!process.env.QUO_API_KEY) throw new Error("QUO_API_KEY not set");
-        await sendMessage(cleanPhone(phone), d.body);
+        const smsBody = guardBuyerCopy(d.body, "fire_blast.body", recordId);
+        await sendMessage(cleanPhone(phone), smsBody);
         results.push({ buyerId: d.buyerId, success: true });
       } else {
         const email = d.buyerEmail ?? buyer.email;
         if (!email) throw new Error("No email");
-        const r = await sendEmail({
-          to: email,
-          subject: d.subject ?? `Off-market deal — ${listing.address}`,
-          body: d.body,
-        });
+        const subject = guardBuyerCopy(
+          d.subject ?? `Contract assignment - ${listing.address}`,
+          "fire_blast.subject",
+          recordId,
+        );
+        const body = guardBuyerCopy(d.body, "fire_blast.body", recordId);
+        const r = await sendEmail({ to: email, subject, body });
         // TODO: post-Gmail-migration this only catches confirmed_failure.
         // 'uncertain' status (e.g. messages.get verify failed) currently falls through as success.
         // Fix before Dispo Agent volume kicks in — extend audit_status to results array.

@@ -21,7 +21,6 @@ import { DISPO_DISCLOSURE } from "@/lib/dispo/disclosure";
 
 interface PublicDealView {
   recordId: string;
-  address: string;
   city: string;
   state: string;
   zip: string;
@@ -154,7 +153,7 @@ function DealBody({
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={deal.photos[activePhoto] ?? deal.photos[0]}
-              alt={deal.address}
+              alt={deal.headline}
               className="h-full w-full object-cover"
             />
           </div>
@@ -184,9 +183,7 @@ function DealBody({
 
       <div className="px-4 pt-5">
         <h1 className="text-xl font-bold leading-snug text-neutral-900">{deal.headline}</h1>
-        <p className="mt-1 text-sm text-neutral-500">
-          {[deal.city, deal.state, deal.zip].filter(Boolean).join(", ")}
-        </p>
+        <p className="mt-1 text-sm text-neutral-500">Under contract. Cash, as-is.</p>
 
         {/* Facts row */}
         {facts.length > 0 && (
@@ -267,7 +264,7 @@ function IntakeForm({ deal }: { deal: PublicDealView }) {
           phone: phone || undefined,
           targetZips: deal.zip || undefined,
           maxPrice: maxPrice ? Number(maxPrice) : undefined,
-          notes: `Deal page: ${deal.address}${message ? ` - ${message}` : ""}`,
+          notes: `Deal page: ${deal.recordId} (${[deal.city, deal.state, deal.zip].filter(Boolean).join(", ")})${message ? " - " + message : ""}`,
           website,
         }),
       });

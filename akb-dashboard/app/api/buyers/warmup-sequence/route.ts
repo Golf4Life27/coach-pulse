@@ -4,6 +4,7 @@ import { sendEmail } from "@/lib/gmail";
 import { buildJarvisSystemPrompt } from "@/lib/jarvis-system-prompt";
 import { synthesize } from "@/lib/maverick/synthesizer";
 import { VOICE_REGISTRY } from "@/lib/maverick/voice-registry";
+import { guardBuyerCopy } from "@/lib/dispo/copy-guard";
 import type { BuyerRecord } from "@/types/jarvis";
 
 export const runtime = "nodejs";
@@ -27,7 +28,7 @@ function fallbackEmail1(b: BuyerRecord): DraftedEmail {
 
 Saw your most recent purchase${b.lastPurchaseAddress ? ` at ${b.lastPurchaseAddress}` : ""} — looks like you're active in ${(b.markets ?? ["the area"]).join(" / ")}.
 
-I'm Alex with AKB Solutions. We source off-market wholesale deals across distressed listings. I'd love to send you anything that fits your buy box.
+I'm Alex with AKB Solutions. We source wholesale deals across distressed listings. I'd love to send you anything that fits your buy box.
 
 Quick form (60 seconds): [Buyer intake form]
 
@@ -37,7 +38,7 @@ Quick form (60 seconds): [Buyer intake form]
 
 async function draftWithLLM(buyer: BuyerRecord, apiKey: string): Promise<DraftedEmail | null> {
   const system = buildJarvisSystemPrompt({ context: "reply_draft", includeBuyerRules: true })
-    + `\n\nYou are drafting Email 1 of a 3-step warmup sequence to a buyer pulled from InvestorBase. Tone: professional but conversational. 4-6 sentences max. Reference the buyer's last purchase (if known) or markets. Mention an "Off-market deals matching your buy box" pitch. Include a short CTA pointing them to the buyer intake form.`;
+    + `\n\nYou are drafting Email 1 of a 3-step warmup sequence to a buyer pulled from InvestorBase. Tone: professional but conversational. 4-6 sentences max. Reference the buyer's last purchase (if known) or markets. Mention a "deals matching your buy box" pitch. Include a short CTA pointing them to the buyer intake form.`;
   try {
     // Phase 10 / P.2 migration — routed through unified synthesizer.
     const result = await synthesize({
@@ -84,9 +85,11 @@ export async function GET(req: Request) {
     if (!buyer.email) continue;
     const llm = await draftWithLLM(buyer, apiKey);
     const draft = llm ?? fallbackEmail1(buyer);
+    const subject = guardBuyerCopy(draft.subject, "warmup.subject", buyer.id);
+    const body = guardBuyerCopy(draft.body, "warmup.body", buyer.id);
 
     // CREATE A DRAFT — never auto-send (per spec).
-    const r = await sendEmail({ to: buyer.email, subject: draft.subject, body: draft.body, asDraft: true });
+    const r = await sendEmail({ to: buyer.email, subject, body, asDraft: true });
     if (r.success) {
       try {
         await updateBuyerV2(buyer.id, {
@@ -96,9 +99,9 @@ export async function GET(req: Request) {
       } catch {
         /* non-fatal */
       }
-      drafted.push({ buyerId: buyer.id, subject: draft.subject, draftId: r.draftId, draftUrl: r.draftUrl, success: true });
+      drafted.push({ buyerId: buyer.id, subject, draftId: r.draftId, draftUrl: r.draftUrl, success: true });
     } else {
-      drafted.push({ buyerId: buyer.id, subject: draft.subject, success: false, error: r.error });
+      drafted.push({ buyerId: buyer.id, subject, success: false, error: r.error });
     }
   }
 

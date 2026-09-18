@@ -113,6 +113,15 @@ describe("isDispoBlastSubject", () => {
     expect(isDispoBlastSubject("Fwd: Re: Off-market: 123 Main St")).toBe(true);
   });
 
+  it("matches the new 'Contract assignment:' prefix", () => {
+    expect(isDispoBlastSubject("Contract assignment: 123 Main St, Detroit - $200,000")).toBe(true);
+  });
+
+  it("matches the new prefix through Re:/Fwd: mutation", () => {
+    expect(isDispoBlastSubject("Re: Contract assignment: 123 Main St, Detroit - $200,000")).toBe(true);
+    expect(isDispoBlastSubject("Fwd: Re: Contract assignment: 123 Main St")).toBe(true);
+  });
+
   it("rejects an unrelated subject", () => {
     expect(isDispoBlastSubject("Question about your listing")).toBe(false);
   });
