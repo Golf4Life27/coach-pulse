@@ -9,9 +9,12 @@
 // a live sample showed most were still active — a comps-card "SOLD AUG 31,
 // 2026" line had leaked past scopeStatusText. Nobody could see the actual
 // scoped text production checks. This route is that view. REPORT-ONLY: it
-// never writes Live_Status / Outreach_Status and detectBareStatusLines here
-// is diagnostic-only, exactly as it is in production (see firecrawl.ts
-// detectInactiveMarkers — NOT wired to bare-status-lines since the rollback).
+// never writes Live_Status / Outreach_Status.
+//
+// 2026-09-18: rebuilt against the REAL markdown this route captured —
+// subject_status_chip (detectSubjectStatusChip, firecrawl.ts) is now the
+// live production decider wired into buildResolvedResult, not a diagnostic
+// running alongside it.
 //
 // GET /api/admin/verify-probe?url=<encoded portal URL>&record_id=<optional rec...>
 //
@@ -106,7 +109,7 @@ export async function GET(req: Request) {
       resolved: fc.resolved,
       still_active: fc.stillActive,
       matched_inactive_markers: fc.matchedInactiveMarkers,
-      bare_status_lines: diagnostic.bare_status_lines,
+      subject_status_chip: diagnostic.subject_status_chip,
       status_scope: diagnostic.status_scope,
       raw: diagnostic.raw,
       comps_header_found: diagnostic.comps_header_found,

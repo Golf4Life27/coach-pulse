@@ -10,7 +10,13 @@
 // off-market home. Every one of them is a house nobody can buy.
 
 import { describe, it, expect } from "vitest";
-import { detectInactiveMarkers, detectStillActive, buildResolvedResult, classifyVerifiedListing } from "./firecrawl";
+import {
+  detectInactiveMarkers,
+  detectStillActive,
+  detectSubjectStatusChip,
+  buildResolvedResult,
+  classifyVerifiedListing,
+} from "./firecrawl";
 
 // Status-region text as the portals actually render it for a home that is
 // no longer for sale. None of these contain the literal strings
@@ -50,47 +56,70 @@ describe("REPRO 8203 Brace — off-market pages are classified ACTIVE", () => {
   // fetched to confirm the actual shape: the subject's own status region is
   // a BARE line — "SOLD AUG 16, 2026" then "Sold" — never a sentence naming
   // "this home". The subject-named markers alone (round 1 of this fix)
-  // would NOT have caught this page. Fixed with line-anchored bare-status
-  // detection (detectBareStatusLines) instead: the ENTIRE trimmed line must
-  // read as just the status, so prose merely mentioning a sale ("since sold
-  // in August 2026") still cannot match, and a NEIGHBOR's identical bare
-  // line ("SOLD JUN 12, 2026" under "Recently sold homes") is kept out by
-  // scopeStatusText's comps stripping — not by the anchor itself.
-
-  // (a) The real Gettysburg shape, full pipeline (buildResolvedResult +
-  // classifyVerifiedListing — the same path the reverify pass and pre-send
-  // probe both call). Must reject firecrawl_inactive.
-  // ROLLED BACK 2026-09-18: bare status-line detection is not wired into production
-  // (3 of 4 sampled Redfin marks were live listings; comps text leaked past scoping).
-  // Re-enable when the detector is rebuilt against real Firecrawl markdown.
-  it.skip("816 N Gettysburg Ave — real Redfin shape rejects firecrawl_inactive", () => {
+  // would NOT have caught this page.
+  //
+  // 2026-09-18 REBUILD: rebuilt against the REAL production Firecrawl
+  // markdown captured by GET /api/admin/verify-probe (merged #250), not
+  // curl-stripped HTML. detectSubjectStatusChip (firecrawl.ts) reads the
+  // FIRST status-chip line, top-down — the subject's own header always
+  // renders before any comps card, so it is inherently subject-scoped; no
+  // separate "is this a comps section" judgment call is needed. The line
+  // sequence below reproduces the real page order (nav rows, then the
+  // subject's own "SOLD AUG 16, 2026" / "Sold" chips, then price/facts,
+  // then "## About this home", then a later comps "Recently sold homes"
+  // block whose own bare "SOLD ..." lines render AFTER the heading and so
+  // never count as the subject's chip).
+  it("816 N Gettysburg Ave — real Redfin shape rejects firecrawl_inactive", () => {
     const md = [
-      "# 816 N Gettysburg Ave, Dayton, OH 45417",
+      "Favorite",
+      "",
+      "Edit Facts",
+      "",
+      "Share",
+      "",
       "SOLD AUG 16, 2026",
-      "Sold",
-      "since sold in August 2026",
-      "3 bed, 1 bath, 890 sqft",
-      "Recently sold homes",
+      "",
+      "816 N Gettysburg Ave photo",
+      "Street View",
+      "",
+      "Redesign",
+      "",
+      "14 photos",
+      "",
+      "Sold on Aug 2026",
+      "",
+      "$40,000",
+      "",
+      "2",
+      "bd",
+      "1 ba",
+      "768",
+      "sq ft",
+      "## About this home",
+      "Cozy 2 bedroom home in Dayton, OH.",
+      "",
+      "Listed by Jennifer Core•eXp Realty",
+      "Bought with Test Member•Test Office",
+      "Redfin checked: [2 minutes ago](https://www.redfin.com/OH/Dayton/816-N-Gettysburg-Ave-45417/home/75965067)",
+      "",
+      "## Redfin Estimate",
+      "$8,979 since sold in August 2026$2,000 since August",
+      "- Recently sold homes",
       "SOLD JUN 12, 2026",
       "SOLD JUN 8, 2026",
-      "Sold",
-      "Pending",
-      "Sold",
     ].join("\n");
     const fc = buildResolvedResult(md, "https://www.redfin.com/OH/Dayton/816-N-Gettysburg-Ave-45417/home/75965067", "816 N Gettysburg Ave", 1, false);
     expect(fc.resolved).toBe(true);
-    expect(fc.matchedInactiveMarkers).toEqual(expect.arrayContaining(["status-line: sold aug 16, 2026", "status-line: sold"]));
+    expect(fc.matchedInactiveMarkers).toEqual(["subject-status: sold aug 16, 2026"]);
     expect(fc.stillActive).toBe(false);
     expect(classifyVerifiedListing(fc)).toEqual({ outcome: "reject", reason: "firecrawl_inactive" });
   });
 
   // (b) Zillow-shape: a "Sold" chip line followed by a "Sold on MM/DD/YY"
-  // chip line — the other common portal rendering.
-  // ROLLED BACK 2026-09-18: bare status-line detection is not wired into production
-  // (3 of 4 sampled Redfin marks were live listings; comps text leaked past scoping).
-  // Re-enable when the detector is rebuilt against real Firecrawl markdown.
-  it.skip("Zillow shape: 'Sold' then 'Sold on 08/29/26' chip lines are detected", () => {
-    const md = "# 1 Test St, City, ST 00000\nSold\nSold on 08/29/26\n3 bed 1 bath.";
+  // chip line — the other common portal rendering. The FIRST chip ("Sold")
+  // wins; the second is never even reached.
+  it("Zillow shape: 'Sold' then 'Sold on 08/29/26' chip lines are detected", () => {
+    const md = "Sold\nSold on 08/29/26\n## About this home\n3 bed 1 bath.";
     expect(detectStillActive(md)).toBe(false);
   });
 
@@ -137,3 +166,89 @@ describe("REPRO 8203 Brace — off-market pages are classified ACTIVE", () => {
     expect(detectStillActive(null)).toBe(true);
   });
 });
+
+// ── REAL PRODUCTION SHAPE — 5338 E 2nd St, Tucson, AZ (2026-09-18) ─────────
+// Captured via GET /api/admin/verify-probe (merged #250) against the real
+// Firecrawl markdown for an ACTIVE Redfin listing. Reproduces the actual
+// line order: nav rows, hero photos, the subject's own bare "For sale" chip,
+// price/facts, "## About this home" (the first heading — containing an
+// unstripped "this home last sold for" sentence, the exact substring that
+// would false-flag under the OLD full-scan behavior), the listing-agent
+// footer, then a LATER comps block whose bare "SOLD ..." chip lines have no
+// header this file recognizes and so survive scopeStatusText untouched —
+// the precise shape that made the 2026-09-17 detector false-flag 27 active
+// listings. The "For sale" chip renders first, so it decides — and its
+// "active" verdict must suppress the later "this home last sold for" hit.
+const TUCSON_ACTIVE_MD = [
+  "Favorite",
+  "",
+  "Hide",
+  "",
+  "Share",
+  "",
+  "5338 E 2nd St, Tucson, AZ 85711 photo 1 of 36",
+  "3D Tour",
+  "",
+  "Street View",
+  "",
+  "36 photos",
+  "",
+  "For sale",
+  "",
+  "$374,000",
+  "",
+  "Est.$2,335/mo —See my rate",
+  "",
+  "3",
+  "bd",
+  "2 ba",
+  "1,936",
+  "sq ft",
+  "## About this home",
+  "Charming corner-lot home, sold as-is, priced to sell. This home last sold for $210,000 in 2019.",
+  "",
+  "Listed by Melissa Rich•Tierra Antigua Realty",
+  "Listing updated: Sep 3, 2026 at 01:51pm",
+  "Redfin checked: [9 minutes ago](https://www.redfin.com/AZ/Tucson/5338-E-2nd-St-85711/home/60123456)",
+  "",
+  "912 E Water St",
+  "SOLD AUG 31, 2026",
+  "$350,000",
+  "876 E Copper St",
+  "SOLD AUG 29, 2026",
+  "$298,000",
+].join("\n");
+
+describe("REAL SHAPE — 5338 E 2nd St Tucson (ACTIVE) classifies accept, first chip wins", () => {
+  it("stillActive true through buildResolvedResult + classifyVerifiedListing accept path", () => {
+    const fc = buildResolvedResult(
+      TUCSON_ACTIVE_MD,
+      "https://www.redfin.com/AZ/Tucson/5338-E-2nd-St-85711/home/60123456",
+      "5338 E 2nd St",
+      1,
+      false,
+    );
+    expect(fc.resolved).toBe(true);
+    // The "active" verdict suppresses the later "this home last sold for"
+    // substring hit — no reject-worthy marker survives.
+    expect(fc.matchedInactiveMarkers).toEqual([]);
+    expect(fc.stillActive).toBe(true);
+    expect(classifyVerifiedListing(fc)).toEqual({ outcome: "accept", outreachStatus: "", acceptBasis: "condition_signal" });
+  });
+
+  it("a page with NO chip before the first heading, but a comps 'Sold' chip after it, falls back to substring behavior", () => {
+    const md = [
+      "Some generic intro copy with no status chip at all.",
+      "## About this home",
+      "This property is off market.",
+    ].join("\n");
+    // No chip → detectSubjectStatusChip returns null verdict, and the
+    // existing substring INACTIVE_MARKERS scan decides instead.
+    expect(fcVerdictOnly(md)).toBe("inactive");
+  });
+});
+
+function fcVerdictOnly(md: string): "active" | "inactive" {
+  const fc = buildResolvedResult(md, null, null, 1, false);
+  return fc.stillActive ? "active" : "inactive";
+}

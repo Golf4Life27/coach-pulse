@@ -27,12 +27,18 @@ describe("buildVerifyProbeDiagnostic", () => {
     expect(d.raw.chars).toBe(md.length);
   });
 
-  it("surfaces bare status lines as a diagnostic without touching resolved/stillActive", () => {
-    const md = "# 5338 E 2nd St\nSOLD AUG 31, 2026\nSold\n";
+  it("surfaces the subject status chip decision without touching resolved/stillActive", () => {
+    // "For sale" (before the first heading) is the subject's own chip — the
+    // later comps "SOLD AUG 31, 2026" card must not override it.
+    const md = "For sale\n\n$374,000\n## About this home\nSOLD AUG 31, 2026\n";
     const d = buildVerifyProbeDiagnostic(md);
-    expect(d.bare_status_lines).toEqual(
-      expect.arrayContaining(["status-line: sold aug 31, 2026", "status-line: sold"]),
-    );
+    expect(d.subject_status_chip).toEqual({ chip: "for sale", verdict: "active" });
+  });
+
+  it("reports a sold chip verdict for a bare status-chip line", () => {
+    const md = "SOLD AUG 31, 2026\n## About this home\n";
+    const d = buildVerifyProbeDiagnostic(md);
+    expect(d.subject_status_chip).toEqual({ chip: "sold aug 31, 2026", verdict: "inactive" });
   });
 
   it("caps first_lines / head at their line limits", () => {
