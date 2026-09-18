@@ -136,7 +136,10 @@ describe("detectStillActive", () => {
     expect(detectStillActive("Sale pending — accepting backups")).toBe(true);
     expect(detectStillActive("This home sold on 4/1/2026")).toBe(true);
   });
-  it("DOES flag a bare status-chip line with no other words (2026-09-17 fix)", () => {
+  // ROLLED BACK 2026-09-18: bare status-line detection is not wired into production
+  // (3 of 4 sampled Redfin marks were live listings; comps text leaked past scoping).
+  // Re-enable when the detector is rebuilt against real Firecrawl markdown.
+  it.skip("DOES flag a bare status-chip line with no other words (2026-09-17 fix)", () => {
     // "Off market" alone on its own line, with no surrounding sentence or
     // comps header, IS the subject's own status chip — the 816 N Gettysburg
     // Ave incident shape (a bare "Sold" line for the subject). Before
