@@ -71,7 +71,13 @@ async function fetchBackHalf(): Promise<RawRecord[]> {
     "{Pipeline_Stage}='under_contract'," +
     "{Pipeline_Stage}='dispo_active'," +
     "{Pipeline_Stage}='assignment_signed'," +
-    "{Outreach_Status}='Contract Signed'" +
+    "{Outreach_Status}='Contract Signed'," +
+    // 1005 2nd St class (2026-09-18): an executed contract whose
+    // Pipeline_Stage was never set and whose Outreach_Status is still
+    // "Offer Accepted" was invisible to this feed, so no EMD / option /
+    // coverage card ever showed for the ONE live deal. Contract_Executed_At
+    // survives a dead deal (spine warning), hence the Dead exclusion.
+    "AND({Contract_Executed_At}!='', {Outreach_Status}!='Dead')" +
     ")";
   const out: RawRecord[] = [];
   let offset: string | undefined;
@@ -139,15 +145,19 @@ export async function GET() {
       // Safety net for the 3123 Sunbeam class: a record still tagged
       // "Contract Signed" whose Pipeline_Stage was never advanced off a stale
       // value (e.g. dead) is coerced to under_contract so it still surfaces.
-      const effectiveStage =
-        isBackHalfStage(pipelineStage) ? pipelineStage : outreachStatus === "Contract Signed" ? "under_contract" : pipelineStage;
+      const contractExecutedAt = str(r.fields["Contract_Executed_At"]);
+      const effectiveStage = isBackHalfStage(pipelineStage)
+        ? pipelineStage
+        : outreachStatus === "Contract Signed" || (!!contractExecutedAt && outreachStatus !== "Dead")
+          ? "under_contract"
+          : pipelineStage;
       return {
         recordId: r.id,
         address: str(r.fields["Address"]),
         pipelineStage: effectiveStage,
         contractPrice: num(r.fields["Contract_Offer_Price"]),
         dealSpread: num(r.fields["Deal_Spread"]),
-        contractExecutedAt: str(r.fields["Contract_Executed_At"]),
+        contractExecutedAt,
         emdDueAt: str(r.fields["EMD_Due_At"]),
         emdReceived: r.fields["EMD_Received"] === true,
         optionDeadline: str(r.fields["Option_Deadline"]),
