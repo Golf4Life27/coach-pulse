@@ -10,6 +10,51 @@
 > a sub-agent file-sweep and not individually re-read, or `[unknown]` when not
 > verified. Do not upgrade a `[sweep]`/`[unknown]` to fact without reading it.
 >
+
+## 0a. 2026-09-18 changes (buyers first, counter decisions) `[verified this session]`
+
+Operator rulings: buyer demand is the missing half (spine recnmCDflZ43MEsDp); no
+paid buyer lists; buyer copy never says "off-market" (recydfR9ZsDNSe0Lr).
+
+- **Copy guard** `lib/dispo/copy-guard.ts`: every buyer-facing string passes
+  `guardBuyerCopy` (throws under vitest, strips + audits
+  `dispo_copy_guard_stripped` in production). Public deal view carries no
+  street address; headline "Contract assignment: City, ST ZIP"; `/d/[id]`
+  has Open Graph tags from the same guarded copy.
+- **Buyer-coverage gate** `lib/dispo/buyer-coverage.ts`: every back-half deal
+  (Pipeline_Stage back-half, Outreach_Status Contract Signed, OR
+  Contract_Executed_At set and not Dead) gets a HOLD card on the home feed
+  (`/api/contract-lifecycle`) when its metro has no funded buyer.
+  `GET /api/dispo/coverage/[recordId]` returns the assessment.
+- **Buy-box drip** `app/api/cron/buyer-box-drip` (daily 15:30Z, limit 20,
+  ceiling 40, `dry_run=true`, kill switch `BUYER_DRIP_HARD_DISABLE`): three
+  ASCII touches over ten days to every buyer with an email and no price box,
+  pointing at `/buyer-intake?b=<buyerId>`. Fields: Box_Drip_Step,
+  Box_Drip_Last_At, Box_Drip_Thread_Id. STOP replies are honored by
+  `dispo-buyer-replies` (Status Opted_Out + Buyer_Status Do Not Contact).
+- **Buyers V2 field map** `lib/buyers-v2.ts` was aligned with the physical
+  Buyers table (buyer_name, buyer_email, buyer_phone, Company_Name,
+  Preferred_Cities, Preferred_Zip_Codes, Preferred_Property_Types,
+  Buyer_Notes; Buyer_Status separate from the machine Status). Fourteen
+  fields the code expected were created in Airtable. Parity test:
+  `lib/buyers-v2-fields.test.ts`. Before this, the intake form 422'd on
+  every submit.
+- **Engaged underwrite lane** `auto-underwrite-engaged`: gated on its own
+  ATTOM 24h count (`ENGAGED_LANE_ATTOM_24H_CAP`, default 60), not the shared
+  RentCast + ATTOM total; cron `25 13,15,17,19,21,23 * * *` limit 6; Counter
+  Received first. ARV route runs on ATTOM alone. `quo-sync` triggers the
+  inline underwrite on a captured counter/interest with no fresh ARV (cap 2
+  per run).
+- **Counter decisions** `lib/counter-decision.ts`: accept / counter / hold /
+  walk / blind from the record's facts; the doctrine ceiling is the only
+  number producer; `/api/live-deals` returns `counterDecision` on Counter
+  Received rows; the Live Deals card shows MAVERICK SAYS + one-tap options
+  that fill the draft. A HELD SMS proposal sent with an edited body
+  dispatches through the gate (`operatorOverrideHold`, audited).
+- **Routines**: MAVERICK 5 is a daily free-source buyers build (prompt in
+  `routine-prompts/buyers-build.v2.md`); MAVERICK 4 (Cowork) gained a
+  Facebook harvest step. See `OPERATING_MAP.md`.
+
 > Last updated: 2026-06-18 · prod HEAD context: branch `claude/admiring-shannon-dzfnbm`, local HEAD `a621b9b` (M7 front-half conveyor wired + capped H2 lift; builds on M6 `7f1caef`, `dff69b1`, PR #27 verify-gate `8952d8c` + PR #28 backlog-reprice `7959eaf`). **New 2026-06-18 work in §8 (M6 §8a-b, M7 §8c).**
 
 ---
