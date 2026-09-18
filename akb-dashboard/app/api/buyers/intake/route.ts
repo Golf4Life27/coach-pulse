@@ -16,7 +16,7 @@
 //      close the form to real buyers. Both of those are deliberate.
 
 import { NextResponse } from "next/server";
-import { findBuyerByEmail, createBuyerV2, updateBuyerV2, BUYER_V2_FIELDS } from "@/lib/buyers-v2";
+import { findBuyerByEmail, getBuyerV2, createBuyerV2, updateBuyerV2, BUYER_V2_FIELDS } from "@/lib/buyers-v2";
 import { sendEmail, type GmailSendResult } from "@/lib/gmail";
 import { audit } from "@/lib/audit-log";
 import {
@@ -146,7 +146,10 @@ export async function POST(req: Request) {
 
   let buyerId: string;
   try {
-    const existing = await findBuyerByEmail(input.email);
+    // Box-drip deep link (?b=<buyerId>): resolve first so a drip recipient
+    // filling the form UPDATEs their own record even if their email on the
+    // form differs from what's on file, instead of creating a duplicate.
+    const existing = (input.buyerId ? await getBuyerV2(input.buyerId) : null) ?? (await findBuyerByEmail(input.email));
     if (existing) {
       await updateBuyerV2(existing.id, fields);
       buyerId = existing.id;

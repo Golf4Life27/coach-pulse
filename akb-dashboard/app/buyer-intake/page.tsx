@@ -23,6 +23,13 @@ export default function BuyerIntakePage() {
   // Honeypot. Invisible to humans, filled by scripted form-stuffers; a
   // non-empty value makes /api/buyers/intake answer 200 and write nothing.
   const [website, setWebsite] = useState("");
+  // Box-drip deep link (?b=<buyerId>, lib/buyers/box-drip.dripIntakeUrl).
+  // Pre-fills nothing — it only rides along on submit so the API updates
+  // this buyer instead of creating a duplicate. Read via window.location
+  // (not useSearchParams) so this page needs no Suspense boundary.
+  const [buyerId] = useState<string | null>(() =>
+    typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("b"),
+  );
 
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
@@ -56,6 +63,7 @@ export default function BuyerIntakePage() {
           volumePerYear: volumePerYear ? Number(volumePerYear) : undefined,
           notes: notes.trim() || undefined,
           website,
+          buyerId: buyerId || undefined,
         }),
       });
       if (!res.ok) {

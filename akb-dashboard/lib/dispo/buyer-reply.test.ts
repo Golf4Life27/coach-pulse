@@ -6,6 +6,7 @@ import {
   formatListingReplyNoteBlock,
   formatBuyerInterestLine,
   formatBuyerNoteLine,
+  isOptOutReply,
 } from "./buyer-reply";
 
 const ASSIGNMENT_PRICE = 200_000; // 90% floor = $180,000
@@ -200,5 +201,41 @@ describe("formatBuyerNoteLine", () => {
     expect(line).toContain("buyer_pass");
     expect(line).toContain("123 Main St");
     expect(line).toContain("no number");
+  });
+});
+
+describe("isOptOutReply", () => {
+  it.each([
+    "STOP",
+    "stop",
+    "Please remove me",
+    "unsubscribe",
+    "opt out please",
+    "opt-out",
+    "take me off this list",
+    "no more emails please",
+    "not interested in receiving these",
+    "stop by anytime", // deliberately true — short reply, keep it simple
+  ])("flags %j as an opt-out", (text) => {
+    expect(isOptOutReply(text)).toBe(true);
+  });
+
+  it.each([
+    "I'll take it, send the contract",
+    "What's the ARV on this one?",
+    "Can you send more photos",
+    "",
+    "   ",
+  ])("does not flag %j as an opt-out", (text) => {
+    expect(isOptOutReply(text)).toBe(false);
+  });
+
+  it("does not flag a long reply just because it contains 'stop'", () => {
+    const long =
+      "I'll take it, send the contract over and let's get this moving, don't stop now, " +
+      "I've been looking for a deal like this for months and this fits my box exactly so " +
+      "let's not slow down, get me the paperwork today please.";
+    expect(long.length).toBeGreaterThan(200);
+    expect(isOptOutReply(long)).toBe(false);
   });
 });

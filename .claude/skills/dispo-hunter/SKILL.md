@@ -60,10 +60,21 @@ For each person who comments "interested", asks a question, or DMs:
 3. If they submit the intake form on the deal page, the existing lane stamps the buyer and pages the operator on interest; you do not need to duplicate the alert.
 4. If they name a number, a timeline, or say "I'll take it": that is Tier C. Reply with "Alex will follow up directly", write it to Notes, and flag it in the report as a yes/no with a default. Do not answer it yourself.
 
+## Harvest (while you're already in the group, on every run)
+
+Beyond leads on OUR post, read the last 7 days of the group's posts and comments for buyer signals: "ISO", "looking for", "cash buyer", "buying in", "we buy", a stated max price or ZIPs, or anyone commenting "interested"/"send me info" on ANY wholesaler's deal post. For each: capture name, metro/state, stated box (price, ZIPs, property types, strategy), how to reach them (a public phone/email in the post, else "FB profile <url>"), and the evidence line (post URL, date). Upsert into Buyers (`get_table_schema` first, write only fields that exist, Source "facebook_group", unknown data in Notes).
+
+- **Cap 20 captures per run.**
+- **No DMs to strangers.** A harvested signal is a name to add to the Buyers table, never a reason to message someone who did not raise a hand on OUR post — the no-cold-DM rule above applies here too.
+- **Never scrape outside the groups you are already in.**
+- **Public post text only.** No screenshots, no profile data beyond what the post itself shows.
+
+Report "buyers harvested N" alongside the rest of the scoreboard.
+
 ## Report and write-back (end of every run)
 
-1. One spine write via `mcp__Maverick__maverick_write_state` (event_type `decision`, attribution `scout`, related_listing = the record id): groups searched / posted / skipped with reasons, leads captured (count and names), any Tier C items, any Facebook warnings. Write it even for a zero-post run.
-2. One plain-language report to the operator: scoreboard first (posts, leads, Tier C items), then decisions as yes/no with a default. No screenshots of private groups in the report unless a warning fired.
+1. One spine write via `mcp__Maverick__maverick_write_state` (event_type `decision`, attribution `scout`, related_listing = the record id): groups searched / posted / skipped with reasons, leads captured (count and names), buyers harvested (count), any Tier C items, any Facebook warnings. Write it even for a zero-post run.
+2. One plain-language report to the operator: scoreboard first (posts, leads, buyers harvested, Tier C items), then decisions as yes/no with a default. No screenshots of private groups in the report unless a warning fired.
 3. Re-run cadence: not more than once per day per deal. The weekly limit of one post per group per deal holds across runs.
 
 ## Stop conditions
