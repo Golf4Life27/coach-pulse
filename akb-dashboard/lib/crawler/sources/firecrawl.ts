@@ -273,6 +273,11 @@ export interface FirecrawlVerifyResult {
    *  snippets. Investigation aid (INV ?debug=true); never used by filters. */
   pageExcerpt?: string | null;
   debugContexts?: Array<{ category: string; phrase: string; snippet: string }>;
+  /** Populated ONLY when verifyListingByUrl is called with
+   *  { includeMarkdown: true } — the FULL, unmodified scraped markdown for
+   *  this one page. Diagnostic aid (admin/verify-probe route); never
+   *  consumed by production classify. */
+  rawMarkdown?: string;
 }
 
 const PAGE_EXCERPT_CHARS = 600;
@@ -671,7 +676,7 @@ export async function verifyListing(
 export async function verifyListingByUrl(
   knownUrl: string | null,
   formattedAddress: string | null,
-  opts: { debug?: boolean } = {},
+  opts: { debug?: boolean; includeMarkdown?: boolean } = {},
 ): Promise<FirecrawlVerifyResult> {
   const base: FirecrawlVerifyResult = {
     credentialed: true,
@@ -719,7 +724,11 @@ export async function verifyListingByUrl(
     const markdown = body.data?.markdown;
     if (!markdown) return { ...base, creditsUsed: credits, resolved: false };
     const result = buildResolvedResult(markdown, knownUrl, formattedAddress, credits, opts.debug ?? false);
-    return { ...result, agentContact: extractAgentContact(body.data?.rawHtml, markdown) };
+    return {
+      ...result,
+      agentContact: extractAgentContact(body.data?.rawHtml, markdown),
+      ...(opts.includeMarkdown ? { rawMarkdown: markdown } : {}),
+    };
   } catch (err) {
     return { ...base, error: err instanceof Error ? err.message : String(err) };
   }
