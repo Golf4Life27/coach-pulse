@@ -7,9 +7,13 @@
 // actually scans. This shapes that view: the SAME scoped text
 // (scopeStatusText) production checks, plus the raw markdown underneath it,
 // truncated to something a human can read in one response.
+//
+// 2026-09-18 REBUILD: replaced the rolled-back bare-status-line diagnostic
+// with subject_status_chip — production's own first-chip-wins decider
+// (detectSubjectStatusChip), now wired into buildResolvedResult itself.
 
 import { scopeStatusText, stripCompsSection } from "@/lib/crawler/sources/listing-text-scope";
-import { detectBareStatusLines } from "@/lib/crawler/sources/firecrawl";
+import { detectSubjectStatusChip, type SubjectStatusChipResult } from "@/lib/crawler/sources/firecrawl";
 
 const MAX_LINE_CHARS = 200;
 const STATUS_SCOPE_LINES = 60;
@@ -21,22 +25,21 @@ function truncateLine(line: string): string {
 }
 
 export interface VerifyProbeDiagnostic {
-  bare_status_lines: string[];
+  subject_status_chip: SubjectStatusChipResult;
   status_scope: { chars: number; first_lines: string[] };
   raw: { chars: number; head: string[] };
   comps_header_found: boolean;
 }
 
 /** Pure: shape one scraped listing's raw Firecrawl markdown into the
- *  diagnostic view — production's own scoped status text
- *  (scopeStatusText), the bare-status-line detector's output on it
- *  (diagnostic only — NOT wired into production, see firecrawl.ts
- *  detectInactiveMarkers), and the raw markdown head. */
+ *  diagnostic view — production's own scoped status text (scopeStatusText),
+ *  the subject status chip decision it now runs (detectSubjectStatusChip —
+ *  the same call buildResolvedResult makes), and the raw markdown head. */
 export function buildVerifyProbeDiagnostic(markdown: string): VerifyProbeDiagnostic {
   const statusScope = scopeStatusText(markdown);
   const stripped = stripCompsSection(markdown);
   return {
-    bare_status_lines: detectBareStatusLines(statusScope),
+    subject_status_chip: detectSubjectStatusChip(statusScope),
     status_scope: {
       chars: statusScope.length,
       first_lines: statusScope.split("\n").slice(0, STATUS_SCOPE_LINES).map(truncateLine),

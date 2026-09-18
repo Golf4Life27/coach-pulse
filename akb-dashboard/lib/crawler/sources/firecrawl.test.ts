@@ -5,6 +5,7 @@ import {
   detectRenovationLanguage,
   detectStillActive,
   detectInactiveMarkers,
+  detectSubjectStatusChip,
   detectNewConstruction,
   extractPhraseContext,
   buildDebugContexts,
@@ -136,17 +137,14 @@ describe("detectStillActive", () => {
     expect(detectStillActive("Sale pending — accepting backups")).toBe(true);
     expect(detectStillActive("This home sold on 4/1/2026")).toBe(true);
   });
-  // ROLLED BACK 2026-09-18: bare status-line detection is not wired into production
-  // (3 of 4 sampled Redfin marks were live listings; comps text leaked past scoping).
-  // Re-enable when the detector is rebuilt against real Firecrawl markdown.
-  it.skip("DOES flag a bare status-chip line with no other words (2026-09-17 fix)", () => {
+  it("DOES flag a bare status-chip line with no other words (2026-09-18 rebuild)", () => {
     // "Off market" alone on its own line, with no surrounding sentence or
     // comps header, IS the subject's own status chip — the 816 N Gettysburg
-    // Ave incident shape (a bare "Sold" line for the subject). Before
-    // 2026-09-17 this defaulted Active; it is now the exact case the line
-    // anchor exists to catch. A neighbor's identical bare line only stays
-    // safe because it lives inside a header-bound comps section that
-    // scopeStatusText strips first — see the next test.
+    // Ave incident shape (a bare "Sold" line for the subject). Rebuilt as
+    // detectSubjectStatusChip: the first chip line, top-down, decides — a
+    // neighbor's identical bare line only stays safe because it lives inside
+    // a header-bound comps section that scopeStatusText strips first, and
+    // because it never renders before the subject's own chip anyway.
     expect(detectStillActive("Off market")).toBe(false);
     expect(detectStillActive("Sold")).toBe(false);
     expect(detectStillActive("Pending")).toBe(false);
@@ -166,6 +164,105 @@ describe("detectStillActive", () => {
   it("true (don't override RentCast) when no text", () => {
     expect(detectStillActive(null)).toBe(true);
     expect(detectStillActive("")).toBe(true);
+  });
+});
+
+describe("detectSubjectStatusChip (first chip before the first heading wins)", () => {
+  it("no text → null verdict", () => {
+    expect(detectSubjectStatusChip(null)).toEqual({ chip: null, verdict: null });
+    expect(detectSubjectStatusChip("")).toEqual({ chip: null, verdict: null });
+  });
+  it("Redfin's USPTO trademark sentence is not a chip", () => {
+    const md =
+      "Redfin and all Redfin variants are trademarks of Redfin Corporation, registered or pending in the USPTO.";
+    expect(detectSubjectStatusChip(md)).toEqual({ chip: null, verdict: null });
+  });
+  it("nav list items ('- Homes for sale', '- Recently sold homes', '- Sale & tax history') are not chips", () => {
+    const md = ["- Homes for sale", "- Recently sold homes", "- Sale & tax history", "For sale"].join("\n");
+    // the nav items are skipped, not stop signals — the real chip 4 lines
+    // down is still found.
+    expect(detectSubjectStatusChip(md)).toEqual({ chip: "for sale", verdict: "active" });
+  });
+  it("a comps 'Sold' chip AFTER the first heading does not count (null verdict)", () => {
+    const md = ["Some intro copy with no status chip.", "## About this home", "Nearby homes", "SOLD AUG 31, 2026"].join(
+      "\n",
+    );
+    expect(detectSubjectStatusChip(md)).toEqual({ chip: null, verdict: null });
+  });
+  it("active chip literals", () => {
+    expect(detectSubjectStatusChip("For sale").verdict).toBe("active");
+    expect(detectSubjectStatusChip("Active").verdict).toBe("active");
+    expect(detectSubjectStatusChip("Coming soon").verdict).toBe("active");
+  });
+  it("inactive chip literals", () => {
+    for (const word of ["Pending", "Contingent", "Sold", "Off market", "Closed"]) {
+      expect(detectSubjectStatusChip(word)).toEqual({ chip: word.toLowerCase(), verdict: "inactive" });
+    }
+  });
+  it("sold-date chip renderings", () => {
+    expect(detectSubjectStatusChip("SOLD AUG 16, 2026")).toEqual({ chip: "sold aug 16, 2026", verdict: "inactive" });
+    expect(detectSubjectStatusChip("Sold on Aug 2026")).toEqual({ chip: "sold on aug 2026", verdict: "inactive" });
+    expect(detectSubjectStatusChip("Sold on 08/29/26")).toEqual({ chip: "sold on 08/29/26", verdict: "inactive" });
+  });
+  it("a long 'sold' SENTENCE past 30 chars is not a chip", () => {
+    expect(detectSubjectStatusChip("Sold as-is, motivated seller, bring offers today").verdict).toBe(null);
+  });
+});
+
+// ── ZILLOW EVIDENCE (2026-09-18) — real production captures via the
+// deployed GET /api/admin/verify-probe against two live Zillow pages.
+// Firecrawl resolved both (resolved: true). Zillow renders its subject
+// chip differently from Redfin in both samples, and BOTH are already
+// covered by the chip rules above without adding new literal words:
+//   - 6307 Woodrow St, Detroit MI (believed pending) → bare "Pending" —
+//     an exact literal already in INACTIVE_STATUS_CHIPS.
+//   - 3467 Zephyr Dr, Dayton OH (sold per agent) → "Sold for $300,000" —
+//     NOT a date-suffixed "Sold on ..." line, but still matches
+//     /^sold(\s+on)?\b/ (the "on" group is optional) and is well under the
+//     30-char cap, so no rule change was needed for this shape either.
+describe("ZILLOW EVIDENCE (2026-09-18, real verify-probe capture)", () => {
+  it("6307 Woodrow St, Detroit MI — bare 'Pending' chip", () => {
+    const md = [
+      "[Skip main navigation](https://www.zillow.com/homedetails/6307-Woodrow-St-Detroit-MI-48210/88277319_zpid/#skip-topnav-target)",
+      "",
+      "OverviewFacts & featuresMarket valuePayment calculatorNeighborhood",
+      "",
+      "Pending",
+      "",
+      "See all 12 photos",
+      "",
+      "Price cut: $4.1K (8/24)",
+      "",
+      "$67,900",
+      "",
+      "# 6307 Woodrow St,Detroit, MI 48210",
+      "",
+      "## What's special",
+      "Investor special with value-add potential!",
+    ].join("\n");
+    expect(detectSubjectStatusChip(md)).toEqual({ chip: "pending", verdict: "inactive" });
+    expect(detectStillActive(md)).toBe(false);
+  });
+
+  it("3467 Zephyr Dr, Dayton OH — 'Sold for $300,000' chip (not a date suffix)", () => {
+    const md = [
+      "[Skip main navigation](https://www.zillow.com/homedetails/3467-Zephyr-Dr-Dayton-OH-45414/35119413_zpid/#skip-topnav-target)",
+      "",
+      "Home valueCost calculatorHome detailsNeighborhood",
+      "",
+      "Sold for $300,000",
+      "",
+      "See all 66 photos",
+      "",
+      "$300,000",
+      "",
+      "# 3467 Zephyr Dr, Dayton, OH 45414",
+      "",
+      "## Home value",
+      "Zestimate® $286,900",
+    ].join("\n");
+    expect(detectSubjectStatusChip(md)).toEqual({ chip: "sold for $300,000", verdict: "inactive" });
+    expect(detectStillActive(md)).toBe(false);
   });
 });
 

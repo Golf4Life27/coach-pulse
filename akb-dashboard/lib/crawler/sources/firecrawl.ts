@@ -22,7 +22,7 @@
 // adapter returns credentialed=false when absent.
 
 import { evaluateListingContent, extractScrapedSqft, extractScrapedPrice, crossCheckSqft, INTAKE_DISTRESS_DOM_MARK } from "@/lib/crawler/intake-filter";
-import { scopeSubjectText, scopeStatusText } from "@/lib/crawler/sources/listing-text-scope";
+import { scopeSubjectText, scopeStatusText, isSectionHeading } from "@/lib/crawler/sources/listing-text-scope";
 import { extractAgentContact, type AgentContact } from "@/lib/crawler/agent-contact-extract";
 
 const FIRECRAWL_API_KEY = process.env.FIRECRAWL_API_KEY;
@@ -345,35 +345,15 @@ export function detectNewConstruction(
 }
 
 /** Pure: matched inactive markers (distinct, in list order). Substring,
- *  case-insensitive. Surfaced for debug + Phase-2 rebalancing. */
+ *  case-insensitive. Surfaced for debug + Phase-2 rebalancing, and used as
+ *  the FALLBACK when detectSubjectStatusChip finds no chip (see below) —
+ *  exactly today's behavior for a page whose subject status can't be read
+ *  as a chip. */
 export function detectInactiveMarkers(text: string | null | undefined): string[] {
   if (!text) return [];
   const lc = text.toLowerCase();
-  const substringHits = INACTIVE_MARKERS.filter((m) => lc.includes(m));
-  // 2026-09-18 ROLLBACK: the bare status-line rule (below) was wired in here
-  // on 2026-09-17 and the next freshness pass marked 27 listings Off Market;
-  // a live-page sample showed 3 of 4 verifiable Redfin marks were ACTIVE
-  // "For sale" listings whose comps module ("SOLD AUG 31, 2026" cards) had
-  // survived scopeStatusText. Until the detector is rebuilt against real
-  // Firecrawl markdown (verify-probe route), only the substring markers
-  // decide. detectBareStatusLines stays exported and unit-tested; it is
-  // NOT called from production.
-  return substringHits;
+  return INACTIVE_MARKERS.filter((m) => lc.includes(m));
 }
-
-/** Bare status-chip lines — the ENTIRE trimmed line reads as just the status
- *  word, nothing else. Real portals render the SUBJECT's own closed-sale
- *  status this way (Redfin's 816 N Gettysburg Ave page, 2026-09-17 incident:
- *  a standalone "SOLD AUG 16, 2026" line, then a standalone "Sold" line —
- *  neither is a substring of any named-subject phrase above). */
-const BARE_STATUS_WORDS = new Set(["sold", "pending", "contingent", "off market", "closed"]);
-
-/** A "Sold <date>" status-chip line — the other common rendering
- *  ("Sold on 08/29/26", "SOLD AUG 16, 2026", "Sold on August 16, 2026").
- *  Anchored full-line so it never matches a sentence merely mentioning a
- *  sale date (e.g. "since sold in August 2026" does NOT start with "sold"). */
-const BARE_SOLD_DATE_LINE =
-  /^sold\s+(on\s+)?([a-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\/\d{1,2}\/\d{2,4})$/i;
 
 /** Pure: strip a single line's leading/trailing markdown decoration
  *  (heading/bullet/table/emphasis markers), lowercased + trimmed — the same
@@ -387,38 +367,68 @@ function normalizeStatusLine(line: string): string {
     .toLowerCase();
 }
 
-/** Pure: line-anchored bare portal status-chip detection (2026-09-17 fix,
- *  the 816 N Gettysburg Ave incident — three agents were texted first-touch
- *  offers on already-sold houses, one six weeks after close). The prior
- *  INACTIVE_MARKERS list only named SUBJECT-explicit phrases ("this home is
- *  sold") or multi-word removal phrasings — nothing caught the bare status
- *  chip ("SOLD AUG 16, 2026" / "Sold") every major portal actually renders
- *  for a closed subject, so `stillActive` defaulted true.
- *
- *  Line-anchored (the WHOLE trimmed line must be just the status), not a
- *  substring scan — a neighbor's "SOLD JUN 12, 2026" comp line would still
- *  match if scanned, so it is scopeStatusText's comps/history stripping
- *  (applied by every caller before this runs) that keeps neighbors out of
- *  the text in the first place, not this anchor. The anchor's own job is
- *  narrower: refuse a sentence merely mentioning "sold" ("since sold in
- *  August 2026", "Sold as-is, motivated seller") which is prose, not a
- *  status chip standing alone on its own line. */
-export function detectBareStatusLines(text: string | null | undefined): string[] {
-  if (!text) return [];
-  const hits = new Set<string>();
-  for (const raw of text.split("\n")) {
-    const line = normalizeStatusLine(raw);
-    if (!line) continue;
-    if (BARE_STATUS_WORDS.has(line) || BARE_SOLD_DATE_LINE.test(line)) {
-      hits.add(`status-line: ${line}`);
-    }
-  }
-  return [...hits];
+/** The SUBJECT's own status chip, exactly as normalizeStatusLine reduces it.
+ *  "for sale" / "active" / "coming soon" are affirmatively still-listed;
+ *  the rest mean the subject is no longer buyable. */
+const ACTIVE_STATUS_CHIPS = new Set(["for sale", "active", "coming soon"]);
+const INACTIVE_STATUS_CHIPS = new Set(["pending", "contingent", "sold", "off market", "closed"]);
+
+/** A "Sold <anything short>" chip line — the other common rendering ("Sold
+ *  on 08/29/26", "SOLD AUG 16, 2026", "Sold on Aug 2026"). The 30-char cap
+ *  is what keeps this a status chip rather than a sentence that happens to
+ *  start with "sold" ("Sold as-is, motivated seller" reads as prose, not a
+ *  standalone chip, and real listing copy sentences run well past 30 chars). */
+const SOLD_DATE_CHIP_LINE = /^sold(\s+on)?\b/i;
+const SOLD_DATE_CHIP_MAX_CHARS = 30;
+
+/** How far to scan for a subject chip when the page has no markdown heading
+ *  at all (an unrecognized portal shape) — bounds the scan instead of
+ *  reading the whole page looking for nothing. */
+const SUBJECT_CHIP_SCAN_LINES = 120;
+
+export interface SubjectStatusChipResult {
+  chip: string | null;
+  verdict: "active" | "inactive" | null;
 }
 
-/** Pure: heuristic still-active check from portal text. Returns false only
- *  on a strong inactive marker. Default true (RentCast already said Active;
- *  this is a staleness double-check).
+/** Pure: first-subject-chip-wins status decision (rebuilt 2026-09-18 against
+ *  REAL Firecrawl markdown from /api/admin/verify-probe, replacing the
+ *  detectBareStatusLines rule rolled back the same day — that rule scanned
+ *  the WHOLE scoped text for a bare status line, so a Redfin comps card
+ *  ("SOLD AUG 31, 2026") that survived scopeStatusText's comps-header
+ *  stripping (the card wasn't under a header this file recognizes) got read
+ *  as the subject's own status and false-flagged 27 active listings.
+ *
+ *  The fix: the SUBJECT's header always renders before any comps card, so
+ *  scanning top-down and taking the FIRST chip line is inherently subject-
+ *  scoped — no comps card can ever be "first". As a second guard for a page
+ *  whose subject header carries no chip at all (unknown portal shapes), the
+ *  first chip only counts when it appears before the first markdown heading
+ *  (or within the first 120 lines when the page has no heading) — so a
+ *  headerless page's comps chip can still never be mistaken for the
+ *  subject's. No chip found in that window → null, and the caller falls
+ *  back to the substring INACTIVE_MARKERS scan exactly as before. */
+export function detectSubjectStatusChip(scopedText: string | null | undefined): SubjectStatusChipResult {
+  if (!scopedText) return { chip: null, verdict: null };
+  const lines = scopedText.split("\n");
+  const headingIndex = lines.findIndex(isSectionHeading);
+  const cutoff = headingIndex === -1 ? Math.min(lines.length, SUBJECT_CHIP_SCAN_LINES) : headingIndex;
+  for (let i = 0; i < cutoff; i++) {
+    const line = normalizeStatusLine(lines[i]);
+    if (!line) continue;
+    if (ACTIVE_STATUS_CHIPS.has(line)) return { chip: line, verdict: "active" };
+    if (INACTIVE_STATUS_CHIPS.has(line)) return { chip: line, verdict: "inactive" };
+    if (line.length <= SOLD_DATE_CHIP_MAX_CHARS && SOLD_DATE_CHIP_LINE.test(line)) {
+      return { chip: line, verdict: "inactive" };
+    }
+  }
+  return { chip: null, verdict: null };
+}
+
+/** Pure: heuristic still-active check from portal text. The subject status
+ *  chip decides when one is found (see detectSubjectStatusChip); otherwise
+ *  false only on a strong substring inactive marker. Default true (RentCast
+ *  already said Active; this is a staleness double-check).
  *
  *  Scopes through scopeStatusText first (2026-09-17 fix) so this matches
  *  what the real verify path (buildResolvedResult) actually checks — comps
@@ -428,7 +438,10 @@ export function detectBareStatusLines(text: string | null | undefined): string[]
  *  2026-05-26 regression fix warned against re-introducing. */
 export function detectStillActive(text: string | null | undefined): boolean {
   if (!text) return true; // no text → don't override RentCast's Active
-  return detectInactiveMarkers(scopeStatusText(text)).length === 0;
+  const scoped = scopeStatusText(text);
+  const chip = detectSubjectStatusChip(scoped);
+  if (chip.verdict != null) return chip.verdict === "active";
+  return detectInactiveMarkers(scoped).length === 0;
 }
 
 /** Pure: a context snippet around the FIRST case-insensitive occurrence of
@@ -529,11 +542,22 @@ export function buildResolvedResult(
   const reno = detectRenovationLanguage(subjectText);
   const content = evaluateListingContent(subjectText);
   const newConstruction = detectNewConstruction(subjectText);
-  const inactiveMarkers = detectInactiveMarkers(statusText);
+  // The subject status chip decides first (first chip before the first
+  // heading wins — see detectSubjectStatusChip). A positive "active" verdict
+  // suppresses any substring INACTIVE_MARKERS hit from later text (e.g. "this
+  // home last sold for" in an unstripped history sentence) by never
+  // consulting detectInactiveMarkers at all. No chip found → identical
+  // substring behavior as before.
+  const chip = detectSubjectStatusChip(statusText);
+  const stillActive = chip.verdict != null ? chip.verdict === "active" : detectInactiveMarkers(statusText).length === 0;
+  const inactiveMarkers =
+    chip.verdict === "inactive" ? [`subject-status: ${chip.chip}`]
+    : chip.verdict === "active" ? []
+    : detectInactiveMarkers(statusText);
   return {
     ...base,
     resolved: true,
-    stillActive: inactiveMarkers.length === 0,
+    stillActive,
     hasRenovatedLanguage: reno.matched,
     matchedKeywords: reno.matchedKeywords,
     wholesalerExcluded: content.wholesalerExcluded,

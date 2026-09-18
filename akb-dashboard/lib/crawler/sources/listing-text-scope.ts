@@ -68,8 +68,10 @@ function normalizeHeaderLine(line: string): string {
     .toLowerCase();
 }
 
-/** Pure: a markdown ATX heading line (`#`..`######` + text). */
-function isSectionHeading(line: string): boolean {
+/** Pure: a markdown ATX heading line (`#`..`######` + text). Exported for
+ *  detectSubjectStatusChip (firecrawl.ts) — the "before the first heading"
+ *  boundary must be the same heading test scopeStatusText itself uses. */
+export function isSectionHeading(line: string): boolean {
   return /^\s{0,3}#{1,6}\s+\S/.test(line);
 }
 
