@@ -219,6 +219,34 @@ export function bumpRepriceGate(pw: {
   return { allowed: false, reason: `reprice_hold_${pw.basisLabel}${flags}` };
 }
 
+// ── List-anchor re-price gate (two-stage doctrine, operator 2026-08-30) ──
+//
+// Bump candidates are pre-reply by definition (Outreach_Status Texted, no
+// inbound) — the doctrine's value-anchored pricer only ever applies FROM THE
+// FIRST REPLY onward (Spine rec8eZG5hH16FFyF2). Gating a pre-reply bump on
+// that pricer holds it for reasons the list-anchor opener never depended on
+// (ARV distrust, rehab placeholder, corroboration) — a doctrine mismatch that
+// held 18/18 bumps on 2026-09-17. In list-anchor mode the bump instead checks
+// itself against the CURRENT list-anchor opener: the sticky number is still
+// the one quoted (never recomputed, INVARIANTS §3), but a list cut deep
+// enough to put the sticky number above today's anchor is a human decision,
+// not a robo-bump.
+export function bumpListAnchorGate(input: {
+  stickyOffer: number;
+  listPrice: number | null | undefined;
+  anchorOpener: number | null;
+  tolerance: number;
+}): BumpRepriceVerdict {
+  const { stickyOffer, listPrice, anchorOpener, tolerance } = input;
+  if (!listPrice || listPrice <= 0 || anchorOpener == null) {
+    return { allowed: false, reason: "list_anchor_hold_no_list" };
+  }
+  if (stickyOffer > anchorOpener + tolerance) {
+    return { allowed: false, reason: "list_anchor_hold_sticky_above_anchor" };
+  }
+  return { allowed: true, reason: null };
+}
+
 // ── Send-time thread truth (2026-07-17, the 7714 E Canfield miss) ────────
 //
 // Airtable state is a CACHE of the thread, not the thread. Two agent

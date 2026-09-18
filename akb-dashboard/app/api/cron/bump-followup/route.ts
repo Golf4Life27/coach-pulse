@@ -59,6 +59,8 @@ import {
   threadInboundTruth,
   buildBumpAbortedNote,
   bumpRepriceGate,
+  bumpListAnchorGate,
+  type BumpRepriceVerdict,
 } from "@/lib/h2-outreach/bump-lane";
 import { evaluateSendWindow, type WorkingHoursMeta } from "@/lib/h2-working-hours";
 import { listSeededZips } from "@/lib/buyer-median-store";
@@ -66,6 +68,8 @@ import { listPriceableArvZips, getZipArvSeed, type ZipArvSeed } from "@/lib/zip-
 import { priceOpenerWithSeed } from "@/lib/opener-pricing";
 import { getMarketForListing, openerArvPctMax } from "@/lib/markets/registry";
 import { resolveAnchorPct } from "@/lib/markets/anchor";
+import { isListAnchorMode, priceOpenerListAnchor } from "@/lib/pricing/list-anchor-opener";
+import { OFFER_ROUND_STEP_USD } from "@/lib/pricing/offer-rounding";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -412,31 +416,63 @@ async function handle(req: Request): Promise<Response> {
       // the renovatedLanguage veto can never see (no page copy). Claim is
       // KEPT on a block (mirrors the economics rail): re-evaluate after the
       // claim TTL, not on every run.
-      const bumpZip = (fresh.zip ?? "").trim();
-      if (bumpZip && !seedCache.has(bumpZip)) {
-        seedCache.set(bumpZip, await getZipArvSeed(bumpZip).catch(() => null));
+      // TWO-STAGE DOCTRINE (operator ruling 2026-08-30, Spine rec8eZG5hH16FFyF2):
+      // a bump candidate is pre-reply by definition (Texted, no inbound), so
+      // in list-anchor mode the gate checks the sticky number against TODAY's
+      // list-anchor opener, not the value-anchored pricer — that pricer's
+      // ARV/rehab/corroboration judgements only apply from the first reply
+      // onward and never gated the list-anchor opener this thread was sent
+      // under. Both branches feed the SAME "h2_bump_reprice_hold" audit event
+      // below; only how the verdict was reached differs.
+      let repriceVerdict: BumpRepriceVerdict;
+      let repriceBasis: string | null;
+      let repriceFlags: readonly string[] = [];
+      let repriceDetail: string | null;
+      let repriceAuditExtra: Record<string, unknown> = {};
+
+      if (isListAnchorMode()) {
+        const anchorPriced = priceOpenerListAnchor(fresh.listPrice ?? null);
+        repriceVerdict = bumpListAnchorGate({
+          stickyOffer: p.stickyOffer,
+          listPrice: fresh.listPrice ?? null,
+          anchorOpener: anchorPriced.result.opener,
+          tolerance: OFFER_ROUND_STEP_USD,
+        });
+        repriceBasis = anchorPriced.basisLabel;
+        repriceDetail = anchorPriced.result.detail ?? null;
+        repriceAuditExtra = { mode: "list_anchor", anchor: anchorPriced.result.opener };
+      } else {
+        const bumpZip = (fresh.zip ?? "").trim();
+        if (bumpZip && !seedCache.has(bumpZip)) {
+          seedCache.set(bumpZip, await getZipArvSeed(bumpZip).catch(() => null));
+        }
+        const bumpMarket = getMarketForListing({ state: fresh.state, zip: fresh.zip });
+        const bumpMarketId = bumpMarket?.id ?? "";
+        let bumpAnchor = anchorCache.get(bumpMarketId);
+        if (bumpAnchor == null) {
+          bumpAnchor = await resolveAnchorPct(bumpMarketId || null);
+          anchorCache.set(bumpMarketId, bumpAnchor);
+        }
+        const repriced = priceOpenerWithSeed({
+          listPrice: fresh.listPrice ?? null,
+          storedArv: fresh.realArvMedian ?? null,
+          storedArvConfidence: fresh.arvConfidence ?? null,
+          estRehabMid: fresh.estRehabMid ?? null,
+          estRehab: fresh.estRehab ?? null,
+          sqft: fresh.buildingSqFt ?? null,
+          arvPctMax: openerArvPctMax(bumpMarket, fresh.state),
+          wholesaleFee: fresh.wholesaleFeeTarget ?? null,
+          anchorPct: bumpAnchor,
+          seed: bumpZip ? seedCache.get(bumpZip) ?? null : null,
+          ownCompsJson: fresh.arvCompDetailsJson ?? null,
+        });
+        repriceVerdict = bumpRepriceGate(repriced);
+        repriceBasis = repriced.basisLabel;
+        repriceFlags = repriced.corroborationFlags;
+        repriceDetail = repriced.result.detail?.slice(0, 300) ?? null;
+        repriceAuditExtra = { mode: "value_anchored" };
       }
-      const bumpMarket = getMarketForListing({ state: fresh.state, zip: fresh.zip });
-      const bumpMarketId = bumpMarket?.id ?? "";
-      let bumpAnchor = anchorCache.get(bumpMarketId);
-      if (bumpAnchor == null) {
-        bumpAnchor = await resolveAnchorPct(bumpMarketId || null);
-        anchorCache.set(bumpMarketId, bumpAnchor);
-      }
-      const repriced = priceOpenerWithSeed({
-        listPrice: fresh.listPrice ?? null,
-        storedArv: fresh.realArvMedian ?? null,
-        storedArvConfidence: fresh.arvConfidence ?? null,
-        estRehabMid: fresh.estRehabMid ?? null,
-        estRehab: fresh.estRehab ?? null,
-        sqft: fresh.buildingSqFt ?? null,
-        arvPctMax: openerArvPctMax(bumpMarket, fresh.state),
-        wholesaleFee: fresh.wholesaleFeeTarget ?? null,
-        anchorPct: bumpAnchor,
-        seed: bumpZip ? seedCache.get(bumpZip) ?? null : null,
-        ownCompsJson: fresh.arvCompDetailsJson ?? null,
-      });
-      const repriceVerdict = bumpRepriceGate(repriced);
+
       if (!repriceVerdict.allowed) {
         row.error = `reprice_gate: ${repriceVerdict.reason}`;
         summary.errors++;
@@ -448,12 +484,13 @@ async function handle(req: Request): Promise<Response> {
           inputSummary: {
             sticky_offer: p.stickyOffer,
             list: fresh.listPrice ?? null,
-            basis: repriced.basisLabel,
-            corroboration_flags: repriced.corroborationFlags,
+            basis: repriceBasis,
+            corroboration_flags: repriceFlags,
+            ...repriceAuditExtra,
           },
           outputSummary: {
             reason: repriceVerdict.reason,
-            detail: repriced.result.detail?.slice(0, 300) ?? null,
+            detail: repriceDetail,
           },
         });
         processed.push(row);

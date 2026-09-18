@@ -60,7 +60,10 @@ describe("REPRO 8203 Brace — off-market pages are classified ACTIVE", () => {
   // (a) The real Gettysburg shape, full pipeline (buildResolvedResult +
   // classifyVerifiedListing — the same path the reverify pass and pre-send
   // probe both call). Must reject firecrawl_inactive.
-  it("816 N Gettysburg Ave — real Redfin shape rejects firecrawl_inactive", () => {
+  // ROLLED BACK 2026-09-18: bare status-line detection is not wired into production
+  // (3 of 4 sampled Redfin marks were live listings; comps text leaked past scoping).
+  // Re-enable when the detector is rebuilt against real Firecrawl markdown.
+  it.skip("816 N Gettysburg Ave — real Redfin shape rejects firecrawl_inactive", () => {
     const md = [
       "# 816 N Gettysburg Ave, Dayton, OH 45417",
       "SOLD AUG 16, 2026",
@@ -83,7 +86,10 @@ describe("REPRO 8203 Brace — off-market pages are classified ACTIVE", () => {
 
   // (b) Zillow-shape: a "Sold" chip line followed by a "Sold on MM/DD/YY"
   // chip line — the other common portal rendering.
-  it("Zillow shape: 'Sold' then 'Sold on 08/29/26' chip lines are detected", () => {
+  // ROLLED BACK 2026-09-18: bare status-line detection is not wired into production
+  // (3 of 4 sampled Redfin marks were live listings; comps text leaked past scoping).
+  // Re-enable when the detector is rebuilt against real Firecrawl markdown.
+  it.skip("Zillow shape: 'Sold' then 'Sold on 08/29/26' chip lines are detected", () => {
     const md = "# 1 Test St, City, ST 00000\nSold\nSold on 08/29/26\n3 bed 1 bath.";
     expect(detectStillActive(md)).toBe(false);
   });

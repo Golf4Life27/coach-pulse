@@ -345,7 +345,15 @@ export function detectInactiveMarkers(text: string | null | undefined): string[]
   if (!text) return [];
   const lc = text.toLowerCase();
   const substringHits = INACTIVE_MARKERS.filter((m) => lc.includes(m));
-  return [...substringHits, ...detectBareStatusLines(text)];
+  // 2026-09-18 ROLLBACK: the bare status-line rule (below) was wired in here
+  // on 2026-09-17 and the next freshness pass marked 27 listings Off Market;
+  // a live-page sample showed 3 of 4 verifiable Redfin marks were ACTIVE
+  // "For sale" listings whose comps module ("SOLD AUG 31, 2026" cards) had
+  // survived scopeStatusText. Until the detector is rebuilt against real
+  // Firecrawl markdown (verify-probe route), only the substring markers
+  // decide. detectBareStatusLines stays exported and unit-tested; it is
+  // NOT called from production.
+  return substringHits;
 }
 
 /** Bare status-chip lines — the ENTIRE trimmed line reads as just the status

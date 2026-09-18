@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   bumpRepriceGate,
+  bumpListAnchorGate,
   BUMP_MAX_ATTEMPTS,
   BUMP_GAP_DAYS,
   extractStickyOffer,
@@ -382,6 +383,44 @@ describe("bumpRepriceGate — recompute-before-queue on the bump lane (963 W 3rd
     });
     expect(v.allowed).toBe(false);
     expect(v.reason).toBe("reprice_hold_hold_failed_corroboration [infeasible_ask]");
+  });
+});
+
+describe("bumpListAnchorGate — pre-reply bumps gate on the list anchor, not the value-anchored pricer (2026-09-17, 18/18 held)", () => {
+  it("ALLOWS when the sticky offer equals the current anchor exactly", () => {
+    const v = bumpListAnchorGate({ stickyOffer: 62_000, listPrice: 100_000, anchorOpener: 62_000, tolerance: 250 });
+    expect(v.allowed).toBe(true);
+    expect(v.reason).toBeNull();
+  });
+
+  it("ALLOWS when the sticky offer is within tolerance above the anchor (rounding)", () => {
+    const v = bumpListAnchorGate({ stickyOffer: 62_100, listPrice: 100_000, anchorOpener: 62_000, tolerance: 250 });
+    expect(v.allowed).toBe(true);
+    expect(v.reason).toBeNull();
+  });
+
+  it("HOLDS when the sticky offer is above the anchor beyond tolerance (the list was cut under the sticky number)", () => {
+    const v = bumpListAnchorGate({ stickyOffer: 70_000, listPrice: 100_000, anchorOpener: 62_000, tolerance: 250 });
+    expect(v.allowed).toBe(false);
+    expect(v.reason).toBe("list_anchor_hold_sticky_above_anchor");
+  });
+
+  it("HOLDS when the list price is null", () => {
+    const v = bumpListAnchorGate({ stickyOffer: 40_000, listPrice: null, anchorOpener: null, tolerance: 250 });
+    expect(v.allowed).toBe(false);
+    expect(v.reason).toBe("list_anchor_hold_no_list");
+  });
+
+  it("HOLDS when the list price is 0", () => {
+    const v = bumpListAnchorGate({ stickyOffer: 40_000, listPrice: 0, anchorOpener: null, tolerance: 250 });
+    expect(v.allowed).toBe(false);
+    expect(v.reason).toBe("list_anchor_hold_no_list");
+  });
+
+  it("ALLOWS when the sticky offer is well below the anchor", () => {
+    const v = bumpListAnchorGate({ stickyOffer: 30_000, listPrice: 100_000, anchorOpener: 62_000, tolerance: 250 });
+    expect(v.allowed).toBe(true);
+    expect(v.reason).toBeNull();
   });
 });
 
