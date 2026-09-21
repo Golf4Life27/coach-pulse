@@ -1,7 +1,7 @@
 # System Facts — AKB Inevitable
 
 **Status:** authoritative. **Owner:** Alex Balog (operator).
-**Updated:** 2026-07-20.
+**Updated:** 2026-09-21.
 **Spine:** paired build_event `recpLB1yC1SaDTqff` (A1 commit cycle, 2026-05-31);
 sold-comp routing facts paired with the ATTOM-promotion build_event
 `recZB4GZGZ2rPwWe9` and the Cuyahoga build_event of 2026-07-20.
@@ -150,6 +150,35 @@ amounts, principle IDs. The template fallback (`renderTemplate`) is
 both the safety net (timeout / error) and the ground-truth input the
 synthesizer paraphrases against. System Facts here are inputs to that
 same ground truth.
+
+## 6a. Model tiers — STANDING RULE (operator ruling 2026-09-21)
+
+Think on the judgment tier, execute on lower tiers. Recorded after a
+usage audit on 2026-09-21: of $13,390 across the 40 most recent sessions,
+$9,267 ran on the judgment tier, and one judgment-tier session with an
+hourly self-re-arming check-in bound to it burned $7,296 in 48 hours.
+
+| Tier | Use it for | Never for |
+|------|-----------|-----------|
+| **Judgment tier** (the top model; the operator's HQ chat) | rulings, stress tests, design of a build, reading a diff before merge, anything the operator would want the sharpest read on | routines, check-ins, `send_later` re-arms, audit reads, triage, engine drives, buyers builds, workers |
+| **Execution tier** (the standard model; MAVERICK 1, 2, 5, 6 hosts) | every scheduled or repetitive job; persistent routine hosts; PR babysitting | operator rulings |
+| **Worker tier** (the fast model) | builds from an HQ brief, log parsing, bulk reads, tests | anything that produces a number for a counterparty |
+
+Rules:
+
+1. A routine or `send_later` is never bound to a judgment-tier session.
+   Bind it to an execution-tier host (`MAVERICK 6 - Ops check-ins` is
+   the shared host for HQ's check-ins) with a standalone prompt.
+2. Every firing into a persistent session re-pays that session's whole
+   context. Keep routine hosts light: load state, do the work, write
+   back, stop. An hourly self-re-arm on any long-lived session is a red
+   flag; use a cron routine with a bounded tool budget instead.
+3. HQ delegates builds to worker-tier subagents from a brief, then
+   reviews the diff. HQ does not run audit sweeps itself when a routine
+   host can.
+4. Model identifiers stay out of code, commits and PRs; name the tier.
+   The tier-to-model mapping lives in the Routines list and the Spine
+   (ruling row of 2026-09-21).
 
 ## 7. Named-agent roster
 
