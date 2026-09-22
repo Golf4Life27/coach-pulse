@@ -76,16 +76,31 @@ export const RENTCAST_HARD_CEILING = (() => {
  *  OPERATING level and always applies — the effective daily cap is the
  *  smaller of the two, so neither knob can silently loosen the other.
  *
- *  Sizing: burn on 9/5 was ~295/day against 3,820 calls left and 26 days to
- *  the plan reset — exhaustion around 9/18. 80/day × 26 days = 2,080, inside
- *  the remaining allowance with room for a bad day. Comps, CMA and rehab on
- *  the deals that matter come from the operator's Cowork pass (PropStream +
- *  Zillow) and ATTOM; RentCast's automated job shrinks to rent estimates,
- *  subject facts and discovery under this cap. Raise via
- *  RENTCAST_DAILY_THROTTLE only alongside a plan change. */
+ *  Sizing history:
+ *
+ *  · 2026-09-05, default 80: burn was ~295/day against 3,820 calls left and
+ *    26 days to the plan reset — exhaustion around 9/18. 80/day × 26 days =
+ *    2,080, inside the remaining allowance with room for a bad day. The
+ *    automated job shrank to rent estimates, subject facts and discovery,
+ *    with comps and rehab coming from the operator's Cowork pass and ATTOM.
+ *
+ *  · 2026-09-22, default 80 → 200 (operator ruling, and the plan DID change
+ *    — the note below about raising only alongside a plan change is
+ *    satisfied, not ignored). The vendor dashboard showed 315 requests of
+ *    5,000 used at day 11 of 30, so the subscription runs ~09-11 → ~10-11
+ *    with 4,685 calls left over 19 days = ~246/day safely available.
+ *    200 × 19 = 3,800, landing at ~4,115 of 5,000 with ~885 in reserve;
+ *    observed burn is ~71/day, so this is headroom rather than a spend
+ *    commitment. The sweep lane's 25% share moves 20 → 50/day.
+ *
+ *    What forced it: ATTOM began returning 401 on every call on 09-21, so
+ *    RentCast is the ONLY comp path left, and an 80/day throttle sized for a
+ *    nearly-exhausted plan was starving it while 94% of a paid plan sat
+ *    unused. Eleven Counter Received rows were reading "blind" as a direct
+ *    result. Revisit at the 10-11 reset. */
 export const RENTCAST_DAILY_THROTTLE = (() => {
   const raw = Number(process.env.RENTCAST_DAILY_THROTTLE);
-  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 80;
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 200;
 })();
 
 /** Effective per-day cap = min(hard ceiling, throttle). */
