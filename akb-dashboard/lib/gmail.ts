@@ -181,30 +181,95 @@ export interface GmailThreadResult {
   status: number | null;
 }
 
+// A run of ~45 sequential threads.get calls on ONE token hit Gmail's
+// per-user rate limit mid-run (2026-09-22 dispo-buyer-replies dry run):
+// mostly 403s, a few 200s interleaved — the signature of `rateLimitExceeded`
+// / `userRateLimitExceeded` (Gmail also uses 429 for this), NOT a scope
+// problem, which would fail every call on the token identically. Retry that
+// case with backoff; a non-rate-limit 403 (e.g. insufficientPermissions)
+// still fails immediately.
+const RATE_LIMIT_RETRY_DELAYS_MS = [500, 1000, 2000]; // 3 retries => 4 attempts total
+const MAX_RETRY_AFTER_MS = 4000;
+const RATE_LIMIT_REASONS = new Set(["rateLimitExceeded", "userRateLimitExceeded", "RESOURCE_EXHAUSTED"]);
+
+interface GoogleApiErrorBody {
+  error?: {
+    errors?: Array<{ reason?: string }>;
+    status?: string;
+  };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Whether a non-ok threads.get response is Gmail's per-user rate limit
+ *  rather than a real permission failure. Parses the body ONLY to match it
+ *  against this fixed whitelist of Google API error reasons/status — the
+ *  parsed value itself is never returned, logged, or stored. */
+function isRateLimitedResponse(status: number, bodyText: string): boolean {
+  if (status === 429) return true;
+  if (status !== 403) return false;
+  try {
+    const parsed = JSON.parse(bodyText) as GoogleApiErrorBody;
+    const reasons = (parsed.error?.errors ?? [])
+      .map((e) => e.reason)
+      .filter((r): r is string => Boolean(r));
+    if (parsed.error?.status) reasons.push(parsed.error.status);
+    return reasons.some((r) => RATE_LIMIT_REASONS.has(r));
+  } catch {
+    return false;
+  }
+}
+
+function retryAfterMs(headerValue: string | null): number | null {
+  if (!headerValue) return null;
+  const seconds = Number(headerValue);
+  if (!Number.isFinite(seconds) || seconds < 0) return null;
+  return Math.min(seconds * 1000, MAX_RETRY_AFTER_MS);
+}
+
 /** Fetch every message on ONE Gmail thread by id (oldest-first), reporting
  *  the fetch outcome instead of swallowing it — a failed fetch (bad token,
  *  Gmail 5xx, thread gone) must never look identical to "no new replies" to
  *  a caller that depends on that distinction (2026-09-22 buy-box drip miss:
  *  getThreadById returned [] on every non-ok response with only a
  *  console.error, so a real fetch failure and zero replies read the same in
- *  the drip's dry-run output). */
+ *  the drip's dry-run output). A rate-limited response is retried with
+ *  backoff before being reported as a failure (same 2026-09-22 run — mixed
+ *  success/403 on one token mid-sweep). */
 export async function getThreadByIdResult(threadId: string): Promise<GmailThreadResult> {
   const id = (threadId ?? "").trim();
   if (!id) return { messages: [], error: "empty_thread_id", status: null };
   const token = await getAccessToken();
   if (!token) return { messages: [], error: "gmail_not_configured", status: null };
-  const r = await fetch(`${GMAIL_API}/threads/${encodeURIComponent(id)}?format=full`, {
-    headers: { Authorization: `Bearer ${token}` },
-    cache: "no-store",
-  });
-  if (!r.ok) {
-    console.error(`[gmail] threads.get ${id} failed with status ${r.status}`);
-    return { messages: [], error: `gmail_thread_fetch_${r.status}`, status: r.status };
+
+  let lastStatus = 0;
+  let lastRateLimited = false;
+  for (let attempt = 0; attempt <= RATE_LIMIT_RETRY_DELAYS_MS.length; attempt++) {
+    const r = await fetch(`${GMAIL_API}/threads/${encodeURIComponent(id)}?format=full`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    if (r.ok) {
+      const data = (await r.json()) as { messages?: GmailFullMessage[] };
+      const msgs = (data.messages ?? []).slice(0, MAX_MESSAGES_PER_THREAD).map(shapeMessage);
+      msgs.sort((a, b) => (a.date ? new Date(a.date).getTime() : 0) - (b.date ? new Date(b.date).getTime() : 0));
+      return { messages: msgs, error: null, status: r.status };
+    }
+
+    lastStatus = r.status;
+    const bodyText = await r.text().catch(() => "");
+    lastRateLimited = isRateLimitedResponse(r.status, bodyText);
+    console.error(`[gmail] threads.get ${id} failed with status ${r.status}${lastRateLimited ? " (rate limited)" : ""}`);
+
+    if (!lastRateLimited || attempt === RATE_LIMIT_RETRY_DELAYS_MS.length) break;
+    const wait = retryAfterMs(r.headers.get("Retry-After")) ?? RATE_LIMIT_RETRY_DELAYS_MS[attempt];
+    await sleep(wait);
   }
-  const data = (await r.json()) as { messages?: GmailFullMessage[] };
-  const msgs = (data.messages ?? []).slice(0, MAX_MESSAGES_PER_THREAD).map(shapeMessage);
-  msgs.sort((a, b) => (a.date ? new Date(a.date).getTime() : 0) - (b.date ? new Date(b.date).getTime() : 0));
-  return { messages: msgs, error: null, status: r.status };
+
+  const suffix = lastRateLimited ? "_rate_limited" : "";
+  return { messages: [], error: `gmail_thread_fetch_${lastStatus}${suffix}`, status: lastStatus };
 }
 
 /** Fetch every message on ONE Gmail thread by id (oldest-first). Thin

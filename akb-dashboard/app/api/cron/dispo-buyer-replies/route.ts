@@ -82,6 +82,17 @@ export const maxDuration = 120;
 const BASE_URL = () => process.env.DASHBOARD_BASE_URL || "https://coach-pulse-ten.vercel.app";
 const DEFAULT_LIMIT = 50;
 
+// Pacing between sequential threads.get calls on the SAME OAuth token
+// (2026-09-22: ~45 buyers fetched back-to-back tripped Gmail's per-user
+// rate limit mid-run — mostly 403s with a few 200s interleaved). At
+// DEFAULT_LIMIT=50 this adds well under 10s to a run inside the 120s
+// maxDuration; lib/gmail.ts also retries a rate-limited fetch itself, this
+// just makes hitting the limit less likely in the first place.
+const THREAD_FETCH_PACING_MS = 120;
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 interface BuyerOutcome {
   buyerId: string;
   buyerEmail: string | null;
@@ -166,6 +177,7 @@ export async function GET(req: Request) {
       }
 
       const messages = await getThreadById(threadId);
+      await sleep(THREAD_FETCH_PACING_MS);
       const wantEmail = extractEmailAddress(buyerEmail);
       const cited = extractCitedGmailIds(listing.notes);
 
@@ -324,6 +336,7 @@ export async function GET(req: Request) {
       // thread, but a swallowed fetch failure and a genuinely empty thread
       // both came back as []).
       const threadResult = await getThreadByIdResult(threadId);
+      await sleep(THREAD_FETCH_PACING_MS);
       out.threadMessageCount = threadResult.messages.length;
       out.threadSenders = Array.from(new Set(threadResult.messages.map((m) => extractEmailAddress(m.from))));
 
