@@ -286,6 +286,22 @@ describe("isBounceFailureSubject", () => {
     expect(isBounceFailureSubject(null)).toBe(false);
     expect(isBounceFailureSubject(undefined)).toBe(false);
   });
+
+  it("flags an Outlook/Exchange 'Undeliverable:' bounce (2026-09-22 production miss)", () => {
+    expect(isBounceFailureSubject("Undeliverable: Re: Quick question about your buy box")).toBe(true);
+  });
+
+  it("does not flag a 'Delivery Status Notification (Delay)' subject", () => {
+    expect(isBounceFailureSubject("Delivery Status Notification (Delay)")).toBe(false);
+  });
+
+  it("does not flag a 'Delayed: ...' subject", () => {
+    expect(isBounceFailureSubject("Delayed: Re: Quick question about your buy box")).toBe(false);
+  });
+
+  it("does not flag a plain buyer reply subject", () => {
+    expect(isBounceFailureSubject("Re: Quick question about your buy box")).toBe(false);
+  });
 });
 
 function msg(over: Partial<DripThreadMessage> = {}): DripThreadMessage {
