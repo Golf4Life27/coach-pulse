@@ -192,6 +192,24 @@ const RATE_LIMIT_RETRY_DELAYS_MS = [500, 1000, 2000]; // 3 retries => 4 attempts
 const MAX_RETRY_AFTER_MS = 4000;
 const RATE_LIMIT_REASONS = new Set(["rateLimitExceeded", "userRateLimitExceeded", "RESOURCE_EXHAUSTED"]);
 
+// A non-rate-limit 403 gets its Google error reason appended to the error
+// code (e.g. "gmail_thread_fetch_403_insufficientPermissions") ONLY when it
+// is one of these known reasons — a fixed whitelist, never the raw body text,
+// so a caller can tell "no permission on this thread" apart from "org policy
+// blocks this" without any risk of an arbitrary error string (which could
+// echo request details) ever leaking through. Anything not on this list gets
+// no suffix (2026-09-22: 9 drip threads failing 403 with no visible reason).
+const KNOWN_403_REASONS = new Set([
+  "insufficientPermissions",
+  "forbidden",
+  "domainPolicy",
+  "accessNotConfigured",
+  "dailyLimitExceeded",
+  "PERMISSION_DENIED",
+  "failedPrecondition",
+  "notFound",
+]);
+
 interface GoogleApiErrorBody {
   error?: {
     errors?: Array<{ reason?: string }>;
@@ -203,23 +221,36 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Whether a non-ok threads.get response is Gmail's per-user rate limit
- *  rather than a real permission failure. Parses the body ONLY to match it
- *  against this fixed whitelist of Google API error reasons/status — the
- *  parsed value itself is never returned, logged, or stored. */
-function isRateLimitedResponse(status: number, bodyText: string): boolean {
-  if (status === 429) return true;
-  if (status !== 403) return false;
+/** Best-effort parse of a Gmail API error body into the reason/status
+ *  strings it names — [] for a malformed or non-JSON body. The raw body
+ *  text itself is never returned by this or any caller of it. */
+function parseGoogleApiErrorReasons(bodyText: string): string[] {
   try {
     const parsed = JSON.parse(bodyText) as GoogleApiErrorBody;
     const reasons = (parsed.error?.errors ?? [])
       .map((e) => e.reason)
       .filter((r): r is string => Boolean(r));
     if (parsed.error?.status) reasons.push(parsed.error.status);
-    return reasons.some((r) => RATE_LIMIT_REASONS.has(r));
+    return reasons;
   } catch {
-    return false;
+    return [];
   }
+}
+
+/** Whether a non-ok threads.get response is Gmail's per-user rate limit
+ *  rather than a real permission failure. */
+function isRateLimitedResponse(status: number, bodyText: string): boolean {
+  if (status === 429) return true;
+  if (status !== 403) return false;
+  return parseGoogleApiErrorReasons(bodyText).some((r) => RATE_LIMIT_REASONS.has(r));
+}
+
+/** The Google error reason to append as an error-code suffix for a
+ *  non-rate-limit 403, or null when the body names none of the known
+ *  reasons (or none at all) — see KNOWN_403_REASONS. */
+function known403ReasonSuffix(bodyText: string): string | null {
+  const reasons = parseGoogleApiErrorReasons(bodyText);
+  return reasons.find((r) => KNOWN_403_REASONS.has(r)) ?? null;
 }
 
 function retryAfterMs(headerValue: string | null): number | null {
@@ -246,6 +277,7 @@ export async function getThreadByIdResult(threadId: string): Promise<GmailThread
 
   let lastStatus = 0;
   let lastRateLimited = false;
+  let lastKnownReasonSuffix: string | null = null;
   for (let attempt = 0; attempt <= RATE_LIMIT_RETRY_DELAYS_MS.length; attempt++) {
     const r = await fetch(`${GMAIL_API}/threads/${encodeURIComponent(id)}?format=full`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -261,6 +293,7 @@ export async function getThreadByIdResult(threadId: string): Promise<GmailThread
     lastStatus = r.status;
     const bodyText = await r.text().catch(() => "");
     lastRateLimited = isRateLimitedResponse(r.status, bodyText);
+    lastKnownReasonSuffix = r.status === 403 ? known403ReasonSuffix(bodyText) : null;
     console.error(`[gmail] threads.get ${id} failed with status ${r.status}${lastRateLimited ? " (rate limited)" : ""}`);
 
     if (!lastRateLimited || attempt === RATE_LIMIT_RETRY_DELAYS_MS.length) break;
@@ -268,7 +301,7 @@ export async function getThreadByIdResult(threadId: string): Promise<GmailThread
     await sleep(wait);
   }
 
-  const suffix = lastRateLimited ? "_rate_limited" : "";
+  const suffix = lastRateLimited ? "_rate_limited" : lastKnownReasonSuffix ? `_${lastKnownReasonSuffix}` : "";
   return { messages: [], error: `gmail_thread_fetch_${lastStatus}${suffix}`, status: lastStatus };
 }
 

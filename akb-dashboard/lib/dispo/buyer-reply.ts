@@ -258,12 +258,22 @@ export function isMailerDaemonAddress(email: string | null | undefined): boolean
   return e.includes("mailer-daemon") || e.includes("postmaster");
 }
 
+// Hard-bounce subject shapes seen in production beyond the generic "Delivery
+// Status Notification (Failure)": Outlook/Exchange's own bounce reads
+// "Undeliverable: <original subject>" (missed on a real Outlook postmaster
+// bounce, 2026-09-22 — the sender-address check in isMailerDaemonAddress
+// matched, but the subject never did), plus the common hard-bounce phrasings
+// "Mail delivery failed", "Returned mail", and "Delivery has failed".
+const BOUNCE_FAILURE_SUBJECT_RE = /failure|undeliverable|delivery (has )?failed|returned mail/i;
+
 /** Pure: does this subject look like a hard bounce ("Delivery Status
- *  Notification (Failure)")? A "(Delay)" notice on the same thread is NOT a
- *  failure — the message may still arrive — so it must read false here. */
+ *  Notification (Failure)", "Undeliverable: ...", "Mail delivery failed",
+ *  "Returned mail", "Delivery has failed")? A "(Delay)"/"Delayed" notice on
+ *  the same thread is NOT a failure — the message may still arrive — so it
+ *  must read false here regardless of which failure phrase also matched. */
 export function isBounceFailureSubject(subject: string | null | undefined): boolean {
   const s = subject ?? "";
-  return /failure/i.test(s) && !/delay/i.test(s);
+  return BOUNCE_FAILURE_SUBJECT_RE.test(s) && !/delay/i.test(s);
 }
 
 export interface DripThreadMessage {

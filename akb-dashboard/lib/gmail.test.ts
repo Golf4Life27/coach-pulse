@@ -213,7 +213,7 @@ describe("getThreadByIdResult rate-limit retry (2026-09-22 pacing fix)", () => {
     expect(apiCalls).toBe(3);
   });
 
-  it("does NOT retry a non-rate-limit 403 (insufficientPermissions) — immediate failure, one fetch", async () => {
+  it("does NOT retry a non-rate-limit 403 (insufficientPermissions) — immediate failure, one fetch, reason suffixed", async () => {
     let apiCalls = 0;
     const fetchMock = vi.fn(async (url: string) => {
       if (String(url).includes("oauth2.googleapis.com")) return tokenResponse();
@@ -227,8 +227,56 @@ describe("getThreadByIdResult rate-limit retry (2026-09-22 pacing fix)", () => {
     await vi.runAllTimersAsync();
     const r = await resultPromise;
 
-    expect(r.error).toBe("gmail_thread_fetch_403");
+    expect(r.error).toBe("gmail_thread_fetch_403_insufficientPermissions");
     expect(apiCalls).toBe(1);
+  });
+
+  it("appends no suffix for a 403 reason not on the known whitelist, and never leaks the raw body", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes("oauth2.googleapis.com")) return tokenResponse();
+      return new Response(
+        JSON.stringify({ error: { errors: [{ reason: "someWeirdUnlistedReason" }], message: "secret internal detail" } }),
+        { status: 403 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { getThreadByIdResult } = await freshGmailModule();
+
+    const resultPromise = getThreadByIdResult("thread123");
+    await vi.runAllTimersAsync();
+    const r = await resultPromise;
+
+    expect(r.error).toBe("gmail_thread_fetch_403");
+    expect(r.error).not.toContain("someWeirdUnlistedReason");
+    expect(r.error).not.toContain("secret internal detail");
+  });
+
+  it("appends the known reason suffix for each whitelisted 403 reason", async () => {
+    const cases: Array<[string, string]> = [
+      ["forbidden", "gmail_thread_fetch_403_forbidden"],
+      ["domainPolicy", "gmail_thread_fetch_403_domainPolicy"],
+      ["accessNotConfigured", "gmail_thread_fetch_403_accessNotConfigured"],
+      ["dailyLimitExceeded", "gmail_thread_fetch_403_dailyLimitExceeded"],
+      ["PERMISSION_DENIED", "gmail_thread_fetch_403_PERMISSION_DENIED"],
+      ["failedPrecondition", "gmail_thread_fetch_403_failedPrecondition"],
+      ["notFound", "gmail_thread_fetch_403_notFound"],
+    ];
+
+    for (const [reason, expected] of cases) {
+      const fetchMock = vi.fn(async (url: string) => {
+        if (String(url).includes("oauth2.googleapis.com")) return tokenResponse();
+        return new Response(JSON.stringify({ error: { errors: [{ reason }] } }), { status: 403 });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const { getThreadByIdResult } = await freshGmailModule();
+
+      const resultPromise = getThreadByIdResult("thread123");
+      await vi.runAllTimersAsync();
+      const r = await resultPromise;
+
+      expect(r.error).toBe(expected);
+      vi.unstubAllGlobals();
+    }
   });
 
   it("never leaks body text or the token through the rate-limited retry path", async () => {
