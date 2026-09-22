@@ -157,7 +157,7 @@
       "schedule": "40 * * * *"
     },
     {
-      "path": "/api/cron/dispo-buyer-replies",
+      "path": "/api/cron/dispo-buyer-replies?limit=200",
       "schedule": "50 * * * *"
     },
     {
