@@ -36,8 +36,27 @@ function hasUsableEmail(email: string | null): boolean {
   return !!email && email.includes("@");
 }
 
-function hasNoBox(maxPrice: number | null): boolean {
-  return maxPrice == null || maxPrice === 0;
+/** A buyer "has a box" (skip the drip) when ANY of: a max price is set, a
+ *  ZIP preference is on file, or their notes carry a "BUY BOX" section
+ *  (2026-09-22 bug hunt — the old check only looked at Max_Price, so buyers
+ *  who already gave us ZIPs/notes but no price, e.g. Julius Florendo and
+ *  Jacob Horn, kept getting re-asked for a box we already had). */
+function hasBox(buyer: BuyerRecord): boolean {
+  if (buyer.maxPrice != null && buyer.maxPrice !== 0) return true;
+  if (buyer.targetZips && buyer.targetZips.trim().length > 0) return true;
+  const notes = buyer.buyerNotes ?? buyer.notes ?? "";
+  if (/buy box/i.test(notes)) return true;
+  return false;
+}
+
+/** True once a buyer's own reply to the drip has already been ingested
+ *  (lib/inbound/gmail-capture.ts marker `src=box_drip_reply`) — the drip
+ *  must stop the moment they answer, not just on an explicit STOP
+ *  (2026-09-22 bug hunt: Clarance replied 9/21 and was still scheduled for
+ *  a step-2 follow-up on 9/24 because only opt-out stopped the drip). */
+function hasAlreadyReplied(buyer: BuyerRecord): boolean {
+  const notes = buyer.buyerNotes ?? buyer.notes ?? "";
+  return notes.includes("src=box_drip_reply");
 }
 
 function isDoNotContact(buyer: BuyerRecord): boolean {
@@ -50,9 +69,10 @@ function isDoNotContact(buyer: BuyerRecord): boolean {
  *  that is (1, 2 or 3) — null when not eligible. */
 function nextStepFor(buyer: BuyerRecord, nowMs: number): 1 | 2 | 3 | null {
   if (!hasUsableEmail(buyer.email)) return null;
-  if (!hasNoBox(buyer.maxPrice)) return null;
+  if (hasBox(buyer)) return null;
   if (buyer.formCompletedAt) return null;
   if (isDoNotContact(buyer)) return null;
+  if (hasAlreadyReplied(buyer)) return null;
 
   const step = buyer.boxDripStep ?? 0;
   if (step >= DRIP_STEPS) return null;

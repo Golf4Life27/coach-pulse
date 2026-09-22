@@ -7,6 +7,14 @@ import {
   formatBuyerInterestLine,
   formatBuyerNoteLine,
   isOptOutReply,
+  isMailerDaemonAddress,
+  isBounceFailureSubject,
+  classifyDripThreadMessages,
+  formatDripBounceNoteLine,
+  extractZipCodesFromReply,
+  extractMaxPriceFromReply,
+  captureBuyBoxFromReply,
+  type DripThreadMessage,
 } from "./buyer-reply";
 
 const ASSIGNMENT_PRICE = 200_000; // 90% floor = $180,000
@@ -237,5 +245,199 @@ describe("isOptOutReply", () => {
       "let's not slow down, get me the paperwork today please.";
     expect(long.length).toBeGreaterThan(200);
     expect(isOptOutReply(long)).toBe(false);
+  });
+});
+
+// ── 2026-09-22 bug hunt: robust drip thread matching + bounces + capture ──
+
+describe("isMailerDaemonAddress", () => {
+  it.each([
+    "mailer-daemon@googlemail.com",
+    "MAILER-DAEMON@googlemail.com",
+    "postmaster@example.com",
+  ])("flags %s", (addr) => {
+    expect(isMailerDaemonAddress(addr)).toBe(true);
+  });
+
+  it.each([
+    "julius.florendo@crestcorerealty.com",
+    "alex@akb-properties.com",
+    null,
+    undefined,
+  ])("does not flag %j", (addr) => {
+    expect(isMailerDaemonAddress(addr)).toBe(false);
+  });
+});
+
+describe("isBounceFailureSubject", () => {
+  it("flags a hard-bounce failure subject", () => {
+    expect(isBounceFailureSubject("Delivery Status Notification (Failure)")).toBe(true);
+  });
+
+  it("does not flag a (Delay) notice", () => {
+    expect(isBounceFailureSubject("Delivery Status Notification (Delay)")).toBe(false);
+  });
+
+  it("does not flag an unrelated subject", () => {
+    expect(isBounceFailureSubject("Re: Quick question about your buy box")).toBe(false);
+  });
+
+  it("null/undefined subject is not a failure", () => {
+    expect(isBounceFailureSubject(null)).toBe(false);
+    expect(isBounceFailureSubject(undefined)).toBe(false);
+  });
+});
+
+function msg(over: Partial<DripThreadMessage> = {}): DripThreadMessage {
+  return {
+    id: "m1",
+    from: "buyer@example.com",
+    subject: "Quick question about your buy box - AKB Solutions",
+    body: "Here's my box.",
+    date: "2026-09-21T16:09:00Z",
+    threadId: "t1",
+    ...over,
+  };
+}
+
+describe("classifyDripThreadMessages", () => {
+  const ourSend = msg({ id: "send1", from: "Alex <alex@akb-properties.com>", date: "2026-09-18T12:00:00Z", body: "" });
+
+  it("counts a reply from a non-matching (but non-mailer-daemon, non-our) address", () => {
+    const reply = msg({ id: "r1", from: "someone.else@otherdomain.com", date: "2026-09-21T16:09:00Z" });
+    const r = classifyDripThreadMessages([ourSend, reply], new Set());
+    expect(r.ourAddress).toBe("alex@akb-properties.com");
+    expect(r.replies.map((m) => m.id)).toEqual(["r1"]);
+    expect(r.bounces).toHaveLength(0);
+  });
+
+  it("excludes our own send (the earliest message) from replies", () => {
+    const r = classifyDripThreadMessages([ourSend], new Set());
+    expect(r.replies).toHaveLength(0);
+    expect(r.bounces).toHaveLength(0);
+  });
+
+  it("excludes a later message that also comes from our own address", () => {
+    const secondSend = msg({ id: "send2", from: "alex@akb-properties.com", date: "2026-09-24T15:30:00Z" });
+    const r = classifyDripThreadMessages([ourSend, secondSend], new Set());
+    expect(r.replies).toHaveLength(0);
+  });
+
+  it("routes a mailer-daemon Failure subject to bounces, not replies", () => {
+    const bounce = msg({
+      id: "b1",
+      from: "mailer-daemon@googlemail.com",
+      subject: "Delivery Status Notification (Failure)",
+      date: "2026-09-21T16:10:00Z",
+    });
+    const r = classifyDripThreadMessages([ourSend, bounce], new Set());
+    expect(r.bounces.map((m) => m.id)).toEqual(["b1"]);
+    expect(r.replies).toHaveLength(0);
+  });
+
+  it("ignores a mailer-daemon Delay notice entirely (not a reply, not a bounce)", () => {
+    const delay = msg({
+      id: "d1",
+      from: "mailer-daemon@googlemail.com",
+      subject: "Delivery Status Notification (Delay)",
+      date: "2026-09-21T16:10:00Z",
+    });
+    const r = classifyDripThreadMessages([ourSend, delay], new Set());
+    expect(r.bounces).toHaveLength(0);
+    expect(r.replies).toHaveLength(0);
+  });
+
+  it("excludes an already-cited message id", () => {
+    const reply = msg({ id: "r1", from: "buyer@example.com" });
+    const r = classifyDripThreadMessages([ourSend, reply], new Set(["r1"]));
+    expect(r.replies).toHaveLength(0);
+  });
+
+  it("derives ourAddress from the earliest message regardless of input order", () => {
+    const reply = msg({ id: "r1", from: "buyer@example.com", date: "2026-09-21T16:09:00Z" });
+    const r = classifyDripThreadMessages([reply, ourSend], new Set());
+    expect(r.ourAddress).toBe("alex@akb-properties.com");
+    expect(r.replies.map((m) => m.id)).toEqual(["r1"]);
+  });
+});
+
+describe("formatDripBounceNoteLine", () => {
+  it("formats the standard bounce note line", () => {
+    const line = formatDripBounceNoteLine({ dateIso: "2026-09-22T10:00:00Z", buyerEmail: "carolinaf90@yahoo.com" });
+    expect(line).toBe("[2026-09-22] Drip email bounced (carolinaf90@yahoo.com)");
+  });
+});
+
+describe("extractZipCodesFromReply", () => {
+  it("finds a single ZIP", () => {
+    expect(extractZipCodesFromReply("I only buy in 38116 right now.")).toEqual(["38116"]);
+  });
+
+  it("finds and dedupes several ZIPs, comma or otherwise separated", () => {
+    expect(extractZipCodesFromReply("ZIPs: 38116, 38118 and 38116 again")).toEqual(["38116", "38118"]);
+  });
+
+  it("does not read a 5-digit price as a ZIP", () => {
+    expect(extractZipCodesFromReply("Budget is $45000 for this one")).toEqual([]);
+  });
+
+  it("returns empty on no match", () => {
+    expect(extractZipCodesFromReply("Sounds good, keep me posted.")).toEqual([]);
+  });
+
+  it("ignores a signature mailing address (state code or ZIP+4)", () => {
+    expect(extractZipCodesFromReply("I buy in 78223.\n--\nJane, Invest Co\nSan Antonio, TX 78209")).toEqual(["78223"]);
+    expect(extractZipCodesFromReply("PO Box 1, Austin TX  78701")).toEqual([]);
+    expect(extractZipCodesFromReply("Office: 78209-1234")).toEqual([]);
+  });
+
+  it("null/undefined input is empty", () => {
+    expect(extractZipCodesFromReply(null)).toEqual([]);
+    expect(extractZipCodesFromReply(undefined)).toEqual([]);
+  });
+});
+
+describe("extractMaxPriceFromReply", () => {
+  it("parses 'under $100K'", () => {
+    expect(extractMaxPriceFromReply("I can go under $100K on the right deal.")).toBe(100_000);
+  });
+
+  it("parses 'up to $250,000'", () => {
+    expect(extractMaxPriceFromReply("Looking to spend up to $250,000.")).toBe(250_000);
+  });
+
+  it("parses a bare '$250k'", () => {
+    expect(extractMaxPriceFromReply("My max is $250k.")).toBe(250_000);
+  });
+
+  it("parses a plain dollar amount with commas and no keyword", () => {
+    expect(extractMaxPriceFromReply("Budget: $180,000")).toBe(180_000);
+  });
+
+  it("returns null when two dollar amounts appear with no ceiling keyword (ambiguous)", () => {
+    expect(extractMaxPriceFromReply("Comps show $200k and $220k nearby.")).toBeNull();
+  });
+
+  it("returns null on no dollar amount", () => {
+    expect(extractMaxPriceFromReply("Sounds good, keep me posted.")).toBeNull();
+  });
+
+  it("null/undefined input is null", () => {
+    expect(extractMaxPriceFromReply(null)).toBeNull();
+    expect(extractMaxPriceFromReply(undefined)).toBeNull();
+  });
+});
+
+describe("captureBuyBoxFromReply", () => {
+  it("captures both zips and max price from one reply", () => {
+    const r = captureBuyBoxFromReply("I buy in 38116 and 38118, up to $150,000.");
+    expect(r.zips).toEqual(["38116", "38118"]);
+    expect(r.maxPriceUsd).toBe(150_000);
+  });
+
+  it("leaves fields empty when unsure", () => {
+    const r = captureBuyBoxFromReply("Thanks, I'll think about it.");
+    expect(r.zips).toEqual([]);
+    expect(r.maxPriceUsd).toBeNull();
   });
 });

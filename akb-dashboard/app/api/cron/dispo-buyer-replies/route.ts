@@ -51,7 +51,7 @@ import {
   BUYER_V2_FIELDS,
 } from "@/lib/buyers-v2";
 import type { BuyerRecord } from "@/types/jarvis";
-import { getThreadById } from "@/lib/gmail";
+import { getThreadById, getThreadByIdResult } from "@/lib/gmail";
 import { extractCitedGmailIds } from "@/lib/inbound/gmail-capture";
 import { extractEmailAddress } from "@/lib/inbound/match";
 import {
@@ -61,6 +61,9 @@ import {
   formatListingReplyNoteBlock,
   formatBuyerInterestLine,
   formatBuyerNoteLine,
+  classifyDripThreadMessages,
+  formatDripBounceNoteLine,
+  captureBuyBoxFromReply,
 } from "@/lib/dispo/buyer-reply";
 import { dealPageUrl } from "@/lib/dispo/blast-email";
 import { sendBuyerReplyAlert } from "@/lib/reply-alert";
@@ -89,6 +92,12 @@ interface BuyerOutcome {
   alertSent: boolean;
   outcome: "ingested" | "no_new_replies" | "skipped_missing_link" | "listing_not_found" | "error";
   detail?: string;
+  /** Drip loop only — every message the thread fetch returned (before any
+   *  filtering), so a dry run can tell "the fetch failed", "the thread is
+   *  genuinely empty", and "we filtered everything out" apart from each
+   *  other. Sender addresses only, never bodies. */
+  threadMessageCount?: number;
+  threadSenders?: string[];
 }
 
 export async function GET(req: Request) {
@@ -309,14 +318,29 @@ export async function GET(req: Request) {
     }
 
     try {
-      const messages = await getThreadById(threadId);
-      const wantEmail = extractEmailAddress(buyerEmail);
-      const cited = extractCitedGmailIds(buyer.notes);
+      // Result-returning fetch (2026-09-22 bug hunt) — a failed fetch must
+      // be visible as "error", never silently identical to "no replies"
+      // (the Julius Florendo / Jacob Horn miss: the reply WAS on the
+      // thread, but a swallowed fetch failure and a genuinely empty thread
+      // both came back as []).
+      const threadResult = await getThreadByIdResult(threadId);
+      out.threadMessageCount = threadResult.messages.length;
+      out.threadSenders = Array.from(new Set(threadResult.messages.map((m) => extractEmailAddress(m.from))));
 
-      const newMessages = messages
-        .filter((m) => extractEmailAddress(m.from) === wantEmail)
-        .filter((m) => !cited.has(m.id))
-        .sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
+      if (threadResult.error) {
+        out.outcome = "error";
+        out.detail = `gmail_thread_fetch_${threadResult.status ?? "unknown"}`;
+        continue;
+      }
+
+      const cited = extractCitedGmailIds(buyer.notes);
+      // Robust matching (2026-09-22): a message counts as a buyer reply
+      // when it isn't OUR send (derived from the thread itself, never a
+      // hardcoded address) and isn't a mail-system notice — the buyer's
+      // own From==email match still applies, it's just no longer required.
+      const { bounces, replies } = classifyDripThreadMessages(threadResult.messages, cited);
+      const bounceIds = new Set(bounces.map((m) => m.id));
+      const newMessages = [...bounces, ...replies].sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
 
       if (newMessages.length === 0) {
         out.outcome = "no_new_replies";
@@ -326,8 +350,26 @@ export async function GET(req: Request) {
       const nowIso = new Date().toISOString();
       const noteLines: string[] = [];
       let optedOut = false;
+      const capturedZips: string[] = [];
+      let capturedMaxPrice: number | null = null;
 
       for (const m of newMessages) {
+        if (bounceIds.has(m.id)) {
+          out.classifications.push("bounce");
+          noteLines.push(formatDripBounceNoteLine({ dateIso: nowIso, buyerEmail }));
+          noteLines.push(`[Gmail inbound msg ${m.id} thread=${m.threadId} ts=${m.date} src=box_drip_bounce ingested_at=${nowIso}]`);
+          await audit({
+            agent: "scout",
+            event: "buyer_drip_bounce",
+            status: "confirmed_success",
+            recordId: buyer.id,
+            externalId: m.id,
+            inputSummary: { buyerId: buyer.id, threadId },
+            decision: "bounced",
+          });
+          continue;
+        }
+
         const stop = isOptOutReply(m.body);
         out.classifications.push(stop ? "opt_out" : "reply");
 
@@ -336,6 +378,9 @@ export async function GET(req: Request) {
           noteLines.push(`[${nowIso.slice(0, 10)}] Opted out via drip reply`);
         } else {
           noteLines.push(`[drip reply ${m.id}] ${m.body.trim().slice(0, 500)}`);
+          const capture = captureBuyBoxFromReply(m.body);
+          capturedZips.push(...capture.zips);
+          if (capture.maxPriceUsd != null && capturedMaxPrice == null) capturedMaxPrice = capture.maxPriceUsd;
         }
         // Dedupe marker — extractCitedGmailIds only recognizes this exact
         // form (lib/inbound/gmail-capture.ts), so every processed message
@@ -370,9 +415,23 @@ export async function GET(req: Request) {
           // matchPricingBuyer both check it, so an opt-out has to land on
           // both columns or a later sweep can still contact this buyer.
           fields[BUYER_V2_FIELDS.Buyer_Status] = "Do Not Contact";
-          // Stops the drip even if Status is later edited back.
-          fields[BUYER_V2_FIELDS.Box_Drip_Step] = 3;
         }
+        // A bounce, an opt-out, or a genuine reply all mean the drip is
+        // done firing on this buyer (2026-09-22: previously only opt-out
+        // stopped it — a buyer who already answered kept getting follow-ups,
+        // e.g. Clarance's step-2 follow-up scheduled after their 9/21 reply).
+        fields[BUYER_V2_FIELDS.Box_Drip_Step] = 3;
+
+        // Conservative structured capture (task 7) — only fills a field
+        // that is currently empty; never overwrites what's on file.
+        const dedupedZips = Array.from(new Set(capturedZips));
+        if (!buyer.targetZips && dedupedZips.length > 0) {
+          fields[BUYER_V2_FIELDS.Target_ZIPs] = dedupedZips.join(", ");
+        }
+        if ((buyer.maxPrice == null || buyer.maxPrice === 0) && capturedMaxPrice != null) {
+          fields[BUYER_V2_FIELDS.Max_Price] = capturedMaxPrice;
+        }
+
         await updateBuyerV2(buyer.id, fields);
       }
 
