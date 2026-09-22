@@ -414,6 +414,11 @@ describe("extractZipCodesFromReply", () => {
 });
 
 describe("extractMaxPriceFromReply", () => {
+  it("never reads a fee or referral amount as a max price", () => {
+    expect(extractMaxPriceFromReply("We offer a $2,500 referral per property closed.")).toBeNull();
+    expect(extractMaxPriceFromReply("Max $5k in rehab")).toBeNull();
+  });
+
   it("parses 'under $100K'", () => {
     expect(extractMaxPriceFromReply("I can go under $100K on the right deal.")).toBe(100_000);
   });
