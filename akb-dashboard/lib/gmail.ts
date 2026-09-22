@@ -169,30 +169,52 @@ export async function getThreadsForEmail(
   return messages;
 }
 
-/** Fetch every message on ONE Gmail thread by id (oldest-first). This is the
- *  linked-thread ingestion path: once a deal thread is linked to a listing,
- *  the sweep pulls the whole thread directly — sender, recipients, and
- *  subject mutations (Re:→Fwd:) can no longer break capture. Returns [] when
- *  Gmail is unconfigured or the thread is gone (fail-soft, like the query
- *  path). */
-export async function getThreadById(threadId: string): Promise<GmailMessage[]> {
+export interface GmailThreadResult {
+  messages: GmailMessage[];
+  /** Short, stable error code — never a raw response body, so a token or
+   *  env value can never end up in something a caller logs or surfaces.
+   *  null when the fetch succeeded (an empty thread is still `error: null`,
+   *  `messages: []`). */
+  error: string | null;
+  /** The HTTP status that produced `error`, or null when the failure
+   *  happened before any request went out (e.g. Gmail not configured). */
+  status: number | null;
+}
+
+/** Fetch every message on ONE Gmail thread by id (oldest-first), reporting
+ *  the fetch outcome instead of swallowing it — a failed fetch (bad token,
+ *  Gmail 5xx, thread gone) must never look identical to "no new replies" to
+ *  a caller that depends on that distinction (2026-09-22 buy-box drip miss:
+ *  getThreadById returned [] on every non-ok response with only a
+ *  console.error, so a real fetch failure and zero replies read the same in
+ *  the drip's dry-run output). */
+export async function getThreadByIdResult(threadId: string): Promise<GmailThreadResult> {
   const id = (threadId ?? "").trim();
-  if (!id) return [];
+  if (!id) return { messages: [], error: "empty_thread_id", status: null };
   const token = await getAccessToken();
-  if (!token) return [];
+  if (!token) return { messages: [], error: "gmail_not_configured", status: null };
   const r = await fetch(`${GMAIL_API}/threads/${encodeURIComponent(id)}?format=full`, {
     headers: { Authorization: `Bearer ${token}` },
     cache: "no-store",
   });
   if (!r.ok) {
-    const errText = await r.text().catch(() => "");
-    console.error(`[gmail] threads.get ${id} ${r.status}:`, errText.slice(0, 200));
-    return [];
+    console.error(`[gmail] threads.get ${id} failed with status ${r.status}`);
+    return { messages: [], error: `gmail_thread_fetch_${r.status}`, status: r.status };
   }
   const data = (await r.json()) as { messages?: GmailFullMessage[] };
   const msgs = (data.messages ?? []).slice(0, MAX_MESSAGES_PER_THREAD).map(shapeMessage);
   msgs.sort((a, b) => (a.date ? new Date(a.date).getTime() : 0) - (b.date ? new Date(b.date).getTime() : 0));
-  return msgs;
+  return { messages: msgs, error: null, status: r.status };
+}
+
+/** Fetch every message on ONE Gmail thread by id (oldest-first). Thin
+ *  wrapper over getThreadByIdResult for callers that only ever cared about
+ *  the messages and are fine treating any failure as "no messages" — fails
+ *  soft like the query path. New callers that need to tell a fetch failure
+ *  apart from an empty thread should call getThreadByIdResult directly. */
+export async function getThreadById(threadId: string): Promise<GmailMessage[]> {
+  const result = await getThreadByIdResult(threadId);
+  return result.messages;
 }
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";

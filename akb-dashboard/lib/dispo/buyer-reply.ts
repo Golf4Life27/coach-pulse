@@ -26,6 +26,7 @@
 
 import { detectL3DollarAmounts } from "@/lib/outreach/l3-amount-detector";
 import { normalizeSubject } from "@/lib/inbound/gmail-thread-link";
+import { extractEmailAddress } from "@/lib/inbound/match";
 
 export type BuyerReplyClass = "buyer_interest" | "buyer_question" | "buyer_pass";
 
@@ -236,4 +237,152 @@ export function formatBuyerNoteLine(input: {
 }): string {
   const iso = (input.nowIso ?? new Date().toISOString()).slice(0, 16).replace("T", " ");
   return `${iso} — Dispo reply (${input.classification}) on ${input.address}: ${amountLabel(input.amountUsd)}`;
+}
+
+// ── Drip thread matching (2026-09-22 bug hunt) ──────────────────────────
+// The drip reader used to require From === the buyer's own stored email —
+// production evidence (Julius Florendo, Jacob Horn) showed a real reply
+// sitting in the exact right thread from the exact address on file, still
+// read as "no_new_replies" days later; the miss was in getThreadById
+// swallowing a fetch error (fixed in lib/gmail.ts), but the From match was
+// also too fragile to trust on its own (a buyer replying from a different
+// address, or CC'd account, would silently vanish the same way). The rule
+// now: anything in the thread that isn't OUR send and isn't a mail-system
+// notice is a reply. "Ours" is derived from the thread itself (the earliest
+// message — the drip send), never a hardcoded address.
+
+/** Pure: true for a mailer-daemon / postmaster address — the sender used by
+ *  automated bounce notices, never a real buyer. */
+export function isMailerDaemonAddress(email: string | null | undefined): boolean {
+  const e = (email ?? "").toLowerCase();
+  return e.includes("mailer-daemon") || e.includes("postmaster");
+}
+
+/** Pure: does this subject look like a hard bounce ("Delivery Status
+ *  Notification (Failure)")? A "(Delay)" notice on the same thread is NOT a
+ *  failure — the message may still arrive — so it must read false here. */
+export function isBounceFailureSubject(subject: string | null | undefined): boolean {
+  const s = subject ?? "";
+  return /failure/i.test(s) && !/delay/i.test(s);
+}
+
+export interface DripThreadMessage {
+  id: string;
+  from: string;
+  subject: string;
+  body: string;
+  date: string;
+  threadId: string;
+}
+
+export interface DripThreadClassification<T extends DripThreadMessage> {
+  /** The address the drip send itself went out from, derived from the
+   *  earliest message on the thread — null only when the thread is empty. */
+  ourAddress: string | null;
+  /** Messages that are a hard bounce (mailer-daemon, "Failure" subject). */
+  bounces: T[];
+  /** Everything else not already cited, not from us, not a mail-system
+   *  notice — a real reply regardless of whether the From address matches
+   *  the buyer's stored email. */
+  replies: T[];
+}
+
+/** Pure: split a Gmail thread's messages (already fetched) into bounces and
+ *  replies, excluding whatever `citedIds` already covers and whatever came
+ *  from our own send address. Does not care what shape the caller's
+ *  message objects are beyond DripThreadMessage — GmailMessage satisfies it
+ *  as-is. */
+export function classifyDripThreadMessages<T extends DripThreadMessage>(
+  messages: T[],
+  citedIds: ReadonlySet<string>,
+): DripThreadClassification<T> {
+  const sorted = [...messages].sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
+  const ourAddress = sorted.length > 0 ? extractEmailAddress(sorted[0].from) : null;
+
+  const bounces: T[] = [];
+  const replies: T[] = [];
+
+  for (const m of sorted) {
+    if (citedIds.has(m.id)) continue;
+    const from = extractEmailAddress(m.from);
+    if (ourAddress && from === ourAddress) continue; // our own send — never a reply
+    if (isMailerDaemonAddress(from)) {
+      if (isBounceFailureSubject(m.subject)) bounces.push(m);
+      // A non-failure mail-system notice (e.g. "(Delay)") is neither a
+      // reply nor a bounce — ignored, no marker written, so a later
+      // sweep re-checks it (harmless) instead of guessing at its meaning.
+      continue;
+    }
+    replies.push(m);
+  }
+
+  return { ourAddress, bounces, replies };
+}
+
+/** One-line note appended to Buyer_Notes when a drip email hard-bounces. */
+export function formatDripBounceNoteLine(input: { dateIso: string; buyerEmail: string }): string {
+  return `[${input.dateIso.slice(0, 10)}] Drip email bounced (${input.buyerEmail})`;
+}
+
+// ── Conservative structured capture from a drip reply (2026-09-22) ──────
+// Fills ONLY Preferred_Zip_Codes / Max_Price, and only when the caller
+// confirms the field is currently empty — this never overwrites anything a
+// buyer already told us. When the text is ambiguous, both return nothing:
+// the raw reply is still kept verbatim in notes either way, so nothing is
+// lost by staying conservative here.
+
+// A ZIP right after a state code ("San Antonio, TX 78209") is a mailing
+// address — almost always the buyer's own signature — not a buy-box ZIP.
+const ZIP_RE = /(?<!\$)(?<!\$\s)(?<!\b[A-Z]{2},?\s{1,2})\b\d{5}\b(?!\s?[kK]\b)(?!-\d{4})/g;
+
+/** Pure: every plausible 5-digit US ZIP in `text`, in first-seen order,
+ *  deduped. A 5-digit run immediately preceded by "$" (a price, not a zip —
+ *  "$45000") is excluded, as is one following a state code ("TX 78209") or
+ *  carrying a ZIP+4 suffix — both are mailing addresses, not a buy box. */
+export function extractZipCodesFromReply(text: string | null | undefined): string[] {
+  const t = text ?? "";
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const m of t.matchAll(ZIP_RE)) {
+    if (!seen.has(m[0])) {
+      seen.add(m[0]);
+      out.push(m[0]);
+    }
+  }
+  return out;
+}
+
+const MAX_PRICE_KEYWORD_RE = /\b(?:under|up ?to|max(?:imum)?|no more than|not more than)\s*\$?\s*([\d,]+(?:\.\d+)?)\s*([kK])?\b/i;
+const DOLLAR_AMOUNT_RE = /\$\s?([\d,]+(?:\.\d+)?)\s*([kK])?\b/g;
+
+function parseDollarAmount(numStr: string, kSuffix: string | undefined): number | null {
+  const n = parseFloat(numStr.replace(/,/g, ""));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.round(kSuffix ? n * 1000 : n);
+}
+
+/** Pure: a buyer's max price from free text ("under $100K", "up to
+ *  $250,000", "$250k"). Prefers an amount named right after a ceiling
+ *  keyword (under/up to/max/budget of); falls back to a single unambiguous
+ *  dollar amount in the whole text. Two or more dollar amounts with no
+ *  ceiling keyword is ambiguous — returns null rather than guess. */
+export function extractMaxPriceFromReply(text: string | null | undefined): number | null {
+  const t = text ?? "";
+  const kw = t.match(MAX_PRICE_KEYWORD_RE);
+  if (kw) return parseDollarAmount(kw[1], kw[2]);
+
+  const all = [...t.matchAll(DOLLAR_AMOUNT_RE)];
+  if (all.length === 1) return parseDollarAmount(all[0][1], all[0][2]);
+  return null;
+}
+
+export interface CapturedBuyBox {
+  zips: string[];
+  maxPriceUsd: number | null;
+}
+
+/** Pure: everything extractZipCodesFromReply / extractMaxPriceFromReply can
+ *  read out of one reply body, in one call. */
+export function captureBuyBoxFromReply(text: string | null | undefined): CapturedBuyBox {
+  return { zips: extractZipCodesFromReply(text), maxPriceUsd: extractMaxPriceFromReply(text) };
 }

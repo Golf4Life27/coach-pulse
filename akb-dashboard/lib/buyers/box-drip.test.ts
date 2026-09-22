@@ -51,6 +51,30 @@ describe("selectDripCandidates — eligibility", () => {
     expect(r).toHaveLength(1);
   });
 
+  it("excludes a buyer with no max price but a ZIP preference on file", () => {
+    const r = selectDripCandidates([buyer({ targetZips: "38116, 38118" })], NOW, 20);
+    expect(r).toHaveLength(0);
+  });
+
+  it("excludes a buyer with no max price/zips but a BUY BOX note (case-insensitive)", () => {
+    const r = selectDripCandidates([buyer({ buyerNotes: "=== buy box (2026-02-10) ===\nSFR, $80-150k" })], NOW, 20);
+    expect(r).toHaveLength(0);
+  });
+
+  it("BUY BOX check also reads the legacy notes field when buyerNotes is empty", () => {
+    const r = selectDripCandidates([buyer({ notes: "=== BUY BOX ===" })], NOW, 20);
+    expect(r).toHaveLength(0);
+  });
+
+  it("excludes a buyer who already replied to the drip (src=box_drip_reply marker), even with no STOP", () => {
+    const r = selectDripCandidates(
+      [buyer({ buyerNotes: "[drip reply abc123] Sounds good\n[Gmail inbound msg abc123 thread=t1 ts=2026-09-21T16:09:00Z src=box_drip_reply ingested_at=2026-09-21T16:51:00Z]" })],
+      NOW,
+      20,
+    );
+    expect(r).toHaveLength(0);
+  });
+
   it("excludes a buyer who already completed the intake form", () => {
     const r = selectDripCandidates([buyer({ formCompletedAt: "2026-09-01T00:00:00Z" })], NOW, 20);
     expect(r).toHaveLength(0);
