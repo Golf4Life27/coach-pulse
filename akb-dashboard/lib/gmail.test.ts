@@ -134,6 +134,125 @@ describe("getThreadByIdResult", () => {
   });
 });
 
+describe("getThreadByIdResult rate-limit retry (2026-09-22 pacing fix)", () => {
+  beforeEach(() => {
+    setGmailEnv();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    clearGmailEnv();
+  });
+
+  function rateLimitedResponse(status = 403, reason = "rateLimitExceeded") {
+    return new Response(JSON.stringify({ error: { errors: [{ reason }], status: "RESOURCE_EXHAUSTED" } }), { status });
+  }
+
+  it("retries a 403 rateLimitExceeded and succeeds on the next attempt", async () => {
+    let apiCalls = 0;
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes("oauth2.googleapis.com")) return tokenResponse();
+      apiCalls++;
+      if (apiCalls === 1) return rateLimitedResponse();
+      return new Response(
+        JSON.stringify({
+          messages: [fullMessage({ id: "m1", threadId: "t1", from: "buyer@example.com", subject: "box", body: "hi", internalDate: "1758470400000" })],
+        }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { getThreadByIdResult } = await freshGmailModule();
+
+    const resultPromise = getThreadByIdResult("thread123");
+    await vi.runAllTimersAsync();
+    const r = await resultPromise;
+
+    expect(r.error).toBeNull();
+    expect(r.messages.map((m) => m.id)).toEqual(["m1"]);
+    expect(apiCalls).toBe(2);
+  });
+
+  it("retries a 403 rateLimitExceeded up to the cap, then reports gmail_thread_fetch_403_rate_limited with exactly 4 fetches", async () => {
+    let apiCalls = 0;
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes("oauth2.googleapis.com")) return tokenResponse();
+      apiCalls++;
+      return rateLimitedResponse();
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { getThreadByIdResult } = await freshGmailModule();
+
+    const resultPromise = getThreadByIdResult("thread123");
+    await vi.runAllTimersAsync();
+    const r = await resultPromise;
+
+    expect(r.error).toBe("gmail_thread_fetch_403_rate_limited");
+    expect(r.status).toBe(403);
+    expect(r.messages).toEqual([]);
+    expect(apiCalls).toBe(4);
+  });
+
+  it("retries a 429 the same way", async () => {
+    let apiCalls = 0;
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes("oauth2.googleapis.com")) return tokenResponse();
+      apiCalls++;
+      if (apiCalls < 3) return new Response(JSON.stringify({ error: { status: "RESOURCE_EXHAUSTED" } }), { status: 429 });
+      return new Response(JSON.stringify({ messages: [] }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { getThreadByIdResult } = await freshGmailModule();
+
+    const resultPromise = getThreadByIdResult("thread123");
+    await vi.runAllTimersAsync();
+    const r = await resultPromise;
+
+    expect(r.error).toBeNull();
+    expect(apiCalls).toBe(3);
+  });
+
+  it("does NOT retry a non-rate-limit 403 (insufficientPermissions) — immediate failure, one fetch", async () => {
+    let apiCalls = 0;
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes("oauth2.googleapis.com")) return tokenResponse();
+      apiCalls++;
+      return new Response(JSON.stringify({ error: { errors: [{ reason: "insufficientPermissions" }] } }), { status: 403 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { getThreadByIdResult } = await freshGmailModule();
+
+    const resultPromise = getThreadByIdResult("thread123");
+    await vi.runAllTimersAsync();
+    const r = await resultPromise;
+
+    expect(r.error).toBe("gmail_thread_fetch_403");
+    expect(apiCalls).toBe(1);
+  });
+
+  it("never leaks body text or the token through the rate-limited retry path", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes("oauth2.googleapis.com")) return tokenResponse("super-secret-access-token");
+      return new Response(
+        JSON.stringify({ error: { errors: [{ reason: "rateLimitExceeded" }], message: "token super-secret-access-token / test-refresh-token" } }),
+        { status: 403 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { getThreadByIdResult } = await freshGmailModule();
+
+    const resultPromise = getThreadByIdResult("thread123");
+    await vi.runAllTimersAsync();
+    const r = await resultPromise;
+
+    expect(r.error).toBe("gmail_thread_fetch_403_rate_limited");
+    expect(r.error).not.toContain("super-secret-access-token");
+    expect(r.error).not.toContain("test-refresh-token");
+    expect(r.error).not.toContain("test-client-secret");
+  });
+});
+
 describe("getThreadById (thin wrapper)", () => {
   beforeEach(() => setGmailEnv());
   afterEach(() => {

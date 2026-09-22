@@ -42,6 +42,17 @@ const DEFAULT_HOURS_BACK = 48;
 const MAX_HOURS_BACK = 24 * 14; // backfill sweeps may reach 14 days
 const POPULATION_RECENT_DAYS = 365;
 
+// Pacing between sequential threads.get calls on the SAME OAuth token, same
+// rationale as dispo-buyer-replies (2026-09-22 rate-limit bug hunt). Cohort
+// is capped at `limit` (default 40, max 100 via ?limit=) and listings
+// typically carry 1-2 linked deal threads, so worst case is on the order of
+// a couple hundred fetches — a few tens of seconds of added pacing, well
+// inside the 120s maxDuration alongside the rest of the sweep's work.
+const THREAD_FETCH_PACING_MS = 120;
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function handle(req: Request) {
   const t0 = Date.now();
   const env = readAuthEnv();
@@ -114,6 +125,7 @@ async function handle(req: Request) {
       }
       for (const tid of linkedIds) {
         for (const m of await getThreadById(tid)) if (!byId.has(m.id)) byId.set(m.id, m);
+        await sleep(THREAD_FETCH_PACING_MS);
       }
       // Linked-thread fetches return whole threads — bound to the sweep window.
       const msgs = [...byId.values()].filter((m) => {
