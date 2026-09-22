@@ -365,10 +365,16 @@ export function extractZipCodesFromReply(text: string | null | undefined): strin
 const MAX_PRICE_KEYWORD_RE = /\b(?:under|up ?to|max(?:imum)?|no more than|not more than)\s*\$?\s*([\d,]+(?:\.\d+)?)\s*([kK])?\b/i;
 const DOLLAR_AMOUNT_RE = /\$\s?([\d,]+(?:\.\d+)?)\s*([kK])?\b/g;
 
+// No house price is under this — anything smaller is a fee, referral, rehab
+// line or EMD, never a buy-box ceiling (2026-09-22: Jacob Horn's "$2,500
+// referral per property" was written to Max_Price as 2500).
+const MIN_PLAUSIBLE_MAX_PRICE_USD = 20_000;
+
 function parseDollarAmount(numStr: string, kSuffix: string | undefined): number | null {
   const n = parseFloat(numStr.replace(/,/g, ""));
   if (!Number.isFinite(n) || n <= 0) return null;
-  return Math.round(kSuffix ? n * 1000 : n);
+  const usd = Math.round(kSuffix ? n * 1000 : n);
+  return usd >= MIN_PLAUSIBLE_MAX_PRICE_USD ? usd : null;
 }
 
 /** Pure: a buyer's max price from free text ("under $100K", "up to
