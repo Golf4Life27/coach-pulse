@@ -140,12 +140,18 @@ describe("the 2026-09-05 throttle — lane share of the day cap", () => {
 });
 
 describe("the effective day cap is the smaller of hard ceiling and throttle", () => {
-  it("defaults: throttle 80 under a 300 hard ceiling → 80", async () => {
+  it("defaults: throttle 200 under a 300 hard ceiling → 200 (raised from 80, operator 2026-09-22)", async () => {
     const mod = await import("./spend-ceiling");
-    expect(mod.RENTCAST_DAILY_THROTTLE).toBe(80);
+    expect(mod.RENTCAST_DAILY_THROTTLE).toBe(200);
     expect(mod.RENTCAST_HARD_CEILING).toBe(300);
-    expect(mod.RENTCAST_DAILY_CAP).toBe(80);
-    expect(mod.currentCaps().day).toBe(80);
+    expect(mod.RENTCAST_DAILY_CAP).toBe(200);
+    expect(mod.currentCaps().day).toBe(200);
+  });
+
+  it("the throttle still cannot loosen the hard ceiling: min(300, 200) stays the smaller", async () => {
+    const mod = await import("./spend-ceiling");
+    expect(mod.RENTCAST_DAILY_CAP).toBe(Math.min(mod.RENTCAST_HARD_CEILING, mod.RENTCAST_DAILY_THROTTLE));
+    expect(mod.RENTCAST_DAILY_CAP).toBeLessThanOrEqual(mod.RENTCAST_HARD_CEILING);
   });
 });
 
