@@ -197,8 +197,9 @@ const RATE_LIMIT_REASONS = new Set(["rateLimitExceeded", "userRateLimitExceeded"
 // is one of these known reasons — a fixed whitelist, never the raw body text,
 // so a caller can tell "no permission on this thread" apart from "org policy
 // blocks this" without any risk of an arbitrary error string (which could
-// echo request details) ever leaking through. Anything not on this list gets
-// no suffix (2026-09-22: 9 drip threads failing 403 with no visible reason).
+// echo request details) ever leaking through. A reason on this list is a
+// real permission failure and fails immediately (no retry). Anything not on
+// this list is an unrecognized 403 — see the note just below.
 const KNOWN_403_REASONS = new Set([
   "insufficientPermissions",
   "forbidden",
@@ -209,6 +210,17 @@ const KNOWN_403_REASONS = new Set([
   "failedPrecondition",
   "notFound",
 ]);
+
+// 2026-09-22 production dry run (80 drip threads, sequential, 120ms pacing):
+// ~10 threads failed with a plain 403 whose reason was on neither list above
+// nor RATE_LIMIT_REASONS (some bodies weren't parseable JSON at all) — a
+// CONTIGUOUS block in fetch order that shifted slightly between runs, and the
+// same thread ids fetched fine moments later via a different client. That's
+// the signature of a transient time-window throttle whose 403 body we don't
+// recognize, not a real permission failure, so it gets the same retry
+// treatment as a known rate limit. Only a reason on KNOWN_403_REASONS skips
+// the retry and fails immediately.
+const SAFE_REASON_IDENTIFIER_RE = /^[A-Za-z_]{1,40}$/;
 
 interface GoogleApiErrorBody {
   error?: {
@@ -253,6 +265,22 @@ function known403ReasonSuffix(bodyText: string): string | null {
   return reasons.find((r) => KNOWN_403_REASONS.has(r)) ?? null;
 }
 
+/** Diagnostic suffix for a 403 whose reason is NOT a known permission
+ *  failure (and not a rate limit) once retries on it are exhausted. Never
+ *  the raw body or message text — only `nonjson` (unparseable body) or a
+ *  reason/status string that is itself a safe identifier (letters/underscore
+ *  only, Google's own reason-code shape); anything else, including a reason
+ *  with punctuation or no reason at all, becomes `unrecognized`. */
+function unrecognized403Suffix(bodyText: string): string {
+  try {
+    JSON.parse(bodyText);
+  } catch {
+    return "nonjson";
+  }
+  const [first] = parseGoogleApiErrorReasons(bodyText);
+  return first && SAFE_REASON_IDENTIFIER_RE.test(first) ? first : "unrecognized";
+}
+
 function retryAfterMs(headerValue: string | null): number | null {
   if (!headerValue) return null;
   const seconds = Number(headerValue);
@@ -278,6 +306,7 @@ export async function getThreadByIdResult(threadId: string): Promise<GmailThread
   let lastStatus = 0;
   let lastRateLimited = false;
   let lastKnownReasonSuffix: string | null = null;
+  let lastUnrecognized403Suffix: string | null = null;
   for (let attempt = 0; attempt <= RATE_LIMIT_RETRY_DELAYS_MS.length; attempt++) {
     const r = await fetch(`${GMAIL_API}/threads/${encodeURIComponent(id)}?format=full`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -293,15 +322,37 @@ export async function getThreadByIdResult(threadId: string): Promise<GmailThread
     lastStatus = r.status;
     const bodyText = await r.text().catch(() => "");
     lastRateLimited = isRateLimitedResponse(r.status, bodyText);
-    lastKnownReasonSuffix = r.status === 403 ? known403ReasonSuffix(bodyText) : null;
-    console.error(`[gmail] threads.get ${id} failed with status ${r.status}${lastRateLimited ? " (rate limited)" : ""}`);
+    lastKnownReasonSuffix = null;
+    lastUnrecognized403Suffix = null;
+    // An unrecognized 403 (reason on neither list, or body isn't parseable
+    // JSON) is retried the same as a rate limit — see the note above
+    // KNOWN_403_REASONS. Only a reason actually on KNOWN_403_REASONS is a
+    // real permission failure and fails immediately.
+    let unrecognized403 = false;
+    if (r.status === 403 && !lastRateLimited) {
+      lastKnownReasonSuffix = known403ReasonSuffix(bodyText);
+      unrecognized403 = lastKnownReasonSuffix === null;
+    }
+    const retryable = lastRateLimited || unrecognized403;
+    console.error(
+      `[gmail] threads.get ${id} failed with status ${r.status}${lastRateLimited ? " (rate limited)" : unrecognized403 ? " (unrecognized 403)" : ""}`,
+    );
 
-    if (!lastRateLimited || attempt === RATE_LIMIT_RETRY_DELAYS_MS.length) break;
+    if (!retryable || attempt === RATE_LIMIT_RETRY_DELAYS_MS.length) {
+      if (unrecognized403) lastUnrecognized403Suffix = unrecognized403Suffix(bodyText);
+      break;
+    }
     const wait = retryAfterMs(r.headers.get("Retry-After")) ?? RATE_LIMIT_RETRY_DELAYS_MS[attempt];
     await sleep(wait);
   }
 
-  const suffix = lastRateLimited ? "_rate_limited" : lastKnownReasonSuffix ? `_${lastKnownReasonSuffix}` : "";
+  const suffix = lastRateLimited
+    ? "_rate_limited"
+    : lastKnownReasonSuffix
+      ? `_${lastKnownReasonSuffix}`
+      : lastUnrecognized403Suffix
+        ? `_${lastUnrecognized403Suffix}`
+        : "";
   return { messages: [], error: `gmail_thread_fetch_${lastStatus}${suffix}`, status: lastStatus };
 }
 

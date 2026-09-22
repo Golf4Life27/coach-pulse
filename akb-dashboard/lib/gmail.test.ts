@@ -58,18 +58,26 @@ describe("getThreadByIdResult", () => {
     clearGmailEnv();
   });
 
-  it("reports the HTTP status on a non-ok fetch instead of swallowing it into []", async () => {
+  it("reports gmail_thread_fetch_403_nonjson after retries when a non-ok 403 body isn't JSON (2026-09-22: unrecognized 403s are a transient throttle, retried like a rate limit)", async () => {
+    vi.useFakeTimers();
+    let apiCalls = 0;
     const fetchMock = vi.fn(async (url: string) => {
       if (String(url).includes("oauth2.googleapis.com")) return tokenResponse();
+      apiCalls++;
       return new Response("forbidden", { status: 403 });
     });
     vi.stubGlobal("fetch", fetchMock);
     const { getThreadByIdResult } = await freshGmailModule();
 
-    const r = await getThreadByIdResult("thread123");
+    const resultPromise = getThreadByIdResult("thread123");
+    await vi.runAllTimersAsync();
+    const r = await resultPromise;
+
     expect(r.messages).toEqual([]);
     expect(r.status).toBe(403);
-    expect(r.error).toBe("gmail_thread_fetch_403");
+    expect(r.error).toBe("gmail_thread_fetch_403_nonjson");
+    expect(apiCalls).toBe(4);
+    vi.useRealTimers();
   });
 
   it("never leaks the access token, refresh token, or client secret into the error string", async () => {
@@ -231,9 +239,11 @@ describe("getThreadByIdResult rate-limit retry (2026-09-22 pacing fix)", () => {
     expect(apiCalls).toBe(1);
   });
 
-  it("appends no suffix for a 403 reason not on the known whitelist, and never leaks the raw body", async () => {
+  it("retries a 403 with an unrecognized-but-well-formed reason, then appends it as an identifier suffix (not swallowed with no code)", async () => {
+    let apiCalls = 0;
     const fetchMock = vi.fn(async (url: string) => {
       if (String(url).includes("oauth2.googleapis.com")) return tokenResponse();
+      apiCalls++;
       return new Response(
         JSON.stringify({ error: { errors: [{ reason: "someWeirdUnlistedReason" }], message: "secret internal detail" } }),
         { status: 403 },
@@ -246,8 +256,58 @@ describe("getThreadByIdResult rate-limit retry (2026-09-22 pacing fix)", () => {
     await vi.runAllTimersAsync();
     const r = await resultPromise;
 
-    expect(r.error).toBe("gmail_thread_fetch_403");
-    expect(r.error).not.toContain("someWeirdUnlistedReason");
+    expect(r.error).toBe("gmail_thread_fetch_403_someWeirdUnlistedReason");
+    expect(apiCalls).toBe(4);
+    expect(r.error).not.toContain("secret internal detail");
+  });
+
+  it("retries an unrecognized 403 and succeeds on the next attempt", async () => {
+    let apiCalls = 0;
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes("oauth2.googleapis.com")) return tokenResponse();
+      apiCalls++;
+      if (apiCalls === 1) {
+        return new Response(JSON.stringify({ error: { errors: [{ reason: "quotaExceeded" }] } }), { status: 403 });
+      }
+      return new Response(
+        JSON.stringify({
+          messages: [fullMessage({ id: "m1", threadId: "t1", from: "buyer@example.com", subject: "box", body: "hi", internalDate: "1758470400000" })],
+        }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { getThreadByIdResult } = await freshGmailModule();
+
+    const resultPromise = getThreadByIdResult("thread123");
+    await vi.runAllTimersAsync();
+    const r = await resultPromise;
+
+    expect(r.error).toBeNull();
+    expect(r.messages.map((m) => m.id)).toEqual(["m1"]);
+    expect(apiCalls).toBe(2);
+  });
+
+  it("falls back to _unrecognized when the reason string has spaces/punctuation (never echoed raw) or is absent", async () => {
+    let apiCalls = 0;
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes("oauth2.googleapis.com")) return tokenResponse();
+      apiCalls++;
+      return new Response(
+        JSON.stringify({ error: { errors: [{ reason: "some weird reason!" }], message: "secret internal detail" } }),
+        { status: 403 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { getThreadByIdResult } = await freshGmailModule();
+
+    const resultPromise = getThreadByIdResult("thread123");
+    await vi.runAllTimersAsync();
+    const r = await resultPromise;
+
+    expect(r.error).toBe("gmail_thread_fetch_403_unrecognized");
+    expect(apiCalls).toBe(4);
+    expect(r.error).not.toContain("some weird reason");
     expect(r.error).not.toContain("secret internal detail");
   });
 
