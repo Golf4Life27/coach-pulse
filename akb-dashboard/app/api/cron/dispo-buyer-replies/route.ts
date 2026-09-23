@@ -34,9 +34,19 @@
 // "[DISPO BUYER INTEREST ...]" note line and a tier_2_urgent ACT NOW alert
 // to the operator (lib/reply-alert.sendBuyerReplyAlert).
 //
-// NEVER sends anything to a buyer. Read/route/alert only — buyer email
-// auto-replies are a later, gated step (operator rule: buyer SMS is Tier C;
-// buyer email is further out still).
+// NEVER sends anything to a buyer on THIS loop (the dispo-blast reply loop,
+// above). Read/route/alert only — buyer email auto-replies for a BLAST
+// reply are a later, gated step (operator rule: buyer SMS is Tier C; buyer
+// email is further out still).
+//
+// EXCEPTION, narrower loop below (2026-09-23, Spine recgpvLksvIVzgB2h,
+// operator verbatim: "yes on the revised auto reply"): the buy-box DRIP
+// reply loop further down this file DOES send — exactly one templated
+// thank-you, only when the reply captured a box, only once per buyer ever.
+// See lib/buyers/box-ack.ts. Every other genuine drip reply still never
+// sends anything; it gets an operator card instead. This carve-out is
+// scoped to the drip loop only — it changes nothing about the blast loop
+// above.
 //
 // GATED DARK: behind INBOUND_CAPTURE_LIVE (default OFF), same flag
 // gmail-sync uses — this is an inbound-capture write path, just buyer-
@@ -75,6 +85,10 @@ import {
   readAuthHeaders,
 } from "@/lib/maverick/oauth/auth-waterfall";
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
+import { isDoNotContact, hasUsableEmail } from "@/lib/buyers/box-drip";
+import { shouldSendBoxAck, composeBoxAckEmail, buildBoxAckCard } from "@/lib/buyers/box-ack";
+import { upsertOperatorActions } from "@/lib/maverick/operator-actions";
+import { sendEmail } from "@/lib/gmail";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -93,6 +107,17 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Buy-box ack (2026-09-23, Spine recgpvLksvIVzgB2h) — per-run send cap.
+const ACK_SEND_CAP = 30;
+
+/** Short, stable code for a failed ack send — NEVER the raw Gmail error
+ *  string, which can carry response body text. Only the HTTP status (or
+ *  "unknown") survives into the audit row / outcome. */
+function ackSendErrorCode(error: string | undefined): string {
+  const m = /Gmail send (\d+)/.exec(error ?? "");
+  return m ? `gmail_${m[1]}` : "send_failed";
+}
+
 interface BuyerOutcome {
   buyerId: string;
   buyerEmail: string | null;
@@ -109,6 +134,11 @@ interface BuyerOutcome {
    *  other. Sender addresses only, never bodies. */
   threadMessageCount?: number;
   threadSenders?: string[];
+  /** Drip loop only (2026-09-23, Spine recgpvLksvIVzgB2h) — what the buy-box
+   *  ack gate decided for this buyer's genuine reply(ies) this run, or
+   *  undefined when no genuine reply fired the gate at all (bounce-only /
+   *  opt-out-only / no new replies / blast-loop rows). */
+  ack?: "sent" | "would_send" | "card" | `skipped:${string}` | `failed:${string}`;
 }
 
 export async function GET(req: Request) {
@@ -293,9 +323,16 @@ export async function GET(req: Request) {
   // Separate population, separate thread key (Box_Drip_Thread_Id), no
   // listing to write into — the drip is buyer-only. Same idempotency
   // discipline (extractCitedGmailIds), dedupe source is the BUYER's own
-  // Notes field instead of a listing's Verification_Notes. Never sends,
-  // never alerts. Kept fully separate from the blast loop above so that
-  // path's behavior is untouched.
+  // Notes field instead of a listing's Verification_Notes. Never alerts.
+  // Kept fully separate from the blast loop above so that path's behavior
+  // is untouched.
+  //
+  // BUY-BOX ACK (2026-09-23, Spine recgpvLksvIVzgB2h) — the one exception to
+  // "never sends": in the SAME pass that ingests a genuine reply here, a
+  // captured box gets exactly one templated thank-you (lib/buyers/box-ack.ts,
+  // shouldSendBoxAck/composeBoxAckEmail); anything else gets an operator
+  // card via lib/maverick/operator-actions.upsertOperatorActions, no send.
+  // See the file-header comment above for the full scope.
   let dripBuyers: BuyerRecord[];
   try {
     dripBuyers = await listBuyersWithBoxDripThread();
@@ -308,6 +345,10 @@ export async function GET(req: Request) {
 
   let totalDripReplies = 0;
   let totalOptOuts = 0;
+  let ackSendCount = 0;
+  let totalAcksSent = 0;
+  let totalAckCards = 0;
+  const killSwitchOn = process.env.BUYER_AUTO_REPLY_DISABLE === "1";
 
   for (const buyer of dripBuyers) {
     const threadId = buyer.boxDripThreadId;
@@ -415,11 +456,135 @@ export async function GET(req: Request) {
       totalDripReplies += newMessages.length;
       if (optedOut) totalOptOuts++;
 
+      // Conservative structured capture (task 7) — only fills a field that
+      // is currently empty; never overwrites what's on file. Computed here
+      // (not inside the `!dryRun` write gate below) because the buy-box ack
+      // decision needs to know whether a box was captured even on a dry run.
+      const dedupedZips = Array.from(new Set(capturedZips));
+      const wouldWriteZips = !buyer.targetZips && dedupedZips.length > 0;
+      const wouldWriteMaxPrice = (buyer.maxPrice == null || buyer.maxPrice === 0) && capturedMaxPrice != null;
+      const boxCaptured = wouldWriteZips || wouldWriteMaxPrice;
+
+      // ── Buy-box ack (2026-09-23, Spine recgpvLksvIVzgB2h, operator
+      // verbatim: "yes on the revised auto reply") — decided BEFORE the
+      // Buyer_Notes write below so a successful send's `[box_ack_sent ...]`
+      // marker lands in the SAME updateBuyerV2 call as the reply ingestion
+      // (spec item 5: "same updateBuyerV2 path"). Only fires when this run
+      // actually saw a genuine (non-bounce, non-opt-out) reply, and never
+      // for a buyer this run just opted out.
+      const hasGenuineReply = out.classifications.includes("reply");
+      let ackMarkerLine: string | null = null;
+
+      if (hasGenuineReply && !optedOut) {
+        const alreadyAcked = (buyer.notes ?? "").includes("[box_ack_sent ");
+        const decision = shouldSendBoxAck({
+          boxCaptured,
+          alreadyAcked,
+          doNotContact: isDoNotContact(buyer),
+          hasUsableEmail: hasUsableEmail(buyer.email),
+          killSwitchOn,
+          capReached: ackSendCount >= ACK_SEND_CAP,
+        });
+
+        if (decision.action === "skip") {
+          out.ack = `skipped:${decision.reason}`;
+        } else if (decision.action === "card") {
+          out.ack = "card";
+          if (!dryRun) {
+            // Excerpt from the LATEST genuine reply this run — mirrors the
+            // dispo-blast loop's "alert on the latest interest message"
+            // rule above (one card, not one per historical message).
+            const lastReply = [...replies]
+              .filter((m) => !isOptOutReply(m.body))
+              .sort((a, b) => Date.parse(a.date) - Date.parse(b.date))
+              .pop();
+            const card = buildBoxAckCard({
+              buyerId: buyer.id,
+              buyerName: buyer.name,
+              replyBody: lastReply?.body ?? "",
+              threadId,
+              nowIso,
+            });
+            if (kvConfigured()) {
+              try {
+                await upsertOperatorActions(kvProd, [card]);
+                totalAckCards++;
+                await audit({
+                  agent: "scout",
+                  event: "buyer_box_ack_card_posted",
+                  status: "confirmed_success",
+                  recordId: buyer.id,
+                  inputSummary: { buyerId: buyer.id, threadId },
+                  decision: "card",
+                });
+              } catch (err) {
+                console.error(`[dispo-buyer-replies] box-ack card write failed for ${buyer.id}:`, err instanceof Error ? err.message : String(err));
+              }
+            } else {
+              console.error(`[dispo-buyer-replies] box-ack card skipped for ${buyer.id}: kv_not_configured`);
+            }
+          }
+        } else {
+          // decision.action === "send"
+          if (dryRun) {
+            out.ack = "would_send";
+          } else {
+            ackSendCount++;
+            const sortedThread = [...threadResult.messages].sort((a, b) => Date.parse(a.date) - Date.parse(b.date));
+            const originalSubject = sortedThread[0]?.subject ?? null;
+            const lastReply = [...replies]
+              .filter((m) => !isOptOutReply(m.body))
+              .sort((a, b) => Date.parse(a.date) - Date.parse(b.date))
+              .pop();
+            const { subject, body } = composeBoxAckEmail({ buyerName: buyer.name, originalSubject });
+            try {
+              // Reply to whoever actually wrote on the thread — the record's
+              // email can differ from the replying address (e.g. an intake
+              // form that updated the email after the drip went out).
+              const replyTo = extractEmailAddress(lastReply?.from ?? "") || buyerEmail;
+              const res = await sendEmail({
+                to: replyTo,
+                subject,
+                body,
+                threadId,
+                inReplyTo: lastReply?.messageIdHeader || undefined,
+                references: lastReply?.messageIdHeader || undefined,
+              });
+              if (!res.success) throw new Error(res.error ?? "send_failed");
+              out.ack = "sent";
+              totalAcksSent++;
+              ackMarkerLine = `[box_ack_sent ${nowIso} gmail:${res.messageId ?? "unknown"}]`;
+              await audit({
+                agent: "crier",
+                event: "buyer_box_ack_sent",
+                status: "confirmed_success",
+                recordId: buyer.id,
+                externalId: res.messageId,
+                inputSummary: { buyerId: buyer.id, threadId },
+                decision: "sent",
+              });
+            } catch (err) {
+              const code = ackSendErrorCode(err instanceof Error ? err.message : undefined);
+              out.ack = `failed:${code}`;
+              await audit({
+                agent: "crier",
+                event: "buyer_box_ack_failed",
+                status: "confirmed_failure",
+                recordId: buyer.id,
+                inputSummary: { buyerId: buyer.id, threadId },
+                error: code,
+              });
+            }
+          }
+        }
+      }
+
       if (!dryRun) {
         const existingNotes = buyer.notes ?? "";
         const sep = existingNotes.trim().length > 0 ? "\n" : "";
+        const allNoteLines = ackMarkerLine ? [...noteLines, ackMarkerLine] : noteLines;
         const fields: Record<string, unknown> = {
-          [BUYER_V2_FIELDS.Notes]: `${existingNotes}${sep}${noteLines.join("\n")}`,
+          [BUYER_V2_FIELDS.Notes]: `${existingNotes}${sep}${allNoteLines.join("\n")}`,
         };
         if (optedOut) {
           fields[BUYER_V2_FIELDS.Status] = "Opted_Out";
@@ -435,13 +600,10 @@ export async function GET(req: Request) {
         // e.g. Clarance's step-2 follow-up scheduled after their 9/21 reply).
         fields[BUYER_V2_FIELDS.Box_Drip_Step] = 3;
 
-        // Conservative structured capture (task 7) — only fills a field
-        // that is currently empty; never overwrites what's on file.
-        const dedupedZips = Array.from(new Set(capturedZips));
-        if (!buyer.targetZips && dedupedZips.length > 0) {
+        if (wouldWriteZips) {
           fields[BUYER_V2_FIELDS.Target_ZIPs] = dedupedZips.join(", ");
         }
-        if ((buyer.maxPrice == null || buyer.maxPrice === 0) && capturedMaxPrice != null) {
+        if (wouldWriteMaxPrice) {
           fields[BUYER_V2_FIELDS.Max_Price] = capturedMaxPrice;
         }
 
@@ -463,6 +625,8 @@ export async function GET(req: Request) {
     drip_buyers_polled: dripBuyers.length,
     drip_replies_ingested: totalDripReplies,
     drip_opt_outs: totalOptOuts,
+    box_acks_sent: totalAcksSent,
+    box_ack_cards_posted: totalAckCards,
     errors: outcomes.filter((o) => o.outcome === "error").length,
     duration_ms: Date.now() - t0,
   };
