@@ -31,6 +31,13 @@ export interface GmailMessage {
   subject: string;
   body: string;
   date: string;
+  /** RFC "Message-ID" header, verbatim (e.g. "<abc123@mail.gmail.com>") — the
+   *  value a threaded reply's In-Reply-To/References must cite. Empty string
+   *  when the header is absent (never null, so callers don't need a second
+   *  null-check beyond the existing "falsy" check every other header here
+   *  already gets). Added 2026-09-23 (Spine recgpvLksvIVzgB2h) for the
+   *  buy-box ack email — nothing read this before. */
+  messageIdHeader: string;
 }
 
 function decodeBase64Url(s: string): string {
@@ -100,10 +107,11 @@ function shapeMessage(msg: GmailFullMessage): GmailMessage {
   const to = findHeader(headers, "To");
   const cc = findHeader(headers, "Cc");
   const dateHeader = findHeader(headers, "Date");
+  const messageIdHeader = findHeader(headers, "Message-ID");
   const body = extractBodyFromPayload(msg.payload);
   const epoch = msg.internalDate ? parseInt(msg.internalDate, 10) : NaN;
   const date = !isNaN(epoch) ? new Date(epoch).toISOString() : (dateHeader || "");
-  return { id: msg.id, threadId: msg.threadId, from, to, cc, subject, body, date };
+  return { id: msg.id, threadId: msg.threadId, from, to, cc, subject, body, date, messageIdHeader };
 }
 
 const MAX_THREADS_TO_PULL = 50;
@@ -383,6 +391,18 @@ interface SendOpts {
    * and the write is skipped — matches the documented attribution gap.
    */
   listingRecordId?: string;
+  /**
+   * Threaded send (2026-09-23, Spine recgpvLksvIVzgB2h — the buy-box ack
+   * email replies on the buyer's own drip thread instead of starting a new
+   * one). All three travel together: `threadId` tells Gmail which thread to
+   * file the sent message under, `inReplyTo`/`references` are the RFC
+   * headers (the ancestor message's Message-ID) that make mail clients
+   * render it as a reply. Omitted entirely for every existing caller — a
+   * plain send is unaffected.
+   */
+  threadId?: string;
+  inReplyTo?: string;
+  references?: string;
 }
 
 export type GmailAuditStatus = "confirmed_success" | "confirmed_failure" | "uncertain";
@@ -446,14 +466,19 @@ function base64Url(input: string): string {
 }
 
 function buildRfc822(opts: SendOpts, fromAddress: string): string {
-  const headers = [
+  const headerLines = [
     `From: ${fromAddress}`,
     `To: ${opts.to}`,
     `Subject: ${opts.subject}`,
     "Content-Type: text/plain; charset=UTF-8",
     "MIME-Version: 1.0",
-  ].join("\r\n");
-  return `${headers}\r\n\r\n${opts.body}`;
+  ];
+  // Threaded reply headers (see SendOpts.inReplyTo/references) — only added
+  // when the caller supplies them, so every non-threaded send is byte-for-
+  // byte unchanged.
+  if (opts.inReplyTo) headerLines.push(`In-Reply-To: ${opts.inReplyTo}`);
+  if (opts.references) headerLines.push(`References: ${opts.references}`);
+  return `${headerLines.join("\r\n")}\r\n\r\n${opts.body}`;
 }
 
 function mailtoFallback(opts: SendOpts): string {
@@ -606,13 +631,20 @@ export async function sendEmail(opts: SendOpts): Promise<GmailSendResult> {
   }
 
   // ── Live send ──────────────────────────────────────────────────────
+  // threadId in the request body (alongside a raw message whose subject and
+  // In-Reply-To/References already match the thread) is what makes Gmail
+  // file the sent message onto the existing thread instead of starting a
+  // new one — undefined here for every non-threaded caller, so the request
+  // shape is unchanged for them.
+  const sendBody: { raw: string; threadId?: string } = { raw };
+  if (opts.threadId) sendBody.threadId = opts.threadId;
   const res = await fetch(`${GMAIL_API}/messages/send`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ raw }),
+    body: JSON.stringify(sendBody),
   });
   if (!res.ok) {
     const errText = await res.text().catch(() => "");

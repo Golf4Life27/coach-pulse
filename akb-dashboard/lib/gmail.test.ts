@@ -397,3 +397,135 @@ describe("getThreadById (thin wrapper)", () => {
     expect(msgs.map((m) => m.id)).toEqual(["m1"]);
   });
 });
+
+describe("shapeMessage — Message-ID header", () => {
+  beforeEach(() => setGmailEnv());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    clearGmailEnv();
+  });
+
+  it("exposes the Message-ID header on a fetched message (2026-09-23, buy-box ack threading)", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes("oauth2.googleapis.com")) return tokenResponse();
+      return new Response(
+        JSON.stringify({
+          messages: [
+            {
+              id: "m1",
+              threadId: "t1",
+              internalDate: "1758470400000",
+              payload: {
+                headers: [
+                  { name: "Subject", value: "box" },
+                  { name: "From", value: "buyer@example.com" },
+                  { name: "Message-ID", value: "<abc123@mail.gmail.com>" },
+                ],
+                mimeType: "text/plain",
+                body: { data: base64Url("hi") },
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { getThreadById } = await freshGmailModule();
+
+    const msgs = await getThreadById("t1");
+    expect(msgs[0].messageIdHeader).toBe("<abc123@mail.gmail.com>");
+  });
+
+  it("comes back as an empty string, never undefined, when the header is absent", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (String(url).includes("oauth2.googleapis.com")) return tokenResponse();
+      return new Response(
+        JSON.stringify({ messages: [fullMessage({ id: "m1", threadId: "t1", from: "buyer@example.com", subject: "box", body: "hi", internalDate: "1758470400000" })] }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { getThreadById } = await freshGmailModule();
+
+    const msgs = await getThreadById("t1");
+    expect(msgs[0].messageIdHeader).toBe("");
+  });
+});
+
+describe("sendEmail — threaded reply (2026-09-23, buy-box ack)", () => {
+  function setSendEnv() {
+    setGmailEnv();
+    process.env.GMAIL_FROM_ADDRESS = "alex@akb-example.com";
+  }
+
+  beforeEach(() => setSendEnv());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    clearGmailEnv();
+    delete process.env.GMAIL_FROM_ADDRESS;
+  });
+
+  function decodeRaw(raw: string): string {
+    return Buffer.from(raw.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf-8");
+  }
+
+  it("puts threadId in the send body and In-Reply-To/References in the raw headers when supplied", async () => {
+    let sendBody: Record<string, unknown> | null = null;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("oauth2.googleapis.com")) return tokenResponse();
+      if (String(url).includes("/messages/send")) {
+        sendBody = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify({ id: "sent1", threadId: "thread123" }), { status: 200 });
+      }
+      // Post-send verification GET.
+      return new Response(
+        JSON.stringify({ labelIds: ["SENT"], payload: { headers: [{ name: "To", value: "buyer@example.com" }] } }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { sendEmail } = await freshGmailModule();
+
+    const result = await sendEmail({
+      to: "buyer@example.com",
+      subject: "Re: your buy box",
+      body: "Thanks.",
+      threadId: "thread123",
+      inReplyTo: "<original@mail.gmail.com>",
+      references: "<original@mail.gmail.com>",
+    });
+
+    expect(result.success).toBe(true);
+    expect(sendBody).not.toBeNull();
+    expect((sendBody as unknown as { threadId?: string }).threadId).toBe("thread123");
+    const raw = decodeRaw((sendBody as unknown as { raw: string }).raw);
+    expect(raw).toContain("In-Reply-To: <original@mail.gmail.com>");
+    expect(raw).toContain("References: <original@mail.gmail.com>");
+  });
+
+  it("omits threadId/In-Reply-To/References entirely for a plain, non-threaded send", async () => {
+    let sendBody: Record<string, unknown> | null = null;
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url).includes("oauth2.googleapis.com")) return tokenResponse();
+      if (String(url).includes("/messages/send")) {
+        sendBody = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify({ id: "sent1", threadId: "thread999" }), { status: 200 });
+      }
+      return new Response(
+        JSON.stringify({ labelIds: ["SENT"], payload: { headers: [{ name: "To", value: "buyer@example.com" }] } }),
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { sendEmail } = await freshGmailModule();
+
+    await sendEmail({ to: "buyer@example.com", subject: "Quick question about your buy box", body: "Hi." });
+
+    expect(sendBody).not.toBeNull();
+    expect((sendBody as unknown as { threadId?: string }).threadId).toBeUndefined();
+    const raw = decodeRaw((sendBody as unknown as { raw: string }).raw);
+    expect(raw).not.toContain("In-Reply-To:");
+    expect(raw).not.toContain("References:");
+  });
+});

@@ -32,7 +32,9 @@ const STATUS_DO_NOT_CONTACT: ReadonlySet<string> = new Set(["opted_out", "dead"]
  *  a buyer can be excluded via either column. Compared case-insensitively. */
 const BUYER_STATUS_DO_NOT_CONTACT: ReadonlySet<string> = new Set(["inactive", "do not contact"]);
 
-function hasUsableEmail(email: string | null): boolean {
+/** Exported for lib/buyers/box-ack.ts (2026-09-23, Spine recgpvLksvIVzgB2h) —
+ *  the box-ack gate reuses this instead of duplicating the "@" check. */
+export function hasUsableEmail(email: string | null): boolean {
   return !!email && email.includes("@");
 }
 
@@ -59,7 +61,10 @@ function hasAlreadyReplied(buyer: BuyerRecord): boolean {
   return notes.includes("src=box_drip_reply");
 }
 
-function isDoNotContact(buyer: BuyerRecord): boolean {
+/** Exported for lib/buyers/box-ack.ts (2026-09-23, Spine recgpvLksvIVzgB2h) —
+ *  the box-ack gate reuses this instead of duplicating the DNC/opt-out
+ *  status check. */
+export function isDoNotContact(buyer: BuyerRecord): boolean {
   const status = (buyer.status ?? "").trim().toLowerCase();
   const buyerStatus = (buyer.buyerStatus ?? "").trim().toLowerCase();
   return STATUS_DO_NOT_CONTACT.has(status) || BUYER_STATUS_DO_NOT_CONTACT.has(buyerStatus);
@@ -124,9 +129,13 @@ export function dripIntakeUrl(baseUrl: string, buyerId: string): string {
   return `${baseUrl.replace(/\/+$/, "")}/buyer-intake?b=${encodeURIComponent(buyerId)}`;
 }
 
-const STOP_LINE = "AKB Solutions LLC. Reply STOP or remove and I will take you off the list.";
+/** Exported (2026-09-23, Spine recgpvLksvIVzgB2h) — the box-ack email reuses
+ *  this exact line instead of forking a second copy of it. */
+export const STOP_LINE = "AKB Solutions LLC. Reply STOP or remove and I will take you off the list.";
 
-function firstName(name: string | null): string {
+/** Exported (2026-09-23, Spine recgpvLksvIVzgB2h) — box-ack.ts reuses this
+ *  instead of forking a second first-name parse. */
+export function firstName(name: string | null): string {
   const first = (name ?? "").trim().split(/\s+/)[0];
   return first || "there";
 }
