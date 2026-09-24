@@ -5,7 +5,10 @@ import {
   noteInvocationCall,
   __resetInvocationCounter,
   dayKey,
-  monthKey,
+  periodKey,
+  billingPeriodStart,
+  nextBillingPeriodStart,
+  RENTCAST_BILLING_ANCHOR_DAY,
   type SpendWindows,
   isRentcastFrozen,
   RENTCAST_FREEZE_UNTIL,
@@ -86,14 +89,36 @@ describe("the in-memory invocation counter", () => {
 });
 
 describe("KV bucket keys", () => {
-  it("buckets by UTC day and UTC month", () => {
+  it("buckets by UTC day and by billing period (anchored day 11, not calendar month)", () => {
     const d = new Date("2026-06-09T23:59:00.000Z");
     expect(dayKey(d)).toBe("rc:spend:d:2026-06-09");
-    expect(monthKey(d)).toBe("rc:spend:m:2026-06");
+    // 6/9 is before the 6/11 anchor, so it's still in May's period.
+    expect(periodKey(d)).toBe("rc:spend:p:2026-05-11");
   });
 
   it("rolls the day bucket at UTC midnight, not local", () => {
     expect(dayKey(new Date("2026-06-10T00:00:01.000Z"))).toBe("rc:spend:d:2026-06-10");
+  });
+});
+
+describe("billingPeriodStart — anchored on RENTCAST_BILLING_ANCHOR_DAY (11), not the calendar month", () => {
+  it("matches the operator's fixed cases", () => {
+    expect(RENTCAST_BILLING_ANCHOR_DAY).toBe(11);
+    expect(billingPeriodStart(new Date("2026-09-10T12:00:00.000Z"))).toBe("2026-08-11");
+    expect(billingPeriodStart(new Date("2026-09-11T00:00:00.000Z"))).toBe("2026-09-11");
+    expect(billingPeriodStart(new Date("2026-09-30T23:59:59.000Z"))).toBe("2026-09-11");
+    expect(billingPeriodStart(new Date("2026-01-05T00:00:00.000Z"))).toBe("2025-12-11");
+    expect(billingPeriodStart(new Date("2026-12-15T00:00:00.000Z"))).toBe("2026-12-11");
+  });
+
+  it("periodKey is the period start under the rc:spend:p: prefix", () => {
+    expect(periodKey(new Date("2026-09-22T00:00:00.000Z"))).toBe("rc:spend:p:2026-09-11");
+  });
+
+  it("nextBillingPeriodStart is always the NEXT 11th, never the 1st of next month", () => {
+    expect(nextBillingPeriodStart(new Date("2026-09-22T00:00:00.000Z"))).toBe("2026-10-11");
+    expect(nextBillingPeriodStart(new Date("2026-09-10T00:00:00.000Z"))).toBe("2026-09-11");
+    expect(nextBillingPeriodStart(new Date("2026-12-31T00:00:00.000Z"))).toBe("2027-01-11");
   });
 });
 

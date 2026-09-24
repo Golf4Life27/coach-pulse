@@ -106,16 +106,24 @@ export const RENTCAST_DAILY_THROTTLE = (() => {
 /** Effective per-day cap = min(hard ceiling, throttle). */
 export const RENTCAST_DAILY_CAP = Math.min(RENTCAST_HARD_CEILING, RENTCAST_DAILY_THROTTLE);
 
-/** Per UTC month. Default 1000 = the Foundation plan's included requests, so
- *  the default posture is "never knowingly enter overage". Raise this to the
- *  real plan allowance when the plan changes.
+/** Per BILLING PERIOD (see RENTCAST_BILLING_ANCHOR_DAY below). Default 1000
+ *  = the Foundation plan's included requests, so the default posture is
+ *  "never knowingly enter overage". Raise this to the real plan allowance
+ *  when the plan changes.
  *
- *  KNOWN IMPRECISION: this buckets by UTC CALENDAR month, while RentCast
- *  bills on its own subscription cycle (which also RESETS when the plan is
- *  changed). So the two windows drift by up to a few weeks. That is
- *  acceptable for a safety brake — it is a ceiling, not an invoice — but it
- *  means this number must never be read as "requests left this billing
- *  period". The vendor dashboard is the authority on that. */
+ *  FIXED 2026-09-24 (three false "RentCast is spent" reports to the
+ *  operator): this used to bucket by UTC CALENDAR month while RentCast
+ *  bills on its own cycle, which the vendor dashboard showed running
+ *  ~11th → ~11th ("day 11 of 30" on 2026-09-22, 315/5,000 used). A
+ *  calendar-month bucket started fresh on the 1st, so by late month it held
+ *  roughly a full extra plan's worth of stale calls on top of the real
+ *  in-cycle count — the KV counter read ~2,333 for "2026-09" against a
+ *  vendor total of 315, and every reader of that number (Pulse's vendor
+ *  health tile, the maverick briefing) reported RentCast as nearly
+ *  exhausted with an "Oct 1" reset that was never the real reset date
+ *  either. The key is now anchored on the vendor's actual cycle start
+ *  (day 11 of each month; see billingPeriodStart) instead of the calendar
+ *  month. */
 export const RENTCAST_MONTHLY_CAP = (() => {
   const raw = Number(process.env.RENTCAST_MONTHLY_CAP);
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 1000;
@@ -245,23 +253,64 @@ export function __resetInvocationCounter(): void {
   invocationCount = 0;
 }
 
+// ── Billing period (fixed 2026-09-24 — see RENTCAST_MONTHLY_CAP above) ──
+// RentCast's own dashboard runs the plan ~11th → ~11th, not calendar-month.
+// The period key is anchored on this day instead of the 1st.
+
+/** The vendor's cycle-start day of month, per the 2026-09-22 dashboard read
+ *  ("day 11 of 30", 315/5,000 used). Moves only if the vendor's own cycle
+ *  moves (it also resets when the plan itself is changed, per the existing
+ *  KNOWN IMPRECISION note above — this anchor is still a best approximation,
+ *  not the invoice). */
+export const RENTCAST_BILLING_ANCHOR_DAY = 11;
+
+/** Pure: the most recent billing-anchor date (RENTCAST_BILLING_ANCHOR_DAY,
+ *  UTC) on or before `now`, as "YYYY-MM-DD". This is the start of the
+ *  billing period `now` falls in. */
+export function billingPeriodStart(now: Date): string {
+  const y = now.getUTCFullYear();
+  const m = now.getUTCMonth();
+  const d = now.getUTCDate();
+  const periodStart =
+    d >= RENTCAST_BILLING_ANCHOR_DAY
+      ? new Date(Date.UTC(y, m, RENTCAST_BILLING_ANCHOR_DAY))
+      : new Date(Date.UTC(y, m - 1, RENTCAST_BILLING_ANCHOR_DAY));
+  return periodStart.toISOString().slice(0, 10);
+}
+
+/** Pure: the NEXT billing-anchor date after the period `now` falls in —
+ *  i.e. when the current period rolls. Any operator-facing "reset date"
+ *  must come from here, never from "the 1st of next month". */
+export function nextBillingPeriodStart(now: Date): string {
+  const [y, m] = billingPeriodStart(now).split("-").map(Number); // m is 1-indexed
+  return new Date(Date.UTC(y, m, RENTCAST_BILLING_ANCHOR_DAY)).toISOString().slice(0, 10);
+}
+
 // ── KV meters ──────────────────────────────────────────────────────────
 
 const DAY_PREFIX = "rc:spend:d:";
-const MONTH_PREFIX = "rc:spend:m:";
+const PERIOD_PREFIX = "rc:spend:p:";
 const DAY_TTL_S = 172_800;   // 48h — outlives its own bucket
-const MONTH_TTL_S = 3_456_000; // 40d — same
+const PERIOD_TTL_S = 3_456_000; // 40d — same
 
 export function dayKey(now: Date): string {
   return `${DAY_PREFIX}${now.toISOString().slice(0, 10)}`;
 }
-export function monthKey(now: Date): string {
-  return `${MONTH_PREFIX}${now.toISOString().slice(0, 7)}`;
+export function periodKey(now: Date): string {
+  return `${PERIOD_PREFIX}${billingPeriodStart(now)}`;
 }
 
 /** Read both KV windows. Returns zeros when KV is absent — the FAIL-OPEN
  *  half of the posture; the caller audits the degradation and the
- *  in-memory window still applies. */
+ *  in-memory window still applies.
+ *
+ *  NO MIGRATION (2026-09-24): the old calendar-month counter (rc:spend:m:*)
+ *  is abandoned, not ported — this period counter starts from zero on
+ *  deploy. That is acceptable because the daily throttle (200/day, hard
+ *  ceiling 300) already keeps real usage far under the vendor's 5,000/cycle
+ *  plan; a month counter that starts at zero mid-cycle can only ever be an
+ *  UNDERcount relative to real vendor usage, never the overcount that broke
+ *  trust here. */
 export async function readKvSpend(now: Date = new Date()): Promise<{ day: number; month: number; kvAvailable: boolean }> {
   if (!kvConfigured()) return { day: 0, month: 0, kvAvailable: false };
   let day = 0;
@@ -273,7 +322,7 @@ export async function readKvSpend(now: Date = new Date()): Promise<{ day: number
     ok = false;
   }
   try {
-    month = Number((await kvProd.get(monthKey(now))) ?? "0") || 0;
+    month = Number((await kvProd.get(periodKey(now))) ?? "0") || 0;
   } catch {
     ok = false;
   }
@@ -304,7 +353,7 @@ export async function recordKvSpend(now: Date = new Date()): Promise<void> {
   if (!kvConfigured()) return;
   for (const [key, ttl] of [
     [dayKey(now), DAY_TTL_S],
-    [monthKey(now), MONTH_TTL_S],
+    [periodKey(now), PERIOD_TTL_S],
   ] as const) {
     try {
       const total = await kvProd.incrBy(key, 1);
