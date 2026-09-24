@@ -373,3 +373,12 @@ describe("1005 2nd St — gone-deal-language-about-a-DIFFERENT-property false-po
     ).not.toBe("rejection");
   });
 });
+
+describe("bare acceptance never fires on a negation (HQ review 2026-09-24)", () => {
+  it.each(["No, deal", "No - accepted", "Deal - not", "Nope, deal", "Never: accept"])("%s is not an acceptance", (msg) => {
+    expect(classifyReply(msg).classification).not.toBe("acceptance");
+  });
+  it("still accepts a name prefix", () => {
+    expect(classifyReply("Randi: Accepted.").classification).toBe("acceptance");
+  });
+});

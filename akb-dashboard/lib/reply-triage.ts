@@ -138,9 +138,14 @@ function normalizeBareMessage(text: string): string {
   return s;
 }
 
+// A stripped "name" word must never be a negation: "No, deal" / "Deal - not"
+// are refusals, not acceptances.
+const NEGATION_WORD = /(?:^|[\s,:-])(?:no|not|nope|never|nah)(?:$|[\s,:-])/i;
+
 function isBareAcceptance(text: string): boolean {
   const base = normalizeBareMessage(text);
   if (BARE_ACCEPTANCE_PHRASES.has(base.toLowerCase())) return true;
+  if (NEGATION_WORD.test(base)) return false;
   // A leading/trailing NAME requires an explicit separator (":", "," or "-")
   // between it and the message — "John: Accepted" / "Accepted - John" — so a
   // multi-word rejection like "Accepted another offer" (plain whitespace, no
