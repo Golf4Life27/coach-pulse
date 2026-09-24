@@ -12,7 +12,7 @@
 // Spec v1.1 §5 Step 1.
 
 import { runWithTimeout } from "../timeout";
-import { isRentcastFrozen } from "@/lib/rentcast/spend-ceiling";
+import { isRentcastFrozen, nextBillingPeriodStart } from "@/lib/rentcast/spend-ceiling";
 import type { FetchOpts, SourceResult } from "../types";
 
 const DEFAULT_TIMEOUT_MS = 3_000;
@@ -26,9 +26,12 @@ export interface RentCastState {
   api_responsive: boolean;
   api_key_configured: boolean;
   monthly_cap: number;
-  // Reset date is the 1st of the next calendar month (UTC) — RentCast
-  // doesn't expose a header for this in 5/14 observation. Reported
-  // here for the briefing's visibility.
+  // FIXED 2026-09-24 (the "Oct 1 reset" false report): this used to be the
+  // 1st of the next calendar month. The vendor dashboard showed the plan
+  // running ~11th → ~11th ("day 11 of 30" on 2026-09-22), so the reset date
+  // is now the next RENTCAST_BILLING_ANCHOR_DAY (spend-ceiling.ts), not the
+  // 1st. RentCast still doesn't expose a header for this — it's still an
+  // approximation, just anchored on the real cycle instead of the calendar.
   reset_date_utc: string;
   // Days remaining in the current billing window.
   days_until_reset: number;
@@ -76,15 +79,13 @@ export function composeRentCastState(
   probeLatencyMs: number,
   now: Date,
 ): RentCastState {
-  const firstOfNextMonth = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 0, 0, 0),
-  );
-  const msUntilReset = firstOfNextMonth.getTime() - now.getTime();
+  const resetDateUtc = nextBillingPeriodStart(now);
+  const msUntilReset = new Date(`${resetDateUtc}T00:00:00.000Z`).getTime() - now.getTime();
   return {
     api_responsive: apiResponsive,
     api_key_configured: Boolean(RENTCAST_API_KEY),
     monthly_cap: RENTCAST_MONTHLY_CAP,
-    reset_date_utc: firstOfNextMonth.toISOString().slice(0, 10),
+    reset_date_utc: resetDateUtc,
     days_until_reset: Math.max(0, Math.ceil(msUntilReset / 86_400_000)),
     probe_latency_ms: probeLatencyMs,
   };

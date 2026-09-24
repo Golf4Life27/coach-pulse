@@ -16,8 +16,8 @@ describe("KV counter atomicity", () => {
   it("records every concurrent increment (the old get+setEx lost them)", async () => {
     const kv = makeMemoryKv();
     const N = 50;
-    await Promise.all(Array.from({ length: N }, () => kv.incrBy("rc:spend:m:2026-08", 1)));
-    expect(Number(await kv.get("rc:spend:m:2026-08"))).toBe(N);
+    await Promise.all(Array.from({ length: N }, () => kv.incrBy("rc:spend:p:2026-08-11", 1)));
+    expect(Number(await kv.get("rc:spend:p:2026-08-11"))).toBe(N);
   });
 
   it("demonstrates the bug the fix replaces", async () => {
