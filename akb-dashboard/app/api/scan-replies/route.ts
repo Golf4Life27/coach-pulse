@@ -1,3 +1,4 @@
+import { requireSendAuth } from "@/lib/send-route-auth";
 import { getListings, updateListingRecord } from "@/lib/airtable";
 import { getMessagesForParticipant } from "@/lib/quo";
 import { isSelfEchoOrAutoreply } from "@/lib/conversation-check";
@@ -74,19 +75,16 @@ interface ScanResult {
 }
 
 export async function GET(req: Request) {
-  // Optional cron secret check
-  const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret) {
-    const authHeader = req.headers.get("authorization");
-    if (authHeader !== `Bearer ${cronSecret}`) {
-      return Response.json({ error: "Unauthorized" }, { status: 401 });
-    }
-  }
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
 
   return handleScan(req);
 }
 
 export async function POST(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   return handleScan(req);
 }
 

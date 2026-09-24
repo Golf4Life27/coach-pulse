@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireSendAuth } from "@/lib/send-route-auth";
 import { getListing, updateListingRecord } from "@/lib/airtable";
 import { sendGuarded } from "@/lib/outreach/send-gate";
 import type {
@@ -79,6 +80,9 @@ export async function POST(
   req: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   const { id } = await params;
   if (!id || !id.startsWith("rec")) {
     return NextResponse.json({ error: "Invalid record id", id }, { status: 400 });

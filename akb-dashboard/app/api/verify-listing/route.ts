@@ -1,3 +1,4 @@
+import { requireSendAuth } from "@/lib/send-route-auth";
 import { canAutoDispose, disposeDeal, parkDeal } from "@/lib/conveyor/park";
 import { hasDeliveredOfferFor, hasOpenThreadFrom } from "@/lib/conveyor/off-market";
 import { auditPaidCall } from "@/lib/spend/audit-paid-call";
@@ -492,6 +493,9 @@ async function verifyOne(
 // --- Route handler ---
 
 export async function POST(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   if (!AIRTABLE_PAT) {
     return Response.json({ error: "AIRTABLE_PAT not set" }, { status: 500 });
   }

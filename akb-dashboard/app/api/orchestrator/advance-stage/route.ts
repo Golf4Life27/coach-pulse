@@ -21,6 +21,7 @@
 // the operator must advance one step at a time (preserves audit trail).
 
 import { NextResponse } from "next/server";
+import { requireSendAuth } from "@/lib/send-route-auth";
 import { audit } from "@/lib/audit-log";
 import { runGate } from "@/lib/orchestrator/gate-runner";
 import { transitionStage } from "@/lib/pipeline-state/engine";
@@ -306,6 +307,9 @@ async function executeAdvance(opts: {
 }
 
 export async function GET(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   const url = new URL(req.url);
   return executeAdvance({
     recordId: url.searchParams.get("recordId") ?? "",
@@ -315,6 +319,9 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   let body: { recordId?: string; target_stage?: string; override_reason?: string };
   try {
     body = await req.json();

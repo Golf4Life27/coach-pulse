@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireSendAuth } from "@/lib/send-route-auth";
 import { getListing } from "@/lib/airtable";
 import type { AgentContext, SafetyCheckResult, SafetyCheckReason } from "@/types/jarvis";
 import { checkFirstOutreachHydration, checkOfferOverList } from "@/lib/outreach-economics";
@@ -51,6 +52,9 @@ function fail(
 }
 
 export async function POST(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   let input: SafetyCheckInput;
   try {
     input = await req.json();

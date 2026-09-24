@@ -1,3 +1,5 @@
+import { requireSendAuth } from "@/lib/send-route-auth";
+
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
@@ -256,11 +258,15 @@ async function batchCreateProposals(
   return { created, errors };
 }
 
-export async function GET() {
+export async function GET(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
   return handleCron();
 }
 
-export async function POST() {
+export async function POST(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
   return handleCron();
 }
 

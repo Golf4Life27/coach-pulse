@@ -1,4 +1,6 @@
 // POST /api/scaffold-tables — creates Agent_Proposals, ZIP_Intelligence, Confirmed_Flips
+import { requireSendAuth } from "@/lib/send-route-auth";
+
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
@@ -28,7 +30,10 @@ async function createTable(
   return { id: data.id, name: data.name };
 }
 
-export async function POST() {
+export async function POST(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   if (!AIRTABLE_PAT) {
     return Response.json({ error: "AIRTABLE_PAT not set" }, { status: 500 });
   }

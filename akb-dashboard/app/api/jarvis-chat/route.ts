@@ -1,3 +1,4 @@
+import { requireSendAuth } from "@/lib/send-route-auth";
 // @deprecated Legacy chat backend. Maverick MCP server
 // (`app/api/maverick/mcp/route.ts`) handles the same role with
 // OAuth-authenticated access + named-agent attribution. Phase 9.11
@@ -190,6 +191,9 @@ async function buildRecordContext(recordId: string): Promise<string | null> {
 }
 
 export async function POST(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
   if (!ANTHROPIC_API_KEY) {
     return Response.json(

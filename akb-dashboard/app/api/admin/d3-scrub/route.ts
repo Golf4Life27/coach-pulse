@@ -18,6 +18,7 @@
 // routing (Phase 1 cadence).
 
 import { NextResponse } from "next/server";
+import { requireSendAuth } from "@/lib/send-route-auth";
 import {
   getListings,
   updateListingRecord,
@@ -30,6 +31,9 @@ export const runtime = "nodejs";
 export const maxDuration = 90;
 
 export async function GET(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   const t0 = Date.now();
   const url = new URL(req.url);
   // Default to dry-run. Apply requires explicit ?apply=1.

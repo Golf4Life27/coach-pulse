@@ -1,3 +1,4 @@
+import { requireSendAuth } from "@/lib/send-route-auth";
 import { getListing, getListings, updateListingRecord } from "@/lib/airtable";
 import { filterLiveReplyProposals } from "@/lib/draft-dismissal";
 import { parseSendEmailPayload, parseSendSmsPayload, parseHoldReviewSmsPayload, sendApprovedReply } from "@/lib/approve-send";
@@ -199,6 +200,9 @@ async function patchProposal(
 }
 
 export async function PATCH(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   const tableId = getTableId();
   if (!tableId) {
     return Response.json(

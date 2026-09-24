@@ -21,6 +21,7 @@ import { sendAutoAck } from "@/lib/auto-ack";
 import { detectOptOut, applyOptOut, inboundStampAdvances, suppressionTargetsForPhone } from "@/lib/outreach/opt-out";
 import { selectThreadListing, isNeverTextedSibling } from "@/lib/conversation-thread";
 import { resolveAlertNumbers } from "@/lib/outreach-economics";
+import { requireSendAuth } from "@/lib/send-route-auth";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -109,13 +110,11 @@ async function batchCreateProposals(
 }
 
 export async function GET(req: Request) {
-  const cronSecret = process.env.CRON_SECRET;
-  if (cronSecret) {
-    const authHeader = req.headers.get("authorization");
-    if (authHeader !== `Bearer ${cronSecret}`) {
-      return Response.json({ error: "Unauthorized" }, { status: 401 });
-    }
-  }
+  // Reuses the shared dashboard-cookie / CRON_SECRET / OAuth waterfall
+  // (was a bespoke `!==` bearer compare here; requireSendAuth's underlying
+  // constantTimeEqual is exact-length + crypto.timingSafeEqual).
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
 
   const proposalsTableId = getProposalsTableId();
   if (!proposalsTableId) {

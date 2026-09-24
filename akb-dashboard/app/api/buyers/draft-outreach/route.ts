@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireSendAuth } from "@/lib/send-route-auth";
 import { getListing } from "@/lib/airtable";
 import { getBuyerV2 } from "@/lib/buyers-v2";
 import { buildJarvisSystemPrompt } from "@/lib/jarvis-system-prompt";
@@ -52,6 +53,9 @@ function formatUsd(n: number): string {
 }
 
 export async function POST(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   let body: RequestBody;
   try {
     body = await req.json();

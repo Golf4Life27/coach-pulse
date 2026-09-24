@@ -1,3 +1,4 @@
+import { requireSendAuth } from "@/lib/send-route-auth";
 import Anthropic from "@anthropic-ai/sdk";
 import {
   getNegotiationContext,
@@ -53,6 +54,9 @@ function checkRateLimit(recordId: string): boolean {
 }
 
 export async function POST(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
   if (!ANTHROPIC_API_KEY) {
     return Response.json(

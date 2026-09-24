@@ -23,6 +23,7 @@
 // layer). Mutations gated behind ?apply=1.
 
 import { NextResponse } from "next/server";
+import { requireSendAuth } from "@/lib/send-route-auth";
 import { getUrlLessActiveCandidates, updateListingRecord } from "@/lib/airtable";
 import { verifyListing } from "@/lib/crawler/sources/firecrawl";
 import { strictAddressUrlMatch, formatSubjectAddress } from "@/lib/crawler/url-backfill";
@@ -55,6 +56,9 @@ interface RecordOutcome {
 }
 
 export async function GET(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   const t0 = Date.now();
   const url = new URL(req.url);
   const apply = url.searchParams.get("apply") === "1";

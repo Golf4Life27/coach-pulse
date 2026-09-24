@@ -8,6 +8,7 @@
 // Spine_Decision_Log row (refs the approval-gate model recGtpPH4YxvUL2V8).
 
 import { NextResponse } from "next/server";
+import { requireSendAuth } from "@/lib/send-route-auth";
 import {
   getApprovalPendingRows,
   approveZip,
@@ -28,6 +29,9 @@ interface DecisionBody {
 }
 
 export async function POST(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   let body: DecisionBody;
   try {
     body = (await req.json()) as DecisionBody;

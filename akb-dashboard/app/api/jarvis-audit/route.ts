@@ -4,6 +4,7 @@
 // deprecation tag; URL kept live until consumers migrate.
 
 import { NextResponse } from "next/server";
+import { requireSendAuth } from "@/lib/send-route-auth";
 import { getListings } from "@/lib/airtable";
 
 export const runtime = "nodejs";
@@ -25,18 +26,12 @@ async function sleep(ms: number) {
 }
 
 export async function POST(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   const url = new URL(req.url);
   const mode = url.searchParams.get("mode") ?? "all"; // "all" | "photo" | "arv" | "screen" | "dd"
   const limit = parseInt(url.searchParams.get("limit") ?? "50", 10);
-
-  // Optional CRON_SECRET gate.
-  const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = req.headers.get("authorization") ?? "";
-    if (!auth.includes(secret)) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-  }
 
   const all = await getListings();
   const active = all.filter((l) => !DEAD_OR_WON.has(l.outreachStatus ?? ""));
