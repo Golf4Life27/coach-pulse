@@ -315,6 +315,10 @@
     {
       "path": "/api/cron/buyer-box-drip?limit=20",
       "schedule": "30 15 * * *"
+    },
+    {
+      "path": "/api/cron/death-rule?dry_run=1",
+      "schedule": "5 2 * * *"
     }
   ]
 }
