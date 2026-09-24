@@ -94,6 +94,69 @@ const ACCEPTANCE_PATTERNS = [
   /\bwrite\s+(?:it|the\s+offer|the\s+contract)\s+up\b/i,
 ];
 
+/** BARE ACCEPTANCE (execution agenda 2026-09-24, P0-2, spine
+ *  recYbAYqkguZSOTeF): 18644 Kelly Rd Detroit, 2026-09-23 18:25Z — a listing
+ *  agent replied one word, "Accepted.", to our $21,750 offer. Every pattern
+ *  in ACCEPTANCE_PATTERNS above is phrase-shaped ("we accept", "willing to
+ *  accept") and never anchors to the WHOLE message, so a bare "Accepted" or
+ *  "Deal" never fired any of them — classifyReply fell through to "unknown"
+ *  and nobody was paged.
+ *
+ *  This check is a short-message rule layered IN FRONT of the phrase list
+ *  (still gated by DECLINE_OVERRIDES_ACCEPTANCE below): normalize the whole
+ *  message — strip trailing punctuation (never "?", which flips the meaning:
+ *  "Deal?" is a question, not a yes), strip trailing emoji, and strip a
+ *  leading/trailing name or "ok"/"okay" acknowledgment — then require an
+ *  EXACT match against one of the phrases in BARE_ACCEPTANCE_PHRASES.
+ *  Anchoring to the WHOLE message is what keeps this conservative: "Accepted
+ *  another offer", "No deal", "Not accepted", "The seller accepted another
+ *  offer" and "Is that a deal?" all carry extra words (or a negation, or a
+ *  trailing "?") that make the normalized text not EQUAL to a bare phrase, so
+ *  none of them match. A message quoting a different dollar figure isn't in
+ *  the phrase list at all, so it keeps falling through to the existing
+ *  counter logic untouched. */
+const BARE_ACCEPTANCE_PHRASES = new Set([
+  "accepted",
+  "accept",
+  "we accept",
+  "seller accepts",
+  "deal",
+  "yes, accepted",
+  "offer accepted",
+]);
+
+/** Strip trailing emoji/whitespace, trailing punctuation (except "?"), and a
+ *  leading/trailing "ok"/"okay" acknowledgment. Does NOT touch a name — that
+ *  is handled separately in isBareAcceptance so it only fires when doing so
+ *  actually produces a phrase match (see comment there). */
+function normalizeBareMessage(text: string): string {
+  let s = text.trim();
+  s = s.replace(/[\p{Extended_Pictographic}️\s]+$/gu, "").trim();
+  s = s.replace(/[!.,;:]+$/g, "").trim();
+  s = s.replace(/^(?:ok|okay)[\s,.-]+/i, "").trim();
+  s = s.replace(/[\s,.-]+(?:ok|okay)$/i, "").trim();
+  return s;
+}
+
+// A stripped "name" word must never be a negation: "No, deal" / "Deal - not"
+// are refusals, not acceptances.
+const NEGATION_WORD = /(?:^|[\s,:-])(?:no|not|nope|never|nah)(?:$|[\s,:-])/i;
+
+function isBareAcceptance(text: string): boolean {
+  const base = normalizeBareMessage(text);
+  if (BARE_ACCEPTANCE_PHRASES.has(base.toLowerCase())) return true;
+  if (NEGATION_WORD.test(base)) return false;
+  // A leading/trailing NAME requires an explicit separator (":", "," or "-")
+  // between it and the message — "John: Accepted" / "Accepted - John" — so a
+  // multi-word rejection like "Accepted another offer" (plain whitespace, no
+  // separator) is never mistaken for a name-wrapped bare acceptance.
+  const leadingStripped = base.replace(/^[A-Za-z][A-Za-z'-]*\s*[:,-]\s*/, "").trim();
+  if (leadingStripped !== base && BARE_ACCEPTANCE_PHRASES.has(leadingStripped.toLowerCase())) return true;
+  const trailingStripped = base.replace(/\s*[:,-]\s*[A-Za-z][A-Za-z'-]*$/, "").trim();
+  if (trailingStripped !== base && BARE_ACCEPTANCE_PHRASES.has(trailingStripped.toLowerCase())) return true;
+  return false;
+}
+
 /** DECLINE OVERRIDES ACCEPTANCE — "After careful consideration, I have
  *  decided to respectfully decline the offer. The proposed price is
  *  significantly below what I am willing to accept" (1162 N Olive, Marie
@@ -590,6 +653,11 @@ export function classifyReply(body: string): {
   // …unless the same message carries an explicit decline (1162 N Olive,
   // 2026-09-06: "respectfully decline … below what I am willing to accept").
   if (!DECLINE_OVERRIDES_ACCEPTANCE.some((pat) => pat.test(trimmed))) {
+    // Bare acceptance FIRST (see BARE_ACCEPTANCE_PHRASES doc comment) — a
+    // whole-message "Accepted" / "Deal" with no other content.
+    if (isBareAcceptance(trimmed)) {
+      return { classification: "acceptance", matchedPattern: "bare_acceptance" };
+    }
     for (const pat of ACCEPTANCE_PATTERNS) {
       if (pat.test(trimmed)) return { classification: "acceptance", matchedPattern: pat.source };
     }

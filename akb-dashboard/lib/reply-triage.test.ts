@@ -126,6 +126,42 @@ describe("classifyReply", () => {
     expect(classifyReply("theyre in the process of accepting a much higher offer").classification).toBe("rejection");
   });
 
+  it("bare acceptance: a short whole-message yes classifies as acceptance (18644 Kelly Rd, 2026-09-23)", () => {
+    // The anchor case — a listing agent's one-word reply to our $21,750 offer
+    // filed as unknown and paged no one.
+    expect(classifyReply("Accepted.").classification).toBe("acceptance");
+    expect(classifyReply("Accepted").classification).toBe("acceptance");
+    expect(classifyReply("Accept").classification).toBe("acceptance");
+    expect(classifyReply("We accept").classification).toBe("acceptance");
+    expect(classifyReply("Seller accepts").classification).toBe("acceptance");
+    expect(classifyReply("Deal").classification).toBe("acceptance");
+    expect(classifyReply("Deal!").classification).toBe("acceptance");
+    expect(classifyReply("Yes, accepted").classification).toBe("acceptance");
+    expect(classifyReply("Offer accepted").classification).toBe("acceptance");
+    // Case-insensitive, and a leading/trailing name or "ok" is ignored.
+    expect(classifyReply("ACCEPTED").classification).toBe("acceptance");
+    expect(classifyReply("Ok, deal").classification).toBe("acceptance");
+    expect(classifyReply("deal, ok").classification).toBe("acceptance");
+    expect(classifyReply("John: Accepted").classification).toBe("acceptance");
+    expect(classifyReply("Accepted - John").classification).toBe("acceptance");
+  });
+
+  it("bare acceptance stays conservative — NOT acceptance", () => {
+    // A trailing "?" is never stripped: a question is never a yes.
+    expect(classifyReply("Deal?").classification).not.toBe("acceptance");
+    expect(classifyReply("Is that a deal?").classification).not.toBe("acceptance");
+    expect(classifyReply("Will you accept 30k?").classification).not.toBe("acceptance");
+    // A negation or extra words break the whole-message match.
+    expect(classifyReply("No deal").classification).not.toBe("acceptance");
+    expect(classifyReply("Not accepted").classification).not.toBe("acceptance");
+    expect(classifyReply("Accepted another offer").classification).toBe("rejection");
+    expect(classifyReply("The seller accepted another offer").classification).toBe("rejection");
+    // A different dollar figure keeps the existing counter classification —
+    // the bare-acceptance phrase list has no dollar amounts in it.
+    expect(classifyReply("Accepted at $19,000").classification).not.toBe("acceptance");
+    expect(classifyReply("Deal at $19,000").classification).not.toBe("acceptance");
+  });
+
   it("UNCLASSIFIED fallback preserved — ambiguous still routes to manual review (not bypassed)", () => {
     // The patches SHRINK the UNCLASSIFIED bucket toward rejection where the
     // signal is clear, but genuinely-ambiguous replies still land in unknown.
@@ -335,5 +371,14 @@ describe("1005 2nd St — gone-deal-language-about-a-DIFFERENT-property false-po
       classifyReply("I sold that one already but I have another on 5th Ave, want me to send it?")
         .classification,
     ).not.toBe("rejection");
+  });
+});
+
+describe("bare acceptance never fires on a negation (HQ review 2026-09-24)", () => {
+  it.each(["No, deal", "No - accepted", "Deal - not", "Nope, deal", "Never: accept"])("%s is not an acceptance", (msg) => {
+    expect(classifyReply(msg).classification).not.toBe("acceptance");
+  });
+  it("still accepts a name prefix", () => {
+    expect(classifyReply("Randi: Accepted.").classification).toBe("acceptance");
   });
 });
