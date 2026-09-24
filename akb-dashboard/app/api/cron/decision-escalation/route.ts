@@ -7,10 +7,25 @@
 // personal number ONE plain sentence with a deep link.
 //
 // FAIL-CLOSED everywhere:
-//   - OPERATOR_PERSONAL_PHONE unset → report-only (never guesses a number).
+//   - Phone resolution goes through the SAME waterfall operator-page uses
+//     (resolveOperatorPhone: ALERT_PHONE -> OPERATOR_PERSONAL_PHONE ->
+//     MAVERICK_STAGE4_SMS_TARGET -> the operator-confirmed default cell).
+//     P0-17 (2026-09-24): this cron read ONLY OPERATOR_PERSONAL_PHONE and
+//     that var was never set in prod, so 32 overdue decisions accrued with
+//     phone_configured:false and zero texts sent while the operator-page
+//     path (same phone, different resolver) was sending fine.
 //   - Chicago-local window 8:00–21:00 only.
-//   - One text per decision per 24h (KV setNx dedupe).
-//   - Max ESCALATION_MAX_PER_RUN (default 2) texts per run.
+//   - ONE digest text per run, not one per decision (P0-17 follow-up,
+//     2026-09-24 — the resolver fix above meant every one of ~32 overdue
+//     decisions would otherwise fire its own text, hourly, 8am-9pm: noise
+//     on top of the hourly triage routine that already covers the live
+//     ones). Every due decision not already claimed within the last 24h
+//     (KV setNx dedupe, unchanged) is claimed and folded into ONE SMS
+//     naming the top 3 + a count of the rest. A send failure releases every
+//     claim taken this run so the next run retries all of them.
+//   - cfg.maxPerRun no longer caps anything here (a digest is always at
+//     most one text) — the field stays in EscalationConfig because
+//     app/api/cron/accepted-silence/route.ts still reads it.
 //   - Dollars are the conveyor's SOURCED figures — a fabricated $ cannot
 //     exist here by construction.
 // This is a UI-owned lane; it reuses lib/quo.sendMessage but touches no
@@ -27,8 +42,9 @@ import {
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { sendMessage } from "@/lib/quo";
 import { fetchConveyorItemsServer } from "@/lib/decision-feed-server";
+import { resolveOperatorPhone } from "@/lib/maverick/operator-page";
 import {
-  composeEscalationSms,
+  composeEscalationDigestSms,
   insideChicagoWindow,
   readEscalationConfig,
   shouldEscalate,
@@ -64,7 +80,9 @@ export async function GET(req: Request) {
   const cfg = readEscalationConfig();
   const now = new Date();
   const nowIso = now.toISOString();
-  const phone = (process.env.OPERATOR_PERSONAL_PHONE ?? "").trim() || null;
+  // Same resolver operator-page uses (P0-17) — so this cron sends whenever
+  // the operator-page path would, instead of hard-depending on a single var.
+  const phone = resolveOperatorPhone(process.env as Record<string, string | undefined>).trim() || null;
 
   if (!insideChicagoWindow(now, cfg)) {
     return NextResponse.json({ ok: true, outcome: "outside_window", chicago_window: `${cfg.windowStartHour}-${cfg.windowEndHour}`, duration_ms: Date.now() - t0 });
@@ -82,39 +100,79 @@ export async function GET(req: Request) {
   const sent: Array<{ key: string; title: string; sms: string }> = [];
   const skipped: Array<{ key: string; reason: string }> = [];
 
+  // Fail-closed BEFORE claiming anything — a run that cannot deliver must
+  // never spend the 24h dedupe budget on decisions it never told anyone about.
+  if (!phone) {
+    for (const { item } of due) skipped.push({ key: item.key, reason: "no_operator_phone_env" });
+    await audit({
+      agent: "maverick",
+      event: "decision_escalation_run",
+      status: "confirmed_success",
+      inputSummary: { auth_kind: authKind, operator_last_seen: lastSeen, phone_configured: false },
+      outputSummary: { items: items.length, due: due.length, sent: 0, skipped: skipped.length, outcome: "no_phone" },
+      ms: Date.now() - t0,
+    });
+    return NextResponse.json({
+      ok: true,
+      mode: "report_only_no_phone",
+      outcome: "no_phone",
+      operator_last_seen: lastSeen,
+      items_considered: items.length,
+      due: due.map((d) => ({ key: d.item.key, title: d.item.title, dollars: d.item.dollars, reason: d.verdict.reason })),
+      sent,
+      skipped,
+      duration_ms: Date.now() - t0,
+    });
+  }
+
+  // Collect + claim EVERY due decision not already escalated in the last
+  // 24h (same escKey / setNx dedupe as before) — one claim pass, no send
+  // yet. Without KV there is no dedupe store, so every due item is "new"
+  // this run (same fail-open-without-KV posture the route always had).
+  const claimed: typeof due = [];
   for (const { item, verdict } of due) {
-    if (sent.length >= cfg.maxPerRun) {
-      skipped.push({ key: item.key, reason: "max_per_run" });
-      continue;
-    }
-    const sms = composeEscalationSms(item, BASE_URL(), verdict.ageHours);
-    if (!phone) {
-      skipped.push({ key: item.key, reason: "no_operator_phone_env" });
-      continue;
-    }
-    // One text per decision per 24h — claim BEFORE dispatch.
     if (kvConfigured()) {
-      const claimed = await kvProd.setNx(escKey(item.key), nowIso, ESC_DEDUPE_TTL_S).catch(() => false);
-      if (!claimed) {
+      const ok = await kvProd.setNx(escKey(item.key), nowIso, ESC_DEDUPE_TTL_S).catch(() => false);
+      if (!ok) {
         skipped.push({ key: item.key, reason: "already_escalated_24h" });
         continue;
       }
     }
+    claimed.push({ item, verdict });
+  }
+
+  let outcome: "nothing_new" | "sent" | "send_failed" = "nothing_new";
+
+  if (claimed.length > 0) {
+    const sms = composeEscalationDigestSms(
+      claimed.map(({ item }) => ({ title: item.title, dollars: item.dollars })),
+      BASE_URL(),
+    );
     try {
       await sendMessage(phone, sms);
-      sent.push({ key: item.key, title: item.title, sms });
+      outcome = "sent";
+      for (const { item } of claimed) sent.push({ key: item.key, title: item.title, sms });
       await audit({
         agent: "maverick",
         event: "decision_escalation_sent",
         status: "confirmed_success",
-        recordId: item.recordId ?? undefined,
-        inputSummary: { key: item.key, dollars: item.dollars, age_hours: verdict.ageHours, reason: verdict.reason },
+        inputSummary: {
+          keys: claimed.map(({ item }) => item.key),
+          dollars: claimed.map(({ item }) => item.dollars),
+          count: claimed.length,
+        },
         outputSummary: { sms },
       });
     } catch (err) {
-      // Release the claim so the next hourly run retries.
-      if (kvConfigured()) await kvProd.del(escKey(item.key)).catch(() => {});
-      skipped.push({ key: item.key, reason: `send_failed: ${String(err).slice(0, 120)}` });
+      outcome = "send_failed";
+      // Release every claim taken THIS run so the next run retries all of
+      // them — a digest is one delivery; a partial claim with no delivery
+      // is worse than no claim (the next run would silently skip it).
+      if (kvConfigured()) {
+        await Promise.all(claimed.map(({ item }) => kvProd.del(escKey(item.key)).catch(() => {})));
+      }
+      const reason = `send_failed: ${String(err).slice(0, 120)}`;
+      for (const { item } of claimed) skipped.push({ key: item.key, reason });
     }
   }
 
@@ -122,14 +180,15 @@ export async function GET(req: Request) {
     agent: "maverick",
     event: "decision_escalation_run",
     status: "confirmed_success",
-    inputSummary: { auth_kind: authKind, operator_last_seen: lastSeen, phone_configured: phone != null },
-    outputSummary: { items: items.length, due: due.length, sent: sent.length, skipped: skipped.length },
+    inputSummary: { auth_kind: authKind, operator_last_seen: lastSeen, phone_configured: true },
+    outputSummary: { items: items.length, due: due.length, sent: sent.length, skipped: skipped.length, outcome },
     ms: Date.now() - t0,
   });
 
   return NextResponse.json({
     ok: true,
-    mode: phone ? "live" : "report_only_no_phone",
+    mode: "live",
+    outcome,
     operator_last_seen: lastSeen,
     items_considered: items.length,
     due: due.map((d) => ({ key: d.item.key, title: d.item.title, dollars: d.item.dollars, reason: d.verdict.reason })),

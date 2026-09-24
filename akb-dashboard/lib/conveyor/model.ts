@@ -66,6 +66,13 @@ export interface ConveyorItem {
   /** Verbatim inbound quote when the decision is about a reply. */
   verbatim: string | null;
   actions: ConveyorAction[];
+  /** P0-18 (2026-09-24): an OPEN action item older than 14 days used to be
+   *  silently dropped by the Airtable age filter — age was being counted as
+   *  resolution, hiding real open decisions (six, including an old Montrose
+   *  card). It is never dropped now; instead it carries this flag, renders
+   *  at the top of the queue, and the card shows OVERDUE. Only ever set by
+   *  fromActionItem; every other source defaults to false. */
+  overdue?: boolean;
 }
 
 // ── Sourced-dollar extraction ────────────────────────────────────────────
@@ -325,7 +332,15 @@ export function fromProposal(p: ProposalRow): ConveyorItem {
   };
 }
 
-export function fromActionItem(a: ActionItemRow): ConveyorItem {
+/** An OPEN action item older than this is overdue, not resolved (P0-18) —
+ *  same 14-day figure the old Airtable filter used to silently drop it at. */
+export const ACTION_ITEM_OVERDUE_DAYS = 14;
+
+export function fromActionItem(a: ActionItemRow, nowIso?: string): ConveyorItem {
+  const created = a.createdAt ? Date.parse(a.createdAt) : NaN;
+  const now = Date.parse(nowIso ?? new Date().toISOString());
+  const overdue =
+    Number.isFinite(created) && Number.isFinite(now) && now - created > ACTION_ITEM_OVERDUE_DAYS * 24 * HOUR_MS;
   return {
     key: `action_item:${a.id}`,
     source: "action_item",
@@ -343,6 +358,7 @@ export function fromActionItem(a: ActionItemRow): ConveyorItem {
       { kind: "action_item_resolve", itemId: a.id },
       { kind: "action_item_defer", itemId: a.id },
     ],
+    overdue,
   };
 }
 
@@ -412,10 +428,13 @@ export function urgencyRank(item: ConveyorItem, nowIso: string): UrgencyRank {
 
 const TYPE_RANK: Record<ConveyorType, number> = { "2B": 3, "2A": 2, "2C": 1 };
 
-/** Deterministic conveyor order: urgency ↓, dollars ↓ (null last), type
- *  (money/signature > sends > rulings), then oldest first. */
+/** Deterministic conveyor order: overdue (P0-18: an open decision the age
+ *  filter used to hide) ↑ TOP always, then urgency ↓, dollars ↓ (null last),
+ *  type (money/signature > sends > rulings), then oldest first. */
 export function rankConveyor(items: ConveyorItem[], nowIso: string): ConveyorItem[] {
   return [...items].sort((a, b) => {
+    const ov = Number(Boolean(b.overdue)) - Number(Boolean(a.overdue));
+    if (ov !== 0) return ov;
     const u = urgencyRank(b, nowIso) - urgencyRank(a, nowIso);
     if (u !== 0) return u;
     const da = a.dollars ?? -1;
@@ -603,7 +622,7 @@ export function buildConveyor(
   const items = [
     ...rest.map(fromProposal),
     ...(batch ? [batch] : []),
-    ...input.actionItems.map(fromActionItem),
+    ...input.actionItems.map((a) => fromActionItem(a, nowIso)),
     ...input.priorities.map(fromPriority),
     ...input.broCards.map(fromBroCard),
     ...(input.visionHolds ?? []).map(fromVisionHold),

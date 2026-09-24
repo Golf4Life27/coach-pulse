@@ -10,6 +10,8 @@
 
 import type { ConveyorItem } from "@/lib/conveyor/model";
 import { urgencyRank } from "@/lib/conveyor/model";
+import { trimAtWord } from "@/lib/maverick/sms-escalation";
+import { normalizeForGsm7 } from "@/lib/sms/gsm7";
 
 /** KV key for the server-side operator last-seen ping (written by
  *  /api/ui/last-seen, read by the escalation cron). */
@@ -105,6 +107,49 @@ export function composeEscalationSms(item: ConveyorItem, baseUrl: string, ageHou
   const waiting = ageHours != null ? ` waiting ${Math.round(ageHours)}h` : "";
   const link = item.href ? `${baseUrl}${item.href}` : baseUrl;
   return `AKB: ${money(item.dollars ?? 0)} ${what} on ${item.title}${waiting} - ${link}`;
+}
+
+/** Same per-message budget as the other hand-composed operator SMS (see
+ *  lib/maverick/operator-page.ts SMS_MAX_LEN / lib/maverick/sms-escalation.ts
+ *  SMS_MAX_LEN — ~2 GSM-7 segments of headroom). */
+export const ESCALATION_DIGEST_SMS_MAX_LEN = 300;
+
+export interface DigestDueItem {
+  title: string;
+  dollars: number | null;
+}
+
+/** ONE digest SMS for every escalatable decision claimed this run (P0-17
+ *  follow-up, 2026-09-24): a separate text per overdue decision was noise —
+ *  with ~32 overdue decisions live, the per-item send would have meant ~26
+ *  texts in a single day. Names the top 3 in the CALLER's existing due
+ *  order (already ranked: overdue-first, then urgency, then dollars — see
+ *  lib/conveyor/model.rankConveyor), then folds the rest into a count.
+ *  Budgets the link WHOLE first (same discipline as composeOperatorPageSms /
+ *  formatStage4Message — a trimmed link is a broken one), then trims the
+ *  itemized body to what's left. Pure. */
+export function composeEscalationDigestSms(due: DigestDueItem[], baseUrl: string): string {
+  const link = normalizeForGsm7(baseUrl.trim());
+  const top = due.slice(0, 3);
+  const rest = due.length - top.length;
+  const tail = rest > 0 ? `+${rest} more overdue in your queue.` : "";
+
+  const header = normalizeForGsm7(
+    `AKB: ${due.length} overdue decision${due.length === 1 ? "" : "s"} waiting.`,
+  );
+  const itemLines = top.map((d, i) => {
+    const title = normalizeForGsm7(d.title);
+    const withMoney = d.dollars != null ? `${title} - ${money(d.dollars)}` : title;
+    return `${i + 1}) ${withMoney}`;
+  });
+
+  const linkOverhead = link.length + 1;
+  const fixedOverhead = header.length + 1 + (tail ? tail.length + 1 : 0);
+  const room = Math.max(0, ESCALATION_DIGEST_SMS_MAX_LEN - linkOverhead - fixedOverhead);
+  let itemsBody = itemLines.join("\n");
+  if (itemsBody.length > room) itemsBody = trimAtWord(itemsBody, room);
+
+  return [header, itemsBody, tail, link].filter(Boolean).join("\n");
 }
 
 export interface DigestBelt {
