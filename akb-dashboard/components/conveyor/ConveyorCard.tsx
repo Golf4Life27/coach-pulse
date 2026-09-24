@@ -22,6 +22,13 @@ function money(n: number | null): string {
 }
 
 function clockLabel(item: ConveyorItem, nowMs: number): { text: string; tone: "overdue" | "soon" | "calm" } {
+  if (item.overdue) {
+    // P0-18: an open action item past the age filter's old 14-day drop —
+    // never hidden now, always flagged instead of silently expiring.
+    const posted = item.postedAt ? Date.parse(item.postedAt) : NaN;
+    const waitedD = Number.isFinite(posted) ? Math.max(0, Math.round((nowMs - posted) / (24 * 3_600_000))) : null;
+    return { text: waitedD != null ? `OVERDUE — waiting ${waitedD}d` : "OVERDUE", tone: "overdue" };
+  }
   if (item.deadlineAt) {
     const t = Date.parse(item.deadlineAt);
     if (Number.isFinite(t)) {

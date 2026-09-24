@@ -15,6 +15,7 @@ import {
   type ProposalRow,
   batchFrontierRetire,
   fromVisionHold,
+  ACTION_ITEM_OVERDUE_DAYS,
 } from "./model";
 
 const NOW = "2026-07-11T16:00:00Z";
@@ -108,19 +109,23 @@ describe("mappers", () => {
   });
 
   it("action item with signature language → 2B with resolve/defer", () => {
-    const item = fromActionItem({
-      id: "itm1",
-      title: "Sign the Poteet assignment contract",
-      sourceRecordId: "recLIST000000002",
-      actionRequired: "DocuSign envelope waiting; $7,500 assignment fee at stake.",
-      context: null,
-      verbatimReply: null,
-      priority: "high",
-      createdAt: "2026-07-10T12:00:00Z",
-    });
+    const item = fromActionItem(
+      {
+        id: "itm1",
+        title: "Sign the Poteet assignment contract",
+        sourceRecordId: "recLIST000000002",
+        actionRequired: "DocuSign envelope waiting; $7,500 assignment fee at stake.",
+        context: null,
+        verbatimReply: null,
+        priority: "high",
+        createdAt: "2026-07-10T12:00:00Z",
+      },
+      NOW,
+    );
     expect(item.type).toBe("2B");
     expect(item.dollars).toBe(7_500);
     expect(item.actions.map((a) => a.kind)).toEqual(["action_item_resolve", "action_item_defer"]);
+    expect(item.overdue).toBe(false); // 1 day old at NOW
   });
 
   it("curated priority keeps its real revenue + deadline", () => {
@@ -164,6 +169,62 @@ describe("ranking", () => {
     expect(urgencyRank({ ...base, deadlineAt: "2026-07-13T20:00:00Z" }, NOW)).toBe(2);
     expect(urgencyRank({ ...base, deadlineAt: "2026-07-20T10:00:00Z" }, NOW)).toBe(1);
     expect(urgencyRank({ ...base, deadlineAt: null }, NOW)).toBe(0);
+  });
+});
+
+describe("P0-18 — an open action item past the age cutoff is overdue, never dropped", () => {
+  function actionItem(over: Partial<Parameters<typeof fromActionItem>[0]> = {}) {
+    return {
+      id: "itm-montrose",
+      title: "1102 Montrose Ave — open decision",
+      sourceRecordId: "recMONTROSE",
+      actionRequired: "Operator ruling needed.",
+      context: null,
+      verbatimReply: null,
+      priority: "medium",
+      createdAt: "2026-06-26T16:00:00Z", // 15 days before NOW
+      ...over,
+    };
+  }
+
+  it("flags an item older than the cutoff as overdue", () => {
+    const old = fromActionItem(actionItem(), NOW);
+    expect(old.overdue).toBe(true);
+
+    const fresh = fromActionItem(actionItem({ createdAt: "2026-07-06T16:00:00Z" }), NOW); // 5 days old
+    expect(fresh.overdue).toBe(false);
+  });
+
+  it(`is exactly the ${ACTION_ITEM_OVERDUE_DAYS}-day cutoff — never dropped, always flagged`, () => {
+    const barelyUnder = fromActionItem(actionItem({ createdAt: "2026-06-27T17:00:00Z" }), NOW); // 13d23h
+    expect(barelyUnder.overdue).toBe(false);
+    const barelyOver = fromActionItem(actionItem({ createdAt: "2026-06-27T15:00:00Z" }), NOW); // 14d01h
+    expect(barelyOver.overdue).toBe(true);
+  });
+
+  it("an overdue action item sorts to the TOP of the queue, ahead of urgent $ decisions", () => {
+    const bigMoneyUrgent = fromPriority({
+      id: "urgent-money",
+      title: "Wire EMD",
+      why: "Overdue money decision.",
+      instructions: null,
+      href: null,
+      revenueUsd: 50_000,
+      deadlineAt: "2026-07-11T10:00:00Z", // already overdue at NOW too
+      postedAt: "2026-07-09T09:00:00Z",
+    });
+    const overdueOpen = fromActionItem(actionItem(), NOW);
+    const ranked = rankConveyor([bigMoneyUrgent, overdueOpen], NOW);
+    expect(ranked.map((i) => i.key)).toEqual([overdueOpen.key, bigMoneyUrgent.key]);
+  });
+
+  it("buildConveyor never drops the old open item and flags it via the same pipe the feed uses", () => {
+    const { items } = buildConveyor(
+      { proposals: [], actionItems: [actionItem()], priorities: [], broCards: [] },
+      NOW,
+    );
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ key: "action_item:itm-montrose", overdue: true });
   });
 });
 

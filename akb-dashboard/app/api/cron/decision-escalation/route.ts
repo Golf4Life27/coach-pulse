@@ -7,7 +7,13 @@
 // personal number ONE plain sentence with a deep link.
 //
 // FAIL-CLOSED everywhere:
-//   - OPERATOR_PERSONAL_PHONE unset → report-only (never guesses a number).
+//   - Phone resolution goes through the SAME waterfall operator-page uses
+//     (resolveOperatorPhone: ALERT_PHONE -> OPERATOR_PERSONAL_PHONE ->
+//     MAVERICK_STAGE4_SMS_TARGET -> the operator-confirmed default cell).
+//     P0-17 (2026-09-24): this cron read ONLY OPERATOR_PERSONAL_PHONE and
+//     that var was never set in prod, so 32 overdue decisions accrued with
+//     phone_configured:false and zero texts sent while the operator-page
+//     path (same phone, different resolver) was sending fine.
 //   - Chicago-local window 8:00–21:00 only.
 //   - One text per decision per 24h (KV setNx dedupe).
 //   - Max ESCALATION_MAX_PER_RUN (default 2) texts per run.
@@ -27,6 +33,7 @@ import {
 import { kvConfigured, kvProd } from "@/lib/maverick/oauth/kv";
 import { sendMessage } from "@/lib/quo";
 import { fetchConveyorItemsServer } from "@/lib/decision-feed-server";
+import { resolveOperatorPhone } from "@/lib/maverick/operator-page";
 import {
   composeEscalationSms,
   insideChicagoWindow,
@@ -64,7 +71,9 @@ export async function GET(req: Request) {
   const cfg = readEscalationConfig();
   const now = new Date();
   const nowIso = now.toISOString();
-  const phone = (process.env.OPERATOR_PERSONAL_PHONE ?? "").trim() || null;
+  // Same resolver operator-page uses (P0-17) — so this cron sends whenever
+  // the operator-page path would, instead of hard-depending on a single var.
+  const phone = resolveOperatorPhone(process.env as Record<string, string | undefined>).trim() || null;
 
   if (!insideChicagoWindow(now, cfg)) {
     return NextResponse.json({ ok: true, outcome: "outside_window", chicago_window: `${cfg.windowStartHour}-${cfg.windowEndHour}`, duration_ms: Date.now() - t0 });

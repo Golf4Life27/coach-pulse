@@ -75,8 +75,10 @@ async function fetchPendingProposals(): Promise<ProposalRow[]> {
 async function fetchOpenActionItems(): Promise<ActionItemRow[]> {
   const pat = process.env.AIRTABLE_PAT;
   if (!pat) return [];
-  // Mirrors /api/operator-actions: open/in_progress within 14 days.
-  const formula = `AND(OR({Status}='open',{Status}='in_progress'), IS_AFTER(CREATED_TIME(), DATEADD(NOW(), -14, 'days')))`;
+  // Mirrors /api/operator-actions: open/in_progress, no age cap (P0-18 —
+  // age was being counted as resolution). fromActionItem flags anything
+  // over 14 days old as overdue and buildConveyor sorts it to the top.
+  const formula = `OR({Status}='open',{Status}='in_progress')`;
   const res = await fetch(
     `https://api.airtable.com/v0/${BASE_ID}/${ACTION_ITEMS_TABLE}?filterByFormula=${encodeURIComponent(formula)}&pageSize=100`,
     { headers: { Authorization: `Bearer ${pat}` }, cache: "no-store" },

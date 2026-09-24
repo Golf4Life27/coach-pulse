@@ -20,11 +20,14 @@ const VALID_STATUS = new Set(["open", "in_progress", "resolved", "deferred"]);
 
 export async function GET() {
   if (!AIRTABLE_PAT) return NextResponse.json({ error: "airtable_not_configured" }, { status: 500 });
-  // Anti-staleness gate (operator 2026-07-08: six June-era ghosts haunted
-  // /queue for a month — "stale and need to disappear"). An action item
-  // older than 14 days is no longer a decision; it was either handled
-  // out-of-band or the thread went cold and belongs to re-engagement.
-  const formula = `AND(OR({Status}='open',{Status}='in_progress'), IS_AFTER(CREATED_TIME(), DATEADD(NOW(), -14, 'days')))`;
+  // P0-18 (2026-09-24): the old anti-staleness gate here (operator
+  // 2026-07-08, on six June-era ghosts) dropped OPEN items past 14 days at
+  // the Airtable read — age was counted as resolution, so a genuinely open
+  // decision (six of them, including an old Montrose card) just vanished
+  // with no trace instead of getting resolved. An open/in_progress item is
+  // NEVER dropped for age now; lib/conveyor/model.fromActionItem flags one
+  // past 14 days as `overdue` and rankConveyor sorts it to the top instead.
+  const formula = `OR({Status}='open',{Status}='in_progress')`;
   const url =
     `https://api.airtable.com/v0/${BASE_ID}/${TABLE}` +
     `?filterByFormula=${encodeURIComponent(formula)}&pageSize=100`;
