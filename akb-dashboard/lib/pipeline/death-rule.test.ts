@@ -45,6 +45,22 @@ describe("classifyDeathRule", () => {
     expect(result.verdict).toBe("executed_needs_termination_card");
   });
 
+  it("executed + recent counterparty message → alive (no termination card)", () => {
+    const result = classifyDeathRule(
+      rec({ lastInboundAt: daysAgo(2), contractExecutedAt: "2026-08-01T00:00:00.000Z" }),
+      NOW,
+    );
+    expect(result.verdict).toBe("alive");
+  });
+
+  it("executed but already Dead (terminated contract) → alive/skip, no daily card", () => {
+    const result = classifyDeathRule(
+      rec({ outreachStatus: "Dead", lastInboundAt: daysAgo(60), contractExecutedAt: "2026-07-01T00:00:00.000Z" }),
+      NOW,
+    );
+    expect(result.verdict).toBe("alive");
+  });
+
   it("never-engaged cold record (no reply ever, no engaged status) → alive (out of scope)", () => {
     const result = classifyDeathRule(
       rec({ outreachStatus: "Texted", lastInboundAt: null, lastOutboundAt: daysAgo(40) }),

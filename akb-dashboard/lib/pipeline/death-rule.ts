@@ -81,12 +81,11 @@ const NOT_APPLICABLE: DeathRuleResult = { verdict: "alive", daysSilent: null, cl
 export function classifyDeathRule(record: DeathRuleRecord, nowIso: string): DeathRuleResult {
   // Signed deals never die this way — checked first so it overrides even a
   // record someone already (mis)flipped toward Dead.
-  if (record.contractExecutedAt) {
-    return { verdict: "executed_needs_termination_card", daysSilent: null, clockSource: null };
-  }
-
   // Already Dead — this rule only KILLS, it never resurrects (that's
   // lib/resurrection.ts's job, triggered by a fresh non-rejection inbound).
+  // A Dead record that still carries Contract_Executed_At (a terminated
+  // contract) is P0-12's guard to police, not this cron's; carding it every
+  // day would be noise.
   if (record.outreachStatus === "Dead") {
     return NOT_APPLICABLE;
   }
@@ -120,6 +119,11 @@ export function classifyDeathRule(record: DeathRuleRecord, nowIso: string): Deat
   const daysSilent = Math.floor(silentMs / (24 * 60 * 60 * 1000));
 
   if (silentMs >= DEATH_RULE_SILENCE_MS) {
+    // A signed deal never dies by silence: it goes to the operator as a
+    // termination decision (operator ruling reclKuvb2ZlGTL09O).
+    if (record.contractExecutedAt) {
+      return { verdict: "executed_needs_termination_card", daysSilent, clockSource };
+    }
     return { verdict: "dead", daysSilent, clockSource };
   }
   return { verdict: "alive", daysSilent, clockSource };
