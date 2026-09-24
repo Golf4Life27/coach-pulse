@@ -1,3 +1,4 @@
+import { requireSendAuth } from "@/lib/send-route-auth";
 import { NextResponse } from "next/server";
 import { listBuyersV2, updateBuyerV2, BUYER_V2_FIELDS } from "@/lib/buyers-v2";
 import { sendEmail } from "@/lib/gmail";
@@ -62,14 +63,11 @@ Output JSON only: { "subject": "...", "body": "..." }`,
 }
 
 export async function GET(req: Request) {
-  // Vercel cron sends GET. Optionally check a CRON_SECRET in headers.
-  const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = req.headers.get("authorization") ?? "";
-    if (!auth.includes(secret)) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-  }
+  // Vercel cron sends GET. Shared waterfall: exact, constant-time CRON_SECRET
+  // compare (the old substring `includes(secret)` check accepted any header
+  // that merely contained the secret).
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
