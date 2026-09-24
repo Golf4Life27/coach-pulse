@@ -13,6 +13,7 @@
 // outbound action without explicit click.
 
 import { NextResponse } from "next/server";
+import { requireSendAuth } from "@/lib/send-route-auth";
 import { getListing } from "@/lib/airtable";
 import { audit } from "@/lib/audit-log";
 import { lastInboundLine, parseConversation } from "@/lib/notes";
@@ -42,6 +43,9 @@ async function readPost(req: Request): Promise<PostBody> {
 }
 
 async function handle(req: Request, ctx: Ctx): Promise<Response> {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   const t0 = Date.now();
   const { recordId } = await ctx.params;
   const post = await readPost(req);

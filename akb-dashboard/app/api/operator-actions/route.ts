@@ -9,6 +9,7 @@
 // Queue show + clear them.
 
 import { NextResponse } from "next/server";
+import { requireSendAuth } from "@/lib/send-route-auth";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -61,6 +62,9 @@ export async function GET() {
 }
 
 export async function PATCH(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   if (!AIRTABLE_PAT) return NextResponse.json({ error: "airtable_not_configured" }, { status: 500 });
   let body: { id?: string; status?: string };
   try {

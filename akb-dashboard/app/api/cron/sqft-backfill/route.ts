@@ -15,6 +15,7 @@
 // ?limit=N    max records to consider (default 150)
 
 import { NextResponse } from "next/server";
+import { requireSendAuth } from "@/lib/send-route-auth";
 import { audit } from "@/lib/audit-log";
 import { patchListingsBatch } from "@/lib/airtable";
 import {
@@ -142,5 +143,7 @@ async function handleGet(req: Request) {
 // route runs yields at the "sweep" share of the daily RentCast cap, so the
 // live-deal lane keeps its headroom. See lib/spend/lane-context.ts.
 export async function GET(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
   return withSpendLane("sweep", () => handleGet(req));
 }

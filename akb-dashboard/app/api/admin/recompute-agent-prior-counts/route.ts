@@ -22,6 +22,7 @@
 // with the diagnostic counters Alex asked for in the 5/14 spec.
 
 import { NextResponse } from "next/server";
+import { requireSendAuth } from "@/lib/send-route-auth";
 import { getListings, updateListingRecord } from "@/lib/airtable";
 import { audit } from "@/lib/audit-log";
 import {
@@ -34,6 +35,9 @@ export const runtime = "nodejs";
 export const maxDuration = 90;
 
 export async function GET(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   const t0 = Date.now();
   const url = new URL(req.url);
   // Default to apply (cron + manual both want writes). Explicit

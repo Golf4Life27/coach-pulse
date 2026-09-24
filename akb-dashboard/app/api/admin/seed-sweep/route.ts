@@ -31,6 +31,7 @@
 // the ?limit cap bound the blast radius.
 
 import { NextResponse } from "next/server";
+import { requireSendAuth } from "@/lib/send-route-auth";
 import { getActiveIntakeRows } from "@/lib/zip-registry";
 import { listArvSeededZips } from "@/lib/zip-arv-seed-store";
 import { fetchListingsByZip } from "@/lib/crawler/sources/rentcast";
@@ -237,5 +238,7 @@ async function handleGet(req: Request) {
 // route runs yields at the "discovery" share of the daily RentCast cap, so the
 // live-deal lane keeps its headroom. See lib/spend/lane-context.ts.
 export async function GET(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
   return withSpendLane("discovery", () => handleGet(req));
 }

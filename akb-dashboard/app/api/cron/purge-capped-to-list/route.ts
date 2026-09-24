@@ -35,6 +35,7 @@
 // ?limit=N   max records to clear per run (default 500)
 
 import { NextResponse } from "next/server";
+import { requireSendAuth } from "@/lib/send-route-auth";
 import { audit } from "@/lib/audit-log";
 import { patchListingsBatch } from "@/lib/airtable";
 import { isCappedToListFossil } from "@/lib/capped-to-list-fossil";
@@ -92,6 +93,9 @@ async function fetchFossils(limit: number): Promise<Fossil[]> {
 }
 
 export async function GET(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   const t0 = Date.now();
   const url = new URL(req.url);
   // DRY RUN BY DEFAULT. This destroys operator data; ?apply=1 is deliberate.

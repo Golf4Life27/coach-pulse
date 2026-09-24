@@ -20,6 +20,7 @@
 // admin routes. Bounded: pages of 100, PATCHes of 10, 250s wall clock.
 
 import { NextResponse } from "next/server";
+import { requireSendAuth } from "@/lib/send-route-auth";
 import { audit } from "@/lib/audit-log";
 
 export const runtime = "nodejs";
@@ -48,6 +49,9 @@ interface Row {
 }
 
 export async function GET(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   const t0 = Date.now();
   if (!AIRTABLE_PAT) return NextResponse.json({ error: "airtable_not_configured" }, { status: 500 });
   if (!TABLE) return NextResponse.json({ error: "AGENT_PROPOSALS_TABLE_ID not set" }, { status: 500 });

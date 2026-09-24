@@ -1,3 +1,4 @@
+import { requireSendAuth } from "@/lib/send-route-auth";
 import Papa from "papaparse";
 
 export const runtime = "nodejs";
@@ -211,6 +212,9 @@ async function chainPreOfferScreen(origin: string, cookie: string, recordIds: st
 // --- Main handler ---
 
 export async function POST(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   if (!AIRTABLE_PAT) {
     return Response.json({ error: "AIRTABLE_PAT not set" }, { status: 500 });
   }

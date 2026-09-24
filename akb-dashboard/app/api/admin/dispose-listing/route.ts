@@ -20,14 +20,17 @@
 // (POST) so a bare GET can't accidentally kill a record. Idempotent —
 // re-firing on an already-dead record is an engine noop.
 //
-// Auth posture: same as the rest of /api/admin/* — no app-level auth,
-// Vercel deployment-layer access control. The confirm gate is the
-// accidental-fire guard.
+// Auth posture (SEV1-B remediation): dashboard-cookie / CRON_SECRET / OAuth
+// waterfall via requireSendAuth — same guard as the other write-capable
+// admin routes. Previously "no app-level auth", relying only on the
+// Vercel deployment layer, which does not gate a public repo + protection-off
+// deployment.
 
 import { NextResponse } from "next/server";
 import { transitionStage } from "@/lib/pipeline-state/engine";
 import { updateListingRecord } from "@/lib/airtable";
 import { audit } from "@/lib/audit-log";
+import { requireSendAuth } from "@/lib/send-route-auth";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -79,6 +82,9 @@ async function dispose(recordId: string, reason: string) {
 }
 
 export async function GET(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   const url = new URL(req.url);
   const recordId = url.searchParams.get("recordId");
   const confirm = url.searchParams.get("confirm");
@@ -111,6 +117,9 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   let body: { recordId?: string; reason?: string };
   try {
     body = await req.json();

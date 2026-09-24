@@ -3,12 +3,16 @@
 // Deal Docs drop, so the two never diverge.
 
 import { NextResponse } from "next/server";
+import { requireSendAuth } from "@/lib/send-route-auth";
 import { importInvestorBaseBuyers } from "@/lib/buyer-intel/buyers-import";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
 
 export async function POST(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   let csvText: string;
   const contentType = req.headers.get("content-type") || "";
   if (contentType.includes("multipart/form-data")) {

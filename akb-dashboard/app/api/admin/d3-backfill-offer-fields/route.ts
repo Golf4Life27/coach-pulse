@@ -26,6 +26,7 @@
 // stomp).
 
 import { NextResponse } from "next/server";
+import { requireSendAuth } from "@/lib/send-route-auth";
 import { getListings, updateListingRecord } from "@/lib/airtable";
 import { audit } from "@/lib/audit-log";
 
@@ -44,6 +45,9 @@ interface BackfillOutcome {
 }
 
 export async function GET(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   const t0 = Date.now();
   const url = new URL(req.url);
   const apply = url.searchParams.get("apply") === "1";

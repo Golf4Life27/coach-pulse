@@ -26,6 +26,7 @@
 // jarvis-brief route uses for timeline context.
 
 import { NextResponse } from "next/server";
+import { requireSendAuth } from "@/lib/send-route-auth";
 import { getListing, updateListingRecord } from "@/lib/airtable";
 import { audit } from "@/lib/audit-log";
 import { lastInboundLine, parseConversation } from "@/lib/notes";
@@ -103,6 +104,9 @@ async function maybeApplyMotivation(
 }
 
 async function handle(req: Request, ctx: Ctx): Promise<Response> {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   const t0 = Date.now();
   const { recordId } = await ctx.params;
   const url = new URL(req.url);

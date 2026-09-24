@@ -9,6 +9,7 @@
 // wrapper handles persistence.
 
 import { NextResponse } from "next/server";
+import { requireSendAuth } from "@/lib/send-route-auth";
 import { callRehabVision } from "@/lib/rehab-calibration";
 import { audit } from "@/lib/audit-log";
 
@@ -35,6 +36,9 @@ function asNum(v: unknown): number | null {
 }
 
 export async function POST(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   const t0 = Date.now();
   let body: RequestBody;
   try {

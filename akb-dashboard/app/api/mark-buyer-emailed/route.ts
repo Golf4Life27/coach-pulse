@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
+import { requireSendAuth } from "@/lib/send-route-auth";
 import { updateProspectiveBuyerRecord } from "@/lib/airtable";
 
 export async function POST(request: Request) {
+  const auth = await requireSendAuth(request);
+  if (!auth.ok) return auth.response;
+
   try {
     const { recordId } = await request.json();
     if (!recordId) {

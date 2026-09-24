@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { requireSendAuth } from "@/lib/send-route-auth";
 import { getListing } from "@/lib/airtable";
 import { listBuyersV2, BUYER_V2_FIELDS } from "@/lib/buyers-v2";
 import type { BuyerMatchResult, BuyerMatch } from "@/types/jarvis";
@@ -48,9 +49,12 @@ function expectedBuyerType(condition: ListingForMatch["condition"]): "flipper" |
 }
 
 export async function POST(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ recordId: string }> },
 ) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   const { recordId } = await params;
   if (!recordId || !recordId.startsWith("rec")) {
     return NextResponse.json({ error: "Invalid record id", recordId }, { status: 400 });

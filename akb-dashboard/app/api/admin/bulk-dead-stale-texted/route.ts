@@ -28,6 +28,7 @@
 // the codebase for future stale-cleanup patterns.
 
 import { NextResponse } from "next/server";
+import { requireSendAuth } from "@/lib/send-route-auth";
 import { getListings, patchListingsBatch, type BatchUpdateRequest } from "@/lib/airtable";
 import { audit } from "@/lib/audit-log";
 import { annotateBulkDead } from "@/lib/bulk-dead-annotation";
@@ -51,6 +52,9 @@ function chunk<T>(arr: T[], size: number): T[][] {
 }
 
 export async function GET(req: Request) {
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
+
   const t0 = Date.now();
   const url = new URL(req.url);
   const dryRun = url.searchParams.get("dry_run") === "1";

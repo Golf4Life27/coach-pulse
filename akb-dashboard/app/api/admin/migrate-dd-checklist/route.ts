@@ -12,10 +12,16 @@
 // choices manually through Airtable's UI.
 //
 // Trigger: POST /api/admin/migrate-dd-checklist
-// Optional CRON_SECRET gate.
+//
+// Auth (security hardening): dashboard-cookie / CRON_SECRET / OAuth waterfall
+// via requireSendAuth. Previously did `auth.includes(secret)` — a substring
+// check (not exact, not timing-safe) that also fell open to no-auth-at-all
+// whenever CRON_SECRET was unset. requireSendAuth's waterfall compares the
+// bearer token with constantTimeEqual (exact-length + crypto.timingSafeEqual).
 
 import { NextResponse } from "next/server";
 import { DD_V3_ITEMS } from "@/types/jarvis";
+import { requireSendAuth } from "@/lib/send-route-auth";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -52,13 +58,8 @@ const NEW_COLORS: Record<string, string> = {
 };
 
 export async function POST(req: Request) {
-  const secret = process.env.CRON_SECRET;
-  if (secret) {
-    const auth = req.headers.get("authorization") ?? "";
-    if (!auth.includes(secret)) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-  }
+  const auth = await requireSendAuth(req);
+  if (!auth.ok) return auth.response;
 
   if (!AIRTABLE_PAT) {
     return NextResponse.json({ error: "AIRTABLE_PAT not set" }, { status: 500 });
