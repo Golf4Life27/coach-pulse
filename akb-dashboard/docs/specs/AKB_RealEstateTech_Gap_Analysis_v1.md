@@ -1,3 +1,5 @@
+> **SUPERSEDED by `akb-dashboard/docs/PLAN.md` (2026-09-23).** Kept for history; do not build from this file.
+
 # AKB Real-Estate-Tech Gap Analysis v1
 
 **Document version:** v1.0

@@ -51,8 +51,8 @@ paid buyer lists; buyer copy never says "off-market" (recydfR9ZsDNSe0Lr).
   Received rows; the Live Deals card shows MAVERICK SAYS + one-tap options
   that fill the draft. A HELD SMS proposal sent with an edited body
   dispatches through the gate (`operatorOverrideHold`, audited).
-- **Routines**: MAVERICK 5 is a daily free-source buyers build (prompt in
-  `routine-prompts/buyers-build.v2.md`); MAVERICK 4 (Cowork) gained a
+- **Routines**: the daily free-source buyers build (prompt in
+  `routine-prompts/buyers-build.v3.md`; moved from MAVERICK 5 to the MAVERICK 6 host on 2026-09-24); MAVERICK 4 (Cowork) gained a
   Facebook harvest step. See `OPERATING_MAP.md`.
 
 > Last updated: 2026-06-18 · prod HEAD context: branch `claude/admiring-shannon-dzfnbm`, local HEAD `a621b9b` (M7 front-half conveyor wired + capped H2 lift; builds on M6 `7f1caef`, `dff69b1`, PR #27 verify-gate `8952d8c` + PR #28 backlog-reprice `7959eaf`). **New 2026-06-18 work in §8 (M6 §8a-b, M7 §8c).**

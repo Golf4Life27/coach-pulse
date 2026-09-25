@@ -161,13 +161,13 @@ hourly self-re-arming check-in bound to it burned $7,296 in 48 hours.
 | Tier | Use it for | Never for |
 |------|-----------|-----------|
 | **Judgment tier** (the top model; the operator's HQ chat) | rulings, stress tests, design of a build, reading a diff before merge, anything the operator would want the sharpest read on | routines, check-ins, `send_later` re-arms, audit reads, triage, engine drives, buyers builds, workers |
-| **Execution tier** (the standard model; MAVERICK 1, 2, 5, 6 hosts) | every scheduled or repetitive job; persistent routine hosts; PR babysitting | operator rulings |
+| **Execution tier** (the standard model; MAVERICK 1, 2, 6 hosts) | every scheduled or repetitive job; persistent routine hosts; PR babysitting | operator rulings |
 | **Worker tier** (the fast model) | builds from an HQ brief, log parsing, bulk reads, tests | anything that produces a number for a counterparty |
 
 Rules:
 
 1. A routine or `send_later` is never bound to a judgment-tier session.
-   Bind it to an execution-tier host (`MAVERICK 6 - Ops check-ins` is
+   Bind it to an execution-tier host (`WS · Routines · MAVERICK 6 · Ops check-ins` (renamed 2026-09-25) is
    the shared host for HQ's check-ins) with a standalone prompt.
 2. Every firing into a persistent session re-pays that session's whole
    context. Keep routine hosts light: load state, do the work, write
@@ -257,7 +257,8 @@ These do not change without a Bible amendment.
 | Wholesale fee — off-market / tax-delinquent / land | **materially higher** than the on-market default (deal-type-specific; quantify when those crawler sources land live) |
 | Contract MAO discipline | Two lanes, both → `Your_MAO_V21`. **Flipper:** 70% rule — `ARV×0.70 − rehab − closing(1.5%) − fee` (`lib/pricing/mao-flip.ts`, no list-price input). **Landlord:** cap-rate V2.1 — `(rent − taxes) ÷ cap`. (Was "65% ARV − rehab − fee"; corrected 2026-06-28.) |
 | Buyer cap rates | TX 8% / TN 10% / MI 9% / Default 9% (env-overridable) |
-| Cadence | door-opener is **value-anchored** (`ARV $/sqft × sqft × buy-box − rehab − fee`) **or HOLDS for review** — never a fraction of list (65%-of-list retired 2026-06-28 after the Blackmoor $84.5k over-offer; INVARIANTS §2). Price-drop = re-engagement (not first contact) — INV-030 |
+| ~~Cadence~~ | ~~door-opener is **value-anchored** (`ARV $/sqft × sqft × buy-box − rehab − fee`) **or HOLDS for review** — never a fraction of list (65%-of-list retired 2026-06-28 after the Blackmoor $84.5k over-offer; INVARIANTS §2).~~ Superseded 2026-08-30 by the two-stage doctrine below. |
+| Cadence (2026-08-30, Spine rec8eZG5hH16FFyF2) | **Two-stage pricing.** First-contact cash openers are **62% × list, phrased soft** (`list_anchor_soft_v1`). From the first reply onward the value-anchored formula is the only producer and the two-lane MAO is the negotiation ceiling; every guard HOLDs instead of improvising. Full doctrine: `.claude/skills/pricing-doctrine/SKILL.md`. Price-drop = re-engagement (not first contact) — INV-030 |
 | Crawler 2.0 unlock | $40K/mo net × 3 consecutive months (Bible §1.2) |
 | Dream Phase unlock | operator hours < 15h/wk |
 

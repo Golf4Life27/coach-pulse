@@ -1,3 +1,5 @@
+> **The plan is `akb-dashboard/docs/PLAN.md` (the Execution Agenda, 2026-09-23).** Build from it, not from older checklists or roadmaps. Who runs what: `akb-dashboard/docs/handoffs/OPERATING_MAP.md`.
+
 # MAVERICK PRIME — Standing Directive (Operator ruling 2026-09-01)
 
 > Operator: Alex Balog. This file is the kickoff doctrine for the orchestrator session
