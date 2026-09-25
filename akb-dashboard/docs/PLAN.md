@@ -568,3 +568,13 @@ Spend, before the first fee (measured by the P0-26 meter): if month-to-date Clau
 
 After the first fee: if the 30-day unattended test fails twice, 99% automation isn't reachable on this setup. Switch to an assisted model (a part-time VA works the queue) instead of more building.
 
+## Charter addenda (2026-09-25)
+
+**Focus metros (Charter §0, "a few focus metros until fees repeat"):** to be named by Alex at the Wholesale vision session. Until then: the metros with a live counter or accepted offer (Detroit MI first) plus the buyers-build standing list. Adding a metro is an operator decision.
+
+**Not-Now list.** Ideas that could not name a charter line go here instead of into a build. Newest first.
+
+| Date | Idea | Who raised it | Charter line it lacks |
+|---|---|---|---|
+| 2026-09-25 | "Make it sellable" (agenda P6) | Sep 23 agenda | Retired by Charter §0 until the finish line |
+| 2026-09-25 | National sweep / adding metros | Jun 28 plan | Retired until fees repeat |

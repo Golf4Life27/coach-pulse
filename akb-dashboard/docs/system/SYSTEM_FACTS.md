@@ -1,13 +1,94 @@
-# System Facts — AKB Inevitable
+# System Facts — Wholesale OS
 
 **Status:** authoritative. **Owner:** Alex Balog (operator).
-**Updated:** 2026-09-21.
+**Updated:** 2026-09-25.
+
+## 0. WHOLESALE OS CHARTER v1 (operator-locked 2026-09-25)
+
+Read this before anything else in this file. It outranks every section
+below, every spine row, every plan, and every prompt. A session that
+cannot name the charter line its work moves does not do that work; it
+adds the idea to the Not-Now list in `docs/PLAN.md` and moves on.
+
+**Why this exists.** Wholesale OS is a family income machine. It exists
+so Alex's wife can stay home and raise their kids. Alex keeps his day
+job for now. This is the Kirsten date gate, made concrete.
+
+**Finish line.** $30,000 a month take-home from assignment fees by
+2027-12-31. Milestones, in order: first assignment fee; 3+ fees; a fee
+every month; $30K a month.
+
+**Operator hours (staged, by milestone).**
+
+| Stage | Alex's time |
+|---|---|
+| Until the first fee | whatever it takes |
+| After the first fee | up to 15 hours a week |
+| After 3+ fees | about 5 hours a week |
+| Once fees repeat monthly | as close to zero as the work allows |
+
+**Always Alex's:** signing, moving money, setting direction.
+
+**Not Alex's:** agent and seller phone calls. A closer paid per deal
+takes them, inside limits Alex sets in writing. Until a closer exists,
+calls are scheduled into one short daily window and Alex is briefed
+before each; every call the system cannot avoid is logged as a finding
+against this line.
+
+**How it earns.**
+- On-market listings AND off-market sellers, in parallel, starting now.
+  Neither lane waits for the other's revenue.
+- A few focus metros until fees repeat, then expand. Focus metros are
+  named in `docs/PLAN.md`; adding one is an operator decision.
+- Volume of negotiations, not perfect deals (Wholesale OS Canon,
+  2026-03-11).
+
+**Hard stops (a session that would cross one stops and surfaces it).**
+1. Wholesale OS never becomes a second job for Alex. Anything that needs
+   him daily without a written automation plan and date is rejected
+   (Automation Discipline Contract Rule 1, 2026-05-22).
+2. Wholesale OS never takes on legal or reputation risk: TCPA, state
+   wholesaling law, or Alex's name with agents and sellers.
+
+**Spend.** Claude runs on the $200/month Max plan; its binding limit is
+the weekly allowance, not dollars. Everything else (data, texting,
+tools, vendors) stays at or under $2,000 a month until the first fee,
+with an alert at $1,500. This supersedes the agenda's $3,000 cap (D7).
+
+**Names.** The system is **Wholesale OS**. The orchestrator is
+**Maverick**. The contracting entity is **AKB Solutions LLC** (and/or
+assigns). CONVEYOR, AKB Inevitable, Jarvis and AKB Launch OS are retired
+names; sessions do not introduce new ones.
+
+**Scope gate and priority order.** Before any build, session or routine
+change, name the charter line it moves. When two pieces of work compete,
+this order wins:
+1. The deal closest to a fee.
+2. Whatever blocks a signature or a funded buyer.
+3. Whatever takes Alex out of the loop.
+4. Everything else.
+
+**What this charter retires.** (a) Off-market waiting on $40K/mo x 3
+months (§9 Crawler 2.0 unlock): retired; off-market runs now. (b)
+"National, not Detroit": retired until fees repeat. (c) "The operator
+closes each deal by hand" (June business plan): retired; a closer does.
+(d) "Make it sellable" as a current goal: retired; it may return after
+the finish line. (e) The Inevitable Constitution v3: superseded by this
+charter; its detailed rules apply only where they do not conflict.
+
+**Vision-session brief format.** Each system's lead reads its own
+six-line brief: what it is; who pays and for what; the 12-month number;
+what stays Alex's; the kill-or-reshape rule with a date; out of scope.
+This charter is Wholesale's.
+
+---
+
 **Spine:** paired build_event `recpLB1yC1SaDTqff` (A1 commit cycle, 2026-05-31);
 sold-comp routing facts paired with the ATTOM-promotion build_event
 `recZB4GZGZ2rPwWe9` and the Cuyahoga build_event of 2026-07-20.
 
-This is the canonical record of the load-bearing facts about the AKB
-Inevitable system. Every Claude session reads it first via
+This is the canonical record of the load-bearing facts about Wholesale
+OS (formerly AKB Inevitable). Every Claude session reads it first via
 `maverick_load_state`. If anything in code, AGENTS.md, a comment, a
 prior commit message, or a recalled Spine row contradicts a fact
 here, **this file wins** — and the contradicting surface is the bug.
@@ -259,8 +340,8 @@ These do not change without a Bible amendment.
 | Buyer cap rates | TX 8% / TN 10% / MI 9% / Default 9% (env-overridable) |
 | ~~Cadence~~ | ~~door-opener is **value-anchored** (`ARV $/sqft × sqft × buy-box − rehab − fee`) **or HOLDS for review** — never a fraction of list (65%-of-list retired 2026-06-28 after the Blackmoor $84.5k over-offer; INVARIANTS §2).~~ Superseded 2026-08-30 by the two-stage doctrine below. |
 | Cadence (2026-08-30, Spine rec8eZG5hH16FFyF2) | **Two-stage pricing.** First-contact cash openers are **62% × list, phrased soft** (`list_anchor_soft_v1`). From the first reply onward the value-anchored formula is the only producer and the two-lane MAO is the negotiation ceiling; every guard HOLDs instead of improvising. Full doctrine: `.claude/skills/pricing-doctrine/SKILL.md`. Price-drop = re-engagement (not first contact) — INV-030 |
-| Crawler 2.0 unlock | $40K/mo net × 3 consecutive months (Bible §1.2) |
-| Dream Phase unlock | operator hours < 15h/wk |
+| ~~Crawler 2.0 unlock~~ | ~~$40K/mo net × 3 consecutive months (Bible §1.2)~~ Retired by Charter §0 (2026-09-25): off-market runs in parallel now. |
+| Dream Phase unlock | ~~operator hours < 15h/wk~~ Superseded by the Charter §0 hours table (2026-09-25): 15h/wk after the first fee, ~5h/wk after 3+ fees, near zero once fees repeat. |
 
 ### Pricing-doctrine enforcement constants (operator-blessed 2026-07-06; ruling `recmy2Vwp1wMA1Vs8`, skill v1.0 `recYoZ85w9mnC0tlE`)
 
