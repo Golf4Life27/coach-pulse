@@ -29,6 +29,16 @@ every month; $30K a month.
 
 **Always Alex's:** signing, moving money, setting direction.
 
+**Operator surface (added 2026-09-25, operator verbatim: "I would really
+like to be able to spend the vast majority of my (diminishing) working
+time in the dashboard for wholesale, rather than bouncing between 3
+different claude sessions and endless different screens").** The
+Wholesale dashboard (prod, home queue) is where Alex works. Every ask
+for him becomes a card there with a default and a deadline. Chat with
+the lead session is for setting direction, not for running the
+business. Anything that makes Alex open a Claude session, a console, or
+a second screen to keep deals moving is a finding against this line.
+
 **Not Alex's:** agent and seller phone calls. A closer paid per deal
 takes them, inside limits Alex sets in writing. Until a closer exists,
 calls are scheduled into one short daily window and Alex is briefed
