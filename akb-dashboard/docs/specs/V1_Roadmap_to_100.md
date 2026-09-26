@@ -1,3 +1,5 @@
+> **SUPERSEDED by `akb-dashboard/docs/PLAN.md` (2026-09-23).** Kept for history; do not build from this file.
+
 # V1 Roadmap to 100% — Inevitable / Crawler / Maverick
 
 **Paired with the INV-026 Progress Meter** (`/api/admin/progress-meter`,

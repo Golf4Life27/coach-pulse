@@ -1,3 +1,7 @@
+> **Charter first:** `docs/system/SYSTEM_FACTS.md` §0 (Wholesale OS Charter v1, operator-locked 2026-09-25) outranks this file. Name the charter line your work moves before you start.
+
+> **The plan is `akb-dashboard/docs/PLAN.md` (the Execution Agenda, 2026-09-23).** Build from it, not from older checklists or roadmaps. Who runs what: `akb-dashboard/docs/handoffs/OPERATING_MAP.md`.
+
 # MAVERICK PRIME — Standing Directive (Operator ruling 2026-09-01)
 
 > Operator: Alex Balog. This file is the kickoff doctrine for the orchestrator session

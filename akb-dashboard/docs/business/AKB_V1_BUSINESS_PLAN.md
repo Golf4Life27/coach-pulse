@@ -1,3 +1,5 @@
+> **Next steps in this plan are SUPERSEDED by `akb-dashboard/docs/PLAN.md` (2026-09-23).** The strategy sections still stand as background.
+
 # AKB Wholesaling — Version 1 Business Plan & Revenue Model
 
 > **Date:** 2026-06-28 · **Author:** drafted with Claude Code, operator-reviewed.

@@ -1,3 +1,5 @@
+> **SUPERSEDED 2026-09-25 by `buyers-build.v3.md`.** Kept for history; the trigger id below is disabled or deleted.
+
 # MAVERICK 5 - Daily buyers build (7am CT) - prompt v2
 
 Routine `MAVERICK 5 - Daily buyers build (7am CT)` (trig_018zBMZy1Nnsy6gq6T8CFCTH), cron `0 12 * * *` UTC, bound to session `MAVERICK 5 - Daily buyers build (routine runs here, do not type here)` (session_01GhyhQYvwVxAYLgbgJgbpMr, repo attached, execution-tier model). Replaces the Sunday-only v1 on 2026-09-18 (operator ruling: buyer demand is the missing half; no paid lists).
