@@ -1,6 +1,6 @@
 # Operating map (one page)
 
-Updated 2026-09-25 (systems audit cleanup, spine recFcxoIL4N6iB7b7). This is the whole picture of who runs what. If it is not on this page, Alex does not need to remember it. The plan is `akb-dashboard/docs/PLAN.md`; the home queue is the one place Alex decides.
+Updated 2026-09-26 (systems audit cleanup, spine recFcxoIL4N6iB7b7; charter reckv6LMYmHW758LZ; TT charter rec7FX2DCxIid3aJf). This is the whole picture of who runs what. If it is not on this page, Alex does not need to remember it. The plan is `akb-dashboard/docs/PLAN.md`; the home queue is the one place Alex decides.
 
 ## 1. Where Alex talks
 
@@ -8,10 +8,10 @@ One lead session per system. Wholesale's is **WS · Lead · MAVERICK HQ**.
 
 | System | Lead session | Where |
 |---|---|---|
-| Wholesale (WS) | WS · Lead · MAVERICK HQ | Code, this repo |
+| Wholesale (WS) | WS · Lead · MAVERICK HQ (session_01T7aEYJN2B4ribY7ouP7fYT, fresh 2026-09-26; the 676K-token HQ is archived) | Code, this repo |
 | Permit Leads (PL) | PL · Lead | Code, Golf4Life27/Fable5 |
 | Space Screens (SS) | SS · Lead (to be created from a brief; the old sessions are too heavy to lead) | Code, Golf4Life27/Roman |
-| TikTok Shop (TT) | TT · Lead (to be created) | Cowork, on the computer where Chrome is logged into Seller Center |
+| TikTok Shop (TT) | TT · Lead (session_01Aa2fkMCEUon2iuUoNeJA3D, created 2026-09-26; charter in Drive "TT · TikTok Shop Charter v1") | Cloud Code session, no repo; plus one local browser task on the Chrome computer for browser-only chores |
 | Golf (GOLF) | GOLF · Lead, if Alex wants one | Code, Golf4Life27/DomeParties |
 
 Everything else is a routine host or a dated build session that Alex never opens. Routines write to the spine and to Airtable, and when a decision needs Alex they text his cell from the Maverick line (+1 630 250 5865). Alex answers in the lead session or by tapping the decision card.
@@ -28,7 +28,7 @@ Everything else is a routine host or a dated build session that Alex never opens
 | WS · MAVERICK 6 · Outreach volume read · daily 8:35a CDT | 8:35am | WS · Routines · MAVERICK 6 · Ops check-ins | Three-line read of what went out, what came back, what cap binds | A card only when something needs him |
 | MAVERICK 4 · Dispo hunter (Cowork local task on one of his computers) | daily 10am | his computer | Posts executed contracts' packages to Facebook buyer groups from his own browser | A text only for Tier C. Not seen in the Cowork scheduled list on 2026-09-24; confirm which computer runs it |
 | Buy-box drip (app cron, 10:30am) | daily | Vercel | Emails every buyer with no price box: three touches over ten days, then stops | Nothing |
-| TT · Shop ops check · daily 8a CDT | 8am | fresh session per run (Cowork) | Reads Seller Center through his Chrome; logs a Metrics row | Needs the "require this computer" switch to see anything |
+| TT · Shop ops check (browser-based) | (off since 2026-09-26) | fresh session per run (Cowork) | Never reached Seller Center in 17 days | Replaced by an inbox-based check the TT lead builds on an execution-tier host |
 | TT · Content pack · daily 7a CDT | (off since 2026-09-25) | fresh session per run (Cowork) | Makes one post a day for the queue | Off until the TT lead decides who posts |
 | GOLF · CMA market check · daily 7a CDT | 7am | GOLF · Routines · CMA market check | Recommend-only golf market read | Its own session |
 
